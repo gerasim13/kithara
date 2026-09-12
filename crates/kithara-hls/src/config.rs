@@ -7,11 +7,11 @@ use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_derive::Patch;
+use kithara_download::Downloader;
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
-use kithara_stream::dl::Downloader;
 use url::Url;
 
 /// Enough rounds for an obstruction another task is already clearing to

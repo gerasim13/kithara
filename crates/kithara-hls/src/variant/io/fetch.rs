@@ -1,8 +1,8 @@
 use kithara_assets::{AcquisitionResult, ReadSide, ResourceAcquisition, WriteSide};
 use kithara_bufpool::HasPool;
+use kithara_download::{DemandFn, FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
-use kithara_stream::dl::{DemandFn, FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;
 
 use super::HlsVariant;

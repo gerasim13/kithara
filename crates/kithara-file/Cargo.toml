@@ -18,10 +18,30 @@ ignored = ["serde"]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = ["kithara-net/client-reqwest", "kithara-stream/client-reqwest", "kithara-abr/client-reqwest"]
-client-wreq = ["kithara-net/client-wreq", "kithara-stream/client-wreq", "kithara-abr/client-wreq"]
-tls-rustls = ["kithara-net/tls-rustls", "kithara-stream/tls-rustls", "kithara-abr/tls-rustls"]
-tls-native = ["kithara-net/tls-native", "kithara-stream/tls-native", "kithara-abr/tls-native"]
+client-reqwest = [
+    "kithara-net/client-reqwest",
+    "kithara-download/client-reqwest",
+    "kithara-stream/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-net/client-wreq",
+    "kithara-download/client-wreq",
+    "kithara-stream/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-net/tls-rustls",
+    "kithara-download/tls-rustls",
+    "kithara-stream/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-net/tls-native",
+    "kithara-download/tls-native",
+    "kithara-stream/tls-native",
+    "kithara-abr/tls-native",
+]
 # Enables the crate's USDT probe points.
 usdt = ["kithara-test-utils/usdt"]
 
@@ -30,6 +50,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }

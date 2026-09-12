@@ -20,6 +20,7 @@ use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_m
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead},
+    download::{Downloader, DownloaderConfig},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -33,10 +34,7 @@ use kithara::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
-    stream::{
-        Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestHttpServer, auto,

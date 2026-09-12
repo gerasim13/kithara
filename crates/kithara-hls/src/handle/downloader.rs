@@ -1,8 +1,8 @@
 use kithara_assets::AssetScope;
 use kithara_bufpool::HasPool;
+use kithara_download::{Downloader, Peer, PeerHandle};
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
-use kithara_stream::dl::{Downloader, Peer, PeerHandle};
 
 /// Single owner of the raw transport + storage + headers quartet and the
 /// sole `downloader.register` site. Vends one permanent narrow handle

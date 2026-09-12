@@ -22,6 +22,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -33,7 +34,6 @@ use kithara::{
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,

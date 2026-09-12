@@ -21,7 +21,7 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt-observer"]
 
 [dependencies]
-kithara = { workspace = true, features = ["test-utils", "full", "queue", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
+kithara = { workspace = true, features = ["download", "full", "queue", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
@@ -34,7 +34,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["test-utils", "apple", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { workspace = true }

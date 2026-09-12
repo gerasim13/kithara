@@ -52,6 +52,7 @@ audio = [
     "kithara/client-reqwest",
     "kithara/decode",
     "kithara/drm",
+    "kithara/download",
     "kithara/encode",
     "kithara/events",
     "kithara/fdk-aac",
@@ -80,6 +81,7 @@ audio = [
 wasm = [
     "dep:kithara",
     "kithara/full",
+    "kithara/download",
     "kithara/queue",
     "kithara/mock",
     "kithara/test-utils",
@@ -112,9 +114,7 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
-# External DTrace acceptance for the real USDT provider. This is deliberately
-# separate from the ordinary integration closure: it requires a macOS runner
-# where the CI account has passwordless DTrace entitlement.
+# External DTrace acceptance for the real USDT provider.
 usdt-observer = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
@@ -265,7 +265,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["test-utils", "android", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "android", "client-wreq"] }
 
 [dev-dependencies]
 toml = { workspace = true }

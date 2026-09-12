@@ -1,6 +1,6 @@
+use kithara_download::{FetchCmd, OnCompleteFn, WriterFn};
 use kithara_net::{Headers, RangeSpec};
 use kithara_platform::CancelToken;
-use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
 use url::Url;
 
 use crate::config::SizeProbeMethod;

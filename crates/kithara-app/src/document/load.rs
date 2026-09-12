@@ -16,6 +16,7 @@ use kithara::{
     analysis::{BeatAnalysisConfig, BeatAnalysisConfigPatchError},
     assets::{AssetLayoutRegistry, AssetStoreConfigPatch, FlushPolicyPatch, StorageBackend},
     audio::AudioConfigPatch,
+    download::DownloaderConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
@@ -23,7 +24,6 @@ use kithara::{
         PlayWorkerConfigPatch, PlaybackResamplerBackend, PlayerConfigPatch, policy::DomainKeyPolicy,
     },
     queue::QueueConfigPatch,
-    stream::dl::DownloaderConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;

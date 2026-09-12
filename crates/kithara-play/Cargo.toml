@@ -17,6 +17,7 @@ default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwes
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
+    "kithara-download/client-reqwest",
     "kithara-stream/client-reqwest",
     "kithara-file/client-reqwest",
     "kithara-hls/client-reqwest",
@@ -26,6 +27,7 @@ client-reqwest = [
 ]
 client-wreq = [
     "kithara-net/client-wreq",
+    "kithara-download/client-wreq",
     "kithara-stream/client-wreq",
     "kithara-file/client-wreq",
     "kithara-hls/client-wreq",
@@ -35,6 +37,7 @@ client-wreq = [
 ]
 tls-rustls = [
     "kithara-net/tls-rustls",
+    "kithara-download/tls-rustls",
     "kithara-stream/tls-rustls",
     "kithara-file/tls-rustls",
     "kithara-hls/tls-rustls",
@@ -44,6 +47,7 @@ tls-rustls = [
 ]
 tls-native = [
     "kithara-net/tls-native",
+    "kithara-download/tls-native",
     "kithara-stream/tls-native",
     "kithara-file/tls-native",
     "kithara-hls/tls-native",
@@ -83,6 +87,7 @@ kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true }
+kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }

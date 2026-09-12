@@ -8,6 +8,7 @@ use kithara_assets::{
     AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
     StorageBackend, WriteSide,
 };
+use kithara_download::{Downloader, DownloaderConfig, Peer};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -17,7 +18,6 @@ use kithara_platform::{
         task::{spawn, yield_now},
     },
 };
-use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 

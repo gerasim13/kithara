@@ -6,6 +6,7 @@ use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,7 +14,6 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, WindowStats, rms},

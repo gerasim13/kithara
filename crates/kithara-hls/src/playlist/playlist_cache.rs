@@ -3,12 +3,12 @@
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_download::PeerHandle;
 use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, RwLock},
     tokio::sync::OnceCell,
 };
-use kithara_stream::dl::PeerHandle;
 use url::Url;
 
 use super::parse::{

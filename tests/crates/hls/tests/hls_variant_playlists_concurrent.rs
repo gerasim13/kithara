@@ -183,7 +183,7 @@ fn max_playlist_batch_size(
     records: &[ProbeRecord],
     variant_request_ids: &HashSet<u64>,
 ) -> Option<u64> {
-    const PROCESS_OPERATION: u64 = operation_id("kithara_stream::dl::batch::BatchGroup::process");
+    const PROCESS_OPERATION: u64 = operation_id("kithara_download::batch::BatchGroup::process");
     records
         .iter()
         .filter(|record| record.operation == PROCESS_OPERATION && record.arity == 2)
