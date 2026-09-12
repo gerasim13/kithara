@@ -503,7 +503,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
     let a = local_wav("a", TRACK_SECS, constant_quiet);
     let id_a = append_loaded(&harness, &queue, &a).await;
     let b = local_wav("b", TRACK_SECS, constant_loud);
-    let id_b = append_loaded(&harness, &queue, &b).await;
+    append_loaded(&harness, &queue, &b).await;
 
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
