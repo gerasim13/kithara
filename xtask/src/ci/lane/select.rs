@@ -27,9 +27,8 @@ pub(crate) struct LanesArgs {
     #[arg(long, value_enum)]
     pub(crate) kind: PipelineKind,
     /// Render only these lanes, whatever their kinds say. This is how a single
-    /// subtask is run on its own. A name must be a declared lane, and one this
-    /// role owns must reach this fleet; a name another role owns simply leaves
-    /// this role empty.
+    /// subtask is run on its own. A lane with no kinds belongs to a dedicated
+    /// workflow and leaves this fan-out empty.
     #[arg(long, value_delimiter = ' ')]
     pub(crate) only: Vec<String>,
     #[arg(long, value_enum, default_value_t = Fleet::Github)]
@@ -95,17 +94,18 @@ fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
-/// `--only` named directly. A lane with `needs` still has to pass this before
-/// it can land in `matrix`; `dependent` below never calls it, because a
-/// consumer's own membership is not what admits it.
+/// `--only` named directly. A lane with no membership belongs to a dedicated
+/// workflow and never enters this fleet's fan-out, even by name.
 fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> bool {
     if lane.role != args.role || !reachable(lane, args.fleet) {
         return false;
     }
+    let membership = membership(lane, args.fleet);
+    if membership.is_empty() {
+        return false;
+    }
     if args.only.is_empty() {
-        membership(lane, args.fleet)
-            .iter()
-            .any(|entry| entry == kind)
+        membership.iter().any(|entry| entry == kind)
     } else {
         args.only.iter().any(|only| only == name)
     }
@@ -201,6 +201,7 @@ pub(crate) fn render(
         .map(String::as_str)
         .filter(|name| !landed.contains(name))
         .filter(|name| lanes[*name].role == args.role)
+        .filter(|name| !membership(&lanes[*name], args.fleet).is_empty())
         .collect();
     if !missing.is_empty() {
         bail!(
@@ -422,6 +423,18 @@ mod tests {
             &args("gate", PipelineKind::Nightly, &["deep-miri"]),
         )
         .expect("a lane another role owns is not this role's to refuse");
+        assert!(selection.matrix.is_empty());
+        assert!(selection.dependent.is_empty());
+    }
+
+    #[test]
+    fn an_only_with_no_membership_stays_in_its_dedicated_workflow() {
+        let mut lanes = catalog();
+        lanes.insert("deep-ui".to_owned(), lane("deep", &[], &[]));
+
+        let selection = render(&lanes, &args("deep", PipelineKind::Nightly, &["deep-ui"]))
+            .expect("a dedicated lane is not part of the generic fan-out");
+
         assert!(selection.matrix.is_empty());
         assert!(selection.dependent.is_empty());
     }
