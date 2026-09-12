@@ -365,7 +365,7 @@ mod tests {
                 "--test",
                 "architecture",
                 "--features",
-                "probe,fixture",
+                "usdt,fixture",
                 "flow",
                 "--",
                 "--nocapture"
