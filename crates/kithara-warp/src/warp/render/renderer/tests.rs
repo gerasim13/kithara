@@ -1,4 +1,4 @@
-use std::num::NonZero;
+use std::{num::NonZero, ops::Range};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -28,6 +28,17 @@ impl Consts {
     /// FFT length for the pitch (dominant-frequency) check.
     const N: usize = 1 << 14;
     const SR: u32 = 44_100;
+    const HOST_BPM: f64 = 124.0;
+    const HOST_SR: f64 = 48_000.0;
+}
+
+fn host_beats(output: Range<SessionFrame>) -> Range<SessionBeat> {
+    let beat = |frame| {
+        let frame: f64 = num_traits::cast(i64::from(frame)).unwrap_or_default();
+        SessionBeat::new(frame * Consts::HOST_BPM / (Consts::HOST_SR * 60.0))
+            .expect("fixture host beat")
+    };
+    beat(output.start)..beat(output.end)
 }
 
 fn f64_of(x: usize) -> f64 {
@@ -133,15 +144,13 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("test Warp owns its publisher");
     let mut renderer = warp.renderer(spec(), pools.clone());
+    let output = SessionFrame::new(1_000)..SessionFrame::new(1_001);
     let context = RenderContext::new(
-        SessionFrame::new(1_000)..SessionFrame::new(1_001),
+        output.clone(),
         spec().sample_rate,
-        Some(
-            SessionBeat::new(1_000.0 * 124.0 / (48_000.0 * 60.0)).expect("fixture host beat")
-                ..SessionBeat::new(1_128.0 * 124.0 / (48_000.0 * 60.0)).expect("fixture host beat"),
-        ),
+        Some(host_beats(output)),
         SessionEpoch::new(1),
-        None,
+        Some(TransportRevision::first()),
     )
     .expect("fixture context is valid");
     publisher.publish(
@@ -227,15 +236,11 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let reader = publisher.reader();
     let mut renderer = warp.renderer(spec, pools());
+    let output = SessionFrame::new(1_000)..SessionFrame::new(1_128);
     let context = RenderContext::new(
-        SessionFrame::new(1_000)..SessionFrame::new(1_128),
+        output.clone(),
         spec.sample_rate,
-        Some(
-            SessionBeat::new((124.0 / 60.0) * (1_000.0 / 48_000.0))
-                .expect("fixture callback beat start is finite")
-                ..SessionBeat::new((124.0 / 60.0) * (1_128.0 / 48_000.0))
-                    .expect("fixture callback beat end is finite"),
-        ),
+        Some(host_beats(output)),
         SessionEpoch::new(1),
         Some(TransportRevision::first()),
     )
