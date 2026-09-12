@@ -3,7 +3,7 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-#[cfg(any(test, feature = "probe-capture"))]
+#[cfg(any(test, feature = "test-utils"))]
 use kithara_play::TransportRevision;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
@@ -24,7 +24,7 @@ pub use config::HostConfig;
 use offline::OfflineRuntime;
 use platform::{Platform, PlatformResult};
 
-#[cfg(any(test, feature = "probe-capture"))]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::api::SessionDuckingMode;
 use crate::{
     api::HostLevel,
@@ -184,7 +184,7 @@ impl<S> Host<S> {
     ///
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
         match self.dispatcher.exec(Cmd::SessionDucking)? {
             Reply::SessionDucking(mode) => Ok(mode),
@@ -268,7 +268,7 @@ impl<S> Host<S> {
         self.root_view.grid().axis().sample_rate()
     }
 
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
         match self
             .dispatcher
@@ -318,7 +318,7 @@ impl<S> Host<S> {
     ///
     /// # Errors
     /// Returns an error when the canonical session rejects the update.
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::SetSessionDucking { mode })
     }
@@ -335,7 +335,7 @@ impl<S> Host<S> {
     ///
     /// # Errors
     /// Returns an error when the Host cannot answer the query.
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
         match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
             Reply::SessionTransport(snapshot) => Ok(snapshot.revision()),

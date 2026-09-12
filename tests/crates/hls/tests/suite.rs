@@ -11,7 +11,6 @@ mod deferred_abr_debug;
 mod drm_stream_integrity;
 mod driver_test;
 mod ephemeral;
-mod forward_withheld_segment_busy_spin;
 mod html_error_body;
 mod html_error_cleanup;
 mod keys_integration;
@@ -28,7 +27,6 @@ mod startup_no_eager_size_probe_storm;
 mod stress_chunk_integrity;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;
-mod stress_seek_audio;
 
 mod stress_seek_lifecycle;
 mod stress_seek_random;

@@ -25,7 +25,7 @@ pub(crate) enum HostCmd<S> {
     EnableOutput {
         outputs: OutputGroup,
     },
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(any(test, feature = "test-utils"))]
     RestartOutput {
         sample_rate: u32,
     },

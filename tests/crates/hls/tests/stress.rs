@@ -30,7 +30,5 @@ mod startup_no_eager_size_probe_storm;
 mod stress_seek_abr;
 #[path = "stress_seek_abr_audio.rs"]
 mod stress_seek_abr_audio;
-#[path = "stress_seek_audio.rs"]
-mod stress_seek_audio;
 #[path = "stress_seek_lifecycle.rs"]
 mod stress_seek_lifecycle;

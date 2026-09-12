@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "kithara test runtime: probe/hang/mock helpers (no-op in release)."
-keywords = ["audio", "testing", "kithara", "probe-capture"]
+keywords = ["audio", "testing", "kithara", "usdt"]
 categories = ["development-tools::testing"]
 
 [features]
@@ -14,7 +14,6 @@ flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
-probe-capture = ["dep:backtrace", "tracing-subscriber/env-filter"]
 usdt = ["dep:usdt"]
 # HTTP backend forwarding.
 client-reqwest = []
@@ -33,7 +32,7 @@ num-traits = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
@@ -41,7 +40,6 @@ url = { workspace = true }
 usdt = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-backtrace = { workspace = true, optional = true }
 serial_test = { workspace = true }
 
 [target.'cfg(rtsan)'.dependencies]

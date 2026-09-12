@@ -61,7 +61,6 @@ audio = [
     "kithara/net",
     "kithara/platform",
     "kithara/play",
-    "kithara/probe-capture",
     "kithara/record",
     "kithara/resample-rubato",
     "kithara/resampler",
@@ -82,7 +81,6 @@ wasm = [
     "dep:kithara",
     "kithara/full",
     "kithara/queue",
-    "kithara/probe-capture",
     "kithara/mock",
     "kithara/test-utils",
     "kithara/symphonia",
@@ -118,7 +116,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe-capture", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
@@ -262,7 +260,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["android", "client-wreq"] }
+kithara = { workspace = true, features = ["test-utils", "android", "client-wreq"] }
 
 [dev-dependencies]
 toml = { workspace = true }

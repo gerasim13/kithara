@@ -1,10 +1,9 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Data, DataStruct, DeriveInput, Error, Field, Fields, Ident, LitStr};
+use syn::{Data, DataStruct, DeriveInput, Error, Field, Fields, Ident};
 
 #[derive(Default)]
 struct FieldOpts {
-    rename: Option<String>,
     skip: bool,
 }
 
@@ -18,12 +17,8 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
             if meta.path.is_ident("skip") {
                 opts.skip = true;
                 Ok(())
-            } else if meta.path.is_ident("name") {
-                let lit: LitStr = meta.value()?.parse()?;
-                opts.rename = Some(lit.value());
-                Ok(())
             } else {
-                Err(meta.error("unknown #[probe(...)] field option (expected `skip` or `name`)"))
+                Err(meta.error("unknown #[probe(...)] field option (expected `skip`)"))
             }
         })?;
     }
@@ -32,16 +27,6 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
 
 pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
-
-    let crate_name = std::env::var("CARGO_PKG_NAME")
-        .map_err(|_| {
-            Error::new_spanned(
-                struct_name,
-                "#[derive(Probe)] requires CARGO_PKG_NAME env var (set automatically by cargo)",
-            )
-        })?
-        .replace('-', "_");
-    let target = format!("{crate_name}_probe");
 
     let fields = match &input.data {
         Data::Struct(DataStruct {
@@ -63,7 +48,6 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let mut field_idents: Vec<Ident> = Vec::new();
-    let mut wire_names: Vec<String> = Vec::new();
     for field in fields {
         let opts = parse_field_opts(field)?;
         if opts.skip {
@@ -73,9 +57,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             .ident
             .clone()
             .ok_or_else(|| Error::new_spanned(field, "expected named field"))?;
-        let wire = opts.rename.unwrap_or_else(|| ident.to_string());
         field_idents.push(ident);
-        wire_names.push(wire);
     }
 
     if field_idents.len() > 6 {
@@ -102,15 +84,6 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    let tracing_pairs: Vec<TokenStream2> = wire_names
-        .iter()
-        .zip(slot_idents.iter())
-        .map(|(name, slot)| {
-            let ident = format_ident!("{}", name);
-            quote! { #ident = #slot }
-        })
-        .collect();
-
     let field_consume: Vec<TokenStream2> = field_idents
         .iter()
         .map(|f| quote! { let _ = &self.#f; })
@@ -124,24 +97,11 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             fn record_probe(&self, name: &'static str) {
                 let _ = name;
                 #(#field_consume)*
-                #[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
+                #[cfg(feature = "usdt")]
                 {
+                    ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
-                    #[cfg(feature = "usdt")]
-                    {
-                        ::kithara_test_utils::probe::register_probes();
-                        ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
-                    }
-                    #[cfg(any(test, feature = "probe-capture"))]
-                    {
-                        let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
-                        ::tracing::event!(
-                            target: #target,
-                            ::tracing::Level::TRACE,
-                            probe = name,
-                            #(#tracing_pairs),*
-                        );
-                    }
+                    ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
                 }
             }
         }

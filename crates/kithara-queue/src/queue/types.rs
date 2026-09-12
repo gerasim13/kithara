@@ -124,7 +124,7 @@ impl AtomicTrackId {
     /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`. Returns `true`
     /// when this call performed the arm. Used only by the cfg-gated
     /// autoplay path (`register_for_test`).
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(test)]
     pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
         self.0
             .compare_exchange(
@@ -149,7 +149,7 @@ impl AtomicTrackId {
     /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true`
     /// when `track` was the armed id. Used only by the cfg-gated
     /// autoplay path (`complete_load_for_test`).
-    #[cfg(any(test, feature = "probe-capture"))]
+    #[cfg(test)]
     pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
         self.0
             .compare_exchange(

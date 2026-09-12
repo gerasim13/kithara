@@ -16,8 +16,7 @@
 
 Proc-macro crate providing unified test attributes (`#[kithara::test]`,
 `#[kithara::probe]`, `#[kithara::mock]`) for native and wasm test suites. Probe
-USDT emission is gated by `usdt`, test tracing capture by
-`cfg(any(test, feature = "probe-capture"))`, and mock emission by
+emission is gated by the `usdt` feature; mock emission is gated by
 `cfg(any(test, feature = "mock"))`; flash is gated by the `flash` feature.
 
 ## Usage

@@ -17,7 +17,6 @@ ignored = ["serde"]
 [features]
 default = []
 perf = ["kithara-stretch?/perf"]
-probe-capture = ["dep:kithara-test-utils"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 render = ["dep:kithara-bufpool"]
 stretch-signalsmith = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-stretch/stretch-signalsmith", "render"]
@@ -29,7 +28,7 @@ kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe-capture", "tls-rustls"], optional = true }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "usdt", "tls-rustls"], optional = true }
 
 arc-swap = { workspace = true }
 bon = { workspace = true }
@@ -52,7 +51,7 @@ kithara-stretch = { workspace = true, default-features = false, optional = true 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe-capture", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
 realfft = { workspace = true }
 

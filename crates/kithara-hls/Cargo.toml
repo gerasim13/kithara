@@ -15,7 +15,6 @@ ignored = ["hotpath"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
-probe-capture = []
 usdt = ["kithara-test-utils/usdt"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-stream/client-reqwest", "kithara-abr/client-reqwest"]
@@ -61,14 +60,13 @@ hotpath = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-abr = { workspace = true, default-features = false, features = ["mock"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-hls = { path = ".", default-features = false, features = ["probe-capture"] }
+kithara-hls = { path = ".", default-features = false, features = [] }
 kithara-net = { workspace = true, default-features = false, features = [
-    "probe-capture",
     "client-reqwest",
     "tls-rustls",
 ] }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe-capture", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }

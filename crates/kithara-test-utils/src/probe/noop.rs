@@ -64,41 +64,6 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 
 pub fn register_probes() {}
 
-#[must_use]
-pub fn caller_fn_above(_probe_fn_name: &str) -> Option<String> {
-    None
-}
-
-#[must_use]
-pub fn next_probe_seq() -> u64 {
-    0
-}
-
-#[must_use]
-pub fn next_thread_probe_seq() -> u64 {
-    0
-}
-
-#[must_use]
-pub fn current_thread_u64() -> u64 {
-    0
-}
-
-#[must_use]
-pub fn current_install_id() -> u64 {
-    0
-}
-
-#[must_use]
-pub fn bump_install_id() -> u64 {
-    0
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-kithara_platform::tokio::task_local! {
-    pub static OWNED_INSTALL_ID: u64;
-}
-
 pub fn fire_0(_name: &'static str) {}
 pub fn fire_1(_name: &'static str, _a0: u64) {}
 pub fn fire_2(_name: &'static str, _a0: u64, _a1: u64) {}
