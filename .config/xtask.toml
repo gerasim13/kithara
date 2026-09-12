@@ -521,6 +521,9 @@ features = ["client-wreq"]
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
 
+[test.net_backends.none]
+features = []
+
 # The default product suite is one Cargo graph. Domain tests remain separate
 # packages, so Cargo can reuse every unchanged test binary while compiling the
 # shared product closure only once. Browser-only packages have their own lane.
@@ -949,6 +952,7 @@ suffix_args = [
 
 [test.lanes.ui-perf]
 program = "cargo"
+net_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry", "kithara-ui/perf"]
 default_flash = false
 prefix_args = [
@@ -964,6 +968,7 @@ suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
 
 [test.lanes.ui-doc]
 program = "cargo"
+net_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]
