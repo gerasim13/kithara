@@ -2,13 +2,11 @@ use std::io::Read;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig},
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
-    stream::{
-        Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir,

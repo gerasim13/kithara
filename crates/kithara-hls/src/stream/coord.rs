@@ -658,6 +658,7 @@ pub(super) mod tests {
         VariantIndex,
     };
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
+    use kithara_download::RequestPriority;
     use kithara_events::EventBus;
     use kithara_platform::{
         sync::{Arc, ThreadGate},
@@ -665,7 +666,7 @@ pub(super) mod tests {
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        RequestPriority, SeekControl,
+        SeekControl,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -1731,7 +1732,7 @@ pub(super) mod tests {
         assert_eq!(replacement.id().seek_epoch(), next_epoch);
     }
 
-    fn v0_seg_idx(cmd: &kithara_stream::dl::FetchCmd) -> u32 {
+    fn v0_seg_idx(cmd: &kithara_download::FetchCmd) -> u32 {
         cmd.url()
             .path()
             .trim_start_matches("/v0-seg")

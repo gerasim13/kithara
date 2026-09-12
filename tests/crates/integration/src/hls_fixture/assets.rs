@@ -5,10 +5,10 @@ use kithara::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, AssetStore,
         DefaultLayout,
     },
+    download::{Downloader, DownloaderConfig, Peer, PeerHandle},
     hls::{Hls, KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
-    stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle},
 };
 use url::Url;
 

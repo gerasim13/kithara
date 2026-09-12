@@ -2,13 +2,14 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    download::DownloaderEvent,
     events::EventBus,
     file::{File, FileConfig, FileEvent},
     platform::{
         CancelToken,
         time::{Duration, Instant, timeout},
     },
-    stream::{DownloaderEvent, Stream},
+    stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

@@ -351,6 +351,7 @@ miri *ARGS:
         cargo +nightly miri test --lib \
         -p kithara-abr \
         -p kithara-bufpool \
+        -p kithara-download \
         -p kithara-events \
         -p kithara-queue \
         -p kithara-stream \

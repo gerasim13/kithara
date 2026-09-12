@@ -2,12 +2,12 @@ use kithara::{
     abr::AbrEvent,
     assets::AssetEvent,
     audio::{AudioEvent, DecoderEvent},
+    download::DownloaderEvent,
     file::FileEvent,
     hls::HlsEvent,
     host::TransportEvent,
     play::PlayerEvent,
     queue::{ItemEvent, QueueEvent},
-    stream::DownloaderEvent,
 };
 use kithara_events::{BusEvent, EventSet};
 

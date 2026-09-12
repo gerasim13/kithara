@@ -12,7 +12,7 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
-use futures::{StreamExt, stream::iter as stream_iter};
+use futures::StreamExt;
 use kithara_abr::{
     Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
     VariantInfo,
@@ -30,10 +30,10 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    BodyStream, DemandFn, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority,
+    DemandFn, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority,
     cmd::{FetchCmdBuilder, fetch_cmd_builder},
 };
-use crate::{Activity, DownloaderEvent, SeekState};
+use crate::DownloaderEvent;
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
@@ -106,11 +106,6 @@ fn test_client_with_options(options: NetOptions) -> HttpClient {
 
 fn test_config() -> DownloaderConfig {
     DownloaderConfig::for_client(test_client()).build()
-}
-
-fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
-    let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
-    BodyStream::wrap_raw(Box::pin(stream))
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
@@ -461,36 +456,6 @@ async fn streaming_without_writer_still_completes() {
     assert!(has_headers);
     assert!(has_no_error);
     drop(handle);
-}
-
-#[kithara::test(tokio)]
-async fn body_stream_collect_accumulates_bytes() {
-    let body = test_body_stream(vec![b"hello", b" ", b"world"]);
-    let result = body.collect().await.expect("collect should succeed");
-    assert_eq!(result.as_ref(), b"hello world");
-}
-
-#[kithara::test(tokio)]
-async fn body_stream_write_all_delegates_to_consumer() {
-    let body = test_body_stream(vec![b"abc", b"def"]);
-    let mut buf = Vec::new();
-    let total = body
-        .write_all(|chunk| {
-            buf.extend_from_slice(chunk);
-            Ok(())
-        })
-        .await
-        .expect("write_all should succeed");
-
-    assert_eq!(total, 6);
-    assert_eq!(buf, b"abcdef");
-}
-
-#[kithara::test(tokio)]
-async fn body_stream_empty_collects_to_empty() {
-    let body = test_body_stream(vec![]);
-    let result = body.collect().await.expect("collect empty should succeed");
-    assert!(result.is_empty());
 }
 
 #[kithara::test(tokio)]
@@ -1096,10 +1061,10 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 
 /// Peer that emits `total_cmds` GET commands and stamps each with its
 /// tag when the response arrives. `priority()` reads the shared
-/// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
+/// activity flag so a mid-stream priority change is observable.
 struct TaggedPriorityPeer {
     gate: Arc<CompletionGate>,
-    seek: Arc<SeekState>,
+    active: Arc<AtomicBool>,
     cancel: CancelToken,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
@@ -1110,7 +1075,7 @@ struct TaggedPriorityPeer {
 impl TaggedPriorityPeer {
     fn new(
         tag: PeerTag,
-        seek: Arc<SeekState>,
+        active: Arc<AtomicBool>,
         url: Url,
         cmds: usize,
         gate: &Arc<CompletionGate>,
@@ -1118,7 +1083,7 @@ impl TaggedPriorityPeer {
     ) -> Self {
         Self {
             tag,
-            seek,
+            active,
             url,
             cancel: CancelToken::never(),
             remaining: Mutex::new(cmds),
@@ -1169,7 +1134,7 @@ impl Peer for TaggedPriorityPeer {
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.seek.is_playing() {
+        if self.active.load(Ordering::Acquire) {
             RequestPriority::High
         } else {
             RequestPriority::Low
@@ -1397,21 +1362,21 @@ async fn active_peer_completes_before_preload_under_contention() {
     let total = CMDS_PER_PEER * 2;
     let gate = CompletionGate::new(total);
 
-    let seek_active = Arc::new(SeekState::new());
-    seek_active.set_playing(true);
+    let active_active = Arc::new(AtomicBool::new(false));
+    active_active.store(true, Ordering::Release);
     let active = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Active,
-        seek_active,
+        active_active,
         url.clone(),
         CMDS_PER_PEER,
         &gate,
         &completion_log,
     ));
 
-    let seek_preload = Arc::new(SeekState::new());
+    let active_preload = Arc::new(AtomicBool::new(false));
     let preload = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Preload,
-        seek_preload,
+        active_preload,
         url,
         CMDS_PER_PEER,
         &gate,
@@ -1636,7 +1601,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 
     let a = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Active,
-        Arc::new(SeekState::new()),
+        Arc::new(AtomicBool::new(false)),
         url.clone(),
         CMDS_PER_PEER,
         &gate,
@@ -1644,7 +1609,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     ));
     let b = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Preload,
-        Arc::new(SeekState::new()),
+        Arc::new(AtomicBool::new(false)),
         url,
         CMDS_PER_PEER,
         &gate,
@@ -1678,7 +1643,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 async fn peer_handle_execute_respects_either_peer_priority() {
     struct FlippablePeer {
         cancel: CancelToken,
-        seek: Arc<SeekState>,
+        active: Arc<AtomicBool>,
     }
     impl Abr for FlippablePeer {
         fn cancel(&self) -> CancelToken {
@@ -1687,7 +1652,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     }
     impl Peer for FlippablePeer {
         fn priority(&self) -> RequestPriority {
-            if self.seek.is_playing() {
+            if self.active.load(Ordering::Acquire) {
                 RequestPriority::High
             } else {
                 RequestPriority::Low
@@ -1696,25 +1661,25 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     }
 
     let dl = Downloader::new(test_config());
-    let seek = Arc::new(SeekState::new());
+    let active = Arc::new(AtomicBool::new(false));
     let peer = Arc::new(FlippablePeer {
         cancel: CancelToken::never(),
-        seek: Arc::clone(&seek),
+        active: Arc::clone(&active),
     });
     let handle = dl.register(peer);
 
     let url = spawn_slow_server(1).await;
 
     assert_eq!(
-        peer_priority_from_handle(&handle, &seek),
+        peer_priority_from_handle(&handle, &active),
         RequestPriority::Low
     );
     let low_resp = handle.execute(FetchCmd::get(url.clone()).build()).await;
     assert!(low_resp.is_ok(), "execute must succeed while Low");
 
-    seek.set_playing(true);
+    active.store(true, Ordering::Release);
     assert_eq!(
-        peer_priority_from_handle(&handle, &seek),
+        peer_priority_from_handle(&handle, &active),
         RequestPriority::High
     );
     let high_resp = handle.execute(FetchCmd::get(url).build()).await;
@@ -1722,9 +1687,9 @@ async fn peer_handle_execute_respects_either_peer_priority() {
 }
 
 /// Helper for the deterministic routing test: reads the effective
-/// peer priority from the same `SeekState` activity the peer observes.
-fn peer_priority_from_handle(_handle: &super::PeerHandle, seek: &SeekState) -> RequestPriority {
-    if seek.is_playing() {
+/// peer priority from the same `AtomicBool` activity the peer observes.
+fn peer_priority_from_handle(_handle: &super::PeerHandle, active: &AtomicBool) -> RequestPriority {
+    if active.load(Ordering::Acquire) {
         RequestPriority::High
     } else {
         RequestPriority::Low

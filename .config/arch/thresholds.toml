@@ -171,13 +171,13 @@ exempt_crates = [
 # Files where minting a fresh cancel root is sanctioned: consumer-crate owner
 # tops (App / FFI), FFI bridges that outlive the player, `CancelScope`'s
 # standalone root, and the dedicated never-cancelled sentinel / latch sites
-# (`kithara-stream` batch placeholder, `kithara-hls` peer `wake_signal`).
+# (`kithara-download` batch placeholder, `kithara-hls` peer `wake_signal`).
 allowed_files = [
   "crates/kithara-app/src/main.rs",
   "crates/kithara-ffi/src/native/inner.rs",
   "crates/kithara-ffi/src/core/item.rs",
   "crates/kithara-platform/src/common/cancel/scope.rs",
-  "crates/kithara-stream/src/dl/batch.rs",
+  "crates/kithara-download/src/batch.rs",
   "crates/kithara-hls/src/peer.rs",
 ]
 
