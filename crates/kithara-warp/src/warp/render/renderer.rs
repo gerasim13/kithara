@@ -110,6 +110,9 @@ pub struct WarpRenderer<S> {
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
     pub(super) reset_pending: bool,
+    /// A source discontinuity may prepare its exact future activation without
+    /// advancing the callback-owned presentation frontier.
+    pub(super) discontinuity_pending: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     pub(super) applied_pitch: f64,
     /// Fractional output frames retained across exact-span requests.
@@ -184,6 +187,7 @@ where
             applied_warp_map: None,
             primed_source_debt: 0,
             reset_pending: false,
+            discontinuity_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
             output_start_meta: None,
@@ -457,6 +461,21 @@ where
             )
             .max(snapshot.frontier().output());
         (output == activation.output()).then_some(activation.revision())
+    }
+
+    pub(super) fn prepare_discontinuity_context(
+        &self,
+        snapshot: Option<RenderSnapshot>,
+        source: u64,
+    ) -> Option<RenderSnapshot> {
+        let snapshot = snapshot?;
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return Some(snapshot);
+        };
+        if self.discontinuity_pending && source == activation.source() {
+            return Some(snapshot.prepare_at(source, activation.output(), activation.revision()));
+        }
+        Some(snapshot)
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.

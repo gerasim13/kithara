@@ -245,6 +245,23 @@ pub struct RenderSnapshot {
 
 impl RenderSnapshot {
     #[cfg(feature = "render")]
+    pub(crate) fn prepare_at(
+        &self,
+        source: u64,
+        output: SessionFrame,
+        warp_map: WarpMapRevision,
+    ) -> Self {
+        Self {
+            frontier: PresentationFrontier::builder()
+                .source(source)
+                .output(output)
+                .warp_map(warp_map)
+                .build(),
+            context: self.context.clone(),
+        }
+    }
+
+    #[cfg(feature = "render")]
     pub(crate) fn advance(
         self,
         previous: Option<&Self>,

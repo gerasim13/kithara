@@ -54,6 +54,12 @@ impl SlotTable {
         Some(self.slots.remove(idx).1)
     }
 
+    pub(super) fn service_scheduled_seeks(&mut self, preparation_frames: usize) {
+        for (_, control) in &mut self.slots {
+            control.service_scheduled_seeks(preparation_frames);
+        }
+    }
+
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             slots: Vec::with_capacity(capacity),

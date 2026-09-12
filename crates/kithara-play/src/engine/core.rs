@@ -2,7 +2,7 @@ mod registration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{ConsumerWakeMode, ScheduledSeek};
+use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
 use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
 use kithara_platform::{
@@ -113,16 +113,16 @@ impl<S> EngineImpl<S> {
         drop(slots);
     }
 
-    pub(crate) fn begin_track_seek(
+    pub(crate) fn schedule_track_seek(
         &self,
         slot: SlotId,
         item: TrackId,
         position: Duration,
-    ) -> Option<ScheduledSeek> {
-        self.slots
-            .lock()
-            .get(slot)
-            .and_then(|control| control.begin_track_seek(item, position))
+        activation: kithara_warp::SessionFrame,
+    ) {
+        if let Some(control) = self.slots.lock().get_mut(slot) {
+            control.schedule_track_seek(item, position, activation);
+        }
     }
 
     pub(crate) fn cancel(&self) {
@@ -401,6 +401,9 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
+        self.slots
+            .lock()
+            .service_scheduled_seeks(self.config.response_budget_frames.get());
         self.session.tick()
     }
 

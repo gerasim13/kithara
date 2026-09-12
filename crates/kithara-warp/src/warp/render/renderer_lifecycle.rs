@@ -443,6 +443,7 @@ where
         let mut output = self.render_at(chunk, prepared.speed, snapshot, Some(prepared))?;
         if let Some(revision) = revision {
             self.applied_warp_map = Some(revision);
+            self.discontinuity_pending = false;
             output.meta.render_revision =
                 kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
                     .unwrap_or(rate_revision);
@@ -453,6 +454,7 @@ where
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.reset_pending = true;
+        self.discontinuity_pending = true;
         self.clear_render_state();
         self.committed = None;
         self.applied_warp_map = None;

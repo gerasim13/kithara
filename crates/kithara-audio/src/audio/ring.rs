@@ -16,6 +16,7 @@ use crate::{RevisionFloorStatus, SourceEnd, SourceSpan};
 
 enum FetchOutcome {
     Continue,
+    Future(Fetch<AudioChunk>),
     Return(Option<(AudioChunk, Option<SourceSpan>)>),
 }
 
@@ -39,6 +40,7 @@ pub(super) struct RingConsumer {
     pub(super) validator: EpochValidator,
     pub(super) current_chunk: Option<AudioChunk>,
     pub(super) current_source_span: Option<SourceSpan>,
+    future_fetch: Option<Fetch<AudioChunk>>,
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
@@ -72,6 +74,7 @@ impl RingConsumer {
             phase: ConsumerPhase::Buffering,
             current_chunk: None,
             current_source_span: None,
+            future_fetch: None,
             rendered_source_head: None,
             rendered_warp_revision: None,
             render_revision_floor: 0,
@@ -93,7 +96,16 @@ impl RingConsumer {
         cursor.clear();
         self.phase = ConsumerPhase::SeekPending { epoch };
 
-        let mut popped = false;
+        let mut popped = self.future_fetch.is_some();
+        if let Some(fetch) = self.future_fetch.take() {
+            if fetch.epoch() == epoch || is_producer_terminal(&fetch) {
+                self.stage_post_seek_fetch(fetch, epoch, cursor);
+                return true;
+            }
+            if let Fetch::Data { data, .. } = fetch {
+                self.discard(data);
+            }
+        }
         while let Some(fetch) = self.audio_rx.try_pop() {
             popped = true;
             if fetch.epoch() < epoch && !is_producer_terminal(&fetch) {
@@ -211,6 +223,9 @@ impl RingConsumer {
     }
 
     fn process_fetch(&mut self, fetch: Fetch<AudioChunk>) -> FetchOutcome {
+        if fetch.epoch() > self.validator.epoch && !is_producer_terminal(&fetch) {
+            return FetchOutcome::Future(fetch);
+        }
         if !self.validator.is_valid(&fetch) && !is_producer_terminal(&fetch) {
             if let Fetch::Data { data, .. } = fetch {
                 self.discard(data);
@@ -256,6 +271,9 @@ impl RingConsumer {
     }
 
     pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
+        if self.future_fetch.is_some() {
+            return RecvOutcome::Empty;
+        }
         if receive_is_nonblocking(self.preloaded, self.block_on_underrun) {
             if let Some(fetch) =
                 try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
@@ -317,6 +335,10 @@ impl RingConsumer {
                 RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
                     FetchOutcome::Continue => {
                         hang_tick!();
+                    }
+                    FetchOutcome::Future(fetch) => {
+                        self.future_fetch = Some(fetch);
+                        return None;
                     }
                     FetchOutcome::Return(chunk) => {
                         hang_reset!();
@@ -915,6 +937,37 @@ mod tests {
             .expect("post-seek chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn future_seek_pcm_waits_for_explicit_presentation(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let future = fixture.chunk(&ring_pcm[..2]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(future, 1))
+            .expect("future chunk reaches ring");
+
+        assert!(fixture.recv().is_none());
+        assert!(fixture.trash_rx.try_pop().is_none());
+        assert!(fixture.ring.begin_seek_epoch(1, &mut fixture.cursor));
+
+        let mut output = [0.0; 2];
+        let read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut output,
+            )
+            .expect("presented future PCM remains readable");
+        let ReadOutcome::Frames { count, .. } = read.outcome else {
+            panic!("presented future PCM must produce frames");
+        };
+        assert_eq!(count.get(), 2);
+        assert_eq!(output.as_slice(), &ring_pcm[..2]);
     }
 
     #[kithara::test]

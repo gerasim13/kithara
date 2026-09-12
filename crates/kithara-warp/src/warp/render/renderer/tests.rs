@@ -208,6 +208,70 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
 }
 
 #[kithara::test]
+fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentation() {
+    let controls = StretchControls::new(1.0);
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let reader = publisher.reader();
+    let mut renderer = warp.renderer(spec(), pools());
+    let presented_output = SessionFrame::new(1_000);
+    let context = RenderContext::new(
+        presented_output..SessionFrame::new(1_128),
+        spec().sample_rate,
+        None,
+        SessionEpoch::new(1),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context")
+    .with_rate(SyncMode::HostSync, controls.rate_target());
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(100)
+            .output(presented_output)
+            .build(),
+    );
+    let cue = 5_000;
+    let activation_output = SessionFrame::new(9_000);
+    let revision = WarpMapRevision::first();
+    warp.region_plan().install(Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("fixture plan")
+            .with_activation(WarpMap::identity(revision).reanchor(cue, activation_output)),
+    )));
+    renderer.reset();
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+    let mut input = chunk(&pools, &[0.0; 256]);
+    input.meta.frame_offset = cue;
+
+    renderer
+        .prepare_quantum(input.meta, input.frames())
+        .expect("post-seek activation is plannable");
+    let output = renderer
+        .render_quantum(input)
+        .expect("post-seek activation renders PCM");
+
+    assert_eq!(
+        kithara_signal::render_warp_map_revision(output.meta.render_revision),
+        u64::from(revision)
+    );
+    assert_eq!(
+        renderer
+            .committed
+            .as_ref()
+            .map(|snapshot| snapshot.frontier().output()),
+        Some(SessionFrame::new(9_000 + i64::from(output.meta.frames)))
+    );
+    assert_eq!(
+        reader.load().map(|snapshot| snapshot.frontier().output()),
+        Some(presented_output),
+        "worker preparation must not acknowledge future PCM as presented"
+    );
+}
+
+#[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(false);

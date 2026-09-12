@@ -380,7 +380,6 @@ async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
 #[ignore = "ignored-red: prepared alignment is not yet delivered to the renderer as a versioned source/output map with exact-frame activation (next Warp phase), 2026-09-10"]
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn published_track_grids_align_the_rendered_beats() {
-    let recorder = probe_capture::install();
     let case = DOWNTEMPO_HOUSE_SYNC;
     let grids = [
         asset_grid(
@@ -477,26 +476,8 @@ async fn published_track_grids_align_the_rendered_beats() {
     }
     assert!(
         failures.is_empty(),
-        "{}\ncapture_origins={capture_origins:?}\nswapped={:?}\ntransition={:?}\nnear={:?}\nplanned={:?}\nprime={:?}\npcm_activation={:?}",
+        "{}\ncapture_origins={capture_origins:?}",
         failures.join("\n"),
-        recorder.events_with_probe("warp_plan_swapped"),
-        recorder.events_with_probe("warp_transition_primed"),
-        recorder
-            .events_with_probe("warp_activation_near")
-            .into_iter()
-            .filter(|event| event
-                .u64("output")
-                .is_some_and(|output| (115_900..=116_350).contains(&output)))
-            .collect::<Vec<_>>(),
-        recorder.events_with_probe("warp_activation_planned"),
-        recorder.events_with_probe("prime_activation"),
-        recorder
-            .events_with_probe("pcm_consumed")
-            .into_iter()
-            .filter(|event| event
-                .u64("output_start")
-                .is_some_and(|output| (185_700..=186_100).contains(&output)))
-            .collect::<Vec<_>>(),
     );
 }
 

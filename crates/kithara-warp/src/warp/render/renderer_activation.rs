@@ -189,6 +189,10 @@ where
             self.clear_pending_source();
         }
         self.prepared_context = self.select_context(meta.frame_offset);
+        let presented = self.prepared_context.take();
+        if let Some(prepared) = self.prepare_discontinuity_context(presented, meta.frame_offset) {
+            self.prepared_context = Some(prepared);
+        }
         let warp_map =
             self.map_at_exact_frontier(self.prepared_context.as_ref(), meta.frame_offset);
         let rate = self.rate;

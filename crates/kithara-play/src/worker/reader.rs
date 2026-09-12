@@ -126,6 +126,7 @@ impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
                 required_frames: NonZeroUsize,
                 presented_source: Option<SourceEnd>,
             ) -> RevisionFloorStatus;
+            fn present_seek(&mut self, epoch: u64) -> kithara_audio::SeekPresentation;
             fn sync_seek(&mut self);
         }
         to self.warp.source() {

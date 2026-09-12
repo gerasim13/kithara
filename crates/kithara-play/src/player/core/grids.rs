@@ -193,21 +193,12 @@ where
                         + kithara_platform::time::Duration::from_nanos(
                             prepared.source % sample_rate * 1_000_000_000 / sample_rate,
                         );
-                if let Some(seek) = self
-                    .runtime
-                    .core
-                    .engine
-                    .begin_track_seek(slot, item, target)
-                    && matches!(seek.outcome, kithara_audio::SeekOutcome::Landed { .. })
-                    && let Err(error) =
-                        self.runtime
-                            .send_to_slot(crate::bridge::PlayerCmd::ScheduleSeek {
-                                item_id: item,
-                                seek_epoch: seek.epoch,
-                            })
-                {
-                    warn!(%error, %item, seek_epoch = seek.epoch, "scheduled Warp seek command was not admitted");
-                }
+                self.runtime.core.engine.schedule_track_seek(
+                    slot,
+                    item,
+                    target,
+                    prepared.activation,
+                );
             }
         }
         Ok(Some(admission))
