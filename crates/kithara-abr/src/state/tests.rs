@@ -126,6 +126,22 @@ fn decide_manual_mode_always_target() {
 }
 
 #[kithara::test]
+fn a_manual_pick_taken_while_a_seek_holds_the_lock_still_decides() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.lock();
+    state.set_mode(AbrMode::Manual(VariantIndex::new(1)));
+    let variants = test_variants_3();
+    let settings = settings_fast();
+    let view = view_with_bw(Some(10_000_000), &variants, &settings);
+
+    let d = state.decide(&view, Instant::now());
+
+    assert!(d.changed());
+    assert_eq!(d.reason(), AbrReason::ManualOverride);
+    assert_eq!(d.target(), VariantIndex::new(1));
+}
+
+#[kithara::test]
 fn decide_no_estimate_stays_put() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
     let variants = test_variants_3();
@@ -388,6 +404,27 @@ fn pending_claim_distinguishes_absent_from_locked() {
         PendingAbrClaim::Locked(_)
     ));
     assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test]
+fn a_manual_intent_formed_under_the_lock_is_published_only_after_unlock() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.lock();
+    state.set_mode(AbrMode::Manual(VariantIndex::new(1)));
+    state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+
+    assert!(matches!(
+        state.pending_claim(VariantIndex::new(0)),
+        PendingAbrClaim::Locked(_)
+    ));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+
+    state.unlock();
+    let claim = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("the manual intent formed under the lock must outlive it");
+    assert!(state.commit_pending(claim, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
 }
 
 #[kithara::test]
@@ -1475,6 +1512,21 @@ fn mode_from(op: ModeOp) -> AbrMode {
     }
 }
 
+/// Drive one tick the way `controller::tick` drives it: a changed decision
+/// becomes a pending request, and a separate boundary commit publishes it.
+/// Publication is the step [`AbrState::lock`] withholds, so a model that
+/// stores the variant straight from the decision never reaches the gate that
+/// enforces SEEK-NO-SWITCH.
+fn drive_tick(state: &AbrState, view: &AbrView<'_>, now: Instant) {
+    let decision = state.decide(view, now);
+    if decision.changed() {
+        state.request_target(decision.target(), decision.reason());
+    }
+    if let Some(claim) = state.claim_pending_decision(state.current_variant_index()) {
+        assert!(state.commit_pending(claim, now));
+    }
+}
+
 fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (1_000u64..20_000_000u64).prop_map(|bps| Op::PushBandwidth { bps }),
@@ -1546,10 +1598,7 @@ proptest! {
                 }
                 Op::Tick => {
                     let view = view_with_bw(current_bps, &variants, &settings);
-                    let d = state.decide(&view, now);
-                    if d.changed() {
-                        state.apply_decision(&d, now);
-                    }
+                    drive_tick(&state, &view, now);
                 }
             }
 
@@ -1568,10 +1617,7 @@ proptest! {
                 && lock_depth == 0
             {
                 let view = view_with_bw(current_bps, &variants, &settings);
-                let d = state.decide(&view, now);
-                if d.changed() {
-                    state.apply_decision(&d, now);
-                }
+                drive_tick(&state, &view, now);
                 prop_assert_eq!(
                     state.current_variant_index(),
                     idx,
