@@ -406,6 +406,8 @@ impl Resource {
             pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
             pub fn sync_seek(&mut self);
+            /// Keep current PCM until replacement seek output is ready.
+            pub fn defer_seek_until_pcm(&mut self);
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Get the current decoded-audio specification.

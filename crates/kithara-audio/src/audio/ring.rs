@@ -20,6 +20,12 @@ enum FetchOutcome {
     Return(Option<(AudioChunk, Option<SourceSpan>)>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SeekEpochStatus {
+    WaitingForPcm,
+    Ready,
+}
+
 pub(super) enum RecvOutcome {
     Closed,
     Empty,
@@ -61,6 +67,27 @@ pub(super) struct RingParts {
     pub(super) audio_rx: Inlet<Fetch<AudioChunk>>,
     pub(super) trash_tx: Outlet<AudioChunk>,
     pub(super) block_on_underrun: bool,
+}
+
+pub(super) trait SeekEpochReadiness {
+    fn seek_epoch_status(&mut self, epoch: u64) -> SeekEpochStatus;
+}
+
+impl SeekEpochReadiness for RingConsumer {
+    fn seek_epoch_status(&mut self, epoch: u64) -> SeekEpochStatus {
+        let parked = self
+            .future_fetch
+            .as_ref()
+            .is_some_and(|fetch| fetch.epoch() == epoch);
+        let queued = self
+            .audio_rx
+            .fold(false, |ready, fetch| ready || fetch.epoch() == epoch);
+        if parked || queued {
+            SeekEpochStatus::Ready
+        } else {
+            SeekEpochStatus::WaitingForPcm
+        }
+    }
 }
 
 impl RingConsumer {
@@ -689,6 +716,32 @@ mod tests {
 
         let mut empty = RingFixture::new(true);
         assert!(!empty.ring.begin_seek_epoch(1, &mut empty.cursor));
+    }
+
+    #[kithara::test]
+    fn seek_epoch_becomes_ready_only_when_its_fetch_is_queued(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        assert_eq!(
+            fixture.ring.seek_epoch_status(1),
+            SeekEpochStatus::WaitingForPcm
+        );
+
+        let old = fixture.chunk(&ring_pcm[..1]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(old, 0))
+            .expect("old epoch reaches ring");
+        assert_eq!(
+            fixture.ring.seek_epoch_status(1),
+            SeekEpochStatus::WaitingForPcm
+        );
+
+        let replacement = fixture.chunk(&ring_pcm[1..2]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(replacement, 1))
+            .expect("replacement epoch reaches ring");
+        assert_eq!(fixture.ring.seek_epoch_status(1), SeekEpochStatus::Ready);
     }
 
     /// One second instead of the ambient ten: the watchdog park is the point of

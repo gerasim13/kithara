@@ -366,7 +366,7 @@ impl PlayerResource {
     /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
     /// picks up the epoch itself via `sync_seek`.
     pub fn reset_for_seek(&mut self) {
-        self.resource.get_mut().sync_seek();
+        self.resource.get_mut().defer_seek_until_pcm();
         self.write_len = 0;
         self.write_pos = 0;
         self.source_spans.clear();

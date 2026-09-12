@@ -245,6 +245,9 @@ pub trait AudioControl {
     /// this is the only half an audio callback may run.
     fn sync_seek(&mut self) {}
 
+    /// Keep current PCM presentable until the begun seek epoch has queued output.
+    fn defer_seek_until_pcm(&mut self) {}
+
     /// Make one prepared seek epoch visible to this reader and adopt it.
     fn present_seek(&mut self, _epoch: u64) -> SeekPresentation {
         SeekPresentation::Superseded

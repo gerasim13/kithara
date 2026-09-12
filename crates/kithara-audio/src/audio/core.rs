@@ -18,7 +18,7 @@ use super::{
     PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
     cursor::ChunkCursor,
     event::AudioEvents,
-    ring::{RecvCtx, RingConsumer},
+    ring::{RecvCtx, RingConsumer, SeekEpochReadiness, SeekEpochStatus},
     seek::{SeekHandle, SeekHandleParts},
 };
 use crate::{
@@ -34,6 +34,13 @@ pub struct Audio<S> {
     _marker: PhantomData<S>,
     ring: RingConsumer,
     session: Session,
+    seek_adoption: SeekAdoption,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeekAdoption {
+    Immediate,
+    DeferUntilPcm,
 }
 
 /// Worker-independent audio reader and its still-concrete producer lane.
@@ -114,6 +121,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
             events: AudioEvents::new(parts.emit, wake_mode),
             session: parts.session,
             controls: parts.controls,
+            seek_adoption: SeekAdoption::Immediate,
             _marker: parts.marker,
         }
     }
@@ -248,6 +256,12 @@ impl<S> Audio<S> {
         if begun == self.ring.validator.epoch {
             return;
         }
+        if self.seek_adoption == SeekAdoption::DeferUntilPcm
+            && self.ring.seek_epoch_status(begun) == SeekEpochStatus::WaitingForPcm
+        {
+            return;
+        }
+        self.seek_adoption = SeekAdoption::Immediate;
         self.events.reset_underrun();
         let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
         if popped {
@@ -417,6 +431,10 @@ impl<S> AudioControl for Audio<S> {
         Self::sync_seek(self);
     }
 
+    fn defer_seek_until_pcm(&mut self) {
+        self.seek_adoption = SeekAdoption::DeferUntilPcm;
+    }
+
     fn present_seek(&mut self, epoch: u64) -> SeekPresentation {
         let current = self.session.seek_obs.epoch();
         if current != epoch {
@@ -425,6 +443,7 @@ impl<S> AudioControl for Audio<S> {
         if self.ring.validator.epoch == epoch {
             return SeekPresentation::Current;
         }
+        self.seek_adoption = SeekAdoption::Immediate;
         self.session.seek.mark_pending(epoch);
         self.sync_seek();
         SeekPresentation::Presented
@@ -561,6 +580,10 @@ mod tests {
             .seek(Duration::from_millis(250))
             .expect("seek should arm epoch");
         assert!(!fixture.audio.session.preload_gate.is_ready());
+        assert_eq!(
+            fixture.audio.ring.validator.epoch,
+            fixture.audio.session.seek_obs.epoch()
+        );
     }
 
     #[kithara::test]
@@ -588,6 +611,40 @@ mod tests {
             AudioControl::present_seek(&mut fixture.audio, scheduled.epoch),
             SeekPresentation::Current
         );
+    }
+
+    #[kithara::test]
+    fn deferred_seek_adopts_epoch_when_replacement_pcm_is_queued(trim_silence: Vec<f32>) {
+        let mut fixture = AudioFixture::default();
+        fixture
+            .data_tx
+            .try_push(Fetch::data(staged_chunk(&trim_silence), 0))
+            .expect("old chunk reaches the ring");
+        let mut old = [0.0f32; 2];
+        assert!(matches!(
+            fixture.audio.read(&mut old).expect("old pcm reads"),
+            ReadOutcome::Frames { .. }
+        ));
+
+        fixture
+            .audio
+            .seek_handle()
+            .begin(Duration::from_millis(250));
+        let begun_epoch = fixture.audio.session.seek_obs.epoch();
+        AudioControl::defer_seek_until_pcm(&mut fixture.audio);
+        fixture.audio.sync_seek();
+        assert_eq!(fixture.audio.ring.validator.epoch, 0);
+
+        fixture
+            .data_tx
+            .try_push(Fetch::data(staged_chunk(&trim_silence), begun_epoch))
+            .expect("replacement chunk reaches the ring");
+        fixture.audio.sync_seek();
+        assert_eq!(fixture.audio.ring.validator.epoch, begun_epoch);
+        assert_eq!(fixture.audio.seek_adoption, SeekAdoption::Immediate);
+
+        fixture.audio.sync_seek();
+        assert_eq!(fixture.audio.ring.validator.epoch, begun_epoch);
     }
 
     #[kithara::test]
