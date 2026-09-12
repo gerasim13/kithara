@@ -55,6 +55,7 @@ pub(crate) struct Entry {
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    pub(crate) isolated_target: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +67,7 @@ pub(crate) struct Dependent {
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    pub(crate) isolated_target: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +144,7 @@ pub(crate) fn render(
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
             runner: github_runner(lane, args.kind),
+            isolated_target: lane.target_snapshot.is_some(),
         })
         .collect();
 
@@ -179,6 +182,7 @@ pub(crate) fn render(
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
+            isolated_target: lane.target_snapshot.is_some(),
         })
         .collect();
 
@@ -363,7 +367,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"},"isolated_target":false}]"#
         );
     }
 

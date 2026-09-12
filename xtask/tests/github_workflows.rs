@@ -1867,17 +1867,18 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
         .as_str()
         .expect("the executor names where the fixtures are read from");
 
+    let cache_root = Path::new(fixtures)
+        .parent()
+        .expect("the fixture store has a mounted-volume parent")
+        .display()
+        .to_string();
     assert!(
-        Path::new(target).is_absolute(),
-        "a relative build directory is one inside the checkout: {target}"
+        target.contains(&format!("'{cache_root}/target'")),
+        "ordinary lanes must keep the runner's persistent target: {target}"
     );
     assert!(
-        Path::new(target).starts_with(
-            Path::new(fixtures)
-                .parent()
-                .expect("the fixture store has a mounted-volume parent")
-        ),
-        "the build directory and the fixture store share the mounted volume"
+        target.contains(&format!("'{cache_root}/target/jobs/")),
+        "snapshot lanes need an empty job target: {target}"
     );
 }
 
@@ -2098,6 +2099,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
             mapping_field(with, "runner").as_str(),
             Some("${{ matrix.runner || '' }}"),
             "the fan-out loses the lane's runner affinity"
+        );
+        assert_eq!(
+            mapping_field(with, "isolated-target").as_str(),
+            Some("${{ matrix.isolated_target }}"),
+            "the fan-out loses the lane's target isolation policy"
         );
     }
     assert_eq!(

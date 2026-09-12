@@ -100,6 +100,7 @@ jobs:
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      isolated-target: ${{ matrix.isolated_target }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -125,3 +126,4 @@ jobs:
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      isolated-target: ${{ matrix.isolated_target }}
