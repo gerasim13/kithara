@@ -275,23 +275,23 @@ workspace = true
 
 [[test]]
 name = "suite_light"
-path = "tests/suite_light.rs"
+path = "crates/integration/tests/suite_light.rs"
 
 [[test]]
 name = "suite_heavy"
-path = "tests/suite_heavy.rs"
+path = "crates/integration/tests/suite_heavy.rs"
 
 [[test]]
 name = "suite_live_web_audio"
-path = "tests/suite_live_web_audio.rs"
+path = "crates/integration/tests/suite_live_web_audio.rs"
 
 [[test]]
 name = "suite_stress"
-path = "tests/suite_stress.rs"
+path = "crates/integration/tests/suite_stress.rs"
 
 [[test]]
 name = "suite_integration_regressions"
-path = "tests/suite_integration_regressions.rs"
+path = "crates/integration/tests/suite_integration_regressions.rs"
 required-features = ["integration-regressions"]
 
 [[test]]

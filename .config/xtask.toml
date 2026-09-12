@@ -500,7 +500,7 @@ features = []
 shared_paths = [
   ".config/xtask.toml",
   ".config/nextest.toml",
-  "tests/crates/integration/Cargo.toml",
+  "tests/Cargo.toml",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -901,7 +901,7 @@ prefix_args = [
 [test.lanes.fixtures]
 program = "cargo"
 owns = [
-  "tests/crates/integration/src/",
+  "tests/src/",
   "tests/crates/harness/tests/suite_harness.rs",
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
