@@ -204,6 +204,11 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
+            pub(crate) fn prepared_launch_readiness(
+                &mut self,
+                context: &kithara_warp::RenderContext,
+                frames: usize,
+            ) -> super::feeder_read::PreparedLaunchReadiness;
             /// Cached span in seconds: how much of the source is on disk.
             #[must_use]
             pub fn cached_span(&self) -> f64;
@@ -217,7 +222,13 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            pub fn schedule_seek(&mut self, epoch: u64);
+            pub fn schedule_seek(
+                &mut self,
+                epoch: u64,
+                disposition: crate::bridge::ScheduledSeekDisposition,
+                armed: bool,
+            );
+            pub(crate) fn set_prepared_launch_armed(&mut self, armed: bool) -> bool;
             pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]

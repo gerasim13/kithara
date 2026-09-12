@@ -118,10 +118,28 @@ impl<S> EngineImpl<S> {
         slot: SlotId,
         item: TrackId,
         position: Duration,
-        activation: kithara_warp::SessionFrame,
+        disposition: crate::bridge::ScheduledSeekDisposition,
     ) {
         if let Some(control) = self.slots.lock().get_mut(slot) {
-            control.schedule_track_seek(item, position, activation);
+            control.schedule_track_seek(item, position, disposition);
+        }
+    }
+
+    pub(crate) fn set_prepared_launch_armed(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        armed: bool,
+    ) -> bool {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .is_some_and(|control| control.set_prepared_launch_armed(item, armed))
+    }
+
+    pub(crate) fn disarm_prepared_launches(&self, slot: SlotId) {
+        if let Some(control) = self.slots.lock().get_mut(slot) {
+            control.disarm_prepared_launches();
         }
     }
 

@@ -1,18 +1,13 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    ops::Range,
-};
+use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_audio::RevisionFloorStatus;
 use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
-use kithara_signal::FrameCount;
 use kithara_test_macros as kithara;
-use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
+use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::feeder::{PlayerResource, ReadOutcome, activation_prefix, combine_reads};
-use crate::{bridge::RtMetrics, resource::RenderActivation, worker::ServiceClass};
+use crate::bridge::RtMetrics;
 
 #[derive(Clone, Copy)]
 enum ActivationTailStatus {
@@ -21,7 +16,103 @@ enum ActivationTailStatus {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduledSeekPresentation {
+    NoRequest,
+    Presented(crate::bridge::ScheduledSeekDisposition),
+    Superseded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreparedLaunchReadiness {
+    NotReady,
+    Ready { prefix_frames: usize },
+}
+
 impl PlayerResource {
+    pub(crate) fn prepared_launch_readiness(
+        &mut self,
+        context: &RenderContext,
+        frames: usize,
+    ) -> PreparedLaunchReadiness {
+        let Some((epoch, crate::bridge::ScheduledSeekDisposition::PreparedLaunch(identity), true)) =
+            self.scheduled_seek
+        else {
+            return PreparedLaunchReadiness::NotReady;
+        };
+        let activation_block = identity.activation >= context.output_frames().start
+            && identity.activation < context.output_frames().end;
+        if activation_block {
+            let observed = self.resource.get().render_activation();
+            kithara::probe_event!(
+                prepared_launch_readiness_checked,
+                expected_activation = i64::from(identity.activation),
+                observed_present = observed.is_some(),
+                observed_activation = observed.map_or(0, |activation| i64::from(activation.output)),
+                observed_revision = observed.map_or(0, |activation| activation.revision),
+                ready = false
+            );
+        }
+        let Some(activation) = self.resource.get().render_activation() else {
+            return PreparedLaunchReadiness::NotReady;
+        };
+        let Some(revision) = kithara_signal::pack_render_revision(0, u64::from(identity.warp_map))
+        else {
+            self.scheduled_seek = None;
+            return PreparedLaunchReadiness::NotReady;
+        };
+        if activation.output != identity.activation || activation.revision != revision {
+            self.scheduled_seek = None;
+            return PreparedLaunchReadiness::NotReady;
+        }
+        let output = activation.output;
+        if output < context.output_frames().start {
+            self.scheduled_seek = None;
+            return PreparedLaunchReadiness::NotReady;
+        }
+        self.resource.get().publish_render_preparation(context);
+        if self.resource.get_mut().present_seek(epoch)
+            == kithara_audio::SeekPresentation::Superseded
+        {
+            self.scheduled_seek = None;
+            return PreparedLaunchReadiness::NotReady;
+        }
+        if output >= context.output_frames().end {
+            return PreparedLaunchReadiness::NotReady;
+        }
+        let Some(prefix_frames) = activation_prefix(context, activation) else {
+            return PreparedLaunchReadiness::NotReady;
+        };
+        let suffix = frames.saturating_sub(prefix_frames);
+        let Some(required) = NonZeroUsize::new(suffix) else {
+            return PreparedLaunchReadiness::NotReady;
+        };
+        if self.sync_render_revision(activation, required)
+            == RevisionFloorStatus::WaitingForReplacement
+        {
+            return PreparedLaunchReadiness::NotReady;
+        }
+        let ScheduledSeekPresentation::Presented(_) = self.present_scheduled_seek() else {
+            return PreparedLaunchReadiness::NotReady;
+        };
+        if self.sync_render_revision(activation, required)
+            == RevisionFloorStatus::WaitingForReplacement
+        {
+            return PreparedLaunchReadiness::NotReady;
+        }
+        if activation_block {
+            kithara::probe_event!(
+                prepared_launch_readiness_checked,
+                expected_activation = i64::from(identity.activation),
+                observed_present = true,
+                observed_activation = i64::from(activation.output),
+                observed_revision = activation.revision,
+                ready = true
+            );
+        }
+        PreparedLaunchReadiness::Ready { prefix_frames }
+    }
+
     /// Read audio frames into the output buffers for the given range.
     ///
     /// Fills internal scratch buffers from the underlying resource as needed,
@@ -63,6 +154,16 @@ impl PlayerResource {
             self.fill_scratch(self.channel_buffers[0].len(), metrics);
             return self.read_current(Some(context), track_id, output, range, metrics);
         };
+        if matches!(
+            self.scheduled_seek,
+            Some((
+                _,
+                crate::bridge::ScheduledSeekDisposition::PreparedLaunch(_),
+                _
+            ))
+        ) {
+            return self.read_current(Some(context), track_id, output, range, metrics);
+        }
         let frames_to_read = range.end - range.start;
         if prefix_frames == 0 {
             let tail = self.prepare_activation_tail(metrics);
@@ -72,7 +173,16 @@ impl PlayerResource {
                         return self.read_current(Some(context), track_id, output, range, metrics);
                     }
                     RevisionFloorStatus::ReadyForSeekPresentation => {
-                        self.present_scheduled_seek();
+                        if matches!(
+                            self.scheduled_seek,
+                            Some((
+                                _,
+                                crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
+                                _
+                            ))
+                        ) {
+                            let _ = self.present_scheduled_seek();
+                        }
                         if self.sync_render_revision(activation, required)
                             == RevisionFloorStatus::WaitingForReplacement
                         {
@@ -121,7 +231,16 @@ impl PlayerResource {
                 return self.read_current(Some(context), track_id, output, range, metrics);
             }
             RevisionFloorStatus::ReadyForSeekPresentation => {
-                self.present_scheduled_seek();
+                if matches!(
+                    self.scheduled_seek,
+                    Some((
+                        _,
+                        crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
+                        _
+                    ))
+                ) {
+                    let _ = self.present_scheduled_seek();
+                }
                 if self.sync_render_revision(activation, required)
                     == RevisionFloorStatus::WaitingForReplacement
                 {
@@ -304,110 +423,5 @@ impl PlayerResource {
             }
         }
         self.activation_blend_pos += blended;
-    }
-
-    fn sync_render_revision(
-        &mut self,
-        activation: RenderActivation,
-        required_frames: NonZeroUsize,
-    ) -> RevisionFloorStatus {
-        let revision = activation.revision;
-        if revision <= self.render_revision_floor {
-            return RevisionFloorStatus::Current;
-        }
-        let status = self.resource.get_mut().sync_render_revision(
-            revision,
-            required_frames,
-            self.last_source_end,
-        );
-        if matches!(
-            status,
-            RevisionFloorStatus::WaitingForReplacement
-                | RevisionFloorStatus::ReadyForSeekPresentation
-        ) {
-            return status;
-        }
-        self.render_revision_floor = revision;
-        if self.source_spans.iter().any(|span| {
-            span.source
-                .is_some_and(|source| source.render_revision() < revision)
-        }) {
-            self.source_spans.clear();
-            self.write_len = 0;
-            self.write_pos = 0;
-        }
-        status
-    }
-
-    fn present_scheduled_seek(&mut self) {
-        let Some(epoch) = self.scheduled_seek_epoch else {
-            return;
-        };
-        match self.resource.get_mut().present_seek(epoch) {
-            kithara_audio::SeekPresentation::Presented
-            | kithara_audio::SeekPresentation::Current => {
-                self.scheduled_seek_epoch = None;
-                self.source_spans.clear();
-                self.write_len = 0;
-                self.write_pos = 0;
-                self.last_source_end = None;
-                self.eof_seen = false;
-                self.failed = false;
-            }
-            kithara_audio::SeekPresentation::Superseded => {
-                self.scheduled_seek_epoch = None;
-            }
-        }
-    }
-
-    pub(crate) const fn schedule_seek(&mut self, epoch: u64) {
-        self.scheduled_seek_epoch = Some(epoch);
-    }
-
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.resource.get().render_reader()
-    }
-
-    /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
-    /// picks up the epoch itself via `sync_seek`.
-    pub fn reset_for_seek(&mut self) {
-        self.resource.get_mut().defer_seek_until_pcm();
-        self.write_len = 0;
-        self.write_pos = 0;
-        self.source_spans.clear();
-        self.last_source_end = None;
-        self.resource.get().clear_render();
-        self.eof_seen = false;
-        self.failed = false;
-        self.activation_blend_pos = self.activation_blend_frames;
-    }
-
-    pub(super) const fn scratch_frames(sample_rate: u32) -> FrameCount {
-        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
-    /// Control-plane handle used to begin a seek off the audio thread.
-    #[must_use]
-    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
-        self.resource.get().seek_handle()
-    }
-
-    delegate::delegate! {
-        to self.resource.get() {
-            /// Total duration in seconds. Returns 0.0 if unknown.
-            #[must_use]
-            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
-            pub fn duration(&self) -> f64;
-            /// Set the target sample rate of the audio host.
-            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Update the scheduling priority hint for the shared worker.
-            pub(crate) fn set_service_class(&self, class: ServiceClass);
-            pub(crate) fn clear_render(&self);
-            pub(crate) fn publish_render(
-                &self,
-                context: &RenderContext,
-                frontier: PresentationFrontier,
-            );
-        }
     }
 }

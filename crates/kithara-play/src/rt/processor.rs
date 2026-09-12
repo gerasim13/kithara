@@ -470,6 +470,9 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             self.render_with_context(context, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
+        if playback_started && !is_playing {
+            self.playback.playing.store(true, Ordering::SeqCst);
+        }
         self.refresh_effective_rate();
 
         if playback_started {

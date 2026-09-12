@@ -1,5 +1,4 @@
 use kithara_platform::sync::Arc;
-#[cfg(feature = "usdt")]
 use kithara_test_macros as kithara;
 use kithara_warp::{
     AlignmentSource, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
@@ -11,6 +10,7 @@ use tracing::warn;
 use super::PlayerImpl;
 use crate::{
     api::TrackId,
+    bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition},
     player::{protocol::PlayerMember, state::TrackGrid},
 };
 
@@ -88,7 +88,7 @@ where
             },
         );
         self.replan_track(item);
-        self.reconcile_item_grid(item, cause, None)
+        self.reconcile_item_grid(item, cause, None, false)
             .map_err(|rejected| {
                 let (error, _) = rejected.into();
                 error
@@ -103,11 +103,12 @@ where
         &mut self,
         cause: ReconcileCause,
         source: Option<AlignmentSource>,
+        prepared_launch: bool,
     ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
         let Some(item) = self.runtime.core.items.current_item_id() else {
             return Ok(None);
         };
-        self.reconcile_item_grid(item, cause, source)
+        self.reconcile_item_grid(item, cause, source, prepared_launch)
     }
 
     fn reconcile_item_grid(
@@ -115,6 +116,7 @@ where
         item: TrackId,
         cause: ReconcileCause,
         source: Option<AlignmentSource>,
+        prepared_launch: bool,
     ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return Ok(None);
@@ -158,17 +160,14 @@ where
         if let Some(prepared) = prepared.filter(|prepared| prepared.target == grid.id)
             && let Some(grid) = self.runtime.core.items.track_grid(item)
         {
-            #[cfg(feature = "usdt")]
-            {
-                kithara::probe_event!(
-                    warp_plan_published,
-                    warp_map_revision = u64::from(prepared.warp_map),
-                    presentation_source = source.frontier().source(),
-                    preparation_source = source.preparation_source(),
-                    activation_source = prepared.source,
-                    activation_output = u64::try_from(i64::from(prepared.activation)).unwrap_or(0)
-                );
-            }
+            kithara::probe_event!(
+                warp_plan_published,
+                warp_map_revision = u64::from(prepared.warp_map),
+                presentation_source = source.frontier().source(),
+                preparation_source = source.preparation_source(),
+                activation_source = prepared.source,
+                activation_output = i64::from(prepared.activation)
+            );
             let plan = grid
                 .segments
                 .region_plan()
@@ -196,7 +195,16 @@ where
                     slot,
                     item,
                     target,
-                    prepared.activation,
+                    if prepared_launch {
+                        ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+                            activation: prepared.activation,
+                            warp_map: prepared.warp_map,
+                        })
+                    } else {
+                        ScheduledSeekDisposition::SeekOnly {
+                            activation: prepared.activation,
+                        }
+                    },
                 );
             }
         }

@@ -3,16 +3,23 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara_audio::{SourceEnd, SourceSpan};
+use kithara_audio::{RevisionFloorStatus, SourceEnd, SourceSpan};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_events::TrackId;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_signal::FrameCount;
 use kithara_test_macros as kithara;
-use kithara_warp::RenderContext;
+use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
+
+use super::feeder_read::ScheduledSeekPresentation;
 
 #[rustfmt::skip]
 use crate::resource::Resource;
-use crate::{bridge::RtMetrics, resource::RenderActivation};
+use crate::{
+    bridge::{RtMetrics, ScheduledSeekDisposition},
+    resource::RenderActivation,
+    worker::ServiceClass,
+};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
@@ -36,7 +43,7 @@ pub struct PlayerResource {
     pub(super) eof_seen: bool,
     pub(super) failed: bool,
     pub(super) render_revision_floor: u64,
-    pub(super) scheduled_seek_epoch: Option<u64>,
+    pub(super) scheduled_seek: Option<(u64, ScheduledSeekDisposition, bool)>,
     pub(super) write_len: usize,
     pub(super) write_pos: usize,
 }
@@ -208,7 +215,7 @@ impl PlayerResource {
             eof_seen: false,
             failed: false,
             render_revision_floor: 0,
-            scheduled_seek_epoch: None,
+            scheduled_seek: None,
         })
     }
 
@@ -371,6 +378,131 @@ impl PlayerResource {
         (source_end.sample_rate() == sample_rate
             && source_end.sample_rate() == self.resource.get().spec().sample_rate)
             .then_some((source_end, self.last_warp_map_revision))
+    }
+
+    pub(super) fn sync_render_revision(
+        &mut self,
+        activation: RenderActivation,
+        required_frames: NonZeroUsize,
+    ) -> RevisionFloorStatus {
+        let revision = activation.revision;
+        if revision <= self.render_revision_floor {
+            return RevisionFloorStatus::Current;
+        }
+        let status = self.resource.get_mut().sync_render_revision(
+            revision,
+            required_frames,
+            self.last_source_end,
+        );
+        if matches!(
+            status,
+            RevisionFloorStatus::WaitingForReplacement
+                | RevisionFloorStatus::ReadyForSeekPresentation
+        ) {
+            return status;
+        }
+        self.render_revision_floor = revision;
+        if self.source_spans.iter().any(|span| {
+            span.source
+                .is_some_and(|source| source.render_revision() < revision)
+        }) {
+            self.source_spans.clear();
+            self.write_len = 0;
+            self.write_pos = 0;
+        }
+        status
+    }
+
+    pub(crate) fn present_scheduled_seek(&mut self) -> ScheduledSeekPresentation {
+        let Some((epoch, disposition, _)) = self.scheduled_seek else {
+            return ScheduledSeekPresentation::NoRequest;
+        };
+        match self.resource.get_mut().present_seek(epoch) {
+            kithara_audio::SeekPresentation::Presented
+            | kithara_audio::SeekPresentation::Current => {
+                self.scheduled_seek = None;
+                self.source_spans.clear();
+                self.write_len = 0;
+                self.write_pos = 0;
+                self.last_source_end = None;
+                self.eof_seen = false;
+                self.failed = false;
+                ScheduledSeekPresentation::Presented(disposition)
+            }
+            kithara_audio::SeekPresentation::Superseded => {
+                self.scheduled_seek = None;
+                ScheduledSeekPresentation::Superseded
+            }
+        }
+    }
+
+    pub(crate) const fn schedule_seek(
+        &mut self,
+        epoch: u64,
+        disposition: ScheduledSeekDisposition,
+        armed: bool,
+    ) {
+        self.scheduled_seek = Some((epoch, disposition, armed));
+    }
+
+    pub(crate) fn set_prepared_launch_armed(&mut self, armed: bool) -> bool {
+        let Some((epoch, disposition, current)) = self.scheduled_seek else {
+            return false;
+        };
+        if !disposition.is_prepared_launch() {
+            return false;
+        }
+        if current != armed {
+            self.scheduled_seek = Some((epoch, disposition, armed));
+        }
+        true
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.resource.get().render_reader()
+    }
+
+    /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
+    /// picks up the epoch itself via `sync_seek`.
+    pub fn reset_for_seek(&mut self) {
+        self.resource.get_mut().defer_seek_until_pcm();
+        self.write_len = 0;
+        self.write_pos = 0;
+        self.source_spans.clear();
+        self.last_source_end = None;
+        self.resource.get().clear_render();
+        self.eof_seen = false;
+        self.failed = false;
+        self.activation_blend_pos = self.activation_blend_frames;
+    }
+
+    pub(super) const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+    }
+
+    /// Control-plane handle used to begin a seek off the audio thread.
+    #[must_use]
+    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
+        self.resource.get().seek_handle()
+    }
+
+    delegate::delegate! {
+        to self.resource.get() {
+            /// Total duration in seconds. Returns 0.0 if unknown.
+            #[must_use]
+            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
+            pub fn duration(&self) -> f64;
+            /// Set the target sample rate of the audio host.
+            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            /// Update the scheduling priority hint for the shared worker.
+            pub(crate) fn set_service_class(&self, class: ServiceClass);
+            pub(crate) fn clear_render(&self);
+            pub(crate) fn publish_render(
+                &self,
+                context: &RenderContext,
+                frontier: PresentationFrontier,
+            );
+        }
     }
 }
 

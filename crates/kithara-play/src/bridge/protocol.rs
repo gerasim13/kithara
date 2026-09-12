@@ -2,6 +2,7 @@ use std::fmt;
 
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_warp::{SessionFrame, WarpMapRevision};
 
 use crate::rt::track::PlayerResource;
 
@@ -22,9 +23,17 @@ pub enum PlayerCmd {
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
     /// Present a decoder seek for one track at its installed Warp activation.
-    ScheduleSeek { item_id: TrackId, seek_epoch: u64 },
+    ScheduleSeek {
+        item_id: TrackId,
+        seek_epoch: u64,
+        disposition: ScheduledSeekDisposition,
+        armed: bool,
+    },
     /// Set the paused state.
-    SetPaused(bool),
+    SetPaused {
+        paused: bool,
+        item_id: Option<TrackId>,
+    },
     /// Update the fade duration.
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
@@ -56,16 +65,53 @@ impl fmt::Debug for PlayerCmd {
             Self::ScheduleSeek {
                 item_id,
                 seek_epoch,
+                disposition,
+                armed,
             } => f
                 .debug_struct("ScheduleSeek")
                 .field("item_id", item_id)
                 .field("seek_epoch", seek_epoch)
+                .field("disposition", disposition)
+                .field("armed", armed)
                 .finish(),
-            Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
+            Self::SetPaused { paused, item_id } => f
+                .debug_struct("SetPaused")
+                .field("paused", paused)
+                .field("item_id", item_id)
+                .finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
         }
     }
+}
+
+/// Immutable reason and identity for a scheduled decoder presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduledSeekDisposition {
+    SeekOnly { activation: SessionFrame },
+    PreparedLaunch(PreparedLaunchIdentity),
+}
+
+impl ScheduledSeekDisposition {
+    #[must_use]
+    pub const fn is_prepared_launch(self) -> bool {
+        matches!(self, Self::PreparedLaunch(_))
+    }
+
+    #[must_use]
+    pub const fn activation(self) -> SessionFrame {
+        match self {
+            Self::SeekOnly { activation } => activation,
+            Self::PreparedLaunch(identity) => identity.activation,
+        }
+    }
+}
+
+/// The exact synchronized relation that may release a prepared launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedLaunchIdentity {
+    pub activation: SessionFrame,
+    pub warp_map: WarpMapRevision,
 }
 
 /// State machine for a single track's lifecycle.

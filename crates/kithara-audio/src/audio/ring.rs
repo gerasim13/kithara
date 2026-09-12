@@ -187,7 +187,7 @@ impl RingConsumer {
             .as_ref()
             .is_some_and(|chunk| chunk.meta.render_revision < revision);
         let current_frames = self.current_chunk.as_ref().map_or(0, |chunk| {
-            if chunk.meta.render_revision >= revision {
+            if replacement_epoch.is_none() && chunk.meta.render_revision >= revision {
                 cursor.remaining_frames(chunk)
             } else {
                 0
@@ -208,8 +208,10 @@ impl RingConsumer {
         let prepared_frames = self
             .audio_rx
             .fold(current_frames.saturating_add(future_frames), |frames, fetch| {
-            let eligible = (self.validator.is_valid(fetch)
-                || replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch))
+            let eligible = replacement_epoch.map_or_else(
+                || self.validator.is_valid(fetch),
+                |epoch| fetch.epoch() == epoch,
+            )
                 && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
             if eligible {
                 let Fetch::Data { data, .. } = fetch else {
@@ -1056,6 +1058,56 @@ mod tests {
         };
         assert_eq!(count.get(), 2);
         assert_eq!(output.as_slice(), &ring_pcm[..2]);
+    }
+
+    #[kithara::test]
+    fn future_seek_readiness_counts_only_the_epoch_that_will_be_presented(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let mut current = fixture.chunk(&ring_pcm[..1]);
+        current.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(current, 0))
+            .expect("current epoch PCM reaches ring");
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        let mut first = fixture.chunk(&ring_pcm[1..2]);
+        first.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(first, 1))
+            .expect("partial future epoch PCM reaches ring");
+        let required = NonZeroUsize::new(2).expect("fixture interval is non-zero");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::WaitingForReplacement,
+            "presenting the future epoch discards current-epoch PCM"
+        );
+
+        let mut second = fixture.chunk(&ring_pcm[2..3]);
+        second.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(second, 1))
+            .expect("complete future epoch PCM reaches ring");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::ReadyForSeekPresentation
+        );
     }
 
     #[kithara::test]

@@ -345,6 +345,12 @@ impl Resource {
         }
     }
 
+    pub(crate) fn publish_render_preparation(&self, context: &RenderContext) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish_preparation(context);
+        }
+    }
+
     pub(crate) fn render_reader(&self) -> Option<RenderReader> {
         self.render_publisher.as_ref().map(RenderPublisher::reader)
     }

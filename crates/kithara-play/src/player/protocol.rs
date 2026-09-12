@@ -142,6 +142,14 @@ where
                 ..
             }
         );
+        let prepared_launch = matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: kithara_warp::SyncIntent::Enable,
+                source: kithara_warp::AlignmentSource::Prepared(_),
+                ..
+            }
+        );
         let alignment_source = match &operation {
             SyncOperation::Sync { source, .. } => Some(*source),
             SyncOperation::Transport {
@@ -169,7 +177,7 @@ where
             || reconcile_transport
             || matches!(admission, SyncAdmission::StateChanged { .. }))
             && let Some(reconciled) =
-                self.reconcile_current_grid(reconcile_cause, alignment_source)?
+                self.reconcile_current_grid(reconcile_cause, alignment_source, prepared_launch)?
         {
             if let Some(projection) = projection {
                 self.runtime.core.engine.publish_deck_grid(projection);

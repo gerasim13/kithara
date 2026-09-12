@@ -136,7 +136,10 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     let context = RenderContext::new(
         SessionFrame::new(1_000)..SessionFrame::new(1_001),
         spec().sample_rate,
-        None,
+        Some(
+            SessionBeat::new(1_000.0 * 124.0 / (48_000.0 * 60.0)).expect("fixture host beat")
+                ..SessionBeat::new(1_128.0 * 124.0 / (48_000.0 * 60.0)).expect("fixture host beat"),
+        ),
         SessionEpoch::new(1),
         None,
     )
@@ -214,33 +217,38 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
 #[kithara::test]
 fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentation() {
     let controls = StretchControls::new(1.0);
+    controls.set_speed(31.0 / 24.0);
+    let spec = AudioSpec {
+        channels: Consts::CH,
+        sample_rate: NonZero::new(48_000).expect("fixture sample rate is non-zero"),
+    };
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let reader = publisher.reader();
-    let mut renderer = warp.renderer(spec(), pools());
-    let presented_output = SessionFrame::new(1_000);
+    let mut renderer = warp.renderer(spec, pools());
     let context = RenderContext::new(
-        presented_output..SessionFrame::new(1_128),
-        spec().sample_rate,
-        None,
+        SessionFrame::new(1_000)..SessionFrame::new(1_128),
+        spec.sample_rate,
+        Some(
+            SessionBeat::new((124.0 / 60.0) * (1_000.0 / 48_000.0))
+                .expect("fixture callback beat start is finite")
+                ..SessionBeat::new((124.0 / 60.0) * (1_128.0 / 48_000.0))
+                    .expect("fixture callback beat end is finite"),
+        ),
         SessionEpoch::new(1),
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
     .with_rate(SyncMode::HostSync, controls.rate_target());
-    publisher.publish(
-        &context,
-        PresentationFrontier::builder()
-            .source(100)
-            .output(presented_output)
-            .build(),
-    );
-    let cue = 5_000;
-    let activation_output = SessionFrame::new(9_000);
-    let revision = WarpMapRevision::first();
+    publisher.publish_preparation(&context);
+    assert!(reader.load().is_none());
+    let cue = 30_000;
+    let activation_output = SessionFrame::new(92_903);
+    let revision =
+        WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.6)])
             .expect("fixture plan")
             .with_activation(WarpMap::identity(revision).reanchor(
                 cue,
@@ -249,14 +257,23 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
             )),
     )));
     renderer.reset();
-    renderer.prepare(spec());
+    renderer.prepare(spec);
     let pools = renderer.pools.clone();
-    let mut input = chunk(&pools, &[0.0; 256]);
+    let mut input = AudioChunk::new(
+        AudioChunkInfo {
+            spec,
+            frames: 128,
+            timestamp: Duration::ZERO,
+            ..Default::default()
+        },
+        sample_buffer(&pools, &[0.0; 256]),
+    );
     input.meta.frame_offset = cue;
 
     renderer
         .prepare_quantum(input.meta, input.frames())
         .expect("post-seek activation is plannable");
+    assert!((renderer.rate.speed() - 31.0 / 24.0).abs() < f32::EPSILON);
     let output = renderer
         .render_quantum(input)
         .expect("post-seek activation renders PCM");
@@ -265,16 +282,12 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
         kithara_signal::render_warp_map_revision(output.meta.render_revision),
         u64::from(revision)
     );
-    assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .map(|snapshot| snapshot.frontier().output()),
-        Some(SessionFrame::new(9_000 + i64::from(output.meta.frames)))
+    assert!(
+        renderer.committed.is_none(),
+        "preparation does not commit presentation"
     );
-    assert_eq!(
-        reader.load().map(|snapshot| snapshot.frontier().output()),
-        Some(presented_output),
+    assert!(
+        reader.load().is_none(),
         "worker preparation must not acknowledge future PCM as presented"
     );
 }

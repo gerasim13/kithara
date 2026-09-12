@@ -28,11 +28,20 @@ where
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: self.core.items.current_item_id(),
+            });
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+            if let Some(slot) = self.slot() {
+                self.core.engine.disarm_prepared_launches(slot);
+            }
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: true,
+                item_id: None,
+            });
             self.enter_paused();
         }
     }
@@ -81,7 +90,13 @@ where
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+        if let Some(slot) = self.slot() {
+            self.core.engine.disarm_prepared_launches(slot);
+        }
+        let _ = self.send_to_slot(PlayerCmd::SetPaused {
+            paused: true,
+            item_id: self.core.items.current_item_id(),
+        });
         self.enter_paused();
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -106,7 +121,18 @@ where
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+        let prepared = self
+            .slot()
+            .zip(self.core.items.current_item_id())
+            .is_some_and(|(slot, item)| {
+                self.core.engine.set_prepared_launch_armed(slot, item, true)
+            });
+        if !prepared {
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: self.core.items.current_item_id(),
+            });
+        }
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);

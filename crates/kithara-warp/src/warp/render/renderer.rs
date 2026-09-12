@@ -7,12 +7,11 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
 };
 use kithara_test_macros as kithara;
-use num_traits::cast::AsPrimitive;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
     ActiveRegion, RegionPlan, RegionPlanSlot, RenderContext, RenderReader, RenderSnapshot,
-    StretchControls, SyncMode, WarpConfig, WarpCursor, WarpMapRevision, temporal::RateTarget,
+    StretchControls, WarpConfig, WarpMapRevision, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -254,7 +253,6 @@ where
         self.active = false;
         self.region = None;
     }
-
     pub(super) fn commit_rate_render(
         &mut self,
         snapshot: Option<RenderSnapshot>,
@@ -427,101 +425,5 @@ where
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
         self.rebuild_pending = true;
-    }
-
-    pub(super) fn select_context(&mut self, frame: u64) -> Option<RenderSnapshot> {
-        let snapshot = self.context.load();
-        if let Some(snapshot) = &snapshot
-            && !self.awaiting_activation_before(frame)
-        {
-            let context = snapshot.context();
-            let region = self.region_for(frame);
-            self.rate = context.rate().with_speed(context.rate_for(region).as_());
-            self.rate_context = Some(context.clone());
-        }
-        snapshot
-    }
-
-    pub(super) fn map_at_exact_frontier(
-        &self,
-        snapshot: Option<&RenderSnapshot>,
-        source: u64,
-    ) -> Option<WarpCursor> {
-        let activation = self.plan.as_ref()?.activation()?;
-        if self.applied_warp_map == Some(activation.revision()) || source != activation.source() {
-            return None;
-        }
-        let snapshot = snapshot?;
-        let output = self
-            .committed
-            .as_ref()
-            .filter(|committed| {
-                committed.context().session_epoch() == snapshot.context().session_epoch()
-            })
-            .map_or_else(
-                || snapshot.frontier().output(),
-                |committed| committed.frontier().output(),
-            )
-            .max(snapshot.frontier().output());
-        (output == activation.output()).then_some(*activation)
-    }
-
-    pub(super) fn prepare_discontinuity_context(
-        &self,
-        snapshot: Option<RenderSnapshot>,
-        source: u64,
-    ) -> Option<RenderSnapshot> {
-        let snapshot = snapshot?;
-        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
-            return Some(snapshot);
-        };
-        if self.discontinuity_pending && source == activation.source() {
-            return Some(snapshot.prepare_at(source, activation.output(), activation.revision()));
-        }
-        Some(snapshot)
-    }
-
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    pub(super) fn sync_plan(&mut self) {
-        let want = self.plan_slot.load();
-        let same = match (&self.plan, &want) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
-            self.prepared_context = None;
-        }
-    }
-
-    /// Whether a live active-to-unity transition still owns queued samples.
-    #[must_use]
-    pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some()
-    }
-
-    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        (self.plan.as_ref().is_none_or(|plan| {
-            plan.segments().is_empty()
-                || plan
-                    .activation()
-                    .is_some_and(|activation| self.applied_warp_map != Some(activation.revision()))
-        }) || self
-            .rate_context
-            .as_ref()
-            .is_none_or(|context| context.mode() == SyncMode::Off))
-            && (speed - 1.0).abs() <= f32::EPSILON
-    }
-
-    fn awaiting_activation_before(&self, source: u64) -> bool {
-        self.plan
-            .as_ref()
-            .and_then(|plan| plan.activation())
-            .is_some_and(|activation| {
-                self.applied_warp_map != Some(activation.revision())
-                    && source != activation.source()
-            })
     }
 }

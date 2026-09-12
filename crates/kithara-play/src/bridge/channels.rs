@@ -10,9 +10,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_warp::{
-    DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, SessionFrame, StretchControls,
-};
+use kithara_warp::{DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -22,7 +20,7 @@ use triple_buffer::{Input, Output, triple_buffer};
 
 use super::PlaybackShared;
 use crate::{
-    bridge::{PlayerCmd, PlayerNotification, SharedEq},
+    bridge::{PlayerCmd, PlayerNotification, ScheduledSeekDisposition, SharedEq},
     rt::{PlayerNodeProcessor, track::PlayerTrack},
     sync::DeckGrid,
 };
@@ -115,9 +113,10 @@ type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 
 #[derive(Clone, Copy)]
 struct ScheduledTrackSeek {
-    activation: SessionFrame,
     item_id: TrackId,
     position: Duration,
+    disposition: ScheduledSeekDisposition,
+    armed: bool,
     state: ScheduledTrackSeekState,
 }
 
@@ -146,47 +145,69 @@ impl SlotControl {
         &self,
         item_id: TrackId,
         position: Duration,
+        disposition: ScheduledSeekDisposition,
     ) -> Option<ScheduledSeek> {
         self.seek
             .0
             .iter()
             .find(|(bound_id, _)| *bound_id == item_id)
-            .map(|(_, handle)| handle.begin_scheduled(position))
+            .map(|(_, handle)| {
+                let prepared_launch = disposition.is_prepared_launch();
+                let seek = if prepared_launch {
+                    handle.begin_prepared(position)
+                } else {
+                    handle.begin_scheduled(position)
+                };
+                if prepared_launch {
+                    kithara_test_macros::probe_event!(
+                        prepared_launch_seek_begun,
+                        item_id = item_id.as_u64(),
+                        seek_epoch = seek.epoch,
+                        target_nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX)
+                    );
+                }
+                seek
+            })
     }
 
     pub(crate) fn schedule_track_seek(
         &mut self,
         item_id: TrackId,
         position: Duration,
-        activation: SessionFrame,
+        disposition: ScheduledSeekDisposition,
     ) {
         self.scheduled_seeks.retain(|seek| seek.item_id != item_id);
         self.scheduled_seeks.push(ScheduledTrackSeek {
-            activation,
             item_id,
             position,
+            disposition,
+            armed: false,
             state: ScheduledTrackSeekState::AwaitingStart,
         });
     }
 
     pub(crate) fn service_scheduled_seeks(&mut self, preparation_frames: usize) {
-        let Some(snapshot) = self.latest_render_snapshot() else {
-            return;
-        };
-        let preparation_frames = i64::try_from(preparation_frames).unwrap_or(i64::MAX);
-        let preparation_end =
-            i64::from(snapshot.frontier().output()).saturating_add(preparation_frames);
+        let preparation_end = self.latest_render_snapshot().map(|snapshot| {
+            i64::from(snapshot.frontier().output())
+                .saturating_add(i64::try_from(preparation_frames).unwrap_or(i64::MAX))
+        });
         let mut index = 0;
         while index < self.scheduled_seeks.len() {
             let request = self.scheduled_seeks[index];
-            if i64::from(request.activation) > preparation_end {
+            if !request.disposition.is_prepared_launch()
+                && preparation_end
+                    .is_none_or(|end| i64::from(request.disposition.activation()) > end)
+            {
                 index += 1;
                 continue;
             }
             let seek_epoch = match request.state {
                 ScheduledTrackSeekState::AwaitingStart => {
-                    let Some(seek) = self.begin_track_seek(request.item_id, request.position)
-                    else {
+                    let Some(seek) = self.begin_track_seek(
+                        request.item_id,
+                        request.position,
+                        request.disposition,
+                    ) else {
                         self.scheduled_seeks.remove(index);
                         continue;
                     };
@@ -206,6 +227,8 @@ impl SlotControl {
                 .try_push(PlayerCmd::ScheduleSeek {
                     item_id: request.item_id,
                     seek_epoch,
+                    disposition: request.disposition,
+                    armed: request.armed,
                 })
                 .is_ok()
             {
@@ -218,6 +241,29 @@ impl SlotControl {
 
     pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
         self.render.0.push((item_id, reader));
+    }
+
+    pub(crate) fn set_prepared_launch_armed(&mut self, item_id: TrackId, armed: bool) -> bool {
+        let Some(seek) = self
+            .scheduled_seeks
+            .iter_mut()
+            .find(|seek| seek.item_id == item_id)
+        else {
+            return false;
+        };
+        if !seek.disposition.is_prepared_launch() {
+            return false;
+        }
+        seek.armed = armed;
+        true
+    }
+
+    pub(crate) fn disarm_prepared_launches(&mut self) {
+        for seek in &mut self.scheduled_seeks {
+            if seek.disposition.is_prepared_launch() {
+                seek.armed = false;
+            }
+        }
     }
 
     /// Record the control half of a track's seek path.
@@ -263,10 +309,13 @@ mod tests {
 
     use kithara_audio::SeekOutcome;
     use kithara_test_utils::kithara;
-    use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch};
+    use kithara_warp::{
+        PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch, SessionFrame,
+    };
     use ringbuf::traits::Consumer;
 
     use super::*;
+    use crate::bridge::PreparedLaunchIdentity;
 
     struct CountSeek(AtomicUsize);
 
@@ -276,6 +325,13 @@ mod tests {
             SeekOutcome::Landed {
                 target: position,
                 landed_at: position,
+            }
+        }
+
+        fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+            ScheduledSeek {
+                epoch: 7,
+                outcome: self.begin(position),
             }
         }
 
@@ -299,7 +355,13 @@ mod tests {
 
         let target = Duration::from_secs(3);
         assert_eq!(
-            control.begin_track_seek(second, target),
+            control.begin_track_seek(
+                second,
+                target,
+                ScheduledSeekDisposition::SeekOnly {
+                    activation: SessionFrame::new(0)
+                }
+            ),
             Some(ScheduledSeek {
                 epoch: 7,
                 outcome: SeekOutcome::Landed {
@@ -335,11 +397,39 @@ mod tests {
                 .output(SessionFrame::new(1_000))
                 .build(),
         );
-        control.schedule_track_seek(item, Duration::from_secs(3), SessionFrame::new(2_000));
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(2_000),
+            },
+        );
 
         control.service_scheduled_seeks(448);
         assert_eq!(seek.0.load(Ordering::Relaxed), 0);
         assert!(inputs.cmd_rx.try_pop().is_none());
+
+        let prepared_item = TrackId::allocate();
+        let prepared_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(prepared_item, prepared_seek.clone());
+        control.schedule_track_seek(
+            prepared_item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+                activation: SessionFrame::new(2_000),
+                warp_map: kithara_warp::WarpMapRevision::first(),
+            }),
+        );
+        control.service_scheduled_seeks(448);
+        assert_eq!(prepared_seek.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                disposition: ScheduledSeekDisposition::PreparedLaunch(_),
+                ..
+            }) if item_id == prepared_item
+        ));
 
         publisher.publish(
             &context,
@@ -352,7 +442,32 @@ mod tests {
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
-            Some(PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7 }) if item_id == item
+            Some(PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7, .. }) if item_id == item
+        ));
+    }
+
+    #[kithara::test]
+    fn prepared_launch_begins_and_transfers_while_paused_without_a_render_snapshot() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(item, seek.clone());
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+                activation: SessionFrame::new(2_000),
+                warp_map: kithara_warp::WarpMapRevision::first(),
+            }),
+        );
+        assert!(control.set_prepared_launch_armed(item, true));
+
+        control.service_scheduled_seeks(448);
+
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek { item_id, armed: true, .. }) if item_id == item
         ));
     }
 
@@ -379,8 +494,21 @@ mod tests {
                 .output(SessionFrame::new(1_000))
                 .build(),
         );
-        while control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).is_ok() {}
-        control.schedule_track_seek(item, Duration::from_secs(3), SessionFrame::new(1_000));
+        while control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: None,
+            })
+            .is_ok()
+        {}
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(1_000),
+            },
+        );
 
         control.service_scheduled_seeks(448);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
@@ -391,9 +519,170 @@ mod tests {
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop()).any(|command| matches!(
                 command,
-                PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7 } if item_id == item
+                PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7, .. } if item_id == item
             ))
         );
+    }
+
+    #[kithara::test]
+    fn prepared_launch_play_before_transfer_carries_armed_release_through_admission_retry() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(item, seek.clone());
+        let publisher = RenderPublisher::default();
+        control.bind_render(item, publisher.reader());
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_000)
+                .output(SessionFrame::new(1_000))
+                .build(),
+        );
+        let disposition = ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        });
+        control.schedule_track_seek(item, Duration::from_secs(3), disposition);
+        while control
+            .cmd_tx
+            .try_push(PlayerCmd::SetFadeDuration(1.0))
+            .is_ok()
+        {}
+
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(448);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(
+            std::iter::from_fn(|| inputs.cmd_rx.try_pop())
+                .all(|command| matches!(command, PlayerCmd::SetFadeDuration(1.0)))
+        );
+
+        control.service_scheduled_seeks(448);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                disposition: observed_disposition,
+                armed: true,
+                ..
+            }) if item_id == item && observed_disposition == disposition
+        ));
+        assert!(inputs.cmd_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn prepared_launch_pause_before_transfer_carries_disarmed_release() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(item, seek.clone());
+        let publisher = RenderPublisher::default();
+        control.bind_render(item, publisher.reader());
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_000)
+                .output(SessionFrame::new(1_000))
+                .build(),
+        );
+        let disposition = ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        });
+        control.schedule_track_seek(item, Duration::from_secs(3), disposition);
+        while control
+            .cmd_tx
+            .try_push(PlayerCmd::SetFadeDuration(1.0))
+            .is_ok()
+        {}
+
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(448);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(control.set_prepared_launch_armed(item, false));
+        while inputs.cmd_rx.try_pop().is_some() {}
+
+        control.service_scheduled_seeks(448);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                disposition: observed_disposition,
+                armed: false,
+                ..
+            }) if item_id == item && observed_disposition == disposition
+        ));
+        assert!(inputs.cmd_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn prepared_launch_pause_before_transfer_disarms_every_launch_in_the_slot() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let first = TrackId::allocate();
+        let second = TrackId::allocate();
+        let first_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        let second_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(first, first_seek.clone());
+        control.bind_seek(second, second_seek.clone());
+        let publisher = RenderPublisher::default();
+        control.bind_render(first, publisher.reader());
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_000)
+                .output(SessionFrame::new(1_000))
+                .build(),
+        );
+        let disposition = ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        });
+        control.schedule_track_seek(first, Duration::from_secs(3), disposition);
+        control.schedule_track_seek(second, Duration::from_secs(3), disposition);
+        assert!(control.set_prepared_launch_armed(first, true));
+        assert!(control.set_prepared_launch_armed(second, true));
+
+        control.disarm_prepared_launches();
+        control.service_scheduled_seeks(448);
+
+        assert_eq!(first_seek.0.load(Ordering::Relaxed), 1);
+        assert_eq!(second_seek.0.load(Ordering::Relaxed), 1);
+        let commands: Vec<_> = std::iter::from_fn(|| inputs.cmd_rx.try_pop()).collect();
+        assert_eq!(commands.len(), 2);
+        assert!(commands.into_iter().all(|command| matches!(
+            command,
+            PlayerCmd::ScheduleSeek {
+                item_id,
+                disposition: observed_disposition,
+                armed: false,
+                ..
+            } if (item_id == first || item_id == second) && observed_disposition == disposition
+        )));
     }
 
     #[kithara::test]
@@ -402,7 +691,13 @@ mod tests {
         let item = TrackId::allocate();
         let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
         control.bind_seek(item, seek.clone());
-        control.schedule_track_seek(item, Duration::from_secs(3), SessionFrame::new(0));
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(0),
+            },
+        );
 
         let handle: Arc<dyn SeekBegin> = seek.clone();
         control.unbind_seek(item, &handle);

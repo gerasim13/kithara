@@ -34,7 +34,10 @@ use ringbuf::traits::{Consumer, Producer};
 use super::*;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    rt::{
+        PlayerNodeProcessor, RenderPass, RenderTargets, StreamShape, TrackSlots,
+        track::{PlayerResource, PlayerTrack},
+    },
     test_pools::{TestPools, pools},
 };
 
@@ -313,6 +316,10 @@ impl AudioControl for RevisionReader {
         self.sample = 2.0;
         RevisionFloorStatus::Switched
     }
+
+    fn present_seek(&mut self, _epoch: u64) -> kithara_audio::SeekPresentation {
+        kithara_audio::SeekPresentation::Current
+    }
 }
 
 fn scheduled_revision_resource(
@@ -386,6 +393,177 @@ fn scheduled_revision_switches_only_at_its_host_frame_with_a_complete_suffix(
             .map(|(_source, revision)| revision),
         Some(expected_revision)
     );
+}
+
+#[kithara::test]
+fn armed_prepared_launch_renders_only_its_ready_suffix() {
+    let (mut inputs, _control) = slot_channels(SharedEq::new(0));
+    let shape = StreamShape {
+        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        max_block_frames: NonZeroU32::new(10).expect("static block size"),
+    };
+    let mut pass = RenderPass::new(
+        &pools(),
+        shape,
+        inputs.stretch,
+        inputs.rate_smoothing,
+        inputs.grid,
+        crate::DEFAULT_GATE_SMOOTHING,
+    );
+    let item = TrackId::allocate();
+    let mut track = PlayerTrack::builder()
+        .sample_rate(shape.sample_rate)
+        .item_id(item)
+        .build(Box::new(scheduled_revision_resource(105, 5)));
+    track.schedule_seek(
+        7,
+        crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
+            crate::bridge::PreparedLaunchIdentity {
+                activation: SessionFrame::new(105),
+                warp_map: WarpMapRevision::first(),
+            },
+        ),
+        true,
+    );
+    track.fade_in();
+    let mut tracks = TrackSlots::default();
+    assert!(tracks.insert(track).is_none());
+    let context = RenderContext::new(
+        SessionFrame::new(100)..SessionFrame::new(110),
+        shape.sample_rate,
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut left = [0.0; 10];
+    let mut right = [0.0; 10];
+    let input: [&[f32]; 0] = [];
+    let mut output = [&mut left[..], &mut right[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &input,
+        outputs: &mut output,
+    };
+
+    let pre_activation = RenderContext::new(
+        SessionFrame::new(90)..SessionFrame::new(100),
+        shape.sample_rate,
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture pre-activation context is valid");
+    let (started, _) = pass.render_audio(
+        Some(&pre_activation),
+        RenderTargets {
+            notification_tx: &mut inputs.notif_tx,
+            metrics: inputs.playback.metrics(),
+            tracks: &mut tracks,
+            seek_epoch: 7,
+        },
+        &mut buffers,
+        10,
+        false,
+    );
+    drop(buffers);
+    assert!(!started);
+    assert!(left.iter().all(|sample| *sample == 0.0));
+    assert!(right.iter().all(|sample| *sample == 0.0));
+
+    let mut output = [&mut left[..], &mut right[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &input,
+        outputs: &mut output,
+    };
+
+    let (started, _) = pass.render_audio(
+        Some(&context),
+        RenderTargets {
+            notification_tx: &mut inputs.notif_tx,
+            metrics: inputs.playback.metrics(),
+            tracks: &mut tracks,
+            seek_epoch: 7,
+        },
+        &mut buffers,
+        10,
+        false,
+    );
+
+    assert!(started);
+    assert!(left[..5].iter().all(|sample| *sample == 0.0));
+    assert!(right[..5].iter().all(|sample| *sample == 0.0));
+    assert!(
+        left[5..].iter().all(|sample| *sample == 2.0),
+        "left={left:?}"
+    );
+    assert!(right[5..].iter().all(|sample| *sample == 2.0));
+}
+
+#[kithara::test]
+fn unarmed_prepared_launch_remains_silent_at_its_ready_activation() {
+    let (mut inputs, _control) = slot_channels(SharedEq::new(0));
+    let shape = StreamShape {
+        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        max_block_frames: NonZeroU32::new(10).expect("static block size"),
+    };
+    let mut pass = RenderPass::new(
+        &pools(),
+        shape,
+        inputs.stretch,
+        inputs.rate_smoothing,
+        inputs.grid,
+        crate::DEFAULT_GATE_SMOOTHING,
+    );
+    let item = TrackId::allocate();
+    let mut track = PlayerTrack::builder()
+        .sample_rate(shape.sample_rate)
+        .item_id(item)
+        .build(Box::new(scheduled_revision_resource(105, 5)));
+    track.schedule_seek(
+        7,
+        crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
+            crate::bridge::PreparedLaunchIdentity {
+                activation: SessionFrame::new(105),
+                warp_map: WarpMapRevision::first(),
+            },
+        ),
+        false,
+    );
+    let mut tracks = TrackSlots::default();
+    assert!(tracks.insert(track).is_none());
+    let context = RenderContext::new(
+        SessionFrame::new(100)..SessionFrame::new(110),
+        shape.sample_rate,
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut left = [1.0; 10];
+    let mut right = [1.0; 10];
+    let input: [&[f32]; 0] = [];
+    let mut output = [&mut left[..], &mut right[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &input,
+        outputs: &mut output,
+    };
+
+    let (started, _) = pass.render_audio(
+        Some(&context),
+        RenderTargets {
+            notification_tx: &mut inputs.notif_tx,
+            metrics: inputs.playback.metrics(),
+            tracks: &mut tracks,
+            seek_epoch: 7,
+        },
+        &mut buffers,
+        10,
+        false,
+    );
+
+    assert!(!started);
+    assert!(left.iter().all(|sample| *sample == 0.0));
+    assert!(right.iter().all(|sample| *sample == 0.0));
 }
 
 #[kithara::test]
@@ -553,7 +731,10 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .expect("fade in first track");
     control
         .cmd_tx
-        .try_push(PlayerCmd::SetPaused(false))
+        .try_push(PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        })
         .expect("start playback");
     process_block(&mut processor, &mut extra);
     let _ = rate_notifications(&mut control);

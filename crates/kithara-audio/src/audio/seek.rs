@@ -137,6 +137,10 @@ impl SeekBegin for SeekHandle {
         self.begin_inner(position, true).outcome
     }
 
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+        self.begin_inner(position, false)
+    }
+
     fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
         let epoch = self.seek.begin_scheduled(position);
         self.wake.wake();

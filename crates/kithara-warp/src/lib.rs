@@ -35,6 +35,8 @@ pub use sync::{
     SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
     TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
 };
+#[cfg(feature = "render")]
+pub(crate) use temporal::RenderState;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")

@@ -27,8 +27,8 @@ use kithara::{
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{
-        AlignmentSource, AssetAxis, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, BeatGridState, LoadGeneration, MapPoint, MapPosition,
+        AlignmentSource, AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
+        BeatGridSnapshot, BeatGridState, LoadGeneration, MapPoint, MapPosition, Meter,
         PresentationFrontier, SegmentSet, SessionFrame, StretchControls, SyncAdmission, SyncGroup,
         SyncIntent, SyncOperation, WarpConfig,
     },
@@ -57,6 +57,7 @@ use kithara_test_fixtures::{
         signal_mp3_sweep_up_60s,
     },
 };
+use kithara_test_utils::probe::capture as probe_capture;
 use num_traits::ToPrimitive;
 
 pub(super) const BLOCK_FRAMES: usize = 128;
@@ -1492,6 +1493,514 @@ pub(super) async fn prepare_fixture_grids(
     }
 }
 
+#[derive(Clone, Copy)]
+struct SingleDeckTempoControl {
+    id: &'static str,
+    provider: Provider,
+    source: &'static str,
+    source_bpm: u32,
+    next_source_beat: u64,
+    rate: &'static str,
+}
+
+const ORIGIN_ZERO_HOUSE_124: &[&str] = &["rhythm_wav_scenario_1_origin_zero_house_124_left_only"];
+const ORIGIN_ZERO_DOWNTEMPO_96: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_downtempo_96_left_only"];
+
+#[ignore = "ignored-red: origin-zero single-deck prepared launch baseline, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::equal_124(SingleDeckTempoControl {
+    id: "origin-zero-equal-124",
+    provider: Provider::Rhythm(ORIGIN_ZERO_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_house_124_left_only",
+    source_bpm: 124,
+    next_source_beat: 23_226,
+    rate: "1",
+})]
+#[case::different_96(SingleDeckTempoControl {
+    id: "origin-zero-different-96",
+    provider: Provider::Rhythm(ORIGIN_ZERO_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_downtempo_96_left_only",
+    source_bpm: 96,
+    next_source_beat: 30_000,
+    rate: "31/24",
+})]
+async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
+    #[case] control: SingleDeckTempoControl,
+) {
+    const REQUEST_OUTPUT_FRONTIER: u64 = 1_152;
+    const ASSIGNED_OUTPUT_FRAME: u64 = 92_903;
+    const NEXT_OUTPUT_FRAME: u64 = 116_129;
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+    const EXPECTED_WARP_MAP_REVISION: u64 = 2;
+    const EXPECTED_RENDER_REVISION: u64 = 8_589_934_596;
+
+    let code_identity =
+        env::var("KITHARA_SCENARIO_CODE_IDENTITY").expect("scenario code identity is required");
+    let dirty_scope =
+        env::var("KITHARA_SCENARIO_DIRTY_SCOPE").expect("scenario dirty scope is required");
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(control.id, 1, 48_000, OperationOrder::PlaySyncSeek)
+        .paused()
+        .hold(124.0);
+    let sources = prepared_sources(control.provider).await;
+    let mut harness = ProductHarness::new_for_block(case, &sources, 0, BLOCK_FRAMES).await;
+    let source_grid = BeatGridSnapshot::segments(
+        BeatGridId::allocate().expect("origin-zero source grid id is available"),
+        BeatGridRevision::first(),
+        BeatGridState::Complete,
+        fixture_grid(control.source),
+    )
+    .expect("origin-zero source score truth creates a complete grid");
+    let source_frame = |ordinal| match source_grid.position_at(MapPoint::new(
+        source_grid.stamp(),
+        Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal))
+            .expect("origin-zero source beat is valid"),
+    )) {
+        BeatGridQuery::Resolved(position) => match *position.value().value() {
+            MapPosition::Asset(frame) => f64::from(frame)
+                .round()
+                .to_u64()
+                .expect("origin-zero source frame fits u64"),
+            position => panic!("origin-zero source grid returned non-asset position {position:?}"),
+        },
+        query => panic!("origin-zero source grid did not resolve source beat: {query:?}"),
+    };
+    assert_eq!(source_frame(0), 0);
+    assert_eq!(source_frame(1), control.next_source_beat);
+
+    prepare_fixture_grids(&mut harness, case, &sources).await;
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(prelaunch.iter().all(|sample| *sample == 0.0));
+    assert_eq!(harness.rendered_frames, REQUEST_OUTPUT_FRONTIER);
+    harness.mark("origin-zero-single-deck-enable");
+    harness.request_sync(case).await;
+    harness.mark("origin-zero-single-deck-play");
+    harness.play_all().await;
+    let capture_start = harness.rendered_frames;
+    let capture_frames = usize::try_from(
+        NEXT_OUTPUT_FRAME
+            .checked_add(u64::try_from(BLOCK_FRAMES).expect("block frames fit u64"))
+            .and_then(|end| end.checked_sub(capture_start))
+            .expect("capture covers the second selected beat"),
+    )
+    .expect("capture span fits usize");
+    let capture = harness
+        .capture_frames(case, capture_frames, harness.block_frames)
+        .await;
+    let left = lane_samples(&capture, 0);
+    let activation_offset = usize::try_from(ASSIGNED_OUTPUT_FRAME - capture_start)
+        .expect("assigned output falls in capture");
+    let pre_activation_nonzero = left[..activation_offset]
+        .iter()
+        .filter(|sample| **sample != 0.0)
+        .count();
+    let post_activation_nonzero = left[activation_offset..]
+        .iter()
+        .filter(|sample| **sample != 0.0)
+        .count();
+    let first_nonzero = left
+        .iter()
+        .position(|sample| *sample != 0.0)
+        .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits u64"));
+    let (markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let underruns = harness.underrun_failures();
+    let gate = kithara::play::DEFAULT_GATE_SMOOTHING;
+    let gate_settled_frames = (f64::from(case.sample_rate)
+        * f64::from(gate.smooth_seconds)
+        * (1.0 / (2.0 * f64::from(gate.settle_epsilon))).ln())
+    .ceil() as usize
+        + harness.block_frames;
+    let equal_rate_waveform = (control.source_bpm == 124).then(|| {
+        let fixture = by_name(control.source).expect("origin-zero fixture is registered");
+        let source = fixture
+            .bytes()
+            .get(44..)
+            .expect("origin-zero WAV has its PCM payload");
+        let expected = source
+            .chunks_exact(4)
+            .skip(gate_settled_frames)
+            .take(control.next_source_beat as usize - gate_settled_frames)
+            .map(|frame| f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32_768.0_f32);
+        let actual = left[activation_offset + gate_settled_frames
+            ..activation_offset + control.next_source_beat as usize]
+            .iter()
+            .copied();
+        expected
+            .zip(actual)
+            .all(|(expected, actual)| expected.to_bits() == actual.to_bits())
+    });
+    let probe_events = recorder
+        .snapshot()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.probe_name(),
+                Some(
+                    "warp_plan_published"
+                        | "prepared_launch_command_admitted"
+                        | "prepared_launch_seek_begun"
+                        | "prepared_launch_readiness_checked"
+                        | "decoder_seek_epoch_observed"
+                        | "producer_pcm_admitted"
+                        | "scheduled_seek_activated"
+                        | "pcm_consumed"
+                        | "pcm_underrun"
+                )
+            )
+        })
+        .map(|event| {
+            serde_json::json!({
+                "probe": event.probe_name(),
+                "seq": event.seq(),
+                "thread_id": event.thread_id(),
+                "fields": event.fields,
+                "strings": event.string_fields,
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "single_deck_origin_zero_control",
+            serde_json::json!({
+                "verdict": "capture-complete-before-assertions",
+                "fixture_generation": "generated rhythm score with source origin 0",
+                "source": control.source,
+                "source_bpm": control.source_bpm,
+                "source_beat_frames": { "beat_0": 0, "beat_1": control.next_source_beat },
+                "host": { "bpm": 124, "beat_4": ASSIGNED_OUTPUT_FRAME, "beat_5": NEXT_OUTPUT_FRAME },
+                "rate": control.rate,
+                "capture": {
+                    "start": capture_start,
+                    "frames": capture_frames,
+                    "pre_activation_nonzero_samples": pre_activation_nonzero,
+                    "post_activation_nonzero_samples": post_activation_nonzero,
+                    "first_nonzero_host_frame": first_nonzero,
+                    "score_marker_host_frames": markers,
+                    "gate_settled_frames": gate_settled_frames,
+                    "equal_rate_waveform_exact_after_gate": equal_rate_waveform,
+                    "underruns": underruns,
+                    "probes": probe_events,
+                },
+                "code_identity": code_identity,
+                "dirty_scope": dirty_scope,
+            }),
+        );
+    }
+    drop(harness);
+    let warp_plan = probe_events
+        .iter()
+        .find(|event| event["probe"] == "warp_plan_published")
+        .expect("prepared launch publishes a warp plan");
+    assert_eq!(
+        warp_plan["fields"]["activation_source"].as_u64(),
+        Some(0),
+        "{}: warp activation source",
+        control.id
+    );
+    assert_eq!(
+        warp_plan["fields"]["presentation_source"].as_u64(),
+        Some(0),
+        "{}: warp presentation source",
+        control.id
+    );
+    assert_eq!(
+        warp_plan["fields"]["preparation_source"].as_u64(),
+        Some(0),
+        "{}: warp preparation source",
+        control.id
+    );
+    assert_eq!(
+        warp_plan["fields"]["activation_output"].as_u64(),
+        Some(ASSIGNED_OUTPUT_FRAME),
+        "{}: warp activation output",
+        control.id
+    );
+    assert_eq!(
+        warp_plan["fields"]["warp_map_revision"].as_u64(),
+        Some(EXPECTED_WARP_MAP_REVISION),
+        "{}: warp map revision",
+        control.id
+    );
+    let first_pcm = probe_events
+        .iter()
+        .find(|event| event["probe"] == "pcm_consumed")
+        .expect("prepared launch consumes PCM");
+    assert_eq!(
+        first_pcm["fields"]["source_start"].as_u64(),
+        Some(0),
+        "{}: first consumed PCM source",
+        control.id
+    );
+    assert_eq!(
+        first_pcm["fields"]["output_start"].as_u64(),
+        Some(ASSIGNED_OUTPUT_FRAME),
+        "{}: first consumed PCM output",
+        control.id
+    );
+    assert_eq!(
+        first_pcm["fields"]["render_revision"].as_u64(),
+        Some(EXPECTED_RENDER_REVISION),
+        "{}: first consumed PCM revision",
+        control.id
+    );
+    assert_eq!(
+        pre_activation_nonzero, 0,
+        "{}: PCM escaped before Host beat 4",
+        control.id
+    );
+    assert!(
+        post_activation_nonzero > 0,
+        "{}: no PCM after Host beat 4",
+        control.id
+    );
+    assert!(
+        underruns.is_empty(),
+        "{}: {}",
+        control.id,
+        underruns.join("; ")
+    );
+    assert_eq!(
+        first_nonzero,
+        Some(ASSIGNED_OUTPUT_FRAME),
+        "{}: beat 0 PCM onset",
+        control.id
+    );
+    assert!(
+        markers.contains(&NEXT_OUTPUT_FRAME),
+        "{}: source beat 1 must mark Host beat 5 at {NEXT_OUTPUT_FRAME}; markers={markers:?}",
+        control.id
+    );
+    assert!(
+        equal_rate_waveform.unwrap_or(true),
+        "{}: rate-1 PCM differs from source after the configured gate settles",
+        control.id
+    );
+}
+
+#[ignore = "ignored-red: real single-deck prepared launch currently produces no post-activation PCM, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
+    #[future(awt)] source_scenario_1_downtempo_house_provider: PreparedSources,
+) {
+    const REQUEST_OUTPUT_FRONTIER: u64 = 1_152;
+    const REQUESTED_SOURCE_FRONTIER: u64 = 0;
+    const SELECTED_SOURCE_FRAME: u64 = 30_000;
+    const NEXT_SOURCE_BEAT_FRAME: u64 = 60_000;
+    const SELECTED_HOST_BEAT: i64 = 4;
+    const ASSIGNED_OUTPUT_FRAME: u64 = 92_903;
+    const NEXT_HOST_BEAT: i64 = 5;
+    const NEXT_OUTPUT_FRAME: u64 = 116_129;
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "scenario-1-single-deck-prepared-launch",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &source_scenario_1_downtempo_house_provider,
+        0,
+        BLOCK_FRAMES,
+    )
+    .await;
+    let source_grid = BeatGridSnapshot::segments(
+        BeatGridId::allocate().expect("Scenario 1 source grid id is available"),
+        BeatGridRevision::first(),
+        BeatGridState::Complete,
+        fixture_grid("rhythm_wav_scenario_1_downtempo_96_left_only"),
+    )
+    .expect("Scenario 1 source score truth creates a complete grid");
+    let source_start = MapPoint::new(
+        source_grid.stamp(),
+        MapPosition::Asset(
+            AssetFrame::new(REQUESTED_SOURCE_FRONTIER as f64).expect("zero source frontier"),
+        ),
+    );
+    let BeatGridQuery::Resolved(selected_beat) = source_grid.beat_at_or_next(source_start) else {
+        panic!("Scenario 1 source grid resolves a selected beat");
+    };
+    assert_eq!(f64::from(*selected_beat.value().value()), 0.0);
+    let BeatGridQuery::Resolved(source_meter) = source_grid.meter_at(*selected_beat.value()) else {
+        panic!("Scenario 1 source grid resolves its configured meter");
+    };
+    assert_eq!(source_meter.value().beats_per_bar(), 4);
+    assert_eq!(i64::from(source_meter.value().downbeat()), 0);
+    let source_frame = |beat| match source_grid
+        .position_at(MapPoint::new(source_grid.stamp(), beat))
+    {
+        BeatGridQuery::Resolved(position) => match *position.value().value() {
+            MapPosition::Asset(frame) => f64::from(frame)
+                .round()
+                .to_u64()
+                .expect("Scenario 1 source frame fits u64"),
+            position => panic!("Scenario 1 source grid returned non-asset position {position:?}"),
+        },
+        query => panic!("Scenario 1 source grid did not resolve source beat: {query:?}"),
+    };
+    assert_eq!(
+        source_frame(*selected_beat.value().value()),
+        SELECTED_SOURCE_FRAME
+    );
+    assert_eq!(
+        source_frame(
+            Beat::try_from(kithara::warp::BeatOrdinal::new(1)).expect("exact source beat one")
+        ),
+        NEXT_SOURCE_BEAT_FRAME
+    );
+
+    prepare_fixture_grids(
+        &mut harness,
+        case,
+        &source_scenario_1_downtempo_house_provider,
+    )
+    .await;
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(prelaunch.iter().all(|sample| *sample == 0.0));
+    assert_eq!(harness.rendered_frames, REQUEST_OUTPUT_FRONTIER);
+    harness.mark("scenario-1-single-deck-enable");
+    harness.request_sync(case).await;
+    let host_frame = |beat: i64| {
+        (beat.to_f64().expect("Scenario 1 Host beat converts to f64")
+            * f64::from(case.sample_rate)
+            * 60.0
+            / case.start_bpm())
+        .round()
+        .to_u64()
+        .expect("Scenario 1 configured Host beat fits u64")
+    };
+    let assigned_output = host_frame(SELECTED_HOST_BEAT);
+    let next_output = host_frame(NEXT_HOST_BEAT);
+    assert_eq!(assigned_output, ASSIGNED_OUTPUT_FRAME);
+    assert_eq!(next_output, NEXT_OUTPUT_FRAME);
+
+    harness.mark("scenario-1-single-deck-play");
+    harness.play_all().await;
+    let capture_start = harness.rendered_frames;
+    let capture_frames = usize::try_from(
+        NEXT_OUTPUT_FRAME
+            .checked_add(u64::try_from(BLOCK_FRAMES).expect("block frames fit u64"))
+            .and_then(|end| end.checked_sub(capture_start))
+            .expect("capture covers the second selected beat"),
+    )
+    .expect("capture span fits usize");
+    let capture = harness
+        .capture_frames(case, capture_frames, harness.block_frames)
+        .await;
+    let left = lane_samples(&capture, 0);
+    let activation_offset =
+        usize::try_from(assigned_output - capture_start).expect("assigned output falls in capture");
+    let pre_activation_nonzero = left[..activation_offset]
+        .iter()
+        .filter(|sample| **sample != 0.0)
+        .count();
+    let post_activation_nonzero = left[activation_offset..]
+        .iter()
+        .filter(|sample| **sample != 0.0)
+        .count();
+    let (markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let underruns = harness.underrun_failures();
+    let probe_events = recorder
+        .snapshot()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.probe_name(),
+                Some(
+                    "warp_plan_published"
+                        | "prepared_launch_command_admitted"
+                        | "prepared_launch_seek_begun"
+                        | "prepared_launch_readiness_checked"
+                        | "decoder_seek_epoch_observed"
+                        | "decoder_seek_epoch_backpressured"
+                        | "producer_pcm_admitted"
+                        | "scheduled_seek_activated"
+                        | "pcm_consumed"
+                        | "pcm_underrun"
+                )
+            )
+        })
+        .map(|event| {
+            serde_json::json!({
+                "probe": event.probe_name(),
+                "seq": event.seq(),
+                "thread_id": event.thread_id(),
+                "fields": event.fields,
+                "strings": event.string_fields,
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "scenario_1_single_deck",
+            serde_json::json!({
+                "requested_output_frontier": REQUEST_OUTPUT_FRONTIER,
+                "requested_source_frontier": REQUESTED_SOURCE_FRONTIER,
+                "source_meter": { "beats_per_bar": 4, "downbeat": 0 },
+                "host_meter": { "beats_per_bar": 4, "downbeat": 0 },
+                "selected_source": { "beat": 0, "frame": SELECTED_SOURCE_FRAME },
+                "assigned_host": { "beat": SELECTED_HOST_BEAT, "frame": assigned_output },
+                "next_source": { "beat": 1, "frame": NEXT_SOURCE_BEAT_FRAME },
+                "next_host": { "beat": NEXT_HOST_BEAT, "frame": next_output },
+                "rate": { "host_over_source": "31/24", "source_bpm": 96, "host_bpm": 124 },
+                "capture": {
+                    "start": capture_start,
+                    "frames": capture_frames,
+                    "pre_activation_nonzero_samples": pre_activation_nonzero,
+                    "post_activation_nonzero_samples": post_activation_nonzero,
+                    "score_marker_host_frames": markers,
+                    "underruns": underruns,
+                    "probes": probe_events,
+                },
+                "provenance_limit": "A score marker is required for source/phase proof. Nonzero energy alone never passes this regression."
+            }),
+        );
+    }
+    drop(harness);
+    assert!(
+        post_activation_nonzero > 0,
+        "Scenario 1 single deck: real decoder/Warp/ring/RT emitted no PCM after assigned Host frame {assigned_output}; selected source {SELECTED_SOURCE_FRAME}, rate 31/24"
+    );
+    assert_eq!(
+        pre_activation_nonzero, 0,
+        "Scenario 1 single deck: PCM escaped before assigned Host frame {assigned_output}"
+    );
+    assert!(
+        underruns.is_empty(),
+        "Scenario 1 single deck: {}",
+        underruns.join("; ")
+    );
+    assert_eq!(
+        markers.first().copied(),
+        Some(assigned_output),
+        "Scenario 1 single deck: selected source {SELECTED_SOURCE_FRAME} must first mark assigned Host beat {SELECTED_HOST_BEAT} at frame {assigned_output}"
+    );
+    assert_eq!(
+        markers.get(1).copied(),
+        Some(next_output),
+        "Scenario 1 single deck: source beat 1 frame {NEXT_SOURCE_BEAT_FRAME} must mark Host beat {NEXT_HOST_BEAT} at frame {next_output}"
+    );
+}
+
 #[ignore = "ignored-red: Scenario 1's same-session stereo-separated capture proves the left deck starts at its native 96 BPM instead of the shared 124 BPM, 2026-09-12"]
 #[kithara::test(
     native,
@@ -1567,9 +2076,14 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
 
     let report = CochleaReport::measure(&capture, CHANNELS, case.sample_rate);
     let (left_markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
-    let initial_launch_failures = scenario_1_initial_launch_failures(
+    let initial_launch_failures = scenario_1_scheduled_launch_failures(
+        &capture,
         &left_markers,
         capture_start,
+        harness
+            .host_grid
+            .as_ref()
+            .expect("Scenario 1 sync request records the authoritative Host grid"),
         case.sample_rate,
         case.start_bpm(),
     );
@@ -1613,37 +2127,100 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
     );
 }
 
-fn scenario_1_initial_launch_failures(
+fn scenario_1_scheduled_launch_failures(
+    capture: &[f32],
     markers: &[u64],
-    capture_start: u64,
+    request_frontier: u64,
+    host_grid: &BeatGridSnapshot,
     sample_rate: u32,
     target_bpm: f64,
 ) -> Vec<String> {
-    let target_period = f64::from(sample_rate) * 60.0 / target_bpm;
-    let expected = [target_period.floor() as u64, target_period.ceil() as u64];
-    let expected_first = capture_start + target_period.round() as u64;
+    let selected_source = scenario_1_selected_source();
+    let (assigned_output, _) = next_host_downbeat(
+        host_grid,
+        Meter::new(4).expect("Scenario 1 score fixtures declare 4/4"),
+        request_frontier,
+    )
+    .expect("Scenario 1 Host grid supplies a reachable downbeat");
     let mut failures = Vec::new();
-    match markers.first() {
-        Some(actual) if *actual == expected_first => {}
-        Some(actual) => failures.push(format!(
-            "left first score cue at Host frame {actual}, expected {expected_first} from source one-beat count-in and shared {target_bpm:.3} BPM Host grid"
-        )),
-        None => failures.push("left has no detected score cue after launch".to_owned()),
+    let left = lane_samples(capture, 0);
+    let boundary = usize::try_from(assigned_output.saturating_sub(request_frontier))
+        .expect("assigned launch span fits capture indexing")
+        .min(left.len());
+    if left[..boundary].iter().any(|sample| *sample != 0.0) {
+        failures.push(format!(
+            "left emitted PCM before selected source {selected_source} may start at Host frame {assigned_output}"
+        ));
     }
+    match markers.first() {
+        Some(actual) if *actual == assigned_output => {}
+        Some(actual) => failures.push(format!(
+            "left selected source cue {selected_source} appeared at Host frame {actual}, expected assigned Host downbeat {assigned_output}"
+        )),
+        None => failures.push(format!(
+            "left has no detected selected source cue {selected_source} at assigned Host frame {assigned_output}"
+        )),
+    }
+    let target_period = f64::from(sample_rate) * 60.0 / target_bpm;
+    let expected_periods = [target_period.floor() as u64, target_period.ceil() as u64];
     for pair in markers.windows(2).take(2) {
         let actual = pair[1] - pair[0];
-        if !expected.contains(&actual) {
+        if !expected_periods.contains(&actual) {
             failures.push(format!(
-                "left score-cue interval {}..{} is {actual} frames ({:.6} BPM), expected {}/{} frames for shared {target_bpm:.3} BPM",
-                pair[0],
-                pair[1],
-                f64::from(sample_rate) * 60.0 / actual as f64,
-                expected[0],
-                expected[1],
+                "left score-cue interval {}..{} is {actual} frames, expected {}/{} frames for Host {target_bpm:.3} BPM",
+                pair[0], pair[1], expected_periods[0], expected_periods[1]
             ));
         }
     }
     failures
+}
+
+fn scenario_1_selected_source() -> u64 {
+    let grid = BeatGridSnapshot::segments(
+        BeatGridId::allocate().expect("Scenario 1 fixture grid id is available"),
+        BeatGridRevision::first(),
+        BeatGridState::Complete,
+        fixture_grid("rhythm_wav_scenario_1_downtempo_96_left_only"),
+    )
+    .expect("Scenario 1 fixture grid creates a complete snapshot");
+    let start = MapPoint::new(
+        grid.stamp(),
+        MapPosition::Asset(AssetFrame::new(0.0).expect("zero is a valid asset frame")),
+    );
+    let BeatGridQuery::Resolved(beat) = grid.beat_at_or_next(start) else {
+        panic!("Scenario 1 fixture grid resolves its first mapped beat");
+    };
+    let BeatGridQuery::Resolved(position) = grid.position_at(*beat.value()) else {
+        panic!("Scenario 1 fixture grid resolves its first mapped beat to an asset frame");
+    };
+    let MapPosition::Asset(frame) = *position.value().value() else {
+        panic!("Scenario 1 fixture grid remains asset-positioned");
+    };
+    f64::from(frame)
+        .round()
+        .to_u64()
+        .expect("Scenario 1 selected source frame fits u64")
+}
+
+fn next_host_downbeat(grid: &BeatGridSnapshot, meter: Meter, frontier: u64) -> Option<(u64, i64)> {
+    let downbeat = i64::from(meter.downbeat());
+    let beats_per_bar = i64::from(meter.beats_per_bar());
+    for bar_offset in -64_i64..=64 {
+        let ordinal = downbeat.checked_add(bar_offset.checked_mul(beats_per_bar)?)?;
+        let beat = Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal)).ok()?;
+        let position = match grid.position_at(MapPoint::new(grid.stamp(), beat)) {
+            BeatGridQuery::Resolved(position) => position,
+            _ => continue,
+        };
+        let MapPosition::Session(frame) = *position.value().value() else {
+            continue;
+        };
+        let frame = u64::try_from(i64::from(frame)).ok()?;
+        if frame >= frontier {
+            return Some((frame, ordinal));
+        }
+    }
+    None
 }
 
 fn lane_early_measurement(

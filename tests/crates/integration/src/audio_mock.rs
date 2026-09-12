@@ -613,6 +613,13 @@ impl SeekBegin for SeekSpy {
         }
     }
 
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+        ScheduledSeek {
+            epoch: 1,
+            outcome: self.begin(position),
+        }
+    }
+
     fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
         ScheduledSeek {
             epoch: 1,

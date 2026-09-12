@@ -121,20 +121,26 @@ impl<S> DecoderNode<S>
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
-    fn sync_seek_epoch(&mut self) {
+    fn sync_seek_epoch(&mut self) -> Option<(u64, u64)> {
         if !self.seek_obs.take_decoder_seek() {
-            return;
+            return None;
         }
         let current = self.seek_obs.epoch();
-        if current == self.runtime.seek_epoch {
-            return;
+        let previous = self.runtime.seek_epoch;
+        if current != previous {
+            self.preload_gate.rearm();
+            self.runtime = DecoderRuntime {
+                seek_epoch: current,
+                ..Default::default()
+            };
         }
-
-        self.preload_gate.rearm();
-        self.runtime = DecoderRuntime {
-            seek_epoch: current,
-            ..Default::default()
-        };
+        kithara::probe_event!(
+            decoder_seek_epoch_observed,
+            previous_epoch = previous,
+            current_epoch = current,
+            adopted = current != previous
+        );
+        Some((previous, current))
     }
 }
 
@@ -192,9 +198,16 @@ where
     #[kithara::measure(label = "play.decoder.tick")]
     #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
-        self.sync_seek_epoch();
+        let seek_epoch_observed = self.sync_seek_epoch();
 
         if !self.port.can_push_direct() {
+            if let Some((previous_epoch, current_epoch)) = seek_epoch_observed {
+                kithara::probe_event!(
+                    decoder_seek_epoch_backpressured,
+                    previous_epoch,
+                    current_epoch
+                );
+            }
             return TickResult::Backpressured;
         }
 
@@ -207,7 +220,7 @@ where
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
-                let (decoded_frontier, source_end) = match &fetch {
+                let (decoded_frontier, source_end, admitted_pcm) = match &fetch {
                     Fetch::Data {
                         data,
                         epoch,
@@ -215,10 +228,25 @@ where
                     } => (
                         Some(data.meta.end_timestamp),
                         source_end.map(|source_end| (source_end, *epoch)),
+                        Some((
+                            *epoch,
+                            data.meta.frame_offset,
+                            data.meta.frames,
+                            data.meta.render_revision,
+                        )),
                     ),
-                    _ => (None, None),
+                    _ => (None, None, None),
                 };
                 self.port.push_direct(fetch);
+                if let Some((epoch, source_start, frames, render_revision)) = admitted_pcm {
+                    kithara::probe_event!(
+                        producer_pcm_admitted,
+                        seek_epoch = epoch,
+                        source_start,
+                        frames,
+                        render_revision
+                    );
+                }
                 if let Some((source_end, epoch)) = source_end {
                     self.source.commit_source_end(source_end, epoch);
                 }

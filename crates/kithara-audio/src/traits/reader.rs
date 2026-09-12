@@ -142,6 +142,9 @@ pub trait SeekBegin: Send + Sync {
     /// this from an audio callback.
     fn begin(&self, position: Duration) -> SeekOutcome;
 
+    /// Prepare producer output immediately while leaving consumer presentation pending.
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek;
+
     /// Prepare decoder output for a later explicit presentation boundary.
     fn begin_scheduled(&self, position: Duration) -> ScheduledSeek;
 }

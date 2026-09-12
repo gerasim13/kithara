@@ -614,6 +614,58 @@ mod tests {
     }
 
     #[kithara::test]
+    fn prepared_seek_waits_for_explicit_presentation() {
+        let mut fixture = AudioFixture::default();
+        let prepared = fixture
+            .audio
+            .seek_handle()
+            .begin_prepared(Duration::from_millis(250));
+
+        assert_eq!(fixture.audio.session.seek_obs.epoch(), prepared.epoch);
+        fixture.audio.sync_seek();
+        assert_eq!(fixture.audio.ring.validator.epoch, 0);
+        assert_eq!(
+            AudioControl::present_seek(&mut fixture.audio, prepared.epoch),
+            SeekPresentation::Presented
+        );
+        assert_eq!(fixture.audio.ring.validator.epoch, prepared.epoch);
+        assert_eq!(
+            AudioControl::present_seek(&mut fixture.audio, prepared.epoch),
+            SeekPresentation::Current
+        );
+    }
+
+    #[kithara::test]
+    fn prepared_seek_retires_a_full_old_epoch_ring_before_replacement_pcm(trim_silence: Vec<f32>) {
+        let mut fixture = AudioFixture::default();
+        fixture
+            .data_tx
+            .try_push(Fetch::data(staged_chunk(&trim_silence), 0))
+            .expect("old epoch fills the bounded ring");
+        let prepared = fixture
+            .audio
+            .seek_handle()
+            .begin_prepared(Duration::from_millis(250));
+        let mut events: EventReceiver<AudioLaneEvent> = fixture.audio.events.bus().subscribe();
+
+        assert_eq!(fixture.audio.ring.validator.epoch, 0);
+        assert_eq!(
+            AudioControl::present_seek(&mut fixture.audio, prepared.epoch),
+            SeekPresentation::Presented
+        );
+        assert_eq!(fixture.audio.ring.validator.epoch, prepared.epoch);
+        assert!(matches!(
+            fixture.audio.ring.phase,
+            crate::audio::ConsumerPhase::SeekPending { epoch } if epoch == prepared.epoch
+        ));
+        fixture
+            .data_tx
+            .try_push(Fetch::data(staged_chunk(&trim_silence), prepared.epoch))
+            .expect("retired old epoch frees the bounded ring for replacement PCM");
+        assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[kithara::test]
     fn deferred_seek_adopts_epoch_when_replacement_pcm_is_queued(trim_silence: Vec<f32>) {
         let mut fixture = AudioFixture::default();
         fixture

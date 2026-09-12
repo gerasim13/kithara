@@ -20,7 +20,7 @@ use triple_buffer::Output;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
-    track::{RtSink, TrackReadOutcome},
+    track::{PreparedLaunchReadiness, RtSink, TrackReadOutcome},
 };
 use crate::{
     bridge::{PlayerNotification, RtMetrics, TrackState},
@@ -98,9 +98,6 @@ impl RenderPass {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
-        let mut playback_started = false;
-        let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
-
         if buffers.outputs.len() < Self::MIN_STEREO {
             return (false, None);
         }
@@ -113,8 +110,22 @@ impl RenderPass {
         // with silence.
         let frames = frames.min(self.capacity);
         let context = self.render_context(context, frames);
-        let context = context.as_ref();
+        self.render_tracks(context.as_ref(), targets, buffers, frames, is_playing)
+    }
 
+    fn render_tracks(
+        &mut self,
+        context: Option<&RenderContext>,
+        targets: RenderTargets<'_>,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
+        let mut playback_started = false;
+        let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
+        let tracks = targets.tracks;
+        let prepared_ready = prepared_launch_ready(tracks, context, frames, is_playing);
+        let is_playing = is_playing || prepared_ready.is_some();
         self.update_gate(is_playing);
         // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
@@ -132,7 +143,6 @@ impl RenderPass {
         for ch_buffer in &mut bus_bufs {
             ch_buffer.fill(0.0);
         }
-        let tracks = targets.tracks;
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
         let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             tracks
@@ -143,7 +153,10 @@ impl RenderPass {
             loaded_tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, (_, state))| state.is_playing())
+                .filter(|(_, (slot, state))| {
+                    state.is_playing()
+                        || prepared_ready.is_some_and(|(prepared, _)| prepared == *slot)
+                })
                 .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
                 .collect();
         let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
@@ -155,6 +168,9 @@ impl RenderPass {
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
         {
+            if prepared_ready.is_some_and(|(slot, _)| slot != *track_handle) {
+                continue;
+            }
             if skip_tracks[track_idx] {
                 continue;
             }
@@ -164,16 +180,24 @@ impl RenderPass {
             }
 
             let mut read_outcome = {
+                let range = prepared_ready
+                    .filter(|(slot, _)| *slot == *track_handle)
+                    .map_or(0..frames, |(_, prefix)| prefix..frames);
                 let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
-                    track.render(context, &mut read_bufs, &mut mix_bufs, 0..frames, &mut sink)
+                    track.render(context, &mut read_bufs, &mut mix_bufs, range, &mut sink)
                 }) else {
                     continue;
                 };
-                playback_started = true;
+                playback_started |= if prepared_ready.is_some_and(|(slot, _)| slot == *track_handle)
+                {
+                    matches!(outcome, TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } if frames > 0)
+                } else {
+                    true
+                };
                 outcome
             };
 
-            if *was_leading {
+            if *was_leading && prepared_ready.is_none() {
                 if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
@@ -319,6 +343,28 @@ impl RenderPass {
         self.gate.update_sample_rate(sample_rate);
         self.rate.update_sample_rate(sample_rate);
     }
+}
+
+fn prepared_launch_ready(
+    tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    context: Option<&RenderContext>,
+    frames: usize,
+    is_playing: bool,
+) -> Option<(TrackSlot, usize)> {
+    (!is_playing)
+        .then(|| {
+            context.and_then(|context| {
+                tracks.iter_mut().find_map(|(slot, track)| {
+                    match track.prepared_launch_readiness(context, frames) {
+                        PreparedLaunchReadiness::Ready { prefix_frames } => {
+                            Some((slot, prefix_frames))
+                        }
+                        PreparedLaunchReadiness::NotReady => None,
+                    }
+                })
+            })
+        })
+        .flatten()
 }
 
 const fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {

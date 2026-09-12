@@ -49,6 +49,12 @@ pub(super) enum ChannelLayout {
     RightOnly,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Origin {
+    Pickup,
+    Zero,
+}
+
 impl ChannelLayout {
     const fn frame(self, stereo: [i16; 2]) -> [i16; 2] {
         match self {
@@ -159,15 +165,28 @@ pub(super) fn wav(style: Style, control: Control) -> Vec<u8> {
 }
 
 pub(super) fn wav_with_layout(style: Style, control: Control, layout: ChannelLayout) -> Vec<u8> {
-    let pcm = pcm(style, control, layout);
+    wav_with_layout_at_origin(style, control, layout, Origin::Pickup)
+}
+
+pub(super) fn wav_with_layout_at_origin(
+    style: Style,
+    control: Control,
+    layout: ChannelLayout,
+    origin: Origin,
+) -> Vec<u8> {
+    let pcm = pcm(style, control, layout, origin);
     let mut bytes = header(Consts::SAMPLE_RATE, Consts::CHANNELS, Some(pcm.len()));
     bytes.extend(pcm);
     bytes
 }
 
 pub(super) fn truth(style: Style, control: Control) -> Truth {
+    truth_at_origin(style, control, Origin::Pickup)
+}
+
+pub(super) fn truth_at_origin(style: Style, control: Control, origin: Origin) -> Truth {
     let beat_frames = beat_frames(style);
-    let first = beat_frames + phase_frames(control);
+    let first = first_beat_frame(beat_frames, control, origin);
     let bar_phase = usize::from(matches!(control, Control::OneBeatBarLate));
     let mut beats = Vec::new();
     let mut downbeats = Vec::new();
@@ -191,9 +210,9 @@ pub(super) fn truth(style: Style, control: Control) -> Truth {
     }
 }
 
-fn pcm(style: Style, control: Control, layout: ChannelLayout) -> Vec<u8> {
+fn pcm(style: Style, control: Control, layout: ChannelLayout, origin: Origin) -> Vec<u8> {
     let beat_frames = beat_frames(style);
-    let first = beat_frames + phase_frames(control);
+    let first = first_beat_frame(beat_frames, control, origin);
     let bed = bed(style, beat_frames);
     let mut bytes =
         Vec::with_capacity(Consts::TOTAL_FRAMES * usize::from(Consts::CHANNELS) * size_of::<i16>());
@@ -397,6 +416,14 @@ fn pcm_sample(sample: f32) -> i16 {
 fn beat_frames(style: Style) -> usize {
     cast((f64::from(Consts::SAMPLE_RATE) * Consts::SECONDS_PER_MINUTE / style.bpm()).round())
         .expect("invariant: a rhythm beat period fits usize")
+}
+
+const fn first_beat_frame(beat_frames: usize, control: Control, origin: Origin) -> usize {
+    let pickup = match origin {
+        Origin::Pickup => beat_frames,
+        Origin::Zero => 0,
+    };
+    pickup + phase_frames(control)
 }
 
 const fn phase_frames(control: Control) -> usize {
