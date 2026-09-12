@@ -18,6 +18,7 @@ use kithara::{
 use kithara_app::recording::AssetPartSink;
 use kithara_test_utils::probe::capture::{self as probe_capture, Recorder};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::{
     artifact_timeline::ArtifactTimeline,
@@ -47,6 +48,7 @@ pub struct AudioArtifactTap {
     timeline: ArtifactTimeline,
     source_grids: BTreeMap<u64, BeatGridSnapshot>,
     probes: Recorder,
+    evidence: BTreeMap<String, Value>,
 }
 
 #[derive(Serialize)]
@@ -71,6 +73,7 @@ impl AudioArtifactTap {
             timeline: ArtifactTimeline::default(),
             source_grids: BTreeMap::new(),
             probes: probe_capture::install(),
+            evidence: BTreeMap::new(),
         }))
     }
 
@@ -98,6 +101,11 @@ impl AudioArtifactTap {
 
     pub fn source_grid(&mut self, track: u64, grid: BeatGridSnapshot) {
         self.source_grids.insert(track, grid);
+    }
+
+    /// Attach test-owned observed evidence to this artifact's manifest.
+    pub fn evidence(&mut self, key: &str, value: Value) {
+        self.evidence.insert(key.to_owned(), value);
     }
 }
 
@@ -137,6 +145,7 @@ impl Drop for AudioArtifactTap {
             "output": output,
             "timeline": timeline,
             "timeline_events": self.timeline.events(),
+            "evidence": self.evidence,
         });
         match self
             .set

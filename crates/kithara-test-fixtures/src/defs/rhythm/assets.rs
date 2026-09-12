@@ -6,7 +6,7 @@ use kithara_analysis::{
 };
 use kithara_test_macros as kithara;
 
-use super::score::{self, Control, Style};
+use super::score::{self, ChannelLayout, Control, Style};
 
 const RHYTHM_FRAMES: u64 = 48_000 * 12;
 
@@ -37,6 +37,13 @@ const RHYTHM_FRAMES: u64 = 48_000 * 12;
 #[case::breakbeat_140_missing_beat(Style::Breakbeat, Control::MissingBeat)]
 fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
     score::wav(style, control)
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::downtempo_96_left_only(Style::Downtempo, ChannelLayout::LeftOnly)]
+#[case::house_124_right_only(Style::House, ChannelLayout::RightOnly)]
+fn rhythm_wav_scenario_1(style: Style, layout: ChannelLayout) -> Vec<u8> {
+    score::wav_with_layout(style, Control::Aligned, layout)
 }
 
 #[kithara::asset(
@@ -71,6 +78,20 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -> Vec<u8> {
     analysis_file(
         BeatArtifact::from(score::truth(style, control)),
+        RHYTHM_FRAMES,
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["rhythm_wav_scenario_1_{case}"]
+)]
+#[case::downtempo_96_left_only(Style::Downtempo)]
+#[case::house_124_right_only(Style::House)]
+fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth(style, Control::Aligned)),
         RHYTHM_FRAMES,
     )
 }

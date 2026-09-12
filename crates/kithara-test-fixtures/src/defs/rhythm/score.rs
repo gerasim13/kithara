@@ -42,6 +42,23 @@ pub(super) enum Style {
     Breakbeat,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ChannelLayout {
+    Stereo,
+    LeftOnly,
+    RightOnly,
+}
+
+impl ChannelLayout {
+    const fn frame(self, stereo: [i16; 2]) -> [i16; 2] {
+        match self {
+            Self::Stereo => stereo,
+            Self::LeftOnly => [stereo[0], 0],
+            Self::RightOnly => [0, stereo[1]],
+        }
+    }
+}
+
 impl Style {
     const fn bass(self, beat: usize) -> Pitch {
         match self {
@@ -138,7 +155,11 @@ impl From<Truth> for BeatArtifact {
 }
 
 pub(super) fn wav(style: Style, control: Control) -> Vec<u8> {
-    let pcm = pcm(style, control);
+    wav_with_layout(style, control, ChannelLayout::Stereo)
+}
+
+pub(super) fn wav_with_layout(style: Style, control: Control, layout: ChannelLayout) -> Vec<u8> {
+    let pcm = pcm(style, control, layout);
     let mut bytes = header(Consts::SAMPLE_RATE, Consts::CHANNELS, Some(pcm.len()));
     bytes.extend(pcm);
     bytes
@@ -170,7 +191,7 @@ pub(super) fn truth(style: Style, control: Control) -> Truth {
     }
 }
 
-fn pcm(style: Style, control: Control) -> Vec<u8> {
+fn pcm(style: Style, control: Control, layout: ChannelLayout) -> Vec<u8> {
     let beat_frames = beat_frames(style);
     let first = beat_frames + phase_frames(control);
     let bed = bed(style, beat_frames);
@@ -179,14 +200,14 @@ fn pcm(style: Style, control: Control) -> Vec<u8> {
 
     for frame in 0..Consts::TOTAL_FRAMES {
         let Some(since_first) = frame.checked_sub(first) else {
-            push_frame(&mut bytes, [0, 0]);
+            push_frame(&mut bytes, layout.frame([0, 0]));
             continue;
         };
         let beat = since_first / beat_frames;
         let within = since_first % beat_frames;
         let missing = matches!(control, Control::MissingBeat) && beat == Consts::MISSING_BEAT;
         if missing {
-            push_frame(&mut bytes, [0, 0]);
+            push_frame(&mut bytes, layout.frame([0, 0]));
             continue;
         }
 
@@ -198,7 +219,7 @@ fn pcm(style: Style, control: Control) -> Vec<u8> {
             } else {
                 22_000
             };
-            push_frame(&mut bytes, [marker, marker]);
+            push_frame(&mut bytes, layout.frame([marker, marker]));
             continue;
         }
 
@@ -214,7 +235,7 @@ fn pcm(style: Style, control: Control) -> Vec<u8> {
             .map_or([0, 0], |samples| {
                 [pcm_sample(samples[0]), pcm_sample(samples[1])]
             });
-        push_frame(&mut bytes, frame);
+        push_frame(&mut bytes, layout.frame(frame));
     }
     bytes
 }

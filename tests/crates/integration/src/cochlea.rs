@@ -166,6 +166,17 @@ pub fn marked_synchronization_failures(
     synchronization_failures_with(label, tracks, channels, sample_rate, target_bpm, false)
 }
 
+/// Extract deterministic fixture beat and downbeat markers with the calibrated
+/// score-marker detector used by the synchronization oracle.
+#[must_use]
+pub fn marked_rhythm_markers(
+    samples: &[f32],
+    channels: u16,
+    sample_rate: u32,
+) -> (Vec<usize>, Vec<usize>) {
+    rhythm_markers(samples, usize::from(channels), sample_rate)
+}
+
 fn synchronization_failures_with(
     label: &str,
     tracks: &[&[f32]],
@@ -199,7 +210,7 @@ fn synchronization_failures_with(
             "track {index} must contain complete frames"
         );
 
-        let (markers, downbeats) = rhythm_markers(samples, channel_count, sample_rate);
+        let (markers, downbeats) = marked_rhythm_markers(samples, channels, sample_rate);
         let marker_debug = markers.iter().take(8).copied().collect::<Vec<_>>();
         let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));

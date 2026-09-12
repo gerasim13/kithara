@@ -38,7 +38,10 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
-    cochlea::{marked_synchronization_failures, synchronization_failures},
+    cochlea::{
+        CochleaReport, marked_rhythm_markers, marked_synchronization_failures,
+        synchronization_failures,
+    },
     fixture_protocol::EncryptionRequest,
     grid::segment_set,
     hls_fixture::{aes128_iv, aes128_key_bytes},
@@ -58,6 +61,7 @@ use num_traits::ToPrimitive;
 
 pub(super) const BLOCK_FRAMES: usize = 128;
 pub(super) const CHANNELS: u16 = 2;
+const RENDER_QUANTUM_FRAMES: usize = 32;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const START_BPM: f64 = 120.0;
 
@@ -357,6 +361,10 @@ const DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_downtempo_96_aligned",
     "rhythm_wav_house_124_aligned",
 ];
+const SCENARIO_1_DOWNTEMPO_HOUSE: &[&str] = &[
+    "rhythm_wav_scenario_1_downtempo_96_left_only",
+    "rhythm_wav_scenario_1_house_124_right_only",
+];
 const TECHNO_BREAKBEAT: &[&str] = &[
     "rhythm_wav_techno_132_aligned",
     "rhythm_wav_breakbeat_140_aligned",
@@ -386,6 +394,7 @@ pub(super) enum Provider {
 
 pub(super) const AMBIENT_TRIP_HOP_PROVIDER: Provider = Provider::Rhythm(AMBIENT_TRIP_HOP);
 pub(super) const DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(DOWNTEMPO_HOUSE);
+const SCENARIO_1_DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(SCENARIO_1_DOWNTEMPO_HOUSE);
 pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_BREAKBEAT);
 pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
 
@@ -598,7 +607,22 @@ impl ProductHarness {
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
-        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
+        let max_block_frames =
+            NonZeroU32::new(u32::try_from(block_frames).expect("fixture block size fits u32"))
+                .expect("fixture block size is non-zero");
+        let response_budget_frames = block_frames
+            .div_ceil(RENDER_QUANTUM_FRAMES)
+            .checked_add(2)
+            .and_then(|chunks| chunks.checked_mul(RENDER_QUANTUM_FRAMES))
+            .and_then(|frames| frames.checked_sub(1))
+            .and_then(NonZeroUsize::new)
+            .expect("fixture response geometry fits usize");
+        let render_quantum_frames =
+            NonZeroUsize::new(RENDER_QUANTUM_FRAMES).expect("fixture quantum is non-zero");
+        let session = HostConfig::offline(pools)
+            .sample_rate(sample_rate)
+            .max_block_frames(max_block_frames)
+            .build();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
@@ -612,8 +636,14 @@ impl ProductHarness {
                 PlayerConfig::builder()
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
+                    .response_budget_frames(response_budget_frames)
                     .crossfade_duration(case.crossfade_secs)
-                    .warp(WarpConfig::builder().stretch(stretch).build())
+                    .warp(
+                        WarpConfig::builder()
+                            .stretch(stretch)
+                            .render_quantum_frames(render_quantum_frames)
+                            .build(),
+                    )
                     .build(),
             );
             player_controls.push(player.control());
@@ -851,9 +881,12 @@ impl ProductHarness {
     }
 
     pub(super) async fn settle_sync_activation(&mut self, case: SyncCase) {
-        let activation = self
-            .sync_activation
-            .expect("fixture SYNC must prepare an activation");
+        let activation = self.sync_activation.unwrap_or_else(|| {
+            panic!(
+                "fixture SYNC must prepare an activation: {}",
+                self.failures.join("; ")
+            )
+        });
         while self.rendered_frames <= activation {
             let _ = self.render(case, self.block_frames).await;
         }
@@ -936,7 +969,8 @@ impl ProductHarness {
                         panic!("{}: synchronized seek deck {index}: {rejected}", case.id)
                     });
                 if let SyncAdmission::Prepared { activation, .. } = admission {
-                    let activation = u64::try_from(i64::from(activation)).unwrap_or(0);
+                    let activation = u64::try_from(i64::from(activation))
+                        .expect("fixture activation must be non-negative");
                     self.sync_activation = Some(
                         self.sync_activation
                             .map_or(activation, |current| current.max(activation)),
@@ -1058,7 +1092,8 @@ impl ProductHarness {
                     ));
                 }
                 if let SyncAdmission::Prepared { activation, .. } = admission {
-                    let activation = u64::try_from(i64::from(activation)).unwrap_or(0);
+                    let activation = u64::try_from(i64::from(activation))
+                        .expect("fixture activation must be non-negative");
                     if let Some(tap) = self.tap.as_mut() {
                         tap.timeline().point(
                             &format!("deck-{index}"),
@@ -1457,6 +1492,217 @@ pub(super) async fn prepare_fixture_grids(
     }
 }
 
+#[ignore = "ignored-red: Scenario 1's same-session stereo-separated capture proves the left deck starts at its native 96 BPM instead of the shared 124 BPM, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn scenario_1_simultaneous_different_bpm_exact_grids(
+    #[future(awt)] source_scenario_1_downtempo_house_provider: PreparedSources,
+) {
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+    const CAPTURE_FRAMES: usize = 48_000 * 10;
+    let case = DOWNTEMPO_HOUSE_SYNC.paused();
+    let code_identity =
+        env::var("KITHARA_SCENARIO_CODE_IDENTITY").expect("scenario code identity is required");
+    let dirty_scope =
+        env::var("KITHARA_SCENARIO_DIRTY_SCOPE").expect("scenario dirty scope is required");
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &source_scenario_1_downtempo_house_provider,
+        0,
+        BLOCK_FRAMES,
+    )
+    .await;
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "scenario_1",
+            serde_json::json!({
+                "verdict": "capture-incomplete",
+                "fixture_generation": {
+                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                    "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
+                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
+                },
+                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
+                "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
+                "requested_source_start_frames": [0, 0],
+                "prelaunch_frames": PRELAUNCH_FRAMES,
+                "capture_frames_after_start": CAPTURE_FRAMES,
+                "code_identity": code_identity.clone(),
+                "dirty_scope": dirty_scope.clone(),
+            }),
+        );
+    }
+    for deck in &harness.decks {
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
+    }
+    prepare_fixture_grids(
+        &mut harness,
+        case,
+        &source_scenario_1_downtempo_house_provider,
+    )
+    .await;
+
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(
+        prelaunch.iter().all(|sample| *sample == 0.0),
+        "scenario 1: prelaunch Host output must remain silent"
+    );
+    harness.mark("scenario-1-enable");
+    harness.request_sync(case).await;
+    harness.mark("scenario-1-simultaneous-host-start");
+    harness.play_all().await;
+    let capture_start = harness.rendered_frames;
+    let capture = harness
+        .capture_frames(case, CAPTURE_FRAMES, harness.block_frames)
+        .await;
+    let underruns = harness.underrun_failures();
+    harness.failures.extend(underruns);
+
+    let report = CochleaReport::measure(&capture, CHANNELS, case.sample_rate);
+    let (left_markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let initial_launch_failures = scenario_1_initial_launch_failures(
+        &left_markers,
+        capture_start,
+        case.sample_rate,
+        case.start_bpm(),
+    );
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "scenario_1",
+            serde_json::json!({
+                "verdict": if initial_launch_failures.is_empty() { "pass" } else { "fail" },
+                "reason": "same-session L/R fixture routing exposes each deck in the Host output; the left start intervals are checked against the requested shared Host tempo",
+                "fixture_generation": {
+                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                    "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
+                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
+                },
+                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
+                "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
+                "requested_source_start_frames": [0, 0],
+                "prelaunch_frames": PRELAUNCH_FRAMES,
+                "capture_frames_after_start": CAPTURE_FRAMES,
+                "sync_activation_frame": harness.sync_activation,
+                "per_lane_early_measurement": {
+                    "capture_host_start_frame": capture_start,
+                    "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+                    "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+                    "interpretation": "observations use the calibrated score-marker detector without shifts or onset tolerance; they report from each lane's first digital non-silence and detected beat marker through the full capture",
+                    "post_activation_left_marker_limitation": "left post-activation PCM remains non-silent, but its peak is below the full-lane relative detector threshold; absent left markers after activation are not a missing-PCM or missing-cue verdict"
+                },
+                "initial_launch_failures": initial_launch_failures,
+                "audible_measurement": report,
+                "harness_failures": harness.failures,
+                "code_identity": code_identity,
+                "dirty_scope": dirty_scope,
+            }),
+        );
+    }
+    drop(harness);
+    assert!(
+        initial_launch_failures.is_empty(),
+        "scenario 1 initial shared-tempo contract failed: {}",
+        initial_launch_failures.join("; ")
+    );
+}
+
+fn scenario_1_initial_launch_failures(
+    markers: &[u64],
+    capture_start: u64,
+    sample_rate: u32,
+    target_bpm: f64,
+) -> Vec<String> {
+    let target_period = f64::from(sample_rate) * 60.0 / target_bpm;
+    let expected = [target_period.floor() as u64, target_period.ceil() as u64];
+    let expected_first = capture_start + target_period.round() as u64;
+    let mut failures = Vec::new();
+    match markers.first() {
+        Some(actual) if *actual == expected_first => {}
+        Some(actual) => failures.push(format!(
+            "left first score cue at Host frame {actual}, expected {expected_first} from source one-beat count-in and shared {target_bpm:.3} BPM Host grid"
+        )),
+        None => failures.push("left has no detected score cue after launch".to_owned()),
+    }
+    for pair in markers.windows(2).take(2) {
+        let actual = pair[1] - pair[0];
+        if !expected.contains(&actual) {
+            failures.push(format!(
+                "left score-cue interval {}..{} is {actual} frames ({:.6} BPM), expected {}/{} frames for shared {target_bpm:.3} BPM",
+                pair[0],
+                pair[1],
+                f64::from(sample_rate) * 60.0 / actual as f64,
+                expected[0],
+                expected[1],
+            ));
+        }
+    }
+    failures
+}
+
+fn lane_early_measurement(
+    interleaved: &[f32],
+    channel: usize,
+    capture_start: u64,
+    sample_rate: u32,
+) -> serde_json::Value {
+    let samples = lane_samples(interleaved, channel);
+    let first_non_silent = samples
+        .iter()
+        .position(|sample| sample.abs() > f32::EPSILON)
+        .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits u64"));
+    let (beat_frames, downbeat_frames) =
+        lane_score_markers(interleaved, channel, capture_start, sample_rate);
+    let intervals = beat_frames
+        .windows(2)
+        .map(|pair| {
+            let frames = pair[1] - pair[0];
+            serde_json::json!({
+                "from_host_frame": pair[0],
+                "to_host_frame": pair[1],
+                "frames": frames,
+                "bpm": f64::from(sample_rate) * 60.0 / frames as f64,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "first_digital_non_silent_host_frame": first_non_silent,
+        "beat_marker_host_frames": beat_frames,
+        "downbeat_marker_host_frames": downbeat_frames,
+        "beat_interval_series": intervals,
+    })
+}
+
+fn lane_score_markers(
+    interleaved: &[f32],
+    channel: usize,
+    capture_start: u64,
+    sample_rate: u32,
+) -> (Vec<u64>, Vec<u64>) {
+    let samples = lane_samples(interleaved, channel);
+    let (beats, downbeats) = marked_rhythm_markers(&samples, 1, sample_rate);
+    let frames = |markers: Vec<usize>| {
+        markers
+            .into_iter()
+            .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits u64"))
+            .collect::<Vec<_>>()
+    };
+    (frames(beats), frames(downbeats))
+}
+
+fn lane_samples(interleaved: &[f32], channel: usize) -> Vec<f32> {
+    interleaved
+        .chunks_exact(usize::from(CHANNELS))
+        .map(|frame| frame[channel])
+        .collect()
+}
+
 async fn hls(
     server: &TestServerHelper,
     init: Asset,
@@ -1747,6 +1993,11 @@ async fn source_ambient_trip_hop_provider() -> PreparedSources {
 #[kithara::fixture]
 async fn source_downtempo_house_provider() -> PreparedSources {
     prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_scenario_1_downtempo_house_provider() -> PreparedSources {
+    prepared_sources(SCENARIO_1_DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
 #[kithara::fixture]
