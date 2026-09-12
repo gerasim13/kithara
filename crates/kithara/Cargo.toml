@@ -99,13 +99,7 @@ signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
-test-utils = [
-    "bufpool",
-    "dep:kithara-test-utils",
-    "kithara-bufpool/test-utils",
-    "kithara-host?/test-utils",
-    "kithara-play?/test-utils",
-]
+test-utils = ["bufpool", "dep:kithara-test-utils", "kithara-bufpool/test-utils", "kithara-host?/test-utils"]
 ui = ["dep:kithara-ui"]
 warp = ["dep:kithara-warp"]
 worker = ["dep:kithara-worker"]

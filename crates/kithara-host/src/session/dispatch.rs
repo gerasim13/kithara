@@ -165,7 +165,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        #[cfg(any(test, feature = "test-utils"))]
         Cmd::SetPlayerMasterVolumes { levels } => {
             match controls::set_player_master_volumes(state, &levels) {
                 Ok(()) => Reply::Ok,
