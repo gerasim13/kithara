@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 use url::Url;
 
 pub trait Probe {
-    fn record_probe(&self, operation: u64);
+    fn record_probe(&self, name: &'static str, operation: u64);
 }
 
 #[must_use]

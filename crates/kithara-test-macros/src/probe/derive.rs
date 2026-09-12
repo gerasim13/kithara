@@ -1,9 +1,10 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Data, DataStruct, DeriveInput, Error, Field, Fields, Ident};
+use syn::{Data, DataStruct, DeriveInput, Error, Field, Fields, Ident, LitStr};
 
 #[derive(Default)]
 struct FieldOpts {
+    rename: Option<String>,
     skip: bool,
 }
 
@@ -17,8 +18,12 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
             if meta.path.is_ident("skip") {
                 opts.skip = true;
                 Ok(())
+            } else if meta.path.is_ident("name") {
+                let lit: LitStr = meta.value()?.parse()?;
+                opts.rename = Some(syn::parse_str::<Ident>(&lit.value())?.to_string());
+                Ok(())
             } else {
-                Err(meta.error("unknown #[probe(...)] field option (expected `skip`)"))
+                Err(meta.error("unknown #[probe(...)] field option (expected `skip` or `name`)"))
             }
         })?;
     }
@@ -27,6 +32,10 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
 
 pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
+    let crate_name = std::env::var("CARGO_PKG_NAME")
+        .map_err(|_| Error::new_spanned(struct_name, "probe requires CARGO_PKG_NAME"))?
+        .replace('-', "_");
+    let target = format!("{crate_name}_probe");
 
     let fields = match &input.data {
         Data::Struct(DataStruct {
@@ -48,6 +57,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let mut field_idents: Vec<Ident> = Vec::new();
+    let mut wire_names = Vec::new();
     for field in fields {
         let opts = parse_field_opts(field)?;
         if opts.skip {
@@ -57,6 +67,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             .ident
             .clone()
             .ok_or_else(|| Error::new_spanned(field, "expected named field"))?;
+        wire_names.push(opts.rename.unwrap_or_else(|| ident.to_string()));
         field_idents.push(ident);
     }
 
@@ -84,6 +95,15 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    let tracing_pairs: Vec<TokenStream2> = wire_names
+        .iter()
+        .zip(&slot_idents)
+        .map(|(name, slot)| {
+            let ident = format_ident!("{name}");
+            quote! { #ident = #slot }
+        })
+        .collect();
+
     let field_consume: Vec<TokenStream2> = field_idents
         .iter()
         .map(|f| quote! { let _ = &self.#f; })
@@ -94,18 +114,79 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #impl_generics ::kithara_test_utils::probe::Probe for #struct_name #ty_generics #where_clause {
             #[inline]
-            fn record_probe(&self, operation: u64) {
-                let _ = operation;
-                #(#field_consume)*
+            fn record_probe(&self, name: &'static str, operation: u64) {
                 #[cfg(feature = "usdt")]
+                let __kithara_usdt_rtsan_permit = ::kithara_test_utils::rtsan::permit();
+                let _ = (name, operation);
+                #(#field_consume)*
+                #[cfg(all(feature = "usdt", target_os = "macos", not(miri)))]
                 {
                     ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
                     ::kithara_test_utils::probe::#fire_fn(operation, #(#slot_idents),*);
                 }
+                #[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+                {
+                    #(#bindings)*
+                    ::kithara_test_utils::tracing::event!(
+                        target: #target,
+                        ::kithara_test_utils::tracing::Level::TRACE,
+                        probe = name,
+                        #(#tracing_pairs),*
+                    );
+                }
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::{DeriveInput, parse_quote};
+
+    use super::expand_derive;
+
+    #[test]
+    fn derive_uses_only_usdt_platform_backends() -> syn::Result<()> {
+        let input: DeriveInput = parse_quote! {
+            struct Sample {
+                #[probe(name = "frames")]
+                samples: u64,
+            }
+        };
+
+        let expanded = expand_derive(&input)?.to_string();
+
+        assert!(
+            expanded
+                .contains("cfg (all (feature = \"usdt\" , target_os = \"macos\" , not (miri)))")
+        );
+        assert!(
+            expanded.contains(
+                "cfg (all (feature = \"usdt\" , any (not (target_os = \"macos\") , miri)))"
+            )
+        );
+        assert!(expanded.contains("kithara_test_utils :: tracing :: event"));
+        assert!(expanded.contains("frames = __probe_slot_0"));
+        assert!(!expanded.contains("cfg (test)"));
+        assert!(!expanded.contains("probe-capture"));
+        assert!(expanded.contains("rtsan :: permit"));
+        Ok(())
+    }
+
+    #[test]
+    fn derive_rejects_a_non_identifier_probe_name() {
+        let input: DeriveInput = parse_quote! {
+            struct Sample {
+                #[probe(name = "not-a-field")]
+                samples: u64,
+            }
+        };
+
+        let err = expand_derive(&input).expect_err("invalid tracing field name");
+
+        assert!(!err.to_string().is_empty(), "{err}");
+    }
 }
 
 /// Expand `#[derive(kithara::IntoProbeArg)]` for a single-field

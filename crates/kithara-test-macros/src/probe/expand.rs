@@ -11,6 +11,7 @@ struct WireFields {
     computed_bindings: Vec<TokenStream2>,
     computed_consumes: Vec<TokenStream2>,
     slots: Vec<Ident>,
+    tracing_fields: Vec<TokenStream2>,
 }
 
 /// Collect every named parameter ident from a function signature.
@@ -121,12 +122,24 @@ fn wire_fields(
         })
         .collect();
     let slots = arg_slots.iter().chain(&computed_slots).cloned().collect();
+    let tracing_fields = args
+        .iter()
+        .zip(&arg_slots)
+        .map(|(name, slot)| quote! { #name = #slot })
+        .chain(
+            computed
+                .iter()
+                .zip(&computed_slots)
+                .map(|((name, _), slot)| quote! { #name = #slot }),
+        )
+        .collect();
     Ok(WireFields {
         arg_bindings,
         computed_bindings,
         arg_consumes,
         computed_consumes,
         slots,
+        tracing_fields,
         fire_fn: format_ident!("fire_{total}"),
     })
 }
@@ -134,6 +147,10 @@ fn wire_fields(
 pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenStream2> {
     let fn_name = input.sig.ident.clone();
     let fn_name_str = fn_name.to_string();
+    let crate_name = std::env::var("CARGO_PKG_NAME")
+        .map_err(|_| Error::new_spanned(&input.sig.ident, "probe requires CARGO_PKG_NAME"))?
+        .replace('-', "_");
+    let target = format!("{crate_name}_probe");
 
     let all_args = collect_fn_param_idents(input)?;
     let arg_idents = resolve_arg_idents(filter.args, &all_args)?;
@@ -152,10 +169,13 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             let __probe_ret = (|| #block)();
             #[cfg(feature = "usdt")]
             {
-                ::kithara_test_utils::probe::register_probes();
                 const __KITHARA_USDT_OPERATION: u64 =
                     ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
-                ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, __KITHARA_USDT_OPERATION);
+                ::kithara_test_utils::probe::Probe::record_probe(
+                    &__probe_ret,
+                    #fn_name_str,
+                    __KITHARA_USDT_OPERATION,
+                );
             }
             __probe_ret
         }
@@ -163,8 +183,14 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         quote! { #(#stmts)* }
     };
 
-    let emit_entry_event =
-        build_emit_entry_event(probe_return, &fn_name_str, &fields.fire_fn, &fields.slots);
+    let emit_entry_event = build_emit_entry_event(
+        probe_return,
+        &fn_name_str,
+        &target,
+        &fields.fire_fn,
+        &fields.slots,
+        &fields.tracing_fields,
+    );
     let WireFields {
         arg_bindings,
         computed_bindings,
@@ -192,9 +218,19 @@ pub(crate) fn expand_event(event: ProbeEvent) -> syn::Result<TokenStream2> {
         args,
         computed,
     } = event;
+    let crate_name = std::env::var("CARGO_PKG_NAME")
+        .map_err(|_| Error::new_spanned(&name, "probe requires CARGO_PKG_NAME"))?
+        .replace('-', "_");
     let probe_name = name.to_string();
     let fields = wire_fields(&args, &computed, &name)?;
-    let emit = build_emit_entry_event(false, &probe_name, &fields.fire_fn, &fields.slots);
+    let emit = build_emit_entry_event(
+        false,
+        &probe_name,
+        &format!("{crate_name}_probe"),
+        &fields.fire_fn,
+        &fields.slots,
+        &fields.tracing_fields,
+    );
     let WireFields {
         arg_bindings,
         computed_bindings,
@@ -214,19 +250,32 @@ pub(crate) fn expand_event(event: ProbeEvent) -> syn::Result<TokenStream2> {
 fn build_emit_entry_event(
     probe_return: bool,
     fn_name_str: &str,
+    target: &str,
     fire_fn: &Ident,
     probe_idents: &[Ident],
+    tracing_fields: &[TokenStream2],
 ) -> TokenStream2 {
     if probe_return {
         return quote! {};
     }
     quote! {
         #[cfg(feature = "usdt")]
+        let __kithara_usdt_rtsan_permit = ::kithara_test_utils::rtsan::permit();
+        #[cfg(all(feature = "usdt", target_os = "macos", not(miri)))]
         {
             ::kithara_test_utils::probe::register_probes();
             const __KITHARA_USDT_OPERATION: u64 =
                 ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
             ::kithara_test_utils::probe::#fire_fn(__KITHARA_USDT_OPERATION, #(#probe_idents),*);
+        }
+        #[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+        {
+            ::kithara_test_utils::tracing::event!(
+                target: #target,
+                ::kithara_test_utils::tracing::Level::TRACE,
+                probe = #fn_name_str,
+                #(#tracing_fields),*
+            );
         }
     }
 }
@@ -259,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_emission_is_usdt_only() -> syn::Result<()> {
+    fn probe_emission_uses_only_usdt_platform_backends() -> syn::Result<()> {
         let input: ItemFn = parse_quote! {
             fn advance(frames: u64) {
                 let _ = frames;
@@ -272,10 +321,19 @@ mod tests {
 
         let expanded = expand(&input, filter)?.to_string();
 
-        assert!(expanded.contains("cfg (feature = \"usdt\")"));
+        assert!(
+            expanded
+                .contains("cfg (all (feature = \"usdt\" , target_os = \"macos\" , not (miri)))")
+        );
+        assert!(
+            expanded.contains(
+                "cfg (all (feature = \"usdt\" , any (not (target_os = \"macos\") , miri)))"
+            )
+        );
         assert!(!expanded.contains("cfg (test)"));
-        assert!(!expanded.contains("tracing"));
-        assert!(!expanded.contains("rtsan"));
+        assert!(!expanded.contains("probe-capture"));
+        assert!(expanded.contains("kithara_test_utils :: tracing :: event"));
+        assert!(expanded.contains("rtsan :: permit"));
         Ok(())
     }
 }

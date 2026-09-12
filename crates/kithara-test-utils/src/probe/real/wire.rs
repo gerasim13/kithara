@@ -9,7 +9,7 @@ use url::Url;
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.
 pub trait Probe {
     /// Fire the probe associated with this value.
-    fn record_probe(&self, operation: u64);
+    fn record_probe(&self, name: &'static str, operation: u64);
 }
 
 /// Stable, allocation-free USDT operation identifier.
@@ -122,22 +122,13 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
     }
 }
 
-/// Register all USDT probes embedded in the binary with the host
-/// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
-/// from multiple init paths — guarded by an internal `OnceLock`. On
-/// wasm32, Android, under Miri, and in production builds (`feature = "usdt"`
-/// disabled), this is a no-op stub - the optional `usdt` crate is not pulled
-/// in.
+/// Register the macOS DTrace probes embedded in the binary. Other targets use
+/// the tracing USDT backend and do not require registration.
 pub fn register_probes() {
     imp::register();
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(miri),
-    feature = "usdt"
-))]
+#[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -150,12 +141,7 @@ mod imp {
     }
 }
 
-#[cfg(any(
-    target_arch = "wasm32",
-    target_os = "android",
-    miri,
-    not(feature = "usdt")
-))]
+#[cfg(any(not(target_os = "macos"), not(feature = "usdt"), miri))]
 mod imp {
     pub(super) fn register() {}
 }

@@ -1,4 +1,4 @@
-#[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+#[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
 #[allow(
     clippy::undocumented_unsafe_blocks,
     reason = "Inline-asm `unsafe` blocks expanded by `usdt::provider!` are out of our control."
@@ -15,7 +15,7 @@ mod prov {
 
 pub fn fire_0(operation: u64) {
     let _ = operation;
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_0!(|| operation);
 }
 
@@ -29,7 +29,7 @@ pub fn fire_0(operation: u64) {
 )]
 pub fn fire_1(operation: u64, a0: u64) {
     let _ = (operation, a0);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_1!(|| (operation, a0));
 }
 
@@ -43,7 +43,7 @@ pub fn fire_1(operation: u64, a0: u64) {
 )]
 pub fn fire_2(operation: u64, a0: u64, a1: u64) {
     let _ = (operation, a0, a1);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_2!(|| (operation, a0, a1));
 }
 
@@ -57,7 +57,7 @@ pub fn fire_2(operation: u64, a0: u64, a1: u64) {
 )]
 pub fn fire_3(operation: u64, a0: u64, a1: u64, a2: u64) {
     let _ = (operation, a0, a1, a2);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_3!(|| (operation, a0, a1, a2));
 }
 
@@ -71,7 +71,7 @@ pub fn fire_3(operation: u64, a0: u64, a1: u64, a2: u64) {
 )]
 pub fn fire_4(operation: u64, a0: u64, a1: u64, a2: u64, a3: u64) {
     let _ = (operation, a0, a1, a2, a3);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_4!(|| (operation, a0, a1, a2, a3));
 }
 
@@ -85,6 +85,6 @@ pub fn fire_4(operation: u64, a0: u64, a1: u64, a2: u64, a3: u64) {
 )]
 pub fn fire_5(operation: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) {
     let _ = (operation, a0, a1, a2, a3, a4);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "usdt"))]
+    #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
     prov::probe_5!(|| (operation, a0, a1, a2, a3, a4));
 }

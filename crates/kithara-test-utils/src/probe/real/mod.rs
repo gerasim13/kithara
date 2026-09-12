@@ -1,20 +1,16 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 
-/// Miri too, and not only Android: it interprets the probe call sites and
-/// refuses the semaphore static each one reads (`extern static
-/// __usdt_sema_kithara_probe_0 is not supported by Miri`), which is how the
-/// weekly run failed in 129 seconds without reaching a single test.
-#[cfg(any(target_os = "android", miri))]
-#[path = "noop.rs"]
-mod usdt_wire;
-#[cfg(not(any(target_os = "android", miri)))]
+/// DTrace is the native USDT backend on macOS. Other targets use the tracing
+/// backend emitted by the probe macro.
+#[cfg(all(target_os = "macos", not(miri)))]
 mod usdt_wire;
 mod wire;
 
+#[cfg(all(target_os = "macos", not(miri)))]
 pub use usdt_wire::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5};
 pub use wire::{IntoProbeArg, Probe, operation_id, register_probes};
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos", not(miri)))]
 mod tests {
     use super::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5, register_probes};
 

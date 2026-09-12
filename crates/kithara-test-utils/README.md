@@ -39,8 +39,8 @@ trait Service {
 ```
 
 Probe sites compile to no-ops unless the emitting crate's `usdt` feature is
-enabled. The tracing capture helper remains ordinary test infrastructure and
-is not connected to USDT probe emission.
+enabled. On macOS, `usdt` emits native DTrace probes; on other targets, it
+emits the same probe records through `tracing`.
 
 ## Key Types
 
@@ -78,7 +78,7 @@ is not connected to USDT probe emission.
 
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
 
-<tr><td><code>usdt</code></td><td>no</td><td>Pulls <code>usdt</code>; enables real USDT probe emission (otherwise no-op)</td></tr>
+<tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 
 <tr><td><code>client-reqwest</code></td><td>no</td><td>Forward the reqwest HTTP backend through <code>kithara-events</code></td></tr>
 

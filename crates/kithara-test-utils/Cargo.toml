@@ -36,9 +36,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-usdt = { workspace = true, optional = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 serial_test = { workspace = true }
 
@@ -50,6 +47,9 @@ rtsan-standalone = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-utils = { path = ".", default-features = false }
