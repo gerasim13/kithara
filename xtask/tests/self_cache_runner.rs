@@ -471,14 +471,15 @@ fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> 
 }
 
 #[test]
-fn ci_bootstrap_ignores_the_lane_target() -> Result<()> {
+fn ci_bootstrap_ignores_the_ephemeral_runner_name() -> Result<()> {
     let fixture = Fixture::new()?;
     let cache = fixture._temp.path().join("cache");
     let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
     let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
     let output = fixture
         .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
-        .env("CI_CONCURRENT_ID", "1")
+        .env_remove("CI_CONCURRENT_ID")
+        .env("RUNNER_NAME", "ephemeral-registration-4033417")
         .env("KITHARA_CACHE_TRUST", "review")
         .env("KITHARA_CI_CACHE_ROOT", &cache)
         .output()?;
@@ -488,7 +489,7 @@ fn ci_bootstrap_ignores_the_lane_target() -> Result<()> {
             "target={}\n",
             cache
                 .join(format!(
-                    "bootstrap/review/target-{}-{}-1",
+                    "bootstrap/review/target-{}-{}-local",
                     system.trim(),
                     arch.trim()
                 ))
