@@ -15,7 +15,8 @@ use kithara_test_utils::kithara;
 use super::{
     Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, participate, reset,
     system::{FlashInner, credit, forward},
-    yield_now,
+    time::TimeoutError,
+    virtual_sleep, virtual_timeout, yield_now,
 };
 use crate::sync::{Arc, Notify};
 
@@ -482,6 +483,33 @@ fn base_keeps_backward_offset_positive() {
     let now = Instant::now();
     let earlier = now - Duration::from_secs(3600);
     assert_eq!(now.duration_since(earlier), Duration::from_secs(3600));
+}
+
+/// A timeout dates its deadline from the clock the engine reads when the
+/// deadline is REGISTERED, and the work it guards registers waits of its own.
+/// Arming after that work runs would therefore date the deadline from a clock
+/// the work had already moved, and a 100ms timeout over a 150ms wait would land
+/// at 250ms - the longer inner wait outliving the shorter timeout. Driven by a
+/// bare manual poll, which pins nothing, so every registration advances the
+/// clock at once: the same mid-poll advance a paced `flash(io)` region allows.
+#[kithara::test(native, flash(false))]
+fn a_timeout_arms_its_deadline_before_the_work_it_guards_moves_the_clock() {
+    let _g = guard();
+    reset();
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut guarded = Box::pin(virtual_timeout(
+        Duration::from_millis(100),
+        virtual_sleep(Duration::from_millis(150)),
+    ));
+
+    assert!(
+        matches!(
+            guarded.as_mut().poll(&mut cx),
+            std::task::Poll::Ready(Err(TimeoutError))
+        ),
+        "a 100ms timeout must expire on work that waits 150ms"
+    );
 }
 
 #[kithara::test(native, flash(false))]
