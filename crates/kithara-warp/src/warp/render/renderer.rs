@@ -12,7 +12,7 @@ use num_traits::cast::AsPrimitive;
 use super::renderer_target::PreparedTarget;
 use crate::{
     ActiveRegion, RegionPlan, RegionPlanSlot, RenderContext, RenderReader, RenderSnapshot,
-    StretchControls, SyncMode, WarpConfig, WarpMapRevision, temporal::RateTarget,
+    StretchControls, SyncMode, WarpConfig, WarpCursor, WarpMapRevision, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -22,6 +22,7 @@ mod tests;
 pub(super) struct PreparedQuantum {
     pub(super) activation: Option<PreparedActivation>,
     pub(super) warp_map: Option<WarpMapRevision>,
+    pub(super) output_rounding_remainder: Option<f64>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
     pub(super) active_frames: usize,
@@ -443,7 +444,7 @@ where
         &self,
         snapshot: Option<&RenderSnapshot>,
         source: u64,
-    ) -> Option<WarpMapRevision> {
+    ) -> Option<WarpCursor> {
         let activation = self.plan.as_ref()?.activation()?;
         if self.applied_warp_map == Some(activation.revision()) || source != activation.source() {
             return None;
@@ -460,7 +461,7 @@ where
                 |committed| committed.frontier().output(),
             )
             .max(snapshot.frontier().output());
-        (output == activation.output()).then_some(activation.revision())
+        (output == activation.output()).then_some(*activation)
     }
 
     pub(super) fn prepare_discontinuity_context(

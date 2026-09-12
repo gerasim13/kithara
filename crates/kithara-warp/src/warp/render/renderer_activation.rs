@@ -198,7 +198,12 @@ where
         }
         Some((history_frames, output_frames))
     }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Select the next source span that fits the configured output quantum.
     pub fn prepare_quantum(
         &mut self,
@@ -221,6 +226,13 @@ where
         }
         let warp_map =
             self.map_at_exact_frontier(self.prepared_context.as_ref(), meta.frame_offset);
+        let output_rounding_remainder = warp_map.and_then(|activation| {
+            self.prepared_context.as_ref().and_then(|snapshot| {
+                snapshot
+                    .context()
+                    .output_rounding_remainder_at(activation.beat())
+            })
+        });
         let rate = self.rate;
         let speed = rate.speed();
         let result = self
@@ -244,7 +256,8 @@ where
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
                     activation,
-                    warp_map,
+                    warp_map: warp_map.map(|activation| activation.revision()),
+                    output_rounding_remainder,
                     rate,
                     speed,
                     active_frames,

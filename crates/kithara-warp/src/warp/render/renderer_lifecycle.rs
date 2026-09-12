@@ -410,6 +410,9 @@ where
                     self.defer_scratch(Some(chunk.samples));
                     return None;
                 }
+                if let Some(remainder) = prepared.output_rounding_remainder {
+                    self.output_remainder = remainder;
+                }
             } else if self.passthrough_history_head.is_some() {
                 self.clear_pending_source();
             }

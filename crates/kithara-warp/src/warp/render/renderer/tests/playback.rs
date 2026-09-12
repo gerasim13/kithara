@@ -216,6 +216,7 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(warp_sine: Vec<f32>) {
             .with_activation(crate::WarpMap::identity(revision).reanchor(
                 initial_frames as u64 + 768,
                 crate::SessionFrame::new(initial_frames as i64 + 36_032),
+                crate::SessionBeat::default(),
             )),
     )));
     let meta = AudioChunkInfo {

@@ -175,8 +175,11 @@ where
                 .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
                 .ok()
                 .map(|plan| {
-                    let activation = WarpMap::identity(prepared.warp_map)
-                        .reanchor(prepared.source, prepared.activation);
+                    let activation = WarpMap::identity(prepared.warp_map).reanchor(
+                        prepared.source,
+                        prepared.activation,
+                        prepared.activation_beat,
+                    );
                     Arc::new(plan.with_activation(activation))
                 });
             self.runtime.core.items.set_track_plan(item, plan);

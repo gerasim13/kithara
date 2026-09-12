@@ -319,8 +319,11 @@ fn scheduled_revision_resource(
     activation_output: i64,
     replacement_frames: usize,
 ) -> PlayerResource {
-    let activation = WarpMap::identity(WarpMapRevision::first())
-        .reanchor(1_000, SessionFrame::new(activation_output));
+    let activation = WarpMap::identity(WarpMapRevision::first()).reanchor(
+        1_000,
+        SessionFrame::new(activation_output),
+        kithara_warp::SessionBeat::default(),
+    );
     let plan = RegionPlan::new(vec![GridSegment::new(0, 10_000, 2.0)])
         .expect("fixture plan")
         .with_activation(activation);

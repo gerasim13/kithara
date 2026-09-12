@@ -87,6 +87,19 @@ impl RenderContext {
         )
         .map(|context| context.with_rate(self.mode, self.rate))
     }
+
+    pub(crate) fn output_rounding_remainder_at(&self, beat: SessionBeat) -> Option<f64> {
+        let beats = self.session_beats.as_ref()?;
+        let output_frames = i64::from(self.output_frames.end)
+            .checked_sub(i64::from(self.output_frames.start))?
+            .to_f64()?;
+        let beat_span = f64::from(beats.end) - f64::from(beats.start);
+        if output_frames <= 0.0 || beat_span <= 0.0 {
+            return None;
+        }
+        let exact_offset = (f64::from(beat) - f64::from(beats.start)) * output_frames / beat_span;
+        Some(exact_offset - exact_offset.round())
+    }
 }
 
 fn beat_subrange(
@@ -201,5 +214,23 @@ mod tests {
                 .for_output_range(BLOCK_FRAMES..BLOCK_FRAMES + 1)
                 .is_none()
         );
+    }
+
+    #[kithara::test]
+    fn activation_keeps_the_absolute_host_frame_rounding_phase() {
+        let context = RenderContext::new(
+            SessionFrame::new(174_545)..SessionFrame::new(174_673),
+            sample_rate(),
+            Some(beat(7.999_979_166_666_667)..beat(8.005_845_833_333_334)),
+            SessionEpoch::new(0),
+            Some(TransportRevision::first()),
+        )
+        .expect("fixture context is valid");
+
+        let remainder = context
+            .output_rounding_remainder_at(beat(8.0))
+            .expect("playing context has an output rounding phase");
+
+        assert!((remainder - 5.0 / 11.0).abs() < 1e-9, "{remainder}");
     }
 }

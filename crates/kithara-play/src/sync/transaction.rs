@@ -305,6 +305,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         operation: operation_id,
         warp_map,
         activation: aligned.activation,
+        activation_beat: aligned.activation_beat,
         source: aligned.source,
         target: *target,
     });

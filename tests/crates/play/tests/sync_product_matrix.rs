@@ -1147,6 +1147,9 @@ impl ProductHarness {
 
     async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
         self.play_all().await;
+        if self.sync_activation.is_some() {
+            self.settle_sync_activation(case).await;
+        }
         self.settle(case, 4).await;
         let capture_frames =
             (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0).round() as usize;

@@ -222,8 +222,11 @@ mod tests {
 
     #[kithara::test]
     fn activation_carries_the_exact_source_output_relation() {
-        let activation =
-            WarpMap::identity(WarpMapRevision::first()).reanchor(24_000, SessionFrame::new(48_000));
+        let activation = WarpMap::identity(WarpMapRevision::first()).reanchor(
+            24_000,
+            SessionFrame::new(48_000),
+            crate::SessionBeat::default(),
+        );
         let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
             .expect("fixture plan")
             .with_activation(activation);
@@ -234,7 +237,11 @@ mod tests {
     #[kithara::test]
     fn slot_publishes_the_installed_plan_activation() {
         let revision = WarpMapRevision::first();
-        let activation = WarpMap::identity(revision).reanchor(24_000, SessionFrame::new(48_000));
+        let activation = WarpMap::identity(revision).reanchor(
+            24_000,
+            SessionFrame::new(48_000),
+            crate::SessionBeat::default(),
+        );
         let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
             .expect("fixture plan")
             .with_activation(activation);

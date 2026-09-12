@@ -1,7 +1,7 @@
 use kithara_warp::{
     AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState,
-    MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, SessionFrame, SyncOperationId,
-    WarpMapRevision,
+    MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, SessionBeat, SessionFrame,
+    SyncOperationId, WarpMapRevision,
 };
 use num_traits::ToPrimitive;
 
@@ -12,6 +12,7 @@ pub(crate) struct PreparedSync {
     pub(crate) operation: SyncOperationId,
     pub(crate) warp_map: WarpMapRevision,
     pub(crate) activation: SessionFrame,
+    pub(crate) activation_beat: SessionBeat,
     pub(crate) source: u64,
     pub(crate) target: BeatGridId,
 }
@@ -22,6 +23,7 @@ pub(crate) struct PreparedSync {
 pub(super) struct MemberAlignment {
     pub(super) alignment: BeatAlignment,
     pub(super) activation: SessionFrame,
+    pub(super) activation_beat: SessionBeat,
     pub(super) source: u64,
 }
 
@@ -126,6 +128,8 @@ pub(super) fn align_member(
     Ok(MemberAlignment {
         alignment: BeatAlignment::new(MapPoint::new(member.stamp(), member_beat), target),
         activation,
+        activation_beat: SessionBeat::new(f64::from(owner_beat))
+            .map_err(|_| MapRegion::point(output))?,
         source: source_frame,
     })
 }

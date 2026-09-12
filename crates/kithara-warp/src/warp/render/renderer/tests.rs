@@ -188,7 +188,11 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     let revision = WarpMapRevision::first();
     let plan = RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
         .expect("fixture plan")
-        .with_activation(WarpMap::identity(revision).reanchor(0, SessionFrame::new(0)));
+        .with_activation(WarpMap::identity(revision).reanchor(
+            0,
+            SessionFrame::new(0),
+            SessionBeat::default(),
+        ));
     slot.install(Some(Arc::new(plan)));
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
@@ -238,7 +242,11 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
     warp.region_plan().install(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("fixture plan")
-            .with_activation(WarpMap::identity(revision).reanchor(cue, activation_output)),
+            .with_activation(WarpMap::identity(revision).reanchor(
+                cue,
+                activation_output,
+                SessionBeat::default(),
+            )),
     )));
     renderer.reset();
     renderer.prepare(spec());
