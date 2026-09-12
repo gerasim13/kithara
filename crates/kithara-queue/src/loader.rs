@@ -267,7 +267,7 @@ mod tests {
 
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_events::EventBus;
-    use kithara_platform::tokio::sync::oneshot;
+    use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
