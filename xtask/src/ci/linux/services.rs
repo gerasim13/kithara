@@ -296,7 +296,7 @@ fn unit(
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
     )?;
-    for entry in Container::environment() {
+    for entry in Container::environment(runner) {
         write!(unit, " --env {entry}")?;
     }
     write!(
@@ -482,11 +482,15 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        for entry in Container::environment() {
+        for entry in Container::environment(host.runner("kithara-ci-octocat").expect("runner")) {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
         assert!(
             text.contains("--env SCCACHE_BASEDIRS=/runner/_work/kithara/kithara"),
+            "{text}"
+        );
+        assert!(
+            text.contains("--env SCCACHE_DIR=/cache/sccache/kithara-ci-octocat"),
             "{text}"
         );
     }

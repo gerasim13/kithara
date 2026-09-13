@@ -4,7 +4,7 @@ use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
-const CACHE_ENVIRONMENT: [&str; 7] = [
+const CACHE_ENVIRONMENT: [&str; 6] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -19,7 +19,6 @@ const CACHE_ENVIRONMENT: [&str; 7] = [
     // Setting the wrapper and not this is how a cache gets installed, enabled,
     // and still never hit.
     "CARGO_INCREMENTAL=0",
-    "SCCACHE_DIR=/cache/sccache",
     // GitHub checks each job out under this stable container path. Without a
     // base directory sccache hashes the host-specific checkout path, so two
     // otherwise identical runners cannot reuse Rust objects.
@@ -124,11 +123,15 @@ impl Container<'_> {
     /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
-    pub(super) fn environment() -> Vec<String> {
+    pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
         let mut environment: Vec<String> = CACHE_ENVIRONMENT
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
+        // The S3 backend is shared, while a daemon's lock and socket state
+        // must belong to one runner. A shared directory makes concurrent
+        // daemon startup time out before rustc can run.
+        environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
         environment.extend(
             LINUX_LINKER_ENV
                 .iter()
@@ -172,7 +175,9 @@ mod tests {
     /// testing.
     #[test]
     fn a_job_is_told_which_linker_to_use() {
-        let environment = Container::environment();
+        let host = super::super::profile::tests::host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        let environment = Container::environment(runner);
 
         for (name, value) in LINUX_LINKER_ENV {
             assert!(
