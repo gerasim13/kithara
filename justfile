@@ -74,12 +74,14 @@ _xtask-ready:
 # The one build with no caches of its own. Their variables are normally produced
 # by `CiEnvironment`, inside the binary this build is compiling. Keep both in the
 # bootstrap namespace the host cleaner owns; Cargo's source cache is split by
-# platform because Cargo also installs native tools below the same home.
+# platform because Cargo also installs native tools below the same home. A
+# daemon keeps the cache directory it started with, so an executor-provided
+# socket gets a distinct bootstrap endpoint when the directory changes.
 [no-exit-message]
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-$trust-$system-$arch-$owner.sock"; fi; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 [no-exit-message]
 [positional-arguments]

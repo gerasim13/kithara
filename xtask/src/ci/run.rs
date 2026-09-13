@@ -305,7 +305,7 @@ fn retire_sccache_server(process: &Process, tools: &ToolsConfig) -> Result<()> {
     )
 }
 
-pub(super) fn execute_lane(
+fn execute_lane(
     process: &Process,
     tools: &ToolsConfig,
     uses_sccache: bool,
