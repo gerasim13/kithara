@@ -108,6 +108,7 @@ kithara-net = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 axum = { workspace = true }
 hotpath = { workspace = true }

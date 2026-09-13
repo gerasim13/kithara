@@ -152,5 +152,8 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "client-wreq", "net"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
 [lints]
 workspace = true

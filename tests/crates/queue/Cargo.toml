@@ -23,7 +23,7 @@ kithara = { workspace = true, features = ["download", "full", "queue", "probe", 
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-devtools = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all"] }
-kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 aes = { workspace = true }
