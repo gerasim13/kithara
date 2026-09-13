@@ -4875,8 +4875,6 @@ dependencies = [
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "num-traits",
- "serde",
  "serial_test",
  "tempfile",
 ]
