@@ -1,5 +1,6 @@
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use kithara_platform::sync::{Arc, Notify};
 use tracing::{
     Event, Metadata, Subscriber,
     field::{Field, Visit},
@@ -29,12 +30,14 @@ struct State {
 
 static EVENTS: Mutex<State> = Mutex::new(State { events: Vec::new() });
 static SCOPE: Mutex<()> = Mutex::new(());
+static RECORDED: Mutex<Option<Arc<Notify>>> = Mutex::new(None);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub struct Scope {
+    recorded: Arc<Notify>,
     _serial: MutexGuard<'static, ()>,
 }
 
@@ -42,13 +45,39 @@ pub struct Scope {
 pub fn scope() -> Scope {
     let serial = lock(&SCOPE);
     lock(&EVENTS).events.clear();
-    Scope { _serial: serial }
+    let recorded = Arc::new(Notify::default());
+    *lock(&RECORDED) = Some(Arc::clone(&recorded));
+    Scope {
+        recorded,
+        _serial: serial,
+    }
 }
 
 impl Scope {
     #[must_use]
     pub fn events(&self) -> Vec<ProbeEvent> {
         lock(&EVENTS).events.clone()
+    }
+
+    /// Resolves once the probes recorded so far satisfy `holds`, re-checking
+    /// after every newly recorded probe.
+    pub async fn wait_for<F>(&self, mut holds: F)
+    where
+        F: FnMut(&[ProbeEvent]) -> bool,
+    {
+        loop {
+            let recorded = self.recorded.notified();
+            if holds(&lock(&EVENTS).events) {
+                return;
+            }
+            recorded.await;
+        }
+    }
+}
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        lock(&RECORDED).take();
     }
 }
 
@@ -75,6 +104,9 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
             probe,
             fields: visitor.fields,
         });
+        if let Some(recorded) = lock(&RECORDED).as_ref() {
+            recorded.notify_one();
+        }
     }
 }
 

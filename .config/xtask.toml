@@ -1221,6 +1221,22 @@ suffix_args = [
 ]
 owns = ["tests/crates/play/tests/rate_response.rs"]
 
+[test.lanes.usdt-play-scheduler]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play",
+  "--cargo-profile",
+  "test-release",
+  "--lib",
+]
+default_features = ["kithara-play/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/worker::node::scheduler_tests::probed::/)"]
+owns = ["crates/kithara-play/src/worker/node/scheduler_tests.rs"]
+
 [test.lanes.usdt-hls]
 program = "cargo"
 prefix_args = [
@@ -2118,6 +2134,13 @@ steps = [
     "--profile",
     "ci",
   ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-play-scheduler",
+    "--profile",
+    "ci",
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",

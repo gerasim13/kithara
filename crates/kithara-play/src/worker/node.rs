@@ -207,6 +207,7 @@ where
                     _ => (None, None),
                 };
                 self.port.push_direct(fetch);
+                kithara::probe_event!(chunk_admitted, epoch = self.runtime.seek_epoch);
                 if let Some((source_end, epoch)) = source_end {
                     self.source.commit_source_end(source_end, epoch);
                 }
