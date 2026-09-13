@@ -603,7 +603,10 @@ mod tests {
                 .map(|(program, args, _)| (program.as_str(), args.clone()))
                 .collect::<Vec<_>>(),
             vec![
-                ("<require os>", vec!["macos".to_owned()]),
+                (
+                    "<require os>",
+                    ["macos", "linux"].map(str::to_owned).to_vec()
+                ),
                 (
                     "<require tools>",
                     [
@@ -644,6 +647,9 @@ mod tests {
         let github = fs::read_to_string(repo().join(".github/workflows/android.yml")).unwrap();
         let gitlab = fs::read_to_string(repo().join(".gitlab/ci/android.yml")).unwrap();
         assert!(github.contains("run: just ci lane android-test --kind platforms"));
+        let ci = fs::read_to_string(repo().join(".github/workflows/ci.yml")).unwrap();
+        assert!(ci.contains("' android-test '"));
+        assert!(ci.contains("uses: ./.github/workflows/android.yml"));
         assert!(gitlab.contains("- just ci run android-test"));
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
     }

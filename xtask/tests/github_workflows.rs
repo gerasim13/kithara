@@ -75,12 +75,14 @@ results = json.loads(os.environ["RESULTS"])
 required_lanes = set(os.environ["REQUIRED_LANES"].split())
 optional_required = bool(required_lanes)
 ui_required = "all" in required_lanes or "deep-ui" in required_lanes
+android_required = "all" in required_lanes or "android-test" in required_lanes
 incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
     and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
     and not (name == "ui" and job["result"] == "skipped" and not ui_required)
+    and not (name == "android" and job["result"] == "skipped" and not android_required)
 }
 if incomplete:
     print(f"required CI jobs did not execute successfully: {incomplete}")
@@ -460,6 +462,20 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "strategy");
     }
+
+    // The Android baseline needs the emulator pool, so a push starts it by name
+    // rather than through the shared fan-out.
+    let android = workflow_job(jobs, "android");
+    assert_eq!(
+        mapping_field(android, "uses").as_str(),
+        Some("./.github/workflows/android.yml")
+    );
+    assert!(
+        mapping_field(android, "if")
+            .as_str()
+            .expect("android carries a condition")
+            .contains("' android-test '")
+    );
 
     let required = workflow_job(jobs, "required");
     assert_eq!(

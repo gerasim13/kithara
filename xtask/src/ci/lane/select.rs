@@ -92,7 +92,7 @@ fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
 /// system is therefore not one GitHub schedules from the catalog, whatever its
 /// membership says - rendering it would run a macOS recipe on a Linux runner.
 fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
-    fleet != Fleet::Github || lane.os.as_deref() == Some("linux")
+    fleet != Fleet::Github || lane.runs_only_on_linux()
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
@@ -261,7 +261,7 @@ mod tests {
             needs: needs.iter().map(|need| (*need).to_owned()).collect(),
             timeout_minutes: 30,
             cache_group: "linux".to_owned(),
-            os: Some("linux".to_owned()),
+            os: vec!["linux".to_owned()],
             program: "just".to_owned(),
             ..CiLaneConfig::default()
         }
@@ -420,7 +420,7 @@ mod tests {
         // return an empty selection a caller reads as success.
         let mut lanes = catalog();
         let mut elsewhere = lane("deep", &["nightly"], &[]);
-        elsewhere.os = Some("macos".to_owned());
+        elsewhere.os = vec!["macos".to_owned()];
         lanes.insert("deep-apple".to_owned(), elsewhere);
 
         let error = render(
@@ -534,11 +534,31 @@ mod tests {
     // Windows work runs from workflows with runner labels of their own. A macOS
     // lane rendered here would run its recipe on a Linux machine and report a
     // green gate for a sanitizer that never ran.
+    // A lane that also runs on another machine needs a device the shared Linux
+    // pool lacks, so the fan-out leaves it to the workflow naming that pool.
+    #[test]
+    fn the_github_fleet_leaves_a_lane_that_also_names_another_machine_to_its_own_pool() {
+        let mut lanes = catalog();
+        let mut device = lane("gate", &["main"], &[]);
+        device.os = vec!["macos".to_owned(), "linux".to_owned()];
+        lanes.insert("android-test".to_owned(), device);
+
+        let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
+            .expect("the GitHub fleet renders");
+        assert!(
+            github
+                .matrix
+                .iter()
+                .all(|entry| entry.lane != "android-test"),
+            "the shared fan-out has no emulator"
+        );
+    }
+
     #[test]
     fn the_github_fleet_never_schedules_a_lane_from_another_operating_system() {
         let mut lanes = catalog();
         let mut elsewhere = lane("gate", &["main"], &[]);
-        elsewhere.os = Some("macos".to_owned());
+        elsewhere.os = vec!["macos".to_owned()];
         lanes.insert("deep-rtsan".to_owned(), elsewhere);
 
         let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))

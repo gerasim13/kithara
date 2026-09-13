@@ -2263,15 +2263,15 @@ role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 120
 
-# Both Android lanes name a Mac, so neither declares `kinds_github`: the GitHub
-# fan-out reaches one pool and that pool is Linux, and a lane declared into a
-# schedule that cannot reach it is a lane that never runs. GitHub starts the
+# Both Android lanes boot an emulator, which the Mac mini and the Linux KVM
+# runners each carry, so both name the two machines and neither declares
+# `kinds_github`: the shared GitHub fan-out has no emulator. GitHub starts the
 # emulator through `.github/workflows/android.yml`, which names the runner pool
 # the catalog cannot yet name.
 [ext.ci.lanes.android-build]
 cache_group = "host"
 label = "Android"
-os = "macos"
+os = ["macos", "linux"]
 tools = ["cargo", "java", "just", "sccache"]
 program = "just"
 steps = [
@@ -2295,7 +2295,7 @@ timeout_minutes = 45
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
-os = "macos"
+os = ["macos", "linux"]
 tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
