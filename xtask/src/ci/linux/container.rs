@@ -4,7 +4,7 @@ use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
-const CACHE_ENVIRONMENT: [&str; 6] = [
+const CACHE_ENVIRONMENT: [&str; 7] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -20,6 +20,10 @@ const CACHE_ENVIRONMENT: [&str; 6] = [
     // and still never hit.
     "CARGO_INCREMENTAL=0",
     "SCCACHE_DIR=/cache/sccache",
+    // GitHub checks each job out under this stable container path. Without a
+    // base directory sccache hashes the host-specific checkout path, so two
+    // otherwise identical runners cannot reuse Rust objects.
+    "SCCACHE_BASEDIR=/runner/_work/kithara/kithara",
     // Well under the volume it lives on, and sccache evicts by least use
     // rather than growing until the disk decides for it.
     "SCCACHE_CACHE_SIZE=100G",

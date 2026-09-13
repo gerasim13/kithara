@@ -485,6 +485,10 @@ mod tests {
         for entry in Container::environment() {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
+        assert!(
+            text.contains("--env SCCACHE_BASEDIR=/runner/_work/kithara/kithara"),
+            "{text}"
+        );
     }
 
     #[test]
