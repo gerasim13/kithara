@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod host_seek;
 #[cfg(test)]
 mod tests;
 

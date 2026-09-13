@@ -11,7 +11,7 @@ use kithara_warp::{
     SyncOperation, SyncStatusSnapshot, TopologyOperation, TransportRevision,
 };
 
-use super::GroupState;
+use super::{GroupState, host_seek};
 use crate::player::PlayerMember;
 
 fn session_grid(
@@ -614,6 +614,159 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
+}
+
+#[kithara::test]
+fn host_seek_quantizes_between_beats_and_keeps_an_exact_beat() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let grid = asset_grid(track, 480_000, 24_000);
+    let stamp = grid.stamp();
+    attach_grid(&mut group, grid);
+    let transport = group.generations().1;
+    let prepare = |source| {
+        host_seek::prepare(
+            &group,
+            stamp,
+            AlignmentSource::Prepared(
+                PresentationFrontier::builder()
+                    .source(source)
+                    .output(SessionFrame::new(10_000))
+                    .build(),
+            ),
+            transport,
+        )
+        .expect("host seek preparation")
+    };
+
+    let between = prepare(10_000);
+    assert_eq!(between.prepared.source, 24_000);
+    assert!(between.prepared.activation >= SessionFrame::new(10_000));
+    let on_beat = prepare(24_000);
+    assert_eq!(on_beat.prepared.source, 24_000);
+}
+
+#[kithara::test]
+fn stale_host_seek_topology_commits_nothing() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let grid = asset_grid(track, 480_000, 24_000);
+    let stamp = grid.stamp();
+    attach_grid(&mut group, grid);
+    let candidate = host_seek::prepare(
+        &group,
+        stamp,
+        AlignmentSource::Prepared(frontier_at_zero()),
+        group.generations().1,
+    )
+    .expect("candidate");
+    let before_generations = group.generations();
+    let before_prepared = group.prepared();
+    attach_grid(
+        &mut group,
+        asset_grid(
+            BeatGridId::allocate().expect("replacement grid id"),
+            480_000,
+            24_000,
+        ),
+    );
+
+    assert!(matches!(
+        host_seek::commit(&mut group, candidate),
+        Err(SyncError::OwnerUnavailable)
+    ));
+    assert_eq!(group.generations(), before_generations);
+    assert_eq!(group.prepared(), before_prepared);
+}
+
+#[kithara::test]
+fn stale_host_seek_member_grid_stamp_commits_nothing() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let first = asset_grid(track, 480_000, 24_000);
+    let stamp = first.stamp();
+    attach_grid(&mut group, first);
+    let candidate = host_seek::prepare(
+        &group,
+        stamp,
+        AlignmentSource::Prepared(frontier_at_zero()),
+        group.generations().1,
+    )
+    .expect("candidate");
+    let base = group.topology().expect("topology").stamp();
+    let replacement = BeatGridSnapshot::segments(
+        track,
+        BeatGridRevision::first()
+            .checked_next()
+            .expect("fixture grid revision advances"),
+        BeatGridState::Complete,
+        asset_segments(480_000, 24_000, None),
+    )
+    .expect("fixture replacement grid is valid");
+    let _ = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Replace {
+                member: track,
+                replacement: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(TestGrid(replacement)),
+                },
+            }]),
+        })
+        .expect("replace member grid");
+    let before_generations = group.generations();
+    let before_prepared = group.prepared();
+    let before_status = group.status();
+
+    assert!(matches!(
+        host_seek::commit(&mut group, candidate),
+        Err(SyncError::OwnerUnavailable)
+    ));
+    assert_eq!(group.generations(), before_generations);
+    assert_eq!(group.prepared(), before_prepared);
+    assert_eq!(group.status(), before_status);
+}
+
+#[kithara::test]
+fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let grid = asset_grid(track, 480_000, 24_000);
+    let stamp = grid.stamp();
+    attach_grid(&mut group, grid);
+    let candidate = host_seek::prepare(
+        &group,
+        stamp,
+        AlignmentSource::Prepared(frontier_at_zero()),
+        group.generations().1,
+    )
+    .expect("candidate");
+    let owner = group.snapshot();
+    let _ = group
+        .publish_grid(session_grid(
+            owner.id(),
+            owner
+                .revision()
+                .checked_next()
+                .expect("fixture owner revision advances"),
+            SessionEpoch::new(0),
+            2.0,
+        ))
+        .expect("publish newer owner grid");
+    let before_generations = group.generations();
+    let before_prepared = group.prepared();
+    let before_status = group.status();
+    let before_topology = group.topology().expect("topology").stamp();
+
+    assert!(matches!(
+        host_seek::commit(&mut group, candidate),
+        Err(SyncError::OwnerUnavailable)
+    ));
+    assert_eq!(group.generations(), before_generations);
+    assert_eq!(group.prepared(), before_prepared);
+    assert_eq!(group.status(), before_status);
+    assert_eq!(group.topology().expect("topology").stamp(), before_topology);
 }
 
 #[kithara::test]

@@ -972,7 +972,7 @@ impl ProductHarness {
         self.mark("seek");
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for index in 0..self.decks.len() {
-            let deck = &self.decks[index];
+            let deck = self.decks.remove(index);
             let seconds = case.start_seconds.map_or_else(
                 || 5.25 + index as f64 * stagger_seconds,
                 |starts| {
@@ -992,40 +992,15 @@ impl ProductHarness {
                     Some((source, source)),
                 );
             }
-            if self.sync_requested {
-                let target = deck.id();
-                let source_frame = (seconds * f64::from(case.sample_rate)).round() as u64;
-                let _ = deck;
-                let transport = self.transport_revision(case).await;
-                let admission = self
-                    .host
-                    .with(move |host| {
-                        host.transact(SyncOperation::Transport {
-                            target,
-                            load: LoadGeneration::first(),
-                            transport,
-                            operation: kithara::warp::TransportOperation::Seek { source_frame },
-                        })
-                    })
-                    .await
-                    .unwrap_or_else(|rejected| {
-                        panic!("{}: synchronized seek deck {index}: {rejected}", case.id)
-                    });
-                if let SyncAdmission::Prepared { activation, .. } = admission {
-                    let activation = u64::try_from(i64::from(activation))
-                        .expect("fixture activation must be non-negative");
-                    self.sync_activation = Some(
-                        self.sync_activation
-                            .map_or(activation, |current| current.max(activation)),
-                    );
-                }
-            } else {
-                deck.seek(seconds)
-                    .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
-            }
-        }
-        if self.sync_requested {
-            self.settle_sync_activation(case).await;
+            let (deck, result) = self
+                .host
+                .with(move |host| {
+                    let result = host.seek_deck(&deck, seconds);
+                    (deck, result)
+                })
+                .await;
+            self.decks.insert(index, deck);
+            result.unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
         }
         self.settle(case, 96).await;
     }
@@ -2153,6 +2128,87 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
         pickup.expected_source_frame
     );
     assert_eq!(plan.fields["activation_output"], pickup.expected_host_onset);
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination() {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "host-seek-plan-destination",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new(case, &sources, 0).await;
+    prepare_fixture_grids(&mut harness, case, &sources).await;
+    harness.request_sync(case).await;
+    let _ = harness.render(case, harness.block_frames * 2).await;
+    let baseline = recorder.snapshot();
+    let baseline_map = baseline
+        .iter()
+        .filter(|event| event.probe_name() == Some("warp_plan_published"))
+        .filter_map(|event| event.u64("warp_map_revision"))
+        .max();
+    let deck = harness.decks.remove(0);
+    let (deck, outcome) = harness
+        .host
+        .with(move |host| {
+            let outcome = host.seek_deck(&deck, 5.25);
+            (deck, outcome)
+        })
+        .await;
+    harness.decks.insert(0, deck);
+    let outcome = outcome.expect("Host seek is admitted");
+    let destination = match outcome {
+        kithara::play::SeekOutcome::Landed { landed_at, .. } => landed_at,
+        other => panic!("fixture seek must land: {other:?}"),
+    };
+    let destination_source =
+        (destination.as_secs_f64() * f64::from(case.sample_rate)).round() as u64;
+    let post = &recorder.snapshot()[baseline.len()..];
+    let plan = post
+        .iter()
+        .find(|event| event.probe_name() == Some("warp_plan_published"))
+        .expect("accepted Host seek publishes its plan before the next tick");
+    assert_eq!(plan.u64("activation_source"), Some(destination_source));
+    assert!(
+        baseline_map.is_none_or(|revision| plan
+            .u64("warp_map_revision")
+            .is_some_and(|next| next > revision)),
+        "Host seek must allocate a new map revision"
+    );
+    let activation = plan
+        .u64("activation_output")
+        .expect("Host seek plan has an exact activation");
+    harness.play_all().await;
+    while harness.rendered_frames <= activation {
+        let _ = harness.render(case, harness.block_frames).await;
+    }
+    let events = recorder.snapshot();
+    let adopted = events
+        .iter()
+        .skip(baseline.len())
+        .find(|event| {
+            event.probe_name() == Some("decoder_seek_epoch_observed")
+                && event.u64("adopted") == Some(1)
+        })
+        .expect("Host seek decoder epoch is adopted");
+    let epoch = adopted.u64("current_epoch").expect("adopted epoch");
+    assert!(events.iter().skip(baseline.len()).any(|event| {
+        event.probe_name() == Some("producer_pcm_admitted")
+            && event.u64("seek_epoch") == Some(epoch)
+            && event.u64("source_start") == Some(destination_source)
+    }));
 }
 
 #[ignore = "ignored-red: late grid must arm an already-requested prepared launch, 2026-09-12"]

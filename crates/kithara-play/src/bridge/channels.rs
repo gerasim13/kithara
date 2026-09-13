@@ -103,8 +103,8 @@ pub struct SlotControl {
     pub eq: SharedEq,
     render: RenderBindings,
     seek: SeekBindings,
-    scheduled_seeks: Vec<ScheduledTrackSeek>,
-    prepared_launch_epochs: Vec<(TrackId, u64)>,
+    scheduled_seeks: SmallVec<[ScheduledTrackSeek; SLOT_TRACKS]>,
+    prepared_launch_epochs: SmallVec<[(TrackId, u64); SLOT_TRACKS]>,
 }
 
 #[derive(Default)]
@@ -135,6 +135,17 @@ type RenderBinding = (TrackId, RenderReader);
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
+    pub(crate) fn has_seek_binding(&self, item_id: TrackId) -> bool {
+        self.seek.0.iter().any(|(bound_id, _)| *bound_id == item_id)
+    }
+
+    pub(crate) fn can_schedule_track_seek(&self, item_id: TrackId) -> bool {
+        self.scheduled_seeks
+            .iter()
+            .any(|seek| seek.item_id == item_id)
+            || self.scheduled_seeks.len() < SLOT_TRACKS
+    }
+
     /// Begin a seek on every track this slot holds, off the audio thread.
     pub fn begin_seek(&self, position: Duration) {
         for (_, handle) in &self.seek.0 {
@@ -177,6 +188,7 @@ impl SlotControl {
         position: Duration,
         disposition: ScheduledSeekDisposition,
     ) {
+        debug_assert!(self.can_schedule_track_seek(item_id));
         self.scheduled_seeks.retain(|seek| seek.item_id != item_id);
         self.prepared_launch_epochs
             .retain(|(bound_id, _)| *bound_id != item_id);
@@ -890,6 +902,27 @@ mod tests {
         assert!(control.scheduled_seeks.is_empty());
         assert_eq!(seek.0.load(Ordering::Relaxed), 0);
     }
+
+    #[kithara::test]
+    fn scheduled_seeks_stop_at_the_resident_track_capacity() {
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let items = (0..=SLOT_TRACKS)
+            .map(|_| TrackId::allocate())
+            .collect::<Vec<_>>();
+        for item in items.iter().take(SLOT_TRACKS) {
+            control.schedule_track_seek(
+                *item,
+                Duration::ZERO,
+                ScheduledSeekDisposition::SeekOnly {
+                    activation: SessionFrame::new(0),
+                },
+            );
+        }
+
+        assert!(!control.can_schedule_track_seek(items[SLOT_TRACKS]));
+        assert!(control.can_schedule_track_seek(items[0]));
+        assert_eq!(control.scheduled_seeks.len(), SLOT_TRACKS);
+    }
 }
 
 #[must_use]
@@ -921,8 +954,8 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         cmd_tx,
         eq,
         seek: SeekBindings::default(),
-        scheduled_seeks: Vec::new(),
-        prepared_launch_epochs: Vec::new(),
+        scheduled_seeks: SmallVec::new(),
+        prepared_launch_epochs: SmallVec::new(),
         render: RenderBindings::default(),
     };
     (inputs, control)

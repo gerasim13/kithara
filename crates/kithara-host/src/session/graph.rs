@@ -420,7 +420,7 @@ pub(super) mod slots {
             slots = player.slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
-        let reply = Reply::SlotAllocated(AllocatedSlot::new(control, slot_id));
+        let reply = Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot_id)));
         Ok(reply)
     }
     pub(in crate::session) fn release_slot<B: AudioBackend, S>(

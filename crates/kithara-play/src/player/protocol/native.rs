@@ -1,11 +1,45 @@
+use kithara_platform::time::Duration;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
     SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
-    SyncRejected, SyncStatusSnapshot,
+    SyncRejected, SyncStatusSnapshot, TransportRevision,
 };
 
 use super::Player;
 use crate::{api::TrackId, sync::GroupState};
+
+#[derive(Clone)]
+pub(crate) struct PreparedHostSeek {
+    pub(crate) activation_floor: kithara_warp::SessionFrame,
+    pub(crate) item: TrackId,
+    pub(crate) grid_stamp: kithara_warp::BeatGridStamp,
+    pub(crate) plan: kithara_platform::sync::Arc<kithara_warp::RegionPlan>,
+    pub(crate) sample_rate: u32,
+    pub(crate) slot: crate::api::SlotId,
+    pub(crate) source_frame: u64,
+}
+
+pub(crate) fn duration_for_source(source: u64, sample_rate: u32) -> Duration {
+    let sample_rate = u64::from(sample_rate);
+    Duration::from_secs(source / sample_rate)
+        + Duration::from_nanos(source % sample_rate * 1_000_000_000 / sample_rate)
+}
+
+pub(crate) fn seek_outcome(
+    target: Duration,
+    landed_at: Duration,
+    duration: Option<f64>,
+) -> kithara_audio::SeekOutcome {
+    match duration {
+        Some(duration) if landed_at.as_secs_f64() >= duration => {
+            kithara_audio::SeekOutcome::PastEof {
+                target,
+                duration: Duration::from_secs_f64(duration),
+            }
+        }
+        _ => kithara_audio::SeekOutcome::Landed { target, landed_at },
+    }
+}
 
 pub(crate) type PlayerSync = GroupState<PlayerMember>;
 
@@ -33,6 +67,13 @@ impl PlayerMember {
             pub fn host_level(&self) -> f32;
         }
         to self.inner.as_mut() {
+            /// Validates and commits a Host-owned deck seek.
+            #[doc(hidden)]
+            pub fn seek_from_host(
+                &mut self,
+                seconds: f64,
+                transport: TransportRevision,
+            ) -> Result<kithara_audio::SeekOutcome, crate::PlayError>;
             /// Pushes the Host's committed session anchor into the player.
             ///
             /// # Errors

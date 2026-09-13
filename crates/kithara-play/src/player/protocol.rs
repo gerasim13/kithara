@@ -8,6 +8,13 @@ use kithara_warp::{
     SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent,
     SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot, TransportOperation,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    kithara_platform::sync::Arc,
+    kithara_test_macros as kithara,
+    kithara_warp::{TransportRevision, WarpMap},
+    num_traits::ToPrimitive,
+};
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding, api::TrackId, bridge::PlayerCmd};
@@ -74,6 +81,14 @@ pub trait Player:
 
     /// Seek within the current item.
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
+
+    /// Validates and commits a deck seek through the canonical Host owner.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn seek_from_host(
+        &mut self,
+        seconds: f64,
+        transport: TransportRevision,
+    ) -> Result<SeekOutcome, PlayError>;
 
     /// Commit the host-applied deck level after a validated graph batch.
     fn set_host_level(&self, level: f32);
@@ -302,6 +317,68 @@ where
             .with_open_result(|runtime| runtime.seek_seconds(seconds))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn seek_from_host(
+        &mut self,
+        seconds: f64,
+        transport: TransportRevision,
+    ) -> Result<SeekOutcome, PlayError> {
+        if !seconds.is_finite() {
+            return Err(PlayError::InvalidHostSeekPosition { seconds });
+        }
+        let seconds = seconds.max(0.0);
+        if self.sync.mode() != SyncMode::HostSync {
+            return self.seek_seconds(seconds);
+        }
+        let prepared = self.prepare_host_seek(seconds)?;
+        let source = kithara_warp::AlignmentSource::Prepared(
+            kithara_warp::PresentationFrontier::builder()
+                .source(prepared.source_frame)
+                .output(prepared.activation_floor)
+                .build(),
+        );
+        let reconcile =
+            crate::sync::host_seek::prepare(&self.sync, prepared.grid_stamp, source, transport)
+                .map_err(PlayError::from)?;
+        let destination =
+            target::duration_for_source(reconcile.prepared.source, prepared.sample_rate);
+        let plan = Arc::new(prepared.plan.as_ref().clone().with_activation(
+            WarpMap::identity(reconcile.prepared.warp_map).reanchor(
+                reconcile.prepared.source,
+                reconcile.prepared.activation,
+                reconcile.prepared.activation_beat,
+            ),
+        ));
+        let items = &self.runtime.core.items;
+        let sync = &mut self.sync;
+        let _ = self.runtime.core.engine.commit_validated_track_seek(
+            prepared.slot,
+            prepared.item,
+            destination,
+            crate::bridge::ScheduledSeekDisposition::SeekOnly {
+                activation: reconcile.prepared.activation,
+            },
+            || {
+                items.commit_current_track_plan(prepared.item, prepared.grid_stamp, plan, || {
+                    crate::sync::host_seek::commit(sync, reconcile).map_err(PlayError::from)
+                })
+            },
+        )?;
+        kithara::probe_event!(
+            warp_plan_published,
+            warp_map_revision = u64::from(reconcile.prepared.warp_map),
+            presentation_source = prepared.source_frame,
+            preparation_source = prepared.source_frame,
+            activation_source = reconcile.prepared.source,
+            activation_output = i64::from(reconcile.prepared.activation)
+        );
+        Ok(target::seek_outcome(
+            kithara_platform::time::Duration::from_secs_f64(seconds),
+            destination,
+            self.runtime.duration_seconds(),
+        ))
+    }
+
     fn set_host_level(&self, level: f32) {
         if !self.runtime.is_closed() {
             self.runtime.core.engine.commit_desired_master_volume(level);
@@ -310,6 +387,60 @@ where
 
     fn tick(&self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)
+    }
+}
+
+impl<S> PlayerImpl<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_host_seek(&self, seconds: f64) -> Result<target::PreparedHostSeek, PlayError> {
+        if !seconds.is_finite() {
+            return Err(PlayError::InvalidHostSeekPosition { seconds });
+        }
+        let seconds = seconds.max(0.0);
+        let item = self
+            .runtime
+            .core
+            .items
+            .current_item_id()
+            .ok_or(PlayError::NoCurrentItem)?;
+        let grid = self
+            .runtime
+            .core
+            .items
+            .track_grid(item)
+            .ok_or(PlayError::MissingTrackGrid { item })?;
+        let grid_stamp = grid.snapshot.stamp();
+        let plan = Arc::new(
+            grid.segments
+                .region_plan()
+                .map_err(|_| PlayError::InvalidTrackGrid { item })?,
+        );
+        let slot = self.runtime.slot().ok_or(PlayError::NoActiveSlot)?;
+        self.runtime.core.engine.validate_track_seek(slot, item)?;
+        let sample_rate = grid.snapshot.axis().sample_rate().get();
+        let source_frame = (seconds * f64::from(sample_rate)).round();
+        let source_frame = source_frame
+            .to_u64()
+            .ok_or(PlayError::InvalidHostSeekPosition { seconds })?;
+        let frontier = self.runtime.presentation_frontier();
+        let lead = i64::try_from(self.runtime.core.response_budget_frames.get())
+            .map_err(|_| PlayError::InvalidHostSeekPosition { seconds })?;
+        let activation_floor = i64::from(frontier.output())
+            .checked_add(lead)
+            .map(kithara_warp::SessionFrame::new)
+            .ok_or(PlayError::InvalidHostSeekPosition { seconds })?;
+        Ok(target::PreparedHostSeek {
+            activation_floor,
+            item,
+            grid_stamp,
+            plan,
+            sample_rate,
+            slot,
+            source_frame,
+        })
     }
 }
 
@@ -345,5 +476,79 @@ where
             sync,
             self.runtime.core.engine.master_volume(),
         ))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_bufpool::testing::{TestPools, pools};
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+    use kithara_warp::SyncMemberKind;
+
+    use super::*;
+    use crate::{GroupState, PlayWorker, PlayWorkerConfig, mock, player::PlayerConfig};
+
+    fn player() -> PlayerImpl<TestPools> {
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .session(mock::session())
+                .build(),
+        )
+    }
+
+    #[kithara::test]
+    fn host_seek_rejects_nonfinite_without_advancing_sync() {
+        let player = player();
+        let before = player.sync.generations();
+
+        let Err(error) = player.prepare_host_seek(f64::NAN) else {
+            panic!("NaN is invalid");
+        };
+
+        assert!(matches!(error, PlayError::InvalidHostSeekPosition { .. }));
+        assert_eq!(player.sync.generations(), before);
+    }
+
+    #[kithara::test]
+    fn host_seek_requires_a_current_item_before_mutation() {
+        let player = player();
+        let before = player.sync.generations();
+
+        let Err(error) = player.prepare_host_seek(1.0) else {
+            panic!("empty player has no item");
+        };
+
+        assert!(matches!(error, PlayError::NoCurrentItem));
+        assert_eq!(player.sync.generations(), before);
+    }
+
+    #[kithara::test]
+    fn host_seek_receipt_keeps_the_request_and_reports_the_quantized_destination() {
+        let destination = target::duration_for_source(24_000, 48_000);
+        let request = Duration::from_millis(510);
+
+        assert_eq!(destination, Duration::from_millis(500));
+        assert!(matches!(
+            target::seek_outcome(request, destination, Some(1.0)),
+            SeekOutcome::Landed { target, landed_at } if target == request && landed_at == destination
+        ));
+    }
+
+    #[kithara::test]
+    #[case::off(SyncMode::Off)]
+    #[case::local(SyncMode::LocalSync)]
+    fn host_seek_delegates_directly_without_a_grid(#[case] mode: SyncMode) {
+        let mut player = player();
+        player.sync = GroupState::new(player.sync.snapshot(), SyncMemberKind::Grid, mode);
+
+        let outcome = player
+            .seek_from_host(1.0, TransportRevision::first())
+            .expect("non-HostSync seek delegates to the resident player");
+
+        assert!(matches!(outcome, SeekOutcome::Landed { target, landed_at }
+            if target == Duration::from_secs(1) && landed_at == target));
     }
 }

@@ -1,4 +1,6 @@
 use kithara_bufpool::HasPool;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_play::TransportRevision;
 use kithara_play::{
     BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, PlayError, SeekOutcome, SegmentSet,
     SessionAnchor, SessionBinding, SyncAdmission, SyncApplied, SyncError, SyncGroup,
@@ -66,6 +68,12 @@ where
             fn tick(&self) -> Result<(), PlayError>;
         }
         to self.player {
+            #[cfg(not(target_arch = "wasm32"))]
+            fn seek_from_host(
+                &mut self,
+                seconds: f64,
+                transport: TransportRevision,
+            ) -> Result<SeekOutcome, PlayError>;
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
             fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;

@@ -33,18 +33,41 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
-        HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
+        HostCmd::Play(cmd) => HostReply::Play(Box::new(run_cmd(state, cmd))),
         HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        #[cfg(not(target_arch = "wasm32"))]
+        HostCmd::SeekDeck { deck, seconds } => HostReply::Seek(seek_deck(state, deck, seconds)),
         #[cfg(any(test, feature = "usdt"))]
         HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn seek_deck<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+    seconds: f64,
+) -> Result<kithara_play::SeekOutcome, PlayError> {
+    let transport = transport::snapshot(state)?.revision();
+    let host = state.root.id();
+    let member = state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .ok_or_else(|| {
+            PlayError::from(SessionError::from(SyncError::MemberNotFound {
+                group_id: host,
+                member_id: deck,
+            }))
+        })?;
+    member.seek_from_host(seconds, transport)
 }
 
 fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd) -> HostReply {

@@ -8,7 +8,8 @@ use kithara::{
     platform::sync::Arc,
     play::{
         Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode, SlotId,
+        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode, SessionError,
+        SlotId,
     },
     warp::{BeatGrid, BeatGridId},
 };
@@ -218,6 +219,25 @@ fn foreign_host_cannot_close_owned_player() {
     let mut owner_host = Host::new(HostConfig::builder().build()).expect("create owner host");
     let mut foreign_host = Host::new(HostConfig::builder().build()).expect("create foreign host");
     let player = insert_player(&mut owner_host);
+
+    let error = owner_host
+        .seek_deck(&player, f64::NAN)
+        .expect_err("non-finite seek must not reach the session");
+    assert!(matches!(error, PlayError::InvalidHostSeekPosition { .. }));
+
+    let error = foreign_host
+        .seek_deck(&player, 0.0)
+        .expect_err("foreign host must reject the player before dispatching a seek");
+    assert!(matches!(error, PlayError::ForeignSession));
+
+    let error = owner_host
+        .seek_deck(&player, 0.0)
+        .expect_err("an empty deck must preserve its unprepared runtime");
+    assert!(matches!(
+        error,
+        PlayError::Session(SessionError::TransportNotProcessed)
+    ));
+    assert_eq!(player.position_seconds(), None);
 
     let error = foreign_host
         .remove(&player)

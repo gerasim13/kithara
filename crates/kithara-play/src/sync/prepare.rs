@@ -35,6 +35,17 @@ pub(super) struct AlignmentPolicy {
     pub(super) source_cue: Option<Beat>,
 }
 
+/// Host seeks retain an exact downbeat and quantize any between-beat request to
+/// the following downbeat, matching the deck's published musical grid.
+pub(super) fn host_seek_policy(source: kithara_warp::AlignmentSource) -> AlignmentPolicy {
+    AlignmentPolicy {
+        playback_rate: source.playback_rate(),
+        align_downbeat: true,
+        require_future_source: source.requires_future_cue(),
+        source_cue: None,
+    }
+}
+
 /// Aligns the member's beat under the frontier's source frame onto the next
 /// whole owner beat after the frontier's output frame.
 ///

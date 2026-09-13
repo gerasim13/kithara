@@ -187,7 +187,7 @@ mod wire {
         PlayerRegistered(RegisteredPlayer),
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
-        SlotAllocated(AllocatedSlot),
+        SlotAllocated(Box<AllocatedSlot>),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
         SyncAdmission(SyncAdmission),
@@ -368,7 +368,7 @@ mod handle {
                 stretch,
                 rate_smoothing,
             })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
+                Reply::SlotAllocated(allocated) => Ok(*allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
                 )),

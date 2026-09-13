@@ -175,6 +175,18 @@ impl ItemQueue {
         }))
     }
 
+    pub(crate) fn commit_current_track_plan<R>(
+        &self,
+        item: TrackId,
+        stamp: kithara_warp::BeatGridStamp,
+        plan: Arc<RegionPlan>,
+        commit: impl FnOnce() -> Result<R, crate::PlayError>,
+    ) -> Result<R, crate::PlayError> {
+        self.playlist
+            .lock()
+            .commit_current_track_plan(item, stamp, plan, commit)
+    }
+
     delegate::delegate! {
         to self.playlist.lock() {
             #[call(clear)]

@@ -209,6 +209,30 @@ impl Playlist {
         track.plan = plan;
     }
 
+    pub(crate) fn commit_current_track_plan<R>(
+        &mut self,
+        item: TrackId,
+        stamp: kithara_warp::BeatGridStamp,
+        plan: Arc<RegionPlan>,
+        commit: impl FnOnce() -> Result<R, crate::PlayError>,
+    ) -> Result<R, crate::PlayError> {
+        if self.item_id(self.current) != Some(item) {
+            return Err(crate::PlayError::StaleHostSeek { item });
+        }
+        let Some(track) = self.tracks.get_mut(&item) else {
+            return Err(crate::PlayError::StaleHostSeek { item });
+        };
+        if track.grid.as_ref().map(|grid| grid.snapshot.stamp()) != Some(stamp) {
+            return Err(crate::PlayError::StaleHostSeek { item });
+        }
+        let committed = commit()?;
+        if let Some(slot) = &track.slot {
+            slot.install(Some(plan.clone()));
+        }
+        track.plan = Some(plan);
+        Ok(committed)
+    }
+
     pub(crate) fn has_resource(&self, index: usize) -> bool {
         self.items
             .get(index)
@@ -292,12 +316,37 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use kithara_warp::{AssetFrame, GridSegment, RegionPlan, RegionPlanSlot};
+    use kithara_warp::{
+        AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment,
+        MapAxis, RegionPlan, RegionPlanSlot,
+    };
 
-    use super::Playlist;
+    use super::{Playlist, Slot};
 
     fn plan() -> Arc<RegionPlan> {
         Arc::new(RegionPlan::new(vec![GridSegment::new(0, 48_000, 1.0)]).expect("fixture plan"))
+    }
+
+    fn grid(id: BeatGridId, revision: BeatGridRevision) -> BeatGridSnapshot {
+        BeatGridSnapshot::unavailable(
+            id,
+            revision,
+            MapAxis::Asset(AssetAxis::new(
+                std::num::NonZeroU32::new(48_000).expect("fixture sample rate"),
+                48_000,
+            )),
+        )
+    }
+
+    fn segments() -> kithara_warp::SegmentSet {
+        kithara_warp::SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(
+                std::num::NonZeroU32::new(48_000).expect("fixture sample rate"),
+                48_000,
+            )),
+            Vec::new(),
+        )
+        .expect("empty fixture segments are valid")
     }
 
     #[kithara::test(native, flash(false))]
@@ -406,6 +455,111 @@ mod tests {
         assert!(
             slot.load()
                 .is_some_and(|installed| Arc::ptr_eq(&installed, &plan))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn stale_host_seek_current_item_leaves_the_existing_plan_untouched() {
+        let mut playlist = Playlist::default();
+        let stale = TrackId(7);
+        let current = TrackId(8);
+        let grid_id = BeatGridId::allocate().expect("fixture grid identity");
+        let stamp = grid(grid_id, BeatGridRevision::first()).stamp();
+        let existing = plan();
+        let slot = Arc::new(RegionPlanSlot::default());
+        playlist.items = vec![
+            Some(Slot {
+                resource: None,
+                item_id: stale,
+            }),
+            Some(Slot {
+                resource: None,
+                item_id: current,
+            }),
+        ];
+        playlist.current = 1;
+        playlist.publish_track_grid(
+            stale,
+            super::TrackGrid {
+                id: grid_id,
+                revision: BeatGridRevision::first(),
+                snapshot: grid(grid_id, BeatGridRevision::first()),
+                segments: segments(),
+            },
+        );
+        playlist.track_loaded(stale, Some(slot.clone()));
+        playlist.set_track_plan(stale, Some(existing.clone()));
+        let replacement = plan();
+        let mut committed = false;
+
+        let result = playlist.commit_current_track_plan(stale, stamp, replacement, || {
+            committed = true;
+            Ok(())
+        });
+
+        assert!(matches!(result, Err(crate::PlayError::StaleHostSeek { item }) if item == stale));
+        assert!(!committed);
+        assert!(
+            slot.load()
+                .is_some_and(|installed| Arc::ptr_eq(&installed, &existing))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn stale_host_seek_track_grid_stamp_leaves_the_existing_plan_untouched() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let grid_id = BeatGridId::allocate().expect("fixture grid identity");
+        let first = grid(grid_id, BeatGridRevision::first());
+        let stamp = first.stamp();
+        let existing = plan();
+        let slot = Arc::new(RegionPlanSlot::default());
+        playlist.items = vec![Some(Slot {
+            resource: None,
+            item_id: item,
+        })];
+        playlist.publish_track_grid(
+            item,
+            super::TrackGrid {
+                id: grid_id,
+                revision: BeatGridRevision::first(),
+                snapshot: first,
+                segments: segments(),
+            },
+        );
+        playlist.track_loaded(item, Some(slot.clone()));
+        playlist.set_track_plan(item, Some(existing.clone()));
+        playlist.publish_track_grid(
+            item,
+            super::TrackGrid {
+                id: grid_id,
+                revision: BeatGridRevision::first()
+                    .checked_next()
+                    .expect("fixture grid revision advances"),
+                snapshot: grid(
+                    grid_id,
+                    BeatGridRevision::first()
+                        .checked_next()
+                        .expect("fixture grid revision advances"),
+                ),
+                segments: segments(),
+            },
+        );
+        let replacement = plan();
+        let mut committed = false;
+
+        let result = playlist.commit_current_track_plan(item, stamp, replacement, || {
+            committed = true;
+            Ok(())
+        });
+
+        assert!(
+            matches!(result, Err(crate::PlayError::StaleHostSeek { item: stale }) if stale == item)
+        );
+        assert!(!committed);
+        assert!(
+            slot.load()
+                .is_some_and(|installed| Arc::ptr_eq(&installed, &existing))
         );
     }
 }

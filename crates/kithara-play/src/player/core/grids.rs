@@ -213,7 +213,7 @@ where
                         + kithara_platform::time::Duration::from_nanos(
                             prepared.source % sample_rate * 1_000_000_000 / sample_rate,
                         );
-                self.runtime.core.engine.schedule_track_seek(
+                let _ = self.runtime.core.engine.schedule_track_seek(
                     slot,
                     item,
                     target,

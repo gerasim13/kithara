@@ -1,6 +1,8 @@
 use firewheel::FirewheelCtx;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_play::SeekOutcome;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
@@ -25,6 +27,11 @@ pub(crate) enum HostCmd<S> {
     EnableOutput {
         outputs: OutputGroup,
     },
+    #[cfg(not(target_arch = "wasm32"))]
+    SeekDeck {
+        deck: kithara_warp::BeatGridId,
+        seconds: f64,
+    },
     #[cfg(any(test, feature = "usdt"))]
     RestartOutput {
         sample_rate: u32,
@@ -39,11 +46,13 @@ pub(crate) enum SyncCmd {
 }
 
 pub(crate) enum HostReply {
-    Play(Reply),
+    Play(Box<Reply>),
     Admission(Result<SyncAdmission, SyncRejected<PlayerMember>>),
     Acknowledged(Result<SyncStatusSnapshot, SyncError>),
     Ok,
     Err(PlayError),
+    #[cfg(not(target_arch = "wasm32"))]
+    Seek(Result<SeekOutcome, PlayError>),
 }
 
 pub(crate) struct HostCmdMsg<S> {
