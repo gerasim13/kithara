@@ -10,13 +10,13 @@ use std::{
 use kithara_abr::Abr;
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch, WriterHandle};
 use kithara_bufpool::HasPool;
+use kithara_download::{FetchCmd, Peer, RequestPriority, reject_html_response};
 use kithara_net::{Headers, NetError, RangeSpec};
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
     sync::{Arc, Mutex, Weak},
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::dl::{FetchCmd, Peer, RequestPriority, reject_html_response};
 
 use self::response::{FetchCompletion, FetchWriter, response_contract};
 use crate::{coord::FileCoord, session::inner::FileInner};

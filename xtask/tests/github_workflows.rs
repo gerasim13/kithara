@@ -341,16 +341,16 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         mapping_field(concurrency, "group").as_str(),
         Some("ci-${{ github.ref }}")
     );
-    // One queue per branch: pushes to different branches hold nothing from each
-    // other, and the machine is shared at the runner, where a job waits for the
-    // three cores it asks for. `queue` takes no expression and may not sit
-    // beside a cancellation that can read true, so pushes to one branch queue
-    // rather than evict, and a superseded push is not cancelled. See ci.yml.
+    // One queue per branch: a newer push supersedes obsolete work from the same
+    // branch while pushes to different branches remain independent.
     assert_eq!(
         mapping_field(concurrency, "cancel-in-progress").as_bool(),
-        Some(false)
+        Some(true)
     );
-    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
+    assert!(
+        !concurrency.contains_key("queue"),
+        "GitHub concurrency has no queue extension"
+    );
     let jobs = workflow_jobs(&workflow);
 
     let authorize = workflow_job(jobs, "authorize");
@@ -439,18 +439,19 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
-// One entry per push, and it is the gate. A workflow that also declares `push`
-// spends the fleet on every commit outside the gate's own budget and outside
-// the aggregate that decides whether the push was green - which is how a
-// two-hour UI suite came to start on every push to a runner pool one machine
-// deep. Everything else is reached by its caller, by the night, or by hand.
+// One entry reacts to every push, and it is the gate. Workflows may still react
+// to a restricted branch set, such as the UI suite on `main`.
 #[test]
-fn the_gate_is_the_only_workflow_a_push_starts() {
+fn the_gate_is_the_only_workflow_every_push_starts() {
     let mut entries = Vec::new();
     for name in workflow_file_names() {
         let workflow = github_workflow(&name);
         let on = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on");
-        if on.as_mapping().is_some_and(|on| on.contains_key("push")) {
+        if on
+            .as_mapping()
+            .and_then(|on| on.get("push"))
+            .is_some_and(Value::is_null)
+        {
             entries.push(name);
         }
     }
@@ -1795,9 +1796,12 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
         Path::new(target).is_absolute(),
         "a relative build directory is one inside the checkout: {target}"
     );
-    assert_eq!(
-        Path::new(target).parent(),
-        Path::new(fixtures).parent(),
+    assert!(
+        Path::new(target).starts_with(
+            Path::new(fixtures)
+                .parent()
+                .expect("the fixture store has a mounted-volume parent")
+        ),
         "the build directory and the fixture store share the mounted volume"
     );
 }

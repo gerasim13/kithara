@@ -401,13 +401,7 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     let cache = fixture._temp.path().join("cache");
     let ready = fixture._temp.path().join("ready");
     let release = fixture._temp.path().join("release");
-    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
-    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
-    let target = if system.trim() == "Linux" {
-        cache.join(format!("target-slots/review-linux-{}-slot-0", arch.trim()))
-    } else {
-        fixture.root.join("target")
-    };
+    let target = fixture._temp.path().join("private-target");
     let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
     command
         .env("CI", "true")
@@ -415,6 +409,7 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
         .env("CI_JOB_ID", "lease-test")
         .env("KITHARA_CACHE_TRUST", "review")
         .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("CARGO_TARGET_DIR", &target)
         .env("SELF_CACHE_READY", &ready)
         .env("SELF_CACHE_RELEASE", &release)
         .stdin(Stdio::null())
@@ -434,6 +429,32 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
     assert!(!heartbeat.exists());
+    Ok(())
+}
+
+#[test]
+fn ci_bootstrap_ignores_the_lane_target() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let cache = fixture._temp.path().join("cache");
+    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
+    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(97));
+    assert!(fs::read_to_string(&fixture.cargo_log)?.contains(&format!(
+            "target={}\n",
+            cache
+                .join(format!(
+                    "bootstrap/review/target-{}-{}",
+                    system.trim(),
+                    arch.trim()
+                ))
+                .display()
+        )));
     Ok(())
 }
 
@@ -840,11 +861,15 @@ fn killed_refresh_parent_does_not_leave_builder_descendants() -> Result<()> {
         r#"#!/bin/sh
 set -eu
 trap 'exit 0' TERM
-printf '%s\n' "$PPID" > "$SELF_CACHE_WORKER_PID"
-printf '%s\n' "$$" > "$SELF_CACHE_CARGO_PID"
+publish_pid() {
+    printf '%s\n' "$1" > "$2.pending"
+    mv "$2.pending" "$2"
+}
+publish_pid "$PPID" "$SELF_CACHE_WORKER_PID"
+publish_pid "$$" "$SELF_CACHE_CARGO_PID"
 sh -c 'trap "" TERM; while :; do sleep 300; done' &
 descendant=$!
-printf '%s\n' "$descendant" > "$SELF_CACHE_DESCENDANT_PID"
+publish_pid "$descendant" "$SELF_CACHE_DESCENDANT_PID"
 wait "$descendant"
 "#,
     )?;

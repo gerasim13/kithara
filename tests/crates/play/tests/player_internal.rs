@@ -275,13 +275,10 @@ async fn player_advance_emits_event(constant_half: &'static [u8]) {
     let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
     player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
-    let mut rx = player.subscribe();
+    let mut rx: EventReceiver<PlayerEvent> = player.subscribe();
     player.advance_to_next_item();
     let event = rx.try_recv().map(|env| env.event);
-    assert!(matches!(
-        event,
-        Ok(TestEvent::Player(PlayerEvent::CurrentItemChanged { .. }))
-    ));
+    assert!(matches!(event, Ok(PlayerEvent::CurrentItemChanged { .. })));
 }
 
 #[kithara::test]

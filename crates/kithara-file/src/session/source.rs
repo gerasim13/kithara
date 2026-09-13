@@ -3,6 +3,7 @@ use std::{num::NonZeroUsize, ops::Range};
 use bon::Builder;
 use kithara_assets::{AssetReader, ReadSide};
 use kithara_bufpool::HasPool;
+use kithara_download::PeerHandle;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
@@ -10,7 +11,7 @@ use kithara_stream::{
     Activity, AudioCodec, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead,
     PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
     SourceError as StreamSourceError, SourcePhase, SourceProbe, StreamError, StreamResult,
-    WorkerWake, dl::PeerHandle,
+    WorkerWake,
 };
 use kithara_test_utils::kithara;
 use tracing::trace;

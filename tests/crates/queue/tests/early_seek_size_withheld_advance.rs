@@ -22,6 +22,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -30,7 +31,6 @@ use kithara::{
         ResourceConfig, ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
@@ -151,7 +151,7 @@ async fn build_hls_resource(
             .store(store.clone())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
-                    .backend(DecoderBackend::Symphonia)
+                    .backend(DecoderBackend::default())
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(GATED_VARIANT))

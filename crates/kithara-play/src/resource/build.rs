@@ -1,11 +1,11 @@
 use kithara_audio::{AudioConfig, AudioObserver, ConsumerWakeMode, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
+use kithara_download::{Downloader, DownloaderConfig};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};

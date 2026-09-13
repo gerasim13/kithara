@@ -1,11 +1,11 @@
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},

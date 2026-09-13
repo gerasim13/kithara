@@ -125,7 +125,7 @@ impl BatchGroup {
     ///
     /// The `batch_size` / `first_request_id` probe values are written as
     /// `name = expr`: the macro gates them behind `cfg(any(test, feature =
-    /// "probe"))`, so the metric computation is free in production builds.
+    /// "usdt"))`, so the metric computation is free in production builds.
     #[kithara::flash(true)]
     #[kithara::probe(
         batch_size = self.entries.len(),

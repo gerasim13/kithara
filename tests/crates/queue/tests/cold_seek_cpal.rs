@@ -2,19 +2,19 @@
 
 use kithara::{
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant, timeout},
+        CancelToken, time,
+        time::{Duration, Instant, timeout},
     },
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};
 use kithara_test_utils::off_thread::OffThread;
@@ -98,7 +98,7 @@ async fn wait_for_position_at_least(
 /// silvercomet-specific HTTP / format behaviour rather than anything in
 /// the kithara pipeline abstract.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

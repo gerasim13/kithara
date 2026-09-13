@@ -13,6 +13,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
+    download::{Downloader, DownloaderConfig},
     events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -23,7 +24,6 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,

@@ -5,6 +5,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
+    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -17,7 +18,6 @@ use kithara::{
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

@@ -32,7 +32,7 @@ crates = ["kithara-abr", "kithara-storage", "kithara-test-utils"]
 [[layer]]
 index = 4
 name = "core"
-crates = ["kithara-assets", "kithara-stream"]
+crates = ["kithara-assets", "kithara-download", "kithara-stream"]
 
 [[layer]]
 index = 5

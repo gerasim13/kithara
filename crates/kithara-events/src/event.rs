@@ -14,6 +14,12 @@ pub trait Event: Clone + core::fmt::Debug + Send + Sync + 'static {}
 ///
 /// Every `Event` is a one-member set through the blanket impl below; a
 /// multi-member set is a consumer-local enum with `#[derive(EventSet)]`.
+///
+/// A multi-member receiver polls its members in declaration order and yields
+/// the first that has an event queued, so it reports no order between
+/// members: an earlier-declared member preempts one that published first.
+/// Publication order holds inside a member, which is where a consumer reads
+/// it from — a one-member receiver.
 pub trait EventSet: Sized + Send + 'static {
     type Receivers: Send;
 

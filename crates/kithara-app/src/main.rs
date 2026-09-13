@@ -6,11 +6,11 @@ use std::num::NonZeroUsize;
 use clap::Parser;
 use kithara::{
     assets::{FlushHub, FlushPolicy},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, thread, tokio},
     play::PlayWorkerConfig,
-    stream::dl::{Downloader, DownloaderConfig},
     worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
 use kithara_app::{

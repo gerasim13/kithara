@@ -8,13 +8,13 @@ use std::{
 
 use kithara::{
     abr::Abr,
+    download::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
         time::Duration,
     },
-    stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
 };
 use kithara_integration_tests::bufpool_ext::pools;
 

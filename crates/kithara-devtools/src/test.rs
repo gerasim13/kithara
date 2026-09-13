@@ -201,6 +201,7 @@ fn lane_command(
             let backend = request
                 .net_backend
                 .as_deref()
+                .or(lane.default_backend.as_deref())
                 .unwrap_or(&test.default_backend);
             let (_, cmd) = nextest_lane_command(project, toggles, backend, &request.passthrough)?;
             Ok(cmd)
@@ -324,9 +325,10 @@ fn features_for(
         .unwrap_or_else(|| lane.default_no_block.unwrap_or(config.no_block.default));
     let backend_name = request
         .net_backend
-        .clone()
-        .unwrap_or_else(|| config.default_backend.clone());
-    lane_features(config, lane, LaneToggles { flash, no_block }, &backend_name)
+        .as_deref()
+        .or(lane.default_backend.as_deref())
+        .unwrap_or(&config.default_backend);
+    lane_features(config, lane, LaneToggles { flash, no_block }, backend_name)
 }
 
 pub(crate) fn lane_features(
@@ -366,10 +368,51 @@ pub(crate) fn nextest_lane_command(
     nextest_lane_command_for(project, toggles, backend, extra, NextestAction::Run)
 }
 
+/// Operation on the same configured nextest selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NextestAction {
+pub enum NextestAction {
     Run,
     List,
+}
+
+/// Build the default suite command for a platform adapter.
+///
+/// # Errors
+/// Returns an error when the configured suite or backend is invalid.
+pub fn default_nextest_command(
+    project: &ProjectConfig,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
+    nextest_command_for_lane(project, &project.test.default_lane, extra, action)
+}
+
+/// Build the command for a configured test lane.
+/// # Errors
+/// Returns an error when the lane or its backend configuration is invalid.
+pub fn nextest_command_for_lane(
+    project: &ProjectConfig,
+    lane_name: &str,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
+    let test = &project.test;
+    validate_config(test)?;
+    let lane = test
+        .lanes
+        .get(lane_name)
+        .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
+    let toggles = LaneToggles {
+        flash: lane.default_flash.unwrap_or(test.flash.default),
+        no_block: lane.default_no_block.unwrap_or(test.no_block.default),
+    };
+    let backend = lane
+        .default_backend
+        .as_deref()
+        .unwrap_or(&test.default_backend);
+    let features = lane_features(test, lane, toggles, backend)?;
+    let (_, command) = nextest_command(test, lane, features, extra, action)?;
+    Ok(command)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -640,6 +683,7 @@ mod tests {
                 ],
                 suffix_args: vec!["--locked".to_owned()],
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: None,
                 default_no_block: None,
                 passthrough: String::new(),
@@ -658,6 +702,7 @@ mod tests {
                 ],
                 suffix_args: vec!["-E".to_owned(), "test(loom_model_)".to_owned()],
                 default_features: vec!["demo/loom".to_owned()],
+                default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
                 passthrough: String::new(),
@@ -672,6 +717,7 @@ mod tests {
                 prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
                 suffix_args: Vec::new(),
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: None,
                 default_no_block: Some(true),
                 passthrough: String::new(),
@@ -686,6 +732,7 @@ mod tests {
                 prefix_args: vec!["test".to_owned()],
                 suffix_args: vec!["selenium".to_owned()],
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
                 passthrough: "after-suffix".to_owned(),
@@ -741,6 +788,29 @@ mod tests {
             ext: toml::Table::default(),
             tools: crate::common::tools::ToolsConfig::default(),
         }
+    }
+
+    #[test]
+    fn lane_backend_default_does_not_override_an_explicit_request() {
+        let mut project = synthetic_project();
+        project.test.default_backend = "native".into();
+        project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .unwrap()
+            .default_backend = Some("http".into());
+        let default = TestRequest::parse(&["--flash=off".into()]).unwrap();
+        let lane = &project.test.lanes["workspace"];
+        let features = features_for(&project.test, lane, &default).unwrap();
+        let explicit =
+            TestRequest::parse(&["--flash=off".into(), "--net-backend=native".into()]).unwrap();
+        let requested = features_for(&project.test, lane, &explicit).unwrap();
+        assert_eq!(features, BTreeSet::from(["base-feature".into()]));
+        assert_eq!(
+            requested,
+            BTreeSet::from(["base-feature".into(), "demo/native-net".into()])
+        );
     }
 
     #[test]
@@ -1084,6 +1154,32 @@ mod tests {
         assert_eq!(
             envs_of(&cmd),
             vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_platform_adapter_can_build_a_named_lane_inventory() {
+        let project = synthetic_project();
+        let command = nextest_command_for_lane(
+            &project,
+            "loom",
+            &["-p".to_owned(), "demo-platform-tests".to_owned()],
+            NextestAction::List,
+        )
+        .expect("named lane inventory");
+
+        assert_eq!(
+            args_of(&command),
+            [
+                "nextest",
+                "list",
+                "--features",
+                "base-feature,demo/loom",
+                "-p",
+                "demo-platform-tests",
+                "-E",
+                "test(loom_model_)",
+            ]
         );
     }
 }

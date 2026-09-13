@@ -150,7 +150,7 @@ let (tx, rx) = mpsc::channel::<ResourceKey>(cap);
 ```
 
 Reserve `unbounded_channel` for provably rate-limited producers and justify it in a comment; at the RT edge use a fixed-capacity SPSC ring.
-*tier: warm | detector: manual (backlog `unbounded_channel(` census) | present in kithara (kithara-hls `stream/hls.rs`, kithara-stream `downloader.rs` - control-plane, uncommented)*
+*tier: warm | detector: manual (backlog `unbounded_channel(` census) | present in kithara (kithara-hls `stream/hls.rs`, kithara-download `downloader.rs` - control-plane, uncommented)*
 
 **`tokio::sync::Mutex` for plain data** (across-await half is E1)
 

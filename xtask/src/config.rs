@@ -75,6 +75,11 @@ pub(crate) struct CiLaneConfig {
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
     pub(crate) github_runner: Option<String>,
+    /// The protected GitHub runner label used by this lane on `main`.
+    pub(crate) github_runner_main: Option<String>,
+    /// Immutable trusted Cargo target snapshot this lane restores before it
+    /// builds. The key names a compatible Cargo invocation, not a revision.
+    pub(crate) target_snapshot: Option<String>,
     pub(crate) timeout_minutes: u32,
     /// Checkout depth. Zero is full history, which a lane comparing against a
     /// base revision needs and a shallow clone does not carry.
@@ -217,6 +222,27 @@ impl CiProjectConfig {
             }
             if lane.github_runner.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.github_runner must not be empty");
+            }
+            if lane
+                .github_runner_main
+                .as_deref()
+                .is_some_and(str::is_empty)
+            {
+                bail!("ext.ci.lanes.{name}.github_runner_main must not be empty");
+            }
+            if lane.target_snapshot.as_deref().is_some_and(str::is_empty) {
+                bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
+            }
+            if lane.target_snapshot.is_some()
+                && lane.steps.iter().any(|step| {
+                    step.env
+                        .get("CARGO_TARGET_DIR")
+                        .is_some_and(|target| target != TARGET_PLACEHOLDER)
+                })
+            {
+                bail!(
+                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}"
+                );
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
@@ -491,6 +517,7 @@ pub(crate) struct HookRoute {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct AndroidConfig {
+    pub(crate) test_lane: String,
     /// Cargo package compiled into the Android JNI libraries.
     pub(crate) ffi_crate: String,
     /// AAR artifacts the Gradle export is expected to produce.
@@ -834,6 +861,36 @@ timeout_minutes = 30
     }
 
     #[test]
+    fn a_target_snapshot_lane_may_not_move_cargo_after_restore() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.snapshot]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+target_snapshot = "linux-test-release"
+steps = [{ args = ["test"], label = "suite", env = { CARGO_TARGET_DIR = "{target}/other" } }]
+role = "gate"
+timeout_minutes = 30
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("a snapshot must restore where Cargo will build");
+        assert!(
+            error.to_string().contains("must keep CARGO_TARGET_DIR"),
+            "the error must explain the snapshot/Cargo target contract: {error}"
+        );
+    }
+
+    #[test]
     fn an_unknown_publish_step_fails_the_config() {
         let ctx = ctx_from_config(
             r#"
@@ -930,6 +987,7 @@ upload_timeout_secs = 600
 
 [ext.android]
 ffi_crate = "kithara-ffi"
+test_lane = "android"
 aars = ["kithara.aar"]
 default_avd = "Pixel_6"
 demo_package = "com.kithara.example"
@@ -955,6 +1013,7 @@ apple_proof_needles = ["AppleCodec"]
         assert_eq!(ext.release.title, "Kithara");
         assert_eq!(ext.release.http_timeout_secs, Some(60));
         assert_eq!(ext.release.upload_timeout_secs, Some(600));
+        assert_eq!(ext.android.test_lane, "android");
         assert_eq!(ext.android.default_avd, "Pixel_6");
         assert_eq!(ext.android.boot_wait_attempts, Some(120));
         assert_eq!(ext.android.boot_poll_interval_secs, Some(1));

@@ -2,10 +2,11 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    download::DownloaderEvent,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration},
-    stream::{DownloaderEvent, Stream},
+    stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

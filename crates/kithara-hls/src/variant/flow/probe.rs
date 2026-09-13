@@ -1,9 +1,9 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use kithara_bufpool::HasPool;
+use kithara_download::{FetchCmd, OnCompleteFn, WriterFn};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
 use tracing::{debug, trace};
 use url::Url;
 

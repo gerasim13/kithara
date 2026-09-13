@@ -1,5 +1,6 @@
 use kithara::{
     assets::EvictReason,
+    download::CancelReason,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -7,7 +8,7 @@ use kithara::{
         TimeControlStatus, TimeRange,
     },
     queue::{AdvanceReason, QueueRepeatMode, RepeatMode, TrackStatus as TS, Transition},
-    stream::{AudioCodec, CancelReason, ContainerFormat},
+    stream::{AudioCodec, ContainerFormat},
 };
 use kithara_audio::{
     DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,

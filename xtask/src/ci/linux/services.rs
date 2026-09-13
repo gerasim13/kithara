@@ -57,6 +57,12 @@ pub(super) fn install(
         .context("reading this machine's core count")?
         .get();
     for (index, runner) in host.runners.iter().enumerate() {
+        client_environment(&runner.sccache_s3_env_file).with_context(|| {
+            format!(
+                "validating S3 cache environment for Linux runner {}",
+                runner.name
+            )
+        })?;
         let path = PathBuf::from(LAYOUT.systemd_root).join(runner.service());
         let cpuset = cpuset(index, runner.cpus, cores);
         std::fs::write(&path, unit(host, runner, &cpuset, pins, LAYOUT.executable)?)
@@ -293,10 +299,12 @@ fn unit(
     for entry in Container::environment() {
         write!(unit, " --env {entry}")?;
     }
-    if let Some(path) = &host.sccache_s3_env_file {
-        client_environment(path)?;
-        write!(unit, " --env-file {}", path.display())?;
-    }
+    write!(
+        unit,
+        " --env KITHARA_CACHE_TRUST={} --env-file {}",
+        runner.cache_trust.as_str(),
+        runner.sccache_s3_env_file.display()
+    )?;
     for (volume, target) in &job.mounts {
         let mount_type = Container::mount_type(volume);
         write!(
@@ -480,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_inherits_the_configured_s3_cache_environment() {
+    fn a_unit_inherits_its_own_s3_cache_environment_and_trust() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let env_file = directory.path().join("cache.env");
         std::fs::write(
@@ -492,7 +500,7 @@ mod tests {
             .expect("restrict cache environment");
 
         let mut host = host_fixture();
-        host.sccache_s3_env_file = Some(env_file.clone());
+        host.runners[0].sccache_s3_env_file = env_file.clone();
         let pins = &fixture().pins;
         let text = unit(
             &host,
@@ -507,6 +515,40 @@ mod tests {
             text.contains(&format!("--env-file {}", env_file.display())),
             "{text}"
         );
+        assert!(text.contains("--env KITHARA_CACHE_TRUST=review"), "{text}");
+    }
+
+    #[test]
+    fn a_trusted_runner_marks_only_its_own_job_as_trusted() {
+        let mut host = host_fixture();
+        host.runners[0].cache_trust = crate::ci::environment::CacheTrust::Trusted;
+        let pins = &fixture().pins;
+        let trusted = unit(
+            &host,
+            host.runner("kithara-ci-octocat").expect("runner"),
+            "0,1,2",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+        let review = unit(
+            &host,
+            host.runner("kithara-ci-hubot").expect("runner"),
+            "3,4,5",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+
+        assert!(
+            trusted.contains("--env KITHARA_CACHE_TRUST=trusted"),
+            "{trusted}"
+        );
+        assert!(
+            review.contains("--env KITHARA_CACHE_TRUST=review"),
+            "{review}"
+        );
+        assert!(!review.contains("KITHARA_CACHE_TRUST=trusted"), "{review}");
     }
 
     /// The whole fleet declares one runtime directory, so systemd must be told

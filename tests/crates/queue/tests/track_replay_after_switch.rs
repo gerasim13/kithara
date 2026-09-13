@@ -6,16 +6,16 @@ use std::fmt::Write;
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
+    download::{Downloader, DownloaderConfig},
     events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, sleep},
+        CancelToken, time,
+        time::{Duration, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

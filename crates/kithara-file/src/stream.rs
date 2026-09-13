@@ -5,14 +5,12 @@ use kithara_assets::{
     ResourceAttachment, ResourceKey,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
-use kithara_stream::{
-    PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
-    dl::{Downloader, DownloaderConfig},
-};
+use kithara_stream::{PlayheadState, SeekState, SourceError as StreamSourceError, StreamType};
 use kithara_test_utils::kithara;
 use url::Url;
 

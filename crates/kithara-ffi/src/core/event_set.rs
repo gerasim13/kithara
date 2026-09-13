@@ -1,9 +1,9 @@
 use kithara::{
     abr::AbrEvent,
     assets::AssetEvent,
+    download::DownloaderEvent,
     play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
     queue::QueueEvent,
-    stream::DownloaderEvent,
 };
 use kithara_audio::{AudioEvent, DecoderEvent};
 use kithara_events::EventSet;

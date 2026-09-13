@@ -98,12 +98,6 @@ impl BodyStream {
         }
     }
 
-    /// Wrap a raw stream (for testing or non-HTTP sources).
-    #[must_use]
-    pub fn wrap_raw(inner: InnerStream) -> Self {
-        Self { inner }
-    }
-
     /// Stream chunks through a writer, return total bytes written.
     ///
     /// The writer runs on the consumer's task — not on the downloader's
@@ -168,3 +162,7 @@ fn wrap_with_cancel(byte_stream: ByteStream, cancel: CancelGroup) -> InnerStream
         },
     ))
 }
+
+#[cfg(test)]
+#[path = "../tests/body.rs"]
+mod tests;

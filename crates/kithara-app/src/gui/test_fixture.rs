@@ -1,11 +1,11 @@
 use iced::window::Id;
 use kithara::{
     assets::StorageBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
     play::{PlayWorkerConfig, policy::DomainKeyPolicy},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 
 use super::{

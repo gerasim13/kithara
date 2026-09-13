@@ -4,16 +4,13 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
+    download::{Downloader, DownloaderConfig, DownloaderEvent},
     hls::HlsConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::{
-        DownloaderEvent,
-        dl::{Downloader, DownloaderConfig},
-    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,

@@ -58,7 +58,7 @@ pub struct DownloaderConfig {
 }
 
 /// Builds a real `HttpClient`, so Miri cannot reach it for the same reason it
-/// cannot reach `dl::tests`: the shared client initialises `aws-lc`, a C
+/// cannot reach the download tests: the shared client initialises `aws-lc`, a C
 /// library Miri cannot enter.
 #[cfg(all(test, not(miri)))]
 mod tests {

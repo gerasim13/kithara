@@ -1,12 +1,9 @@
-/// Linker every Linux CI job links with, as target-scoped Cargo variables.
+/// Current default linker for Linux CI jobs, as target-scoped Cargo variables.
 ///
-/// A test job spends more wall-clock linking than compiling: measured on the
-/// GitHub fleet, a warm `Tests (simulated clock)` reached the last `Compiling`
-/// line five and a half minutes before the profile finished, and what filled
-/// that gap was `bfd` linking fifty-two optimised test binaries. `sccache`
-/// cannot shorten it — it declines to cache anything that invokes the system
-/// linker — so the linker itself is the only lever. `lld` is in the CI image
-/// already and was never selected.
+/// Cargo timing establishes that the build dominates the test lane but does
+/// not split code generation from linking, so `lld` is a controlled candidate,
+/// not a root-cause conclusion. The image also carries `mold` for a separately
+/// measured target-scoped override. `sccache` cannot reuse final link outputs.
 ///
 /// Scoped per target rather than through `RUSTFLAGS`, which would follow the
 /// wasm and Apple builds to hosts that have no `ld.lld`. Both Linux triples are

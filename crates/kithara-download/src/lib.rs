@@ -4,6 +4,8 @@
 //! routes fetch commands from registered peers. Protocols register via
 //! [`Downloader::register`] and issue fetches through [`PeerHandle::execute`].
 
+#![forbid(unsafe_code)]
+
 mod batch;
 mod cmd;
 mod config;
@@ -17,6 +19,7 @@ mod response;
 /// and the tests that reach a server bind a real socket on 127.0.0.1, which
 /// `fcntl(F_SETFD)` refuses under Miri. A transport double would test the double.
 #[cfg(all(test, not(miri)))]
+#[path = "../tests/download.rs"]
 mod tests;
 
 pub use cmd::{

@@ -1,75 +1,83 @@
 # android-build / branch
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / platforms
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / merge-request
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / quarantine
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / main
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / nightly
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / weekly
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / release
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-test / branch
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / platforms
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / merge-request
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / quarantine
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / main
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / nightly
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / weekly
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / release
   <require os> macos
-  <require tools> adb cargo emulator java just sccache
-  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
-  just platform android test --avd Kithara_CI_API_36 --skip-build
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # apple-e2e / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
@@ -445,7 +453,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
@@ -455,7 +462,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
@@ -465,7 +471,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
@@ -475,7 +480,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
@@ -485,7 +489,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
@@ -495,7 +498,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
@@ -507,7 +509,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch
@@ -1905,81 +1906,81 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
@@ -2353,50 +2354,34 @@
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-firefox / branch
   <require os> linux

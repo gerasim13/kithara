@@ -8,6 +8,7 @@ use std::{
 };
 
 use kithara_bufpool::HasPool;
+use kithara_download::FetchCmd;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -17,7 +18,6 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
-    dl::FetchCmd,
 };
 use tracing::debug;
 

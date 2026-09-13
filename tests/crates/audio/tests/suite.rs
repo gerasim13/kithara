@@ -4,6 +4,8 @@
     reason = "integration test crate - unwraps are acceptable in test code"
 )]
 
+use kithara_test_dylib as _;
+
 mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
@@ -16,6 +18,4 @@ mod file_ephemeral_mp3;
 mod gapless_crossfade;
 #[cfg(not(target_arch = "wasm32"))]
 mod gapless_pipeline;
-#[cfg(not(target_arch = "wasm32"))]
-mod no_sync_passthrough;
 mod stream_source_tests;

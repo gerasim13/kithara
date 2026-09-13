@@ -80,7 +80,8 @@ impl<S: EventSet> EventReceiver<S> {
         Self { rx }
     }
 
-    /// Waits for the next event from any member of the set.
+    /// Waits for the next event from any member of the set, preferring the
+    /// earlier-declared member when several have one queued.
     ///
     /// # Errors
     /// Returns lag information or `Closed` when all members close.
@@ -88,7 +89,8 @@ impl<S: EventSet> EventReceiver<S> {
         S::recv(&mut self.rx).await
     }
 
-    /// Takes the next queued event from any member of the set.
+    /// Takes the next queued event from any member of the set, preferring the
+    /// earlier-declared member when several have one queued.
     ///
     /// # Errors
     /// Returns `Empty`, lag information, or `Closed` when all members close.

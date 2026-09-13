@@ -5,18 +5,17 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::{
-        AudioCodec,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -118,7 +117,8 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 /// `PlayheadWrite::advance` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

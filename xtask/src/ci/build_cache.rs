@@ -429,7 +429,12 @@ pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     {
         let entry = entry.with_context(|| format!("reading build cache {}", slots.display()))?;
         if entry.file_type()?.is_dir() {
-            targets.push(entry.path());
+            // Target snapshots give each job a private parent. Keep accepting
+            // the pre-snapshot flat slot layout until its old directories age
+            // out, but charge and reclaim the writable Cargo directory.
+            let path = entry.path();
+            let cargo = path.join("cargo");
+            targets.push(if cargo.is_dir() { cargo } else { path });
         }
     }
     targets.sort();

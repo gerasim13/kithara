@@ -10,7 +10,7 @@ use std::{
 
 use kithara::{
     self,
-    platform::{sync::Arc, time::Duration, tokio::runtime::Runtime},
+    platform::{sync::Arc, time::Duration, tokio::runtime::Builder as RuntimeBuilder},
     storage::WaitOutcome,
     stream::{
         Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
@@ -171,7 +171,9 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
     let config = MockStreamConfig {
         source: Some(source),
     };
-    Runtime::new()
+    RuntimeBuilder::new_current_thread()
+        .enable_all()
+        .build()
         .expect("runtime creation should succeed")
         .block_on(Stream::new(config))
         .expect("stream creation should succeed")

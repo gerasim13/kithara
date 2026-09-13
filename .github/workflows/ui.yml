@@ -1,10 +1,11 @@
 name: UI
 
 # UI tests are isolated from the general workspace suite: unit and integration
-# targets, real GPU rendering, and host screenshots all run here. Two hours of
-# a runner pool one machine deep is not a per-push cost, so the night starts it
-# through `dispatch.yml` and a hand can start it here.
+# targets, real GPU rendering, and host screenshots all run here. It runs after
+# main changes and through the nightly dispatcher; a hand can start it too.
 on:
+  push:
+    branches: [main]
   workflow_call:
   workflow_dispatch:
 

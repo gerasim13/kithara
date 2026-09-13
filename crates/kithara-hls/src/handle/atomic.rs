@@ -7,8 +7,8 @@ use kithara_assets::{
     AcquisitionResult, AssetScope, AssetWriter, AssetsError, ReadSide, ResourceKey, WriteSide,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_download::{FetchCmd, FetchResponse, PeerHandle, reject_html_response};
 use kithara_net::{Headers, NetError};
-use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle, reject_html_response};
 use tracing::{debug, warn};
 use url::Url;
 

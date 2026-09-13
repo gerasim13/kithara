@@ -6,6 +6,7 @@ use kithara::{
     assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -16,7 +17,6 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -474,8 +474,8 @@ async fn wait_for_post_seek_advance(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await)]
-#[case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await)]
+#[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
+#[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_no_sidx(DecoderBackend::Apple, plain_hls().await)

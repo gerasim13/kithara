@@ -5,12 +5,12 @@ use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
 use kithara_bufpool::HasPool;
+use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stream::dl::Downloader;
 use kithara_warp::WarpConfig;
 use url::Url;
 

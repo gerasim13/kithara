@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::env;
@@ -5,10 +6,10 @@ use std::env;
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
+    download::Downloader,
     platform::time::Duration,
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::Downloader,
 };
 use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind};
 use kithara_integration_tests::{

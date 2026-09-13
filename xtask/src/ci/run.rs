@@ -441,13 +441,10 @@ fn report_lane(
 ) -> Result<()> {
     let process = Process::recording(
         root,
-        Recording::default()
-            .with_reply(
-                tools.program("xcodebuild"),
-                &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-            )
-            .with_reply("chromium", &ci_config.pins.chromium_version)
-            .with_reply("chromedriver", &ci_config.pins.chromium_version),
+        Recording::default().with_reply(
+            tools.program("xcodebuild"),
+            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+        ),
     );
     let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
     let recorded = process
@@ -600,6 +597,61 @@ mod tests {
     }
 
     #[test]
+    fn android_baseline_builds_fresh_without_requiring_sdk_tools_on_path() {
+        let (outcome, steps) = resolve("android-test", PipelineKind::Platforms);
+        outcome.unwrap();
+        assert_eq!(
+            steps
+                .iter()
+                .map(|(program, args, _)| (program.as_str(), args.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("<require os>", vec!["macos".to_owned()]),
+                (
+                    "<require tools>",
+                    [
+                        "cargo",
+                        "curl",
+                        "ffmpeg",
+                        "java",
+                        "just",
+                        "make",
+                        "pkg-config",
+                        "tar"
+                    ]
+                    .map(str::to_owned)
+                    .to_vec()
+                ),
+                (
+                    "just",
+                    ["platform", "android", "clippy"]
+                        .map(str::to_owned)
+                        .to_vec()
+                ),
+                (
+                    "just",
+                    vec![
+                        "platform".to_owned(),
+                        "android".to_owned(),
+                        "test".to_owned(),
+                        "--avd".to_owned(),
+                        fixture().pins.android_avd
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn both_ci_executors_select_the_android_test_lane() {
+        let github = fs::read_to_string(repo().join(".github/workflows/android.yml")).unwrap();
+        let gitlab = fs::read_to_string(repo().join(".gitlab/ci/android.yml")).unwrap();
+        assert!(github.contains("run: just ci lane android-test --kind platforms"));
+        assert!(gitlab.contains("- just ci run android-test"));
+        assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
+    }
+
+    #[test]
     fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
         for kind in [
             PipelineKind::MergeRequest,
@@ -689,14 +741,11 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let version = ci_config.pins.chromium_version.clone();
                 let recording = Recording::default()
                     .with_reply(
                         project.tools.program("xcodebuild"),
                         &format!("Xcode {}", ci_config.pins.expected_xcode_version),
                     )
-                    .with_reply("chromium", &version)
-                    .with_reply("chromedriver", &version)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
                     .with_reply("xcrun", r#"{"testNodes":[]}"#);
@@ -886,6 +935,18 @@ mod tests {
                 .all(|line| !line.trim().starts_with("image:")),
             "the pipeline must not override the local image provisioned in runner config"
         );
+    }
+
+    #[test]
+    fn gitlab_setup_leaves_the_lane_target_path_unclaimed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+
+        assert!(!common.contains("target/xtask-self-cache"));
+        assert!(!common.contains("before_script:"));
     }
 
     #[test]

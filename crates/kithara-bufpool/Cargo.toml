@@ -34,12 +34,15 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false, features = ["test-utils"] }
-kithara-test-fixtures = { workspace = true }
+kithara-core-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

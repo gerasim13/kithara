@@ -204,15 +204,8 @@ always = ["backend-cpal"]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# The model rule belongs to every crate that offers the choice, and the facade
-# offers it without re-exporting `beat-backend`, so a marker read there reached
-# only the crate the backend lives in. `beat-nn` is the name both carry: it
-# selects the neural detector without selecting its bytes, which the backend
-# refuses with compile_error!. `beat-nn-full-int8` inherits the model
-# kithara-beat cannot produce on a runner; it costs no coverage to leave out,
-# because it compiles the same `include_bytes!(env!(..))` arm `beat-nn-full`
-# does. cargo-hack refuses a feature named by both lists, so what stays
-# mutually exclusive is what is still selectable.
+# `beat-nn` scopes this rule to both crates and is invalid without model bytes.
+# Full-int8 is excluded because its model cannot be produced on CI runners.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
 never = ["beat-nn", "beat-nn-full-int8"]
@@ -428,7 +421,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -445,7 +438,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-no-block.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -462,7 +455,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-backtrace.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -480,7 +473,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-full.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -515,8 +508,15 @@ features = ["flash"]
 default = false
 features = ["no-block"]
 
-[test.net_backends.wreq]
+[test.net_backends.none]
 features = []
+
+[test.net_backends.wreq]
+features = [
+  "client-wreq",
+  "kithara-net/client-wreq",
+  "kithara-test-utils/client-wreq",
+]
 
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
@@ -551,6 +551,302 @@ prefix_args = [
   "test-release",
 ]
 
+[test.lanes.android]
+program = "cargo"
+default_backend = "wreq"
+default_flash = true
+default_no_block = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-abr-tests",
+  "-p",
+  "kithara-assets-tests",
+  "-p",
+  "kithara-audio-tests",
+  "-p",
+  "kithara-bufpool-tests",
+  "-p",
+  "kithara-decode-tests",
+  "-p",
+  "kithara-events-tests",
+  "-p",
+  "kithara-file-tests",
+  "-p",
+  "kithara-hls-tests",
+  "-p",
+  "kithara-integration-tests",
+  "-p",
+  "kithara-net-tests",
+  "-p",
+  "kithara-platform-tests",
+  "-p",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
+  "-p",
+  "kithara-storage-tests",
+  "-p",
+  "kithara-stream-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+# Core data-flow contracts have no reason to compile decoders, encoders, the
+# player, or the app. Keep their selected packages together because they share
+# the same low-level closure and are all exercised by one branch change.
+[test.lanes.core]
+program = "cargo"
+default_features = ["kithara-platform/tokio-rt-multi-thread"]
+owns = [
+  "crates/kithara-bufpool/",
+  "crates/kithara-events/",
+  "crates/kithara-platform/",
+  "crates/kithara-signal/",
+  "crates/kithara-stream/",
+  "tests/crates/bufpool/",
+  "tests/crates/core/",
+  "tests/crates/events/",
+  "tests/crates/platform/",
+  "tests/crates/stream/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-bufpool",
+  "-p",
+  "kithara-events",
+  "-p",
+  "kithara-platform",
+  "-p",
+  "kithara-signal",
+  "-p",
+  "kithara-stream",
+  "-p",
+  "kithara-bufpool-tests",
+  "-p",
+  "kithara-events-tests",
+  "-p",
+  "kithara-platform-tests",
+  "-p",
+  "kithara-stream-tests",
+  "-p",
+  "kithara-core-test-fixtures",
+  "--cargo-profile",
+  "test-release",
+]
+
+# The audio closure owns decode/playback-adjacent implementations and the
+# dedicated tests package. It deliberately uses the lightweight fixture
+# registry declared by `kithara-audio-tests`.
+[test.lanes.audio]
+program = "cargo"
+owns = [
+  "crates/kithara-audio/",
+  "crates/kithara-record/",
+  "crates/kithara-resampler/",
+  "crates/kithara-stretch/",
+  "crates/kithara-warp/",
+  "tests/crates/audio/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-audio",
+  "-p",
+  "kithara-record",
+  "-p",
+  "kithara-resampler",
+  "-p",
+  "kithara-stretch",
+  "-p",
+  "kithara-warp",
+  "-p",
+  "kithara-audio-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+# Each domain facade stays in `tests/`, but a branch selects it with the crate
+# that owns the production contract. The full workspace lane remains the
+# fallback and the default-branch proof.
+[test.lanes.abr]
+program = "cargo"
+owns = ["crates/kithara-abr/", "tests/crates/abr/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-abr",
+  "-p",
+  "kithara-abr-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.analysis]
+program = "cargo"
+owns = [
+  "crates/kithara-analysis/",
+  "crates/kithara-beat/",
+  "tests/crates/analysis/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-analysis",
+  "-p",
+  "kithara-beat",
+  "-p",
+  "kithara-analysis-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.app]
+program = "cargo"
+owns = ["crates/kithara-app/", "tests/crates/app/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-app",
+  "-p",
+  "kithara-app-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.assets]
+program = "cargo"
+owns = ["crates/kithara-assets/", "tests/crates/assets/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-assets",
+  "-p",
+  "kithara-assets-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.decode]
+program = "cargo"
+owns = ["crates/kithara-decode/", "tests/crates/decode/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-decode",
+  "-p",
+  "kithara-decode-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.encode]
+program = "cargo"
+owns = ["crates/kithara-encode/", "tests/crates/encode/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-encode",
+  "-p",
+  "kithara-encode-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.file]
+program = "cargo"
+owns = ["crates/kithara-file/", "tests/crates/file/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-file",
+  "-p",
+  "kithara-file-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.hls]
+program = "cargo"
+owns = ["crates/kithara-hls/", "tests/crates/hls/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.net]
+program = "cargo"
+owns = ["crates/kithara-net/", "tests/crates/net/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-net",
+  "-p",
+  "kithara-net-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.play]
+program = "cargo"
+owns = ["crates/kithara-play/", "tests/crates/play/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play",
+  "-p",
+  "kithara-play-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.queue]
+program = "cargo"
+owns = ["crates/kithara-queue/", "tests/crates/queue/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-queue",
+  "-p",
+  "kithara-queue-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.storage]
+program = "cargo"
+owns = ["crates/kithara-storage/", "tests/crates/storage/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-storage",
+  "-p",
+  "kithara-storage-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
 # What the product-only first split excludes is not product:
 # `kithara-devtools` and `xtask` are build tooling, and `kithara-test-utils`
 # and `kithara-test-macros` are the harness the product tests are written with.
@@ -570,6 +866,7 @@ prefix_args = [
 # assessment, release and publish, the platform commands, the xtask self-cache,
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
+default_backend = "none"
 program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
 prefix_args = [
@@ -649,7 +946,7 @@ owns = [
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
-default_features = ["harness"]
+default_features = ["harness", "kithara-test-fixtures/generate"]
 prefix_args = [
   "nextest",
   "run",
@@ -668,6 +965,7 @@ prefix_args = [
 
 [test.lanes.ui]
 program = "cargo"
+owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
 default_features = [
   "kithara-ui/capture",
   "kithara-ui/gpu",
@@ -862,6 +1160,7 @@ default_flash = false
 # tests need no feature and stay in the workspace lane.
 [test.lanes.broadcast]
 program = "cargo"
+owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
 prefix_args = [
   "nextest",
   "run",
@@ -1086,14 +1385,6 @@ cache_group = "linux"
 label = "Web browser"
 os = "linux"
 tools = ["chromium", "chromedriver", "just"]
-pinned = [
-  { tool = "chromium", args = [
-    "--version",
-  ], pin = "chromium_version" },
-  { tool = "chromedriver", args = [
-    "--version",
-  ], pin = "chromium_version" },
-]
 program = "just"
 steps = [
   { args = [
@@ -1422,9 +1713,15 @@ timeout_minutes = 60
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
 # twice in one second, and Cargo reported only "could not compile" with no
 # diagnostic, because the compiler never reached one.
+#
+# `--touched` is fail-closed: on `main`, shared configuration, and every path
+# without a reviewed domain owner it runs `workspace`. A branch only becomes
+# narrow after its path is explicitly owned by one of the lanes above.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
+github_runner_main = "kithara-trusted-snapshot"
+target_snapshot = "linux-test-release"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1433,11 +1730,12 @@ steps = [
   { args = [
     "test",
     "run",
+    "--touched",
     "--no-block=on",
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -1498,9 +1796,9 @@ steps = [
     "--lane=tooling",
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
@@ -1516,9 +1814,9 @@ steps = [
     "--lane=harness",
   ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
@@ -1540,9 +1838,9 @@ steps = [
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
   ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
@@ -2022,6 +2320,11 @@ steps = [
   { args = [
     "platform",
     "android",
+    "clippy",
+  ], label = "Android device Clippy" },
+  { args = [
+    "platform",
+    "android",
     "build",
   ], label = "Android native build" },
 ]
@@ -2029,36 +2332,27 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 45
 
-# The emulator, the connected suite, and the shutdown are one job: the tests
-# only mean anything while the device this job booted is still alive, and a
-# device left running would poison the next Android job on the host. The
-# emulator runs wherever the machine's own architecture matches the guest's, so
-# the lane pins tools rather than a platform.
-#
-# The libraries and the bindings come from the job that builds them, and Gradle
-# is told to skip generating them: a job that arrives without them builds an
-# archive with no library in it and fails on the device with
-# `UnsatisfiedLinkError`, minutes after the emulator came up.
+# CI and prepared local runners execute the same complete baseline. The test
+# command builds the JNI libraries before it acquires an emulator.
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
 os = "macos"
-tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
-left_behind_by = "Android build"
-left_behind = [
-  "android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so",
-  "android/lib/build/generated/uniffi/kotlin",
-]
+tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
+  { args = [
+    "platform",
+    "android",
+    "clippy",
+  ], label = "Android device Clippy" },
   { args = [
     "platform",
     "android",
     "test",
     "--avd",
     "{pin.android_avd}",
-    "--skip-build",
-  ], label = "Android connected tests" },
+  ], label = "Android baseline tests" },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
@@ -2139,6 +2433,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
+target_snapshot = "macos-test-release"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
@@ -2155,7 +2450,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [
@@ -2397,6 +2692,7 @@ steps = ["nightly_retained"]
 exclude_packages = []
 
 [ext.android]
+test_lane = "android"
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.

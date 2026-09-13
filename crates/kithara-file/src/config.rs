@@ -4,10 +4,10 @@ use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_derive::Patch;
+use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
-use kithara_stream::dl::Downloader;
 use url::Url;
 
 /// Source of a file stream: either a remote URL or a local path.

@@ -7,6 +7,7 @@ use kithara::{
     abr::AbrMode,
     assets::AssetStore,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig, DownloaderEvent},
     events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -17,10 +18,6 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::{
-        DownloaderEvent,
-        dl::{Downloader, DownloaderConfig},
-    },
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -205,7 +202,7 @@ fn process_probes(
 ) -> impl Iterator<Item = &probe_capture::ProbeEvent> {
     probes
         .iter()
-        .filter(|probe| probe.target == "kithara_stream_probe")
+        .filter(|probe| probe.target == "kithara_download_probe")
         .filter(|probe| probe.probe_name() == Some(PROCESS_PROBE))
 }
 
@@ -230,7 +227,8 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
 }
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

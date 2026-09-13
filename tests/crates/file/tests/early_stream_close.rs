@@ -7,6 +7,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig, DownloaderEvent},
     events::{EventBus, EventReceiver},
     file::{File, FileConfig, FileEvent, FileSrc},
     net::{HttpClient, NetOptions},
@@ -18,10 +19,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
-    stream::{
-        DownloaderEvent, Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

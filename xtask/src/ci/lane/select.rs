@@ -141,7 +141,7 @@ pub(crate) fn render(
             depth: lane.fetch_depth,
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
-            runner: lane.github_runner.clone(),
+            runner: github_runner(lane, args.kind),
         })
         .collect();
 
@@ -178,7 +178,7 @@ pub(crate) fn render(
             depth: lane.fetch_depth,
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
-            runner: lane.github_runner.clone(),
+            runner: github_runner(lane, args.kind),
         })
         .collect();
 
@@ -212,6 +212,16 @@ pub(crate) fn render(
     }
 
     Ok(Selection { matrix, dependent })
+}
+
+fn github_runner(lane: &CiLaneConfig, kind: PipelineKind) -> Option<String> {
+    if kind == PipelineKind::Main {
+        lane.github_runner_main
+            .clone()
+            .or_else(|| lane.github_runner.clone())
+    } else {
+        lane.github_runner.clone()
+    }
 }
 
 /// Print one member of a selection alone, or the whole object when the
@@ -284,6 +294,23 @@ mod tests {
             .collect();
         assert_eq!(names, ["linux-lint"]);
         assert!(selection.dependent.is_empty());
+    }
+
+    #[test]
+    fn main_uses_the_lane_protected_runner() {
+        let mut lane = lane("gate", &["branch", "main"], &[]);
+        lane.github_runner = Some("kithara-review".to_owned());
+        lane.github_runner_main = Some("kithara-trusted-snapshot".to_owned());
+        let catalog = BTreeMap::from([("linux-test".to_owned(), lane)]);
+
+        let branch = render(&catalog, &args("gate", PipelineKind::Branch, &[])).unwrap();
+        let main = render(&catalog, &args("gate", PipelineKind::Main, &[])).unwrap();
+
+        assert_eq!(branch.matrix[0].runner.as_deref(), Some("kithara-review"));
+        assert_eq!(
+            main.matrix[0].runner.as_deref(),
+            Some("kithara-trusted-snapshot")
+        );
     }
 
     #[test]

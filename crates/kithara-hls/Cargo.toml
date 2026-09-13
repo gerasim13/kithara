@@ -17,16 +17,37 @@ default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 usdt = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = ["kithara-net/client-reqwest", "kithara-stream/client-reqwest", "kithara-abr/client-reqwest"]
-client-wreq = ["kithara-net/client-wreq", "kithara-stream/client-wreq", "kithara-abr/client-wreq"]
-tls-rustls = ["kithara-net/tls-rustls", "kithara-stream/tls-rustls", "kithara-abr/tls-rustls"]
-tls-native = ["kithara-net/tls-native", "kithara-stream/tls-native", "kithara-abr/tls-native"]
+client-reqwest = [
+    "kithara-net/client-reqwest",
+    "kithara-download/client-reqwest",
+    "kithara-stream/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-net/client-wreq",
+    "kithara-download/client-wreq",
+    "kithara-stream/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-net/tls-rustls",
+    "kithara-download/tls-rustls",
+    "kithara-stream/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-net/tls-native",
+    "kithara-download/tls-native",
+    "kithara-stream/tls-native",
+    "kithara-abr/tls-native",
+]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
@@ -61,11 +82,7 @@ hotpath = { workspace = true, optional = true }
 kithara-abr = { workspace = true, default-features = false, features = ["mock"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-hls = { path = ".", default-features = false, features = ["usdt"] }
-kithara-net = { workspace = true, default-features = false, features = [
-    "usdt",
-    "client-reqwest",
-    "tls-rustls",
-] }
+kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "usdt", "hang"] }
 
@@ -80,6 +97,13 @@ wasm-bindgen-test = { workspace = true }
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-net = { workspace = true, default-features = false, features = [
+    "usdt",
+    "client-reqwest",
+    "tls-rustls",
+] }
 
 [lints]
 workspace = true

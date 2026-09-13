@@ -24,14 +24,12 @@ use bytes::Bytes;
 use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig},
     events::EventBus,
     file::{File, FileConfig, FileEvent, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, time::Duration},
-    stream::{
-        Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestHttpServer, TestTempDir,

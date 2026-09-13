@@ -18,7 +18,6 @@ Bridges async producers (network) to sync consumers (decoders). Exposes:
 
 - the sync `Source` trait that decoders read through;
 - the `Stream<T>` wrapper that gives `Source` a `Read + Seek` shape;
-- the pull-driven `Downloader` (struct) and `Peer` (trait) — the workspace's unified HTTP transport;
 - the canonical media vocabulary: `AudioCodec`, `ContainerFormat`, `MediaInfo`, used by every crate that talks about codecs or containers.
 
 ## Usage
@@ -36,14 +35,13 @@ let stream = Stream::new(config).await?;
 - `Source` — sync random-access surface for decoders (`wait_range`, `read_at`, `position`, `len`, `media_info`, `byte_map`, `variant_control`, `abr_handle`).
 - `Stream<T>` — `Read + Seek` wrapper around any `T: StreamType`.
 - `StreamType` — marker for protocol types (`File`, `Hls`) with associated `Config` and `Events`.
-- `dl::Downloader` / `dl::Peer` / `dl::PeerHandle` / `dl::FetchCmd` — shared HTTP pool and pull-driven per-track transport.
 - `AudioCodec` / `ContainerFormat` / `MediaInfo` — canonical media vocabulary, single source of truth.
 
 ## Integration
 
 Architectural waist for bytes entering the decoder: protocol crates implement
-`StreamType` and `dl::Peer`, while decoder/audio crates consume `Stream<T>`.
+`StreamType` and `kithara_download::Peer`, while decoder/audio crates consume `Stream<T>`.
 `AudioCodec`, `ContainerFormat`, and `MediaInfo` are defined here and re-exported
-elsewhere.
+elsewhere. Download orchestration belongs to `kithara-download`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stream) for detailed contracts, invariants, and internals.
