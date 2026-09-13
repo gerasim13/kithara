@@ -379,7 +379,7 @@ impl CiEnvironment {
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
         if let Some(sccache) = &sccache {
-            insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
+            insert(&mut vars, "SCCACHE_BASEDIR", &project_root);
             insert(&mut vars, "SCCACHE_CACHE_SIZE", &sccache.paths.cache_size);
             insert(&mut vars, "SCCACHE_DIR", &sccache.paths.directory);
             if let Some(server_uds) = &sccache.paths.server_uds {
@@ -969,7 +969,7 @@ mod tests {
             let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
             let project = root.join("project");
             fs::create_dir_all(&project).unwrap();
-            let ctx = Ctx::new(project, ProjectConfig::default());
+            let ctx = Ctx::new(project.clone(), ProjectConfig::default());
             let config = super::super::config::fixture();
 
             let environment =
@@ -1005,6 +1005,12 @@ mod tests {
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
                 Some(cache_root.join("sccache-slots/slot-0").as_os_str())
             );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_BASEDIR"))
+                    .map(OsString::as_os_str),
+                Some(project.as_os_str())
+            );
+            assert!(vars.get(OsStr::new("SCCACHE_BASEDIRS")).is_none());
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_SERVER_UDS"))
                     .map(OsString::as_os_str),
