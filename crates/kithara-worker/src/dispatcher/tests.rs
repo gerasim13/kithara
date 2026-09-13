@@ -621,15 +621,25 @@ mod native {
         assert_eq!(streak, 0);
     }
 
+    /// A backpressured task ticks no more often than its park budget allows.
+    ///
+    /// The ceiling comes from the window that was actually observed, not from
+    /// the sleep that was requested: on a loaded host that sleep overshoots,
+    /// and a fixed tick count then fails a scheduler that parked correctly
+    /// through every one of the extra milliseconds.
     #[kithara::test(native, flash(false))]
     fn scheduler_does_not_busy_spin_on_backpressure() {
+        const OBSERVE_WINDOW: Duration = Duration::from_millis(80);
+        const PARK_BUDGET: Duration = Duration::from_millis(20);
+        const STARTUP_AND_ROUNDING_TICKS: usize = 2;
+
         let ticks = Arc::new(AtomicUsize::new(0));
         let (first_tick, first_tick_rx) = mpsc::channel();
         let worker = crate::Worker::new(crate::WorkerConfig::new());
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
                 .name("backpressure-park-test")
-                .wait_timeout(Duration::from_millis(20))
+                .wait_timeout(PARK_BUDGET)
                 .build(),
         );
         let handle = dispatcher
@@ -645,13 +655,19 @@ mod native {
         first_tick_rx
             .recv_timeout(Instant::now() + Duration::from_secs(2))
             .expect("backpressured task must start");
-        thread::sleep(Duration::from_millis(80));
+        let window_started = Instant::now();
+        thread::sleep(OBSERVE_WINDOW);
+        let window = window_started.elapsed();
 
         let observed = ticks.load(Ordering::Relaxed);
         drop(handle);
+        let budgeted_parks =
+            usize::try_from(window.as_millis() / PARK_BUDGET.as_millis()).unwrap_or(usize::MAX);
+        let ceiling = budgeted_parks.saturating_add(STARTUP_AND_ROUNDING_TICKS);
         assert!(
-            observed < 16,
-            "backpressured task ran {observed} times in 80ms despite a 20ms park budget"
+            observed <= ceiling,
+            "backpressured task ran {observed} times in {window:?} despite a {PARK_BUDGET:?} \
+             park budget, above the {ceiling} that window allows"
         );
     }
 
