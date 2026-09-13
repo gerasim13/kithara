@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
-    LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
-    config::CiConfig, run::CacheGroup,
+    LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, SCCACHE_SLOT_CACHE_NAMESPACE,
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -382,6 +382,7 @@ impl CiEnvironment {
             insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
             insert(&mut vars, "SCCACHE_CACHE_SIZE", &sccache.paths.cache_size);
             insert(&mut vars, "SCCACHE_DIR", &sccache.paths.directory);
+            insert(&mut vars, "SCCACHE_IDLE_TIMEOUT", SCCACHE_IDLE_TIMEOUT);
             if let Some(server_uds) = &sccache.paths.server_uds {
                 insert(&mut vars, "SCCACHE_SERVER_UDS", server_uds);
             }
@@ -1020,6 +1021,11 @@ mod tests {
                 vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
                     .map(OsString::as_os_str),
                 Some(config.host.sccache_slot_size().unwrap().as_str().as_ref())
+            );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_IDLE_TIMEOUT"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new(super::super::SCCACHE_IDLE_TIMEOUT))
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());

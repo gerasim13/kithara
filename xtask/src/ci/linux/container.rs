@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
-use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
+use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
 const CACHE_ENVIRONMENT: [&str; 6] = [
@@ -128,6 +128,7 @@ impl Container<'_> {
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
+        environment.push(format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"));
         // The S3 backend is shared, but each runner needs its own daemon
         // endpoint. An explicit socket lets the lane start that daemon before
         // Cargo's parallel compilers can race to start it.
@@ -186,5 +187,16 @@ mod tests {
                 "{name} is missing from {environment:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_runner_keeps_its_ready_cache_daemon_available_for_its_job() {
+        let host = super::super::profile::tests::host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+
+        assert!(
+            Container::environment(runner)
+                .contains(&format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"))
+        );
     }
 }

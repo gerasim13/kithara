@@ -14,11 +14,13 @@ ignored = ["serial_test"]
 name = "test_server"
 path = "bin/test_server.rs"
 test = false
+required-features = ["all"]
 
 [[bin]]
 name = "wasm_test_runner"
 path = "bin/wasm_test_runner.rs"
 test = false
+required-features = ["all"]
 
 [features]
 default = ["all"]
