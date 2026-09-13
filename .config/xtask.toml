@@ -87,12 +87,15 @@ top_contours = 10
 
 [health]
 # Crates excluded from the generic powerset need product-context checks in the
-# owning `just deps hack` recipe.
+# owning `just deps hack` recipe. The integration test root is held out because
+# its closures name a target, not a feature set: `wasm` is the browser build and
+# cannot compile natively, and the test lanes build each closure on its target.
 feature_powerset_exclude = [
   "kithara-play",
   "kithara-app",
   "kithara-fuzz",
   "kithara-warp",
+  "kithara-integration-tests",
 ]
 # The package whose public API is a contract outside this workspace: the facade
 # a consumer depends on. Internal crates are free to break (AGENTS.md says so)
