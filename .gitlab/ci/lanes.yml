@@ -52,7 +52,14 @@ lanes:integration-regressions:
     - just ci run linux-integration-regressions
 
 lanes:usdt:
-  extends: .lane-job
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-integration, rules]
+  stage: lanes
+  timeout: 180 minutes
+  needs: []
   script:
     - just ci run linux-usdt
 

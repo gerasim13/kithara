@@ -29,7 +29,6 @@ kithara = { workspace = true, features = ["download", "full", "queue", "mock", "
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 cochlea-features = { workspace = true }
 firewheel = { workspace = true }

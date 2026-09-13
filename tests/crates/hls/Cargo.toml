@@ -24,7 +24,6 @@ usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 kithara = { workspace = true, features = ["download", "full", "queue", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 bytes = { workspace = true }
 hex = { workspace = true }
