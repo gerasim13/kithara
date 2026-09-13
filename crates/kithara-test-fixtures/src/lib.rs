@@ -7,10 +7,10 @@
 //! for test parameters; signal primitives also support assertions and their own
 //! tests.
 
-/// Every accessor that reads the store carries its own `cfg`, because the store
-/// is a host filesystem the browser cannot reach; an `embed` accessor carries
-/// its bytes instead and compiles everywhere. The store itself stays native, and
-/// the wasm lane reaches the rest through `SignalAsset` over HTTP.
+/// Native fixture generation is opt-in through `native-fixtures`: every native
+/// accessor reads its prepared entry from the host store, which the browser
+/// cannot reach. Without the feature only the portable signal naming compiles,
+/// and the wasm lane reaches fixtures through `SignalAsset` over HTTP.
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod asset;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]

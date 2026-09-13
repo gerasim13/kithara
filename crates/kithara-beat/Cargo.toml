@@ -54,5 +54,8 @@ serde_json = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 serde_yaml_ng = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true

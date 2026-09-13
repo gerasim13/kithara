@@ -22,13 +22,21 @@ pub mod analysis_pass;
     any(target_os = "macos", target_os = "ios")
 ))]
 pub mod apple_warmup;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "all",
+    not(target_arch = "wasm32"),
+    not(target_os = "android")
+))]
 pub mod architecture_trace;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod asset_fixture;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod assets_ext;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "all",
+    not(target_arch = "wasm32"),
+    not(target_os = "android")
+))]
 pub mod audio_artifact;
 #[cfg(feature = "all")]
 pub mod audio_mock;
@@ -84,6 +92,8 @@ pub mod net_fixture;
 pub mod offline;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod packed_audio;
+#[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
+pub mod pcm_oracle;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod reads;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -159,5 +169,5 @@ pub use test_server::{
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 
-#[cfg(any(feature = "all", feature = "wasm"))]
+#[cfg(any(feature = "audio", feature = "wasm"))]
 pub mod event;

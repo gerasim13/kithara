@@ -1025,7 +1025,7 @@ mod tests {
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_IDLE_TIMEOUT"))
                     .map(OsString::as_os_str),
-                Some(OsStr::new(super::super::SCCACHE_IDLE_TIMEOUT))
+                Some(OsStr::new(SCCACHE_IDLE_TIMEOUT))
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());

@@ -1,4 +1,4 @@
-use std::{fs, io::Cursor, process::Command};
+use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory},
@@ -349,7 +349,9 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
         mp4_bytes.extend_from_slice(&segment);
     }
 
-    let samples = decode_fragment_with_ffmpeg(&mp4_bytes, &format!("packaged {label}"));
+    let samples = kithara_integration_tests::pcm_oracle::decode(&mp4_bytes)
+        .await
+        .unwrap_or_else(|error| panic!("packaged {label}: {error:#}"));
     assert_valid_pcm_samples(&samples, &format!("packaged {label} decoded PCM"));
 
     assert!(
@@ -376,9 +378,12 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await)]
-#[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await)]
-#[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia, flac_fragment().await)]
+#[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await))]
+#[cfg_attr(target_os = "android", case::aac_lc_symphonia_product_android("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::default(), aac_fragment().await))]
+#[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await))]
+#[cfg_attr(target_os = "android", case::aac_he_v2_symphonia_product_android("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::default(), he_fragment().await))]
+#[cfg_attr(not(target_os = "android"), case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia, flac_fragment().await))]
+#[cfg_attr(target_os = "android", case::flac_symphonia_product_android("flac_symphonia", AudioCodec::Flac, DecoderBackend::default(), flac_fragment().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_lc_apple("aac_lc_apple", AudioCodec::AacLc, DecoderBackend::Apple, aac_fragment().await),
@@ -543,47 +548,6 @@ fn assert_valid_pcm_samples(samples: &[f32], context: &str) {
         samples.iter().any(|sample| sample.abs() > 0.01),
         "{context}: decoded PCM unexpectedly looks silent"
     );
-}
-
-fn decode_fragment_with_ffmpeg(bytes: &[u8], context: &str) -> Vec<f32> {
-    let temp_dir = tempfile::tempdir().expect("create temp dir for ffmpeg decode");
-    let input_path = temp_dir.path().join("fragment.m4a");
-    fs::write(&input_path, bytes).unwrap_or_else(|error| {
-        panic!("{context}: write temporary MP4 fragment failed: {error}");
-    });
-
-    let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input_path.to_str().expect("temp path utf-8"),
-            "-f",
-            "f32le",
-            "-acodec",
-            "pcm_f32le",
-            "-",
-        ])
-        .output()
-        .unwrap_or_else(|error| panic!("{context}: launching ffmpeg failed: {error}"));
-
-    assert!(
-        output.status.success(),
-        "{context}: ffmpeg decode failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        output.stdout.len() % 4,
-        0,
-        "{context}: ffmpeg returned a non-f32le byte stream"
-    );
-
-    output
-        .stdout
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
 }
 
 fn contains_direction_window(samples: &[f32], channels: usize, expected: SignalDirection) -> bool {

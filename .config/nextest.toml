@@ -64,6 +64,20 @@ retries = 1
 [profile.ci.junit]
 path = "junit.xml"
 
+# Android runs a whole binary behind the first nextest request. The adapter
+# owns its one-hour process deadline and preserves partial libtest results.
+# Nextest reports slow batches without killing an already-passed first test.
+[profile.android]
+test-threads = 1
+retries = 0
+fail-fast = false
+slow-timeout = { period = "600s" }
+leak-timeout = "2s"
+
+[profile.android.junit]
+path = "junit.xml"
+store-failure-output = true
+
 # Fast-only profile: heavy tests are excluded via -E filter in justfile.
 [profile.fast]
 fail-fast = false

@@ -8,7 +8,7 @@ mod host;
 mod image;
 mod lane;
 mod linux;
-mod process;
+pub(crate) mod process;
 mod release;
 mod run;
 mod topology;

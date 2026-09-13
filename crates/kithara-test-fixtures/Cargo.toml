@@ -23,6 +23,7 @@ native-fixtures = [
     "dep:cochlea-render",
     "dep:cochlea-score",
     "dep:delegate",
+    "dep:fs4",
     "dep:futures-lite",
     "dep:hls_m3u8",
     "dep:inventory",
@@ -40,6 +41,7 @@ native-fixtures = [
     "dep:kithara-test-macros",
     "dep:rayon",
     "dep:reqwest",
+    "dep:serde_json",
     "dep:url",
 ]
 
@@ -56,17 +58,20 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-encode = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# `PcmSource` and `EncodedTrack`. The crate refuses to build with no backend,
-# and `ffmpeg` is the one the build script already pulls in, so this adds no
-# compilation.
-kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "ffmpeg", "tls-rustls"], optional = true }
+kithara-encode = { workspace = true, default-features = false, optional = true }
 # `AudioCodec` for the fMP4 sample entries.
-kithara-stream = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"], optional = true }
+kithara-stream = { workspace = true, default-features = false, optional = true }
 
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 delegate = { workspace = true, optional = true }
+fs4 = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [build-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
@@ -90,6 +95,7 @@ cbc = { workspace = true, optional = true }
 cochlea-render = { workspace = true, optional = true }
 cochlea-score = { workspace = true, optional = true }
 delegate = { workspace = true, optional = true }
+fs4 = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
 hex = { workspace = true }
 hls_m3u8 = { workspace = true, optional = true }
@@ -104,7 +110,7 @@ toml = { workspace = true }
 url = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
+kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
@@ -118,6 +124,12 @@ tempfile = { workspace = true }
 tiny_http = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-analysis = { workspace = true, features = ["symphonia"] }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true
