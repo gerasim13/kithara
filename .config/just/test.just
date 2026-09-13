@@ -260,6 +260,7 @@ coverage:
       --ignore-default-filter || test_rc=$?
     cargo llvm-cov nextest --no-report \
       -p kithara-app \
+      --features kithara-app/backend-cpal \
       --cargo-profile test-release \
       --ignore-default-filter \
       -E 'package(kithara-app) & test(/^gui::/)' || test_rc=$?
