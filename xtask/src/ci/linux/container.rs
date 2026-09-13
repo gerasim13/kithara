@@ -23,7 +23,7 @@ const CACHE_ENVIRONMENT: [&str; 7] = [
     // GitHub checks each job out under this stable container path. Without a
     // base directory sccache hashes the host-specific checkout path, so two
     // otherwise identical runners cannot reuse Rust objects.
-    "SCCACHE_BASEDIR=/runner/_work/kithara/kithara",
+    "SCCACHE_BASEDIRS=/runner/_work/kithara/kithara",
     // Well under the volume it lives on, and sccache evicts by least use
     // rather than growing until the disk decides for it.
     "SCCACHE_CACHE_SIZE=100G",

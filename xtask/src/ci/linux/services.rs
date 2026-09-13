@@ -486,7 +486,7 @@ mod tests {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
         assert!(
-            text.contains("--env SCCACHE_BASEDIR=/runner/_work/kithara/kithara"),
+            text.contains("--env SCCACHE_BASEDIRS=/runner/_work/kithara/kithara"),
             "{text}"
         );
     }
