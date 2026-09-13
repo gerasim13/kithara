@@ -15,7 +15,7 @@ mod source_helper;
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 #[cfg(not(target_arch = "wasm32"))]
 mod loader_fixture;
-#[cfg(all(feature = "usdt", target_os = "macos"))]
+#[cfg(feature = "usdt")]
 pub(crate) use loader_fixture::wait_loaded;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use loader_fixture::{LocalWav, append_loaded};
@@ -29,9 +29,9 @@ mod cpal_cold_seek_synthetic;
 mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
-#[cfg(all(feature = "usdt", target_os = "macos"))]
+#[cfg(feature = "usdt")]
 mod flac_swallow_fixture;
-#[cfg(all(feature = "usdt", target_os = "macos"))]
+#[cfg(feature = "usdt")]
 mod full_playthrough_census;
 mod hls_seek_near_end_stress;
 mod loader_lanes;

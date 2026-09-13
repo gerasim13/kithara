@@ -8,7 +8,7 @@ publish = false
 autotests = false
 
 [package.metadata.cargo-machete]
-ignored = ["serial_test"]
+ignored = ["kithara-test-utils", "serial_test"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
