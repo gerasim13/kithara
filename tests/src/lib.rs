@@ -11,9 +11,9 @@
     clippy::unwrap_used
 )]
 
-#[cfg(feature = "all")]
+#[cfg(any(feature = "all", feature = "wasm"))]
 pub mod abr_fixtures;
-#[cfg(feature = "all")]
+#[cfg(any(feature = "all", feature = "wasm"))]
 pub use abr_fixtures::auto;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod analysis_pass;
