@@ -240,7 +240,11 @@ impl RawSnapshot {
                 frontier,
                 context: context.clone(),
             });
-        Some(RenderState { context, snapshot })
+        Some(RenderState {
+            #[cfg(feature = "render")]
+            context,
+            snapshot,
+        })
     }
 }
 
@@ -320,9 +324,9 @@ pub struct RenderSnapshot {
 }
 
 /// One coherent callback context and optional actual presentation base.
-#[cfg(feature = "render")]
 #[derive(Clone, Debug)]
 pub(crate) struct RenderState {
+    #[cfg(feature = "render")]
     pub(crate) context: RenderContext,
     pub(crate) snapshot: Option<RenderSnapshot>,
 }
@@ -405,7 +409,9 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{RenderPublisher, RenderSnapshot};
+    use super::RenderPublisher;
+    #[cfg(feature = "render")]
+    use super::RenderSnapshot;
     use crate::{
         PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
         SyncMode, TransportRevision, WarpMapRevision,

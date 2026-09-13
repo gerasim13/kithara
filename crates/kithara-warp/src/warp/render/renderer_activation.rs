@@ -388,6 +388,15 @@ where
         }
         let warp_map =
             self.map_at_exact_frontier(self.prepared_context.as_ref(), meta.frame_offset);
+        if let Some(activation) = warp_map {
+            self.prepared_context = self.prepared_context.take().map(|snapshot| {
+                snapshot.prepare_at(
+                    meta.frame_offset,
+                    activation.output(),
+                    activation.revision(),
+                )
+            });
+        }
         let output_rounding_remainder = warp_map.and_then(|activation| {
             self.prepared_context.as_ref().and_then(|snapshot| {
                 snapshot

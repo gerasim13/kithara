@@ -88,6 +88,7 @@ impl RenderContext {
         .map(|context| context.with_rate(self.mode, self.rate))
     }
 
+    #[cfg(feature = "render")]
     pub(crate) fn output_rounding_remainder_at(&self, beat: SessionBeat) -> Option<f64> {
         let beats = self.session_beats.as_ref()?;
         let output_frames = i64::from(self.output_frames.end)
@@ -216,6 +217,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "render")]
     #[kithara::test]
     fn activation_keeps_the_absolute_host_frame_rounding_phase() {
         let context = RenderContext::new(

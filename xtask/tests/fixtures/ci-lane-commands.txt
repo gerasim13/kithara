@@ -1002,58 +1002,58 @@
 # deep-warp / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deep-warp / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --flash=off -p kithara-warp --features stretch-signalsmith
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
     CARGO_BUILD_JOBS=2
-  just test run --flash=off -p kithara-play-tests --test play -E test(~sync_) - test(~sync_listening) - test(~no_sync_)
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
     CARGO_BUILD_JOBS=2
 # deps-deny / branch
   <require os> linux

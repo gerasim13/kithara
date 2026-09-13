@@ -594,6 +594,8 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
 #[cfg(feature = "stretch-signalsmith")]
 fn vinyl_varispeed_preserves_periodic_attack_positions() {
     const SPEED: f32 = 1.25;
+    const SPEED_NUMERATOR: usize = 5;
+    const SPEED_DENOMINATOR: usize = 4;
     const PERIOD: usize = 4_096;
     const FRAMES: usize = PERIOD * 6;
 
@@ -610,7 +612,8 @@ fn vinyl_varispeed_preserves_periodic_attack_positions() {
         .copied()
         .collect();
     for source_frame in (PERIOD..FRAMES).step_by(PERIOD) {
-        let expected = (source_frame as f32 / SPEED).round() as usize;
+        let expected =
+            (2 * source_frame * SPEED_DENOMINATOR + SPEED_NUMERATOR) / (2 * SPEED_NUMERATOR);
         let start = expected.saturating_sub(256);
         let end = expected.saturating_add(257).min(mono.len());
         let actual = mono[start..end]

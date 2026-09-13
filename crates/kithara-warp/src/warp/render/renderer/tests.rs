@@ -104,7 +104,8 @@ fn planned_renderer(controls: Arc<StretchControls>) -> (WarpRenderer, Arc<Region
 fn planned_renderer_with_publisher(
     controls: Arc<StretchControls>,
 ) -> (WarpRenderer, Arc<RegionPlanSlot>, RenderPublisher) {
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let rate_target = controls.rate_target();
+    let config = WarpConfig::builder().stretch(controls).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let context = RenderContext::new(
@@ -115,7 +116,7 @@ fn planned_renderer_with_publisher(
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(SyncMode::HostSync, controls.rate_target());
+    .with_rate(SyncMode::HostSync, rate_target);
     publisher.publish(
         &context,
         PresentationFrontier::builder()
