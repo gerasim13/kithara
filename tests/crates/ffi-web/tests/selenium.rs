@@ -1502,6 +1502,7 @@ async fn build_webdriver(
                 "--disable-dev-shm-usage",
                 "--enable-features=SharedArrayBuffer",
                 "--autoplay-policy=no-user-gesture-required",
+                "--mute-audio",
                 "--js-flags=--experimental-wasm-threads",
             ] {
                 caps.add_arg(arg)
@@ -1533,6 +1534,10 @@ async fn build_webdriver(
             prefs
                 .set("dom.workers.requestAnimationFrame", true)
                 .map_err(|err| format!("failed to set firefox worker pref: {err}"))?;
+            // Playback still runs and advances; only the device output is silent.
+            prefs
+                .set("media.volume_scale", "0.0")
+                .map_err(|err| format!("failed to set firefox volume pref: {err}"))?;
             // Everything the page loads is on 127.0.0.1. A profile that
             // inherits a host proxy sends the browser's own startup traffic
             // through it, and a proxy that wants credentials opens an auth
