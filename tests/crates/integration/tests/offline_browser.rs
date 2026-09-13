@@ -19,6 +19,8 @@ const CHANNELS: usize = 2;
 const BLOCK_FRAMES: usize = 512;
 const WARMUP_BLOCKS: usize = 8;
 const MEASURE_BLOCKS: usize = 32;
+/// Renders allowed while collecting `MEASURE_BLOCKS` filled blocks.
+const DELIVERY_ATTEMPTS: usize = MEASURE_BLOCKS * 16;
 const TAP_CAPACITY: usize = 65_536;
 const SILENCE_THRESHOLD: f32 = 0.001;
 /// The signal route serves every tone at full scale, so a sine has RMS
@@ -71,17 +73,50 @@ async fn render_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
     rendered
 }
 
+/// Blocks the graph filled, in render order.
+///
+/// A render the decoder could not fill writes what it had, zero-fills the rest
+/// and counts an underrun, so averaging every rendered block together reads how
+/// the OS scheduled two threads rather than what the fixture carries. That is
+/// what put this suite below the band on a loaded stress runner. Rendering
+/// until a fixed number of blocks come back filled keeps the measurement the
+/// same size in both lanes, and gets there without pacing the loop against
+/// wall-clock time, which an offline render has no reason to wait for.
+async fn render_filled_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
+    let wanted = blocks * BLOCK_FRAMES * CHANNELS;
+    let mut filled = Vec::with_capacity(wanted);
+    let mut renders = 0usize;
+    while filled.len() < wanted {
+        assert!(
+            renders < DELIVERY_ATTEMPTS,
+            "the graph filled {} of {blocks} blocks across {renders} renders",
+            filled.len() / (BLOCK_FRAMES * CHANNELS)
+        );
+        renders += 1;
+        let (block, underran) = worker
+            .call(async move |player| {
+                let before = player.metrics().underruns();
+                let block = player.render(BLOCK_FRAMES).await;
+                (block, player.metrics().underruns() != before)
+            })
+            .await;
+        if !underran {
+            filled.extend_from_slice(&block);
+        }
+    }
+    filled
+}
+
 /// The offline render carries the fixture's signal, read off the audio.
 ///
-/// Whether the feeder is ever a block short reads how the OS scheduled two
-/// threads: the render loop pulls as fast as the host answers while the decoder
-/// runs on its own. The count is `0` across repeated runs on an idle machine,
-/// with bit-identical output, and `1` on a loaded stress runner. It cannot be
-/// made structural here either, because a browser read never parks. So the
-/// render is judged on what it produced — level, headroom, and no gap a block
-/// wide — which reads the same in both lanes. That a source with nothing ready
-/// renders silence and counts an underrun, and a ready one counts nothing, is
-/// pinned on the audio thread in `rt_metrics`.
+/// Only the blocks the graph filled are measured, because a browser read never
+/// parks and a starved one therefore zero-fills instead of waiting. The player
+/// names those blocks itself by counting an underrun, and how many there are
+/// reads how the OS scheduled two threads: none on an idle machine, runs of
+/// them on a loaded stress runner, whose inserted silence averaged the level
+/// below the band. The silence assertion then holds that counter to its word,
+/// because a gap inside a block the player did not mark survives into the
+/// measurement.
 #[kithara::test(
     tokio,
     browser,
@@ -92,7 +127,7 @@ async fn render_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
 async fn offline_render_carries_fixture_signal() {
     let worker = playing_worker().await;
     let _warmup = render_blocks(&worker, WARMUP_BLOCKS).await;
-    let measured = render_blocks(&worker, MEASURE_BLOCKS).await;
+    let measured = render_filled_blocks(&worker, MEASURE_BLOCKS).await;
 
     assert_eq!(measured.len(), MEASURE_BLOCKS * BLOCK_FRAMES * CHANNELS);
     let level = rms(&measured);

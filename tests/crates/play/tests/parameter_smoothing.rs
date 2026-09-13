@@ -26,6 +26,7 @@ use crate::bufpool_ext::{TestPools, pools};
 struct Consts;
 
 impl Consts {
+    const AUDIBLE_PEAK: f32 = 0.1;
     const BLOCK_FRAMES: usize = 480;
     const CHANNELS: usize = 2;
     const EQ_SMOOTH_SECONDS: f32 = 0.01;
@@ -86,6 +87,12 @@ fn peak(pcm: &[f32]) -> f32 {
         .fold(0.0_f32, |acc, sample| acc.max(sample.abs()))
 }
 
+/// A playing sine deck, settled and confirmed audible.
+///
+/// Audibility is confirmed by waiting for an audible block rather than by
+/// reading the settle window's last one: an offline render the decoder could
+/// not fill is zero-filled, and one such block at the end of that window reads
+/// exactly like a deck that never started.
 pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let pools = pools();
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
@@ -125,11 +132,12 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
             deck.play();
         })
         .await;
-    let warm = observe(&harness, Consts::SETTLE_BLOCKS).await;
-    assert!(
-        last_block_peak(&warm) > 0.1,
-        "sine must be audible before the parameter change"
-    );
+    observe(&harness, Consts::SETTLE_BLOCKS).await;
+    let (_, audible) = observe_until(&harness, |block| {
+        last_block_peak(block) > Consts::AUDIBLE_PEAK
+    })
+    .await;
+    assert!(audible, "sine must be audible before the parameter change");
     (harness, id.as_u64())
 }
 
