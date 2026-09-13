@@ -697,6 +697,30 @@ fn every_gitlab_lane_job_runs_the_kinds_its_lane_declares() {
     assert!(checked > 0, "no GitLab job runs a declared lane");
 }
 
+#[test]
+fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
+    let config = GitlabConfig::load(workspace_root());
+    assert_eq!(
+        config.admitted_kinds("deps:semver"),
+        BTreeSet::from(["release".to_owned(), "weekly".to_owned()])
+    );
+
+    for job in ["release:xcframework", "release:android"] {
+        let needs = config
+            .effective_value(job, "needs")
+            .expect("release build declares its prerequisites");
+        assert!(
+            needs
+                .as_sequence()
+                .is_some_and(|needs| needs.iter().any(|need| {
+                    need["job"].as_str() == Some("deps:semver")
+                        && need["optional"].as_bool() == Some(true)
+                })),
+            "{job} must wait for semver when a release schedules it"
+        );
+    }
+}
+
 // The other direction. A lane that names the pipelines it belongs to and that no
 // job runs is a lane declared into a schedule it never reaches - the failure the
 // broadcast lane sat in for months, invisible because nothing compared the two.

@@ -1339,8 +1339,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["release"]
+kinds = ["weekly", "release"]
 timeout_minutes = 60
 fetch_depth = 0
 
