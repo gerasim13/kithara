@@ -204,15 +204,8 @@ always = ["backend-cpal"]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# The model rule belongs to every crate that offers the choice, and the facade
-# offers it without re-exporting `beat-backend`, so a marker read there reached
-# only the crate the backend lives in. `beat-nn` is the name both carry: it
-# selects the neural detector without selecting its bytes, which the backend
-# refuses with compile_error!. `beat-nn-full-int8` inherits the model
-# kithara-beat cannot produce on a runner; it costs no coverage to leave out,
-# because it compiles the same `include_bytes!(env!(..))` arm `beat-nn-full`
-# does. cargo-hack refuses a feature named by both lists, so what stays
-# mutually exclusive is what is still selectable.
+# `beat-nn` scopes this rule to both crates and is invalid without model bytes.
+# Full-int8 is excluded because its model cannot be produced on CI runners.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
 never = ["beat-nn", "beat-nn-full-int8"]
@@ -525,6 +518,9 @@ features = ["flash"]
 default = false
 features = ["no-block"]
 
+[test.net_backends.none]
+features = []
+
 [test.net_backends.wreq]
 features = [
   "client-wreq",
@@ -561,6 +557,48 @@ prefix_args = [
   "kithara-ffi-web-tests",
   "--exclude",
   "kithara-ffi-web-analysis-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.android]
+program = "cargo"
+default_backend = "wreq"
+default_flash = true
+default_no_block = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-abr-tests",
+  "-p",
+  "kithara-assets-tests",
+  "-p",
+  "kithara-audio-tests",
+  "-p",
+  "kithara-bufpool-tests",
+  "-p",
+  "kithara-decode-tests",
+  "-p",
+  "kithara-events-tests",
+  "-p",
+  "kithara-file-tests",
+  "-p",
+  "kithara-hls-tests",
+  "-p",
+  "kithara-integration-tests",
+  "-p",
+  "kithara-net-tests",
+  "-p",
+  "kithara-platform-tests",
+  "-p",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
+  "-p",
+  "kithara-storage-tests",
+  "-p",
+  "kithara-stream-tests",
   "--cargo-profile",
   "test-release",
 ]
@@ -838,6 +876,7 @@ prefix_args = [
 # assessment, release and publish, the platform commands, the xtask self-cache,
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
+default_backend = "none"
 program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
 prefix_args = [
@@ -2255,6 +2294,11 @@ steps = [
   { args = [
     "platform",
     "android",
+    "clippy",
+  ], label = "Android device Clippy" },
+  { args = [
+    "platform",
+    "android",
     "build",
   ], label = "Android native build" },
 ]
@@ -2262,36 +2306,27 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 45
 
-# The emulator, the connected suite, and the shutdown are one job: the tests
-# only mean anything while the device this job booted is still alive, and a
-# device left running would poison the next Android job on the host. The
-# emulator runs wherever the machine's own architecture matches the guest's, so
-# the lane pins tools rather than a platform.
-#
-# The libraries and the bindings come from the job that builds them, and Gradle
-# is told to skip generating them: a job that arrives without them builds an
-# archive with no library in it and fails on the device with
-# `UnsatisfiedLinkError`, minutes after the emulator came up.
+# CI and prepared local runners execute the same complete baseline. The test
+# command builds the JNI libraries before it acquires an emulator.
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
 os = "macos"
-tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
-left_behind_by = "Android build"
-left_behind = [
-  "android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so",
-  "android/lib/build/generated/uniffi/kotlin",
-]
+tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
+  { args = [
+    "platform",
+    "android",
+    "clippy",
+  ], label = "Android device Clippy" },
   { args = [
     "platform",
     "android",
     "test",
     "--avd",
     "{pin.android_avd}",
-    "--skip-build",
-  ], label = "Android connected tests" },
+  ], label = "Android baseline tests" },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
@@ -2631,6 +2666,7 @@ steps = ["nightly_retained"]
 exclude_packages = []
 
 [ext.android]
+test_lane = "android"
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.

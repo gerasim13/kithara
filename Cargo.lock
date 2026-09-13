@@ -4651,6 +4651,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "serial_test",
 ]
@@ -4695,6 +4696,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
 ]
@@ -4742,6 +4744,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "num-traits",
  "url",
@@ -4786,6 +4789,7 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-storage",
+ "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4810,6 +4814,7 @@ dependencies = [
  "bytes",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "rkyv",
  "tempfile",
@@ -4873,6 +4878,7 @@ dependencies = [
  "assert_no_alloc",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "serial_test",
@@ -4888,6 +4894,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4939,6 +4946,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "url",
@@ -4956,6 +4964,7 @@ dependencies = [
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
+ "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4971,6 +4980,7 @@ name = "kithara-bufpool-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "serial_test",
 ]
@@ -5001,6 +5011,7 @@ dependencies = [
  "kithara-signal",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5029,6 +5040,7 @@ dependencies = [
  "futures",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
@@ -5043,6 +5055,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha4"
 dependencies = [
+ "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "proc-macro2",
@@ -5127,6 +5140,7 @@ dependencies = [
  "ffmpeg-next",
  "kithara-bufpool",
  "kithara-stream",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5143,6 +5157,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
 ]
@@ -5169,6 +5184,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-events",
+ "kithara-test-dylib",
  "kithara-test-utils",
 ]
 
@@ -5291,6 +5307,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "serial_test",
@@ -5318,6 +5335,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "serial_test",
  "tempfile",
@@ -5378,6 +5396,7 @@ dependencies = [
  "hex",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
@@ -5438,7 +5457,9 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-devtools",
+ "kithara-encode",
  "kithara-events",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "memory-stats",
@@ -5453,6 +5474,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tokio-stream",
  "toml 1.1.2+spec-1.1.0",
  "tower",
@@ -5528,6 +5550,7 @@ dependencies = [
  "futures",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "unimock",
  "url",
@@ -5559,6 +5582,7 @@ dependencies = [
  "futures",
  "js-sys",
  "kithara-platform",
+ "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5583,6 +5607,7 @@ name = "kithara-platform-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-test-dylib",
  "kithara-test-utils",
 ]
 
@@ -5619,6 +5644,7 @@ dependencies = [
  "kithara-play",
  "kithara-signal",
  "kithara-stream",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5649,6 +5675,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
@@ -5697,6 +5724,7 @@ dependencies = [
  "kithara-app",
  "kithara-devtools",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
@@ -5717,6 +5745,7 @@ dependencies = [
  "kithara-output",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-worker",
@@ -5769,6 +5798,7 @@ dependencies = [
  "crossbeam-queue",
  "delegate",
  "fieldwork",
+ "fs4",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
@@ -5791,6 +5821,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-dylib",
  "kithara-test-utils",
 ]
 
@@ -5824,6 +5855,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "futures",
  "kithara",
+ "kithara-test-dylib",
  "kithara-test-utils",
  "thiserror 2.0.18",
 ]
@@ -5842,6 +5874,7 @@ dependencies = [
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5851,6 +5884,16 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-test-dylib"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -5864,6 +5907,7 @@ dependencies = [
  "cochlea-render",
  "cochlea-score",
  "delegate",
+ "fs4",
  "futures-lite",
  "hex",
  "hls_m3u8",
@@ -5879,6 +5923,7 @@ dependencies = [
  "kithara-resampler",
  "kithara-signal",
  "kithara-stream",
+ "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5886,6 +5931,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
@@ -12640,6 +12686,7 @@ dependencies = [
  "proc-macro2",
  "regex",
  "reqwest",
+ "roxmltree",
  "rustdoc-types",
  "serde",
  "serde_json",

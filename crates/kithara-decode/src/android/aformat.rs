@@ -12,33 +12,21 @@ pub(crate) struct OwnedFormat {
 }
 
 impl OwnedFormat {
+    pub(crate) fn get_str(&self, key: &CStr) -> Option<&CStr> {
+        let mut value = std::ptr::null();
+        // SAFETY: the format and key are live; value is a writable out-parameter.
+        let found = unsafe { ffi::AMediaFormat_getString(self.raw(), key.as_ptr(), &mut value) };
+        if !found || value.is_null() {
+            return None;
+        }
+        // SAFETY: the successful query returns a NUL-terminated string owned by this format.
+        Some(unsafe { CStr::from_ptr(value) })
+    }
+
     pub(crate) fn get_i32(&self, key: &CStr) -> Option<i32> {
         let mut value = 0;
+        // SAFETY: `raw` is live; `key` is NUL-terminated and `value` is an out-param.
         unsafe { ffi::AMediaFormat_getInt32(self.raw(), key.as_ptr(), &mut value) }.then_some(value)
-    }
-
-    pub(crate) fn get_i64(&self, key: &CStr) -> Result<Option<i64>, AndroidBackendError> {
-        let mut value = 0;
-        Ok(
-            unsafe { ffi::AMediaFormat_getInt64(self.raw(), key.as_ptr(), &mut value) }
-                .then_some(value),
-        )
-    }
-
-    pub(crate) fn get_string(&self, key: &CStr) -> Result<Option<String>, AndroidBackendError> {
-        let mut value = std::ptr::null();
-        let found = unsafe { ffi::AMediaFormat_getString(self.raw(), key.as_ptr(), &mut value) };
-        if !found {
-            return Ok(None);
-        }
-        let value = NonNull::new(value.cast_mut()).ok_or_else(|| {
-            AndroidBackendError::operation("media-format-string", "string pointer was null")
-        })?;
-        Ok(Some(
-            unsafe { CStr::from_ptr(value.as_ptr()) }
-                .to_string_lossy()
-                .into_owned(),
-        ))
     }
 
     pub(crate) fn get_u16(&self, key: &CStr) -> Result<Option<u16>, AndroidBackendError> {
@@ -69,13 +57,15 @@ impl OwnedFormat {
         self.raw.as_ptr()
     }
 
-    pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) -> bool {
-        unsafe { ffi::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) }
+    pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) {
+        // SAFETY: `raw` is live and exclusively borrowed; `key` is NUL-terminated.
+        unsafe { ffi::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) };
     }
 }
 
 impl Drop for OwnedFormat {
     fn drop(&mut self) {
+        // SAFETY: `raw` is live and freed exactly once, here.
         unsafe { ffi::AMediaFormat_delete(self.raw()) };
     }
 }
