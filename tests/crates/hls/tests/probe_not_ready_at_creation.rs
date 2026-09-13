@@ -34,9 +34,14 @@
 //! Determinism: no `sleep`, no real-time pacing, no CPU-load dependence. The
 //! `HlsTestServer` segment gate withholds segment 0's BODY while its size
 //! (HEAD) stays known, so up-front size estimation still completes at
-//! construction but the decoder probe's read window (which spills past the
-//! 44-byte WAV init into the withheld body) reads not-ready data — exactly the
-//! race the load flake hits non-deterministically.
+//! construction but the decoder probe reads not-ready data — exactly the race
+//! the load flake hits non-deterministically.
+//!
+//! The WAV header heads segment 0 rather than riding a separate `EXT-X-MAP`
+//! init, because the withheld unit has to be the one the build reads: a read
+//! never awaits past the unit holding its cursor, so a fixture with an init
+//! leaves construction satisfied by those 44 bytes alone and the withheld
+//! segment asserts nothing.
 use std::num::NonZeroUsize;
 
 use kithara::{
@@ -75,8 +80,8 @@ const SEGMENT_COUNT: usize = 8;
 
 #[kithara::fixture]
 fn fixture_config(hls_stream_header: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsTestServerConfig {
-    let init_segment = Arc::new(hls_stream_header);
-    let pcm = Arc::new(hls_pcm_boundary);
+    let mut media = hls_stream_header;
+    media.extend_from_slice(&hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     HlsTestServerConfig {
@@ -84,8 +89,7 @@ fn fixture_config(hls_stream_header: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsT
         segments_per_variant: SEGMENT_COUNT,
         segment_size: SEGMENT_SIZE,
         segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![pcm]),
-        init_data_per_variant: Some(vec![init_segment]),
+        custom_data_per_variant: Some(vec![Arc::new(media)]),
         variant_bandwidths: Some(vec![1_000_000]),
         ..Default::default()
     }
@@ -132,19 +136,18 @@ fn audio_config(
         .build()
 }
 
-/// The first segment's body never arrives (the WAV init's 44 bytes are open,
-/// but the probe window spills past them into the withheld body). The
-/// init-range gate spins its bounded budget and then `PlayWorker::open` surfaces a
-/// TYPED terminal error — never the transient `Interrupted` retry-signal that
-/// callers `.expect()` away, and never the prior synthetic `Io(TimedOut)`.
+/// The first segment's body never arrives, and it carries the WAV header the
+/// decoder probe opens with. The blocking read spins its bounded budget and
+/// then `PlayWorker::open` surfaces a TYPED terminal error — never the transient
+/// `Interrupted` retry-signal that callers `.expect()` away, and never the
+/// prior synthetic `Io(TimedOut)`.
 ///
-/// Post network-layer fix (Option A): the active variant's init body is
-/// prefetched-and-committed by `Hls::create`, and decoder construction reads
-/// through the BLOCKING off-RT `Stream::read` adapter. So a construction-range
-/// byte that never arrives makes `PlayWorker::open` FAIL — bounded by the blocking
-/// read budget (never a hang to the test timeout), surfacing the STREAM
-/// layer's typed pending payload verbatim — and is NEVER masked by an
-/// audio-minted error type or a synthetic `TimedOut`. The band-aid audio gate
+/// Post network-layer fix (Option A): decoder construction reads through the
+/// BLOCKING off-RT `Stream::read` adapter. So a construction-range byte that
+/// never arrives makes `PlayWorker::open` FAIL — bounded by the blocking read
+/// budget (never a hang to the test timeout), surfacing the STREAM layer's
+/// typed pending payload verbatim — and is NEVER masked by an audio-minted
+/// error type or a synthetic `TimedOut`. The band-aid audio gate
 /// (`InitNotReady`, `gate_init_range`, the rebuild loop) is gone; the typed
 /// terminal comes from the stream layer, not the audio layer.
 #[kithara::test(
@@ -158,10 +161,9 @@ async fn audio_new_bounded_failure_when_first_segment_withheld(
     fixture_config: HlsTestServerConfig,
 ) {
     // Withhold segment 0's BODY for the lifetime of the test; HEAD stays open
-    // so size estimation completes at construction. The WAV init (a separate
-    // resource) is reachable, so the `Hls::create` init prefetch commits; the
-    // decoder probe's read window then spills past the init into the withheld
-    // body, which the blocking read waits the full budget for and then fails.
+    // so size estimation completes at construction. The decoder probe opens at
+    // byte 0, which is inside that withheld body, so the blocking read waits
+    // the full budget for it and then fails.
     let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
     let cancel = CancelToken::never();
     let pools = pools();
