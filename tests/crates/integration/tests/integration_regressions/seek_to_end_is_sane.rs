@@ -4,11 +4,10 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
     download::{Downloader, DownloaderConfig},
-    events::PlayerEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
+    play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
