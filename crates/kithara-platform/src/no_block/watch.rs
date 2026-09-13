@@ -18,6 +18,15 @@ use super::{
 pub(super) enum Tier {
     Blanket,
     Strict,
+    /// A budget on the work a poll did, not on the wall it sat in.
+    ///
+    /// A descheduled poll and a blocked one read the same from the wall: both
+    /// spend it and neither spends CPU. A site whose subject is arithmetic,
+    /// already sanctioned wherever it blocks, has nothing left for a wall
+    /// budget to measure except the host, so it is judged on the CPU its
+    /// unsanctioned remainder spends. A build with no thread CPU clock cannot
+    /// make that statement and makes none.
+    Work,
 }
 
 pin_project! {
@@ -68,11 +77,23 @@ impl<F: Future> Future for Watched<F> {
         };
         let paused = nanos_since(ctx::paused_nanos(), paused_before);
         let wall = wall_start.elapsed().saturating_sub(paused);
-        if wall > *this.budget {
+        let unpaused_cpu = || {
             let paused_cpu = nanos_since(ctx::paused_cpu_nanos(), paused_cpu_before);
-            let cpu =
-                clock::thread_cpu_elapsed(cpu_start).map(|cpu| cpu.saturating_sub(paused_cpu));
-            report::over_budget(this.name, this.loc, wall, cpu, *this.budget, *this.tier);
+            clock::thread_cpu_elapsed(cpu_start).map(|cpu| cpu.saturating_sub(paused_cpu))
+        };
+        let over_budget = match *this.tier {
+            Tier::Work => unpaused_cpu().is_some_and(|cpu| cpu > *this.budget),
+            Tier::Blanket | Tier::Strict => wall > *this.budget,
+        };
+        if over_budget {
+            report::over_budget(
+                this.name,
+                this.loc,
+                wall,
+                unpaused_cpu(),
+                *this.budget,
+                *this.tier,
+            );
         }
         res
     }
@@ -120,5 +141,18 @@ pub fn watch_budget<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Wa
         loc: Location::caller(),
         budget: Duration::from_millis(budget_ms),
         tier: Tier::Strict,
+    }
+}
+
+#[doc(hidden)]
+#[must_use]
+#[track_caller]
+pub fn watch_cpu_budget<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Watched<F> {
+    Watched {
+        fut,
+        name,
+        loc: Location::caller(),
+        budget: Duration::from_millis(budget_ms),
+        tier: Tier::Work,
     }
 }
