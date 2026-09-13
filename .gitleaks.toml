@@ -21,4 +21,5 @@ targetRules = ["generic-api-key"]
 paths = [
   '''^assets/drm/index-(shq|slossless|slq|smq)-a1\.m3u8$''',
   '''^(?:tests/src/native|crates/kithara-test-utils/src)/hls_stream\.rs$''',
+  '''^android/lib/src/androidTest/kotlin/com/kithara/HermeticFixtures\.kt$''',
 ]
