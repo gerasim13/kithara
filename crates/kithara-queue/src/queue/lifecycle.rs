@@ -105,8 +105,12 @@ where
             self.set_status(id, TrackStatus::Loaded);
             if self.should_autoplay
                 && self.autoplay_target.disarm_if_matches(id)
-                && let Err(err) =
-                    self.select_with_reason(id, Transition::None, AdvanceReason::UserSelect)
+                && let Err(err) = self.select_with_start_intent(
+                    id,
+                    Transition::None,
+                    AdvanceReason::UserSelect,
+                    true,
+                )
             {
                 tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
             }
@@ -301,6 +305,7 @@ where
 
     fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
+        let was_playing = was_current && self.player.is_playing();
         let successor_id = if was_current {
             let guard = self.lock_tracks();
             let pos = guard.iter().position(|e| e.id == id);
@@ -329,8 +334,12 @@ where
 
         if was_current {
             if let Some(next) = successor_id {
-                let _ =
-                    self.select_with_reason(next, Transition::None, AdvanceReason::RemovedCurrent);
+                let _ = self.select_with_start_intent(
+                    next,
+                    Transition::None,
+                    AdvanceReason::RemovedCurrent,
+                    was_playing,
+                );
             } else {
                 self.player.pause();
             }

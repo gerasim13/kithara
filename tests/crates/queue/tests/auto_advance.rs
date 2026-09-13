@@ -111,6 +111,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
         .run(&queue, move |q| q.select(id, Transition::Crossfade))
         .await
         .expect("select initial track");
+    queue.play();
 
     while let Ok(envelope) = receiver.try_recv() {
         assert!(
@@ -167,7 +168,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
 }
 
 #[kithara::test(tokio)]
-async fn selecting_a_loaded_track_starts_playback_when_first_load_autoplay_is_disabled(
+async fn selecting_a_loaded_track_stays_paused_until_play_when_first_load_autoplay_is_disabled(
     constant_three: &'static [u8],
 ) {
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -192,10 +193,17 @@ async fn selecting_a_loaded_track_starts_playback_when_first_load_autoplay_is_di
         .await
         .expect("select loaded track");
 
+    let pcm = render_loop(&queue, &harness, 8).await;
+    assert!(
+        first_onset_frame(&pcm, 0.005).is_none(),
+        "an idle explicit selection must remain paused"
+    );
+
+    queue.play();
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
     assert!(
         first_onset_frame(&pcm, 0.005).is_some(),
-        "an explicit selection must start playback when first-load autoplay is disabled"
+        "play must start an explicit selection"
     );
     drop(queue);
     harness.close().await;
@@ -345,6 +353,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -429,6 +438,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -519,6 +529,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     let mut prefetch_seen = false;
     let mut handover_seen = false;
@@ -688,6 +699,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("first select track A");
+    queue.play();
     let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
     assert_eq!(
         queue.current_index(),
@@ -702,6 +714,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("second select track A");
+    queue.play();
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -763,6 +776,7 @@ async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
@@ -908,6 +922,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 

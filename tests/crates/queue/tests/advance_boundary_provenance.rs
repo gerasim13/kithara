@@ -1182,6 +1182,7 @@ async fn setup_queue_with_sample_rate(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     QueueSetup { harness, queue }
 }
@@ -1216,6 +1217,7 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     QueueSetup { harness, queue }
 }
@@ -1282,6 +1284,7 @@ async fn setup_flac_queue_with_player_config_autoplay(
             .run(&queue, move |q| q.select(id_a, Transition::None))
             .await
             .expect("select track A");
+        queue.play();
     }
 
     QueueSetup { harness, queue }
@@ -1315,6 +1318,7 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    queue.play();
 
     QueueSetup { harness, queue }
 }

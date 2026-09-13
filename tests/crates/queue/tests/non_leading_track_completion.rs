@@ -148,6 +148,7 @@ async fn non_leading_completion_does_not_advance_the_queue(
         .run(&queue, move |q| q.select(current, Transition::None))
         .await
         .expect("select the current track");
+    harness.run(&queue, |q| q.play()).await;
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     publish_completion(&harness, completion, role, stale);
@@ -191,6 +192,7 @@ async fn background_completion_does_not_cut_the_current_track_audio(
         .run(&queue, move |q| q.select(current, Transition::None))
         .await
         .expect("select the current track");
+    harness.run(&queue, |q| q.play()).await;
     let before_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let before = mean_abs(&before_pcm[before_pcm.len() / 2..]);
     assert!(

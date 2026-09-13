@@ -134,6 +134,7 @@ async fn play_queue(
         .run(&queue, move |q| q.select(first, transition))
         .await
         .expect("select the first track");
+    queue.play();
 
     let mut receiver = queue.subscribe();
     let mut log = QueueLog::default();

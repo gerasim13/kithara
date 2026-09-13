@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 
 use crate::{
     error::QueueError,
-    event::{AdvanceReason, QueueEvent, TrackStatus},
+    event::{QueueEvent, TrackStatus},
     queue::{QueueControl, types::SelectPhase},
 };
 
@@ -77,7 +77,7 @@ where
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 
-        let pending_transition = {
+        let pending_select = {
             let mut phase = self
                 .pending_select
                 .lock()
@@ -85,7 +85,7 @@ where
             let result = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;
-                    Some(pending.transition)
+                    Some(pending)
                 }
                 _ => None,
             };
@@ -93,9 +93,10 @@ where
             result
         };
 
-        let Some(transition) = pending_transition else {
+        let Some(pending) = pending_select else {
             return;
         };
+        let transition = pending.transition;
         let was_playing = self.player.is_playing();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
         if was_playing && crossfade > 0.0 {
@@ -106,7 +107,7 @@ where
         if let Err(error) = self.select_player_item(
             index,
             SelectTransition {
-                autoplay: true,
+                autoplay: pending.autoplay,
                 crossfade_seconds: crossfade,
             },
         ) {
@@ -119,7 +120,7 @@ where
             .select(index);
         self.bus.publish(QueueEvent::CurrentTrackAdvance {
             id: Some(id),
-            reason: AdvanceReason::UserSelect,
+            reason: pending.reason,
         });
         self.tracks.set_status(id, TrackStatus::Consumed);
     }

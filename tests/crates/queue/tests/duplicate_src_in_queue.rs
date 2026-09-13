@@ -28,8 +28,6 @@ use crate::bufpool_ext::TestPools;
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-/// ≈ 0.74 s of rendered audio — far short of `TRACK_SECS`.
-const WARMUP_BLOCKS: usize = 64;
 const TRACK_SECS: f64 = 30.0;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
 
@@ -101,7 +99,8 @@ async fn fixture_playing_the_second_copy(
         .run(&queue, move |q| q.select(playing, Transition::None))
         .await
         .expect("select the second copy");
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    harness.run(&queue, |q| q.play()).await;
+    render_loop(&queue, &harness, 1).await;
 
     (harness, queue, first, playing)
 }
@@ -125,7 +124,7 @@ async fn a_failure_only_flags_the_entry_that_played(
     let (harness, queue, first, playing) = fixture_playing_the_second_copy(constant_loud).await;
 
     publish_leading_failure(&harness, playing);
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    render_loop(&queue, &harness, 1).await;
 
     let id = if played_entry { playing } else { first };
     let status = status_of(&queue, id);

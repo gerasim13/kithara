@@ -299,6 +299,7 @@ async fn playing_queue(
         .run(queue.control(), move |q| q.select(id, Transition::None))
         .await
         .expect("select live-rate fixture");
+    queue.play();
     (harness, queue)
 }
 

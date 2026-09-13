@@ -338,6 +338,7 @@ async fn build_queue(sources: Vec<ResourceSrc>, temp_dir: &TestTempDir, seam: Se
         })
         .await
         .expect("select the first track");
+    queue.play();
 
     Census {
         harness,

@@ -7,11 +7,11 @@ use kithara_events::TrackId;
 use kithara_play::SelectTransition;
 
 #[cfg(any(test, feature = "usdt"))]
-use crate::event::{AdvanceReason, QueueEvent};
+use crate::event::QueueEvent;
 use crate::{
     attempts::LoadClass,
     error::QueueError,
-    event::TrackStatus,
+    event::{AdvanceReason, TrackStatus},
     queue::{
         QueueControl,
         types::{PendingSelect, SelectPhase, Transition},
@@ -110,6 +110,8 @@ where
         id: TrackId,
         index: usize,
         transition: Transition,
+        reason: AdvanceReason,
+        autoplay: bool,
     ) -> Option<Result<(), QueueError>> {
         let cached = self
             .test_resources
@@ -131,7 +133,7 @@ where
         if let Err(error) = self.select_player_item(
             index,
             SelectTransition {
-                autoplay: true,
+                autoplay,
                 crossfade_seconds: crossfade,
             },
         ) {
@@ -140,7 +142,7 @@ where
         self.lock_navigation_mut().select(index);
         self.bus.publish(QueueEvent::CurrentTrackAdvance {
             id: Some(id),
-            reason: AdvanceReason::UserSelect,
+            reason,
         });
         self.set_status(id, TrackStatus::Consumed);
         Some(Ok(()))
@@ -152,6 +154,8 @@ where
         _id: TrackId,
         _index: usize,
         _transition: Transition,
+        _reason: AdvanceReason,
+        _autoplay: bool,
     ) -> Option<Result<(), QueueError>> {
         let _ = self;
         None

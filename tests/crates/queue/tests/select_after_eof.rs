@@ -74,6 +74,7 @@ async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
         .expect("select track");
+    harness.run(&queue, |q| q.play()).await;
 
     queue.seek(54.689_879_542).expect("seek must land");
 
@@ -105,6 +106,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    harness.run(&queue, |q| q.play()).await;
     let first_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
         first_onset_frame(&first_pcm, 0.005).is_some(),
@@ -116,6 +118,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
+    harness.run(&queue, |q| q.play()).await;
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -161,10 +164,13 @@ async fn switch_back_to_consumed_track_switches_audio(
 
     match initial_start {
         InitialStart::Play => harness.run(&queue, move |q| q.play()).await,
-        InitialStart::Select => harness
-            .run(&queue, move |q| q.select(id_a, Transition::None))
-            .await
-            .expect("select track A"),
+        InitialStart::Select => {
+            harness
+                .run(&queue, move |q| q.select(id_a, Transition::None))
+                .await
+                .expect("select track A");
+            harness.run(&queue, |q| q.play()).await;
+        }
     }
     let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
@@ -260,6 +266,7 @@ async fn reselect_playing_track_cancels_pending_switch(constant_three: &'static 
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
+    harness.run(&queue, |q| q.play()).await;
     let warmup_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     assert!(
         first_onset_frame(&warmup_pcm, 0.005).is_some(),
