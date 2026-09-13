@@ -28,16 +28,6 @@ struct DecoderHost {
     _error_callback: Closure<dyn FnMut(JsValue)>,
     _output_callback: Closure<dyn FnMut(AudioData)>,
     pending: Rc<RefCell<VecDeque<(u64, u64)>>>,
-    pending_output: Rc<RefCell<VecDeque<PendingOutput>>>,
-}
-
-/// An output callback transfers ownership of the browser's [`AudioData`] to
-/// the host loop. Copying it can enter browser code, so that work must happen
-/// after the callback returns.
-struct PendingOutput {
-    data: AudioData,
-    input_pts_us: u64,
-    generation: u64,
 }
 
 struct DecoderState {
@@ -96,14 +86,6 @@ where
                     Err(_) => break 'outer,
                 }
             }
-            for state in decoders.values_mut() {
-                state.host.drain_outputs(
-                    &state.out_tx,
-                    state.generation.get(),
-                    &state.announced_generation,
-                    &pools,
-                );
-            }
             let pause = if worked { Duration::ZERO } else { POLL_IDLE };
             time::sleep(pause).await;
         }
@@ -116,10 +98,10 @@ where
 
 async fn dispatch<S>(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>, pools: &PoolRegion<S>)
 where
-    S: HasPool<f32>,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
-        HostCmd::Open { id, reply_tx } => on_open(id, reply_tx, decoders),
+        HostCmd::Open { id, reply_tx } => on_open(id, reply_tx, decoders, pools),
         HostCmd::Configure {
             decoder_id,
             codec_string,
@@ -141,7 +123,6 @@ where
             }
             state.generation.set(generation);
             state.announced_generation.set(None);
-            state.host.clear_pending_outputs();
             if let Err(err) =
                 state
                     .host
@@ -193,7 +174,6 @@ where
             state.generation.set(generation);
             state.announced_generation.set(None);
             state.host.pending.borrow_mut().clear();
-            state.host.clear_pending_outputs();
             if let Err(err) = state.host.decoder.reset() {
                 let err = api_error("reset", &err);
                 tracing::error!(decoder_id, generation, error = %err, "failed to reset WebCodecs decoder");
@@ -204,7 +184,7 @@ where
             decoder_id,
             generation,
         } => {
-            let Some(state) = decoders.get_mut(&decoder_id) else {
+            let Some(state) = decoders.get(&decoder_id) else {
                 tracing::warn!(
                     decoder_id,
                     generation,
@@ -221,12 +201,6 @@ where
                 .map_err(|err| api_error("flush", &err));
             match result {
                 Ok(()) => {
-                    state.host.drain_outputs(
-                        &state.out_tx,
-                        generation,
-                        &state.announced_generation,
-                        pools,
-                    );
                     state.out_tx.send(HostOut::Flushed { generation }).ok();
                 }
                 Err(err) => {
@@ -243,11 +217,14 @@ where
     }
 }
 
-fn on_open(
+fn on_open<S>(
     decoder_id: u64,
     out_tx: mpsc::Sender<HostOut>,
     decoders: &mut HashMap<u64, DecoderState>,
-) {
+    pools: &PoolRegion<S>,
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     if decoders.contains_key(&decoder_id) {
         let err = DecodeError::backend(HostError::Api {
             op: "open",
@@ -258,7 +235,13 @@ fn on_open(
     }
     let generation = Rc::new(Cell::new(0));
     let announced_generation = Rc::new(Cell::new(None));
-    match DecoderHost::new(decoder_id, out_tx.clone(), Rc::clone(&generation)) {
+    match DecoderHost::new(
+        decoder_id,
+        out_tx.clone(),
+        Rc::clone(&generation),
+        Rc::clone(&announced_generation),
+        pools.clone(),
+    ) {
         Ok(host) => {
             decoders.insert(
                 decoder_id,
@@ -280,7 +263,6 @@ fn on_open(
 
 fn close_decoder(decoder_id: u64, state: DecoderState) {
     let DecoderState { host, .. } = state;
-    host.clear_pending_outputs();
     if let Err(err) = host.decoder.close() {
         tracing::warn!(decoder_id, detail = %js_detail(&err), "failed to close WebCodecs decoder");
     } else {
@@ -289,11 +271,16 @@ fn close_decoder(decoder_id: u64, state: DecoderState) {
 }
 
 impl DecoderHost {
-    fn new(
+    fn new<S>(
         decoder_id: u64,
         out_tx: mpsc::Sender<HostOut>,
         generation: Rc<Cell<u64>>,
-    ) -> DecodeResult<Self> {
+        announced_generation: Rc<Cell<Option<u64>>>,
+        pools: PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<f32> + 'static,
+    {
         let error_tx = out_tx.clone();
         let error_generation = Rc::clone(&generation);
         let error_callback = Closure::new(move |value: JsValue| {
@@ -305,8 +292,6 @@ impl DecoderHost {
 
         let pending = Rc::new(RefCell::new(VecDeque::new()));
         let output_pending = Rc::clone(&pending);
-        let pending_output = Rc::new(RefCell::new(VecDeque::new()));
-        let queued_output = Rc::clone(&pending_output);
         let output_callback = Closure::new(move |data: AudioData| {
             let pts_us = data.timestamp().to_u64();
             let Some((input_pts_us, output_generation)) = output_pending.borrow_mut().pop_front()
@@ -315,72 +300,28 @@ impl DecoderHost {
                 tracing::debug!(decoder_id, pts_us, "dropping unmatched WebCodecs output");
                 return;
             };
-            queued_output.borrow_mut().push_back(PendingOutput {
-                data,
-                input_pts_us,
-                generation: output_generation,
-            });
-        });
-
-        let init = AudioDecoderInit::new(
-            error_callback.as_ref().unchecked_ref(),
-            output_callback.as_ref().unchecked_ref(),
-        );
-        let decoder = AudioDecoder::new(&init).map_err(|err| api_error("create", &err))?;
-        Ok(Self {
-            decoder,
-            pending,
-            pending_output,
-            _error_callback: error_callback,
-            _output_callback: output_callback,
-        })
-    }
-
-    fn clear_pending_outputs(&self) {
-        for output in self.pending_output.borrow_mut().drain(..) {
-            output.data.close();
-        }
-    }
-
-    fn drain_outputs<S>(
-        &self,
-        out_tx: &mpsc::Sender<HostOut>,
-        generation: u64,
-        announced_generation: &Rc<Cell<Option<u64>>>,
-        pools: &PoolRegion<S>,
-    ) where
-        S: HasPool<f32>,
-    {
-        loop {
-            let output = self.pending_output.borrow_mut().pop_front();
-            let Some(output) = output else {
-                break;
-            };
-            let output_pts_us = output.data.timestamp().to_u64();
-            if output_pts_us != Some(output.input_pts_us) {
-                tracing::debug!(
-                    input_pts_us = output.input_pts_us,
-                    ?output_pts_us,
-                    "WebCodecs adjusted output timestamp"
-                );
+            if pts_us != Some(input_pts_us) {
+                tracing::debug!(decoder_id, input_pts_us, output_pts_us = ?pts_us, "WebCodecs adjusted output timestamp");
             }
-            if output.generation != generation {
-                output.data.close();
+            let generation = generation.get();
+            if output_generation != generation {
+                data.close();
                 tracing::debug!(
-                    output_generation = output.generation,
+                    output_generation,
                     generation,
+                    decoder_id,
                     "dropping stale WebCodecs output"
                 );
-                continue;
+                return;
             }
-            match copy_audio(&output.data, output.generation, pools) {
-                Ok(event) => {
+            match copy_audio(&data, output_generation, &pools) {
+                Ok(output) => {
                     if announced_generation.get() != Some(generation)
                         && let HostOut::Pcm {
                             sample_rate,
                             channels,
                             ..
-                        } = &event
+                        } = &output
                     {
                         out_tx
                             .send(HostOut::Configured {
@@ -391,14 +332,26 @@ impl DecoderHost {
                             .ok();
                         announced_generation.set(Some(generation));
                     }
-                    out_tx.send(event).ok();
+                    out_tx.send(output).ok();
                 }
                 Err(err) => {
-                    tracing::error!(generation, error = %err, "failed to copy WebCodecs AudioData");
-                    send_error(out_tx, &err, generation);
+                    tracing::error!(decoder_id, generation, error = %err, "failed to copy WebCodecs AudioData");
+                    send_error(&out_tx, &err, generation);
                 }
             }
-        }
+        });
+
+        let init = AudioDecoderInit::new(
+            error_callback.as_ref().unchecked_ref(),
+            output_callback.as_ref().unchecked_ref(),
+        );
+        let decoder = AudioDecoder::new(&init).map_err(|err| api_error("create", &err))?;
+        Ok(Self {
+            decoder,
+            pending,
+            _error_callback: error_callback,
+            _output_callback: output_callback,
+        })
     }
 
     fn configure(
