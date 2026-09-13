@@ -30,11 +30,18 @@ use crate::{
 const BLOCK_FRAMES: usize = 512;
 const DELAYED_SEGMENT_INDEX: usize = 2;
 const DELAY_MS: u64 = 2_500;
+const HEAD_DELAY_MS: u64 = 300;
 const SEGMENTS_PER_VARIANT: usize = 6;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const STARTUP_POSITION_SECS: f64 = 0.05;
 const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 
+/// Playback becomes audible while the tail of the playlist is still withheld.
+///
+/// The stopwatch starts before the resource is opened, so the property holds
+/// wherever the startup wait sits: moving it back into construction hides it
+/// from a stopwatch started at `play`, and the assertion then passes for a
+/// player that never began.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
@@ -52,13 +59,14 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
         GAPLESS_SAMPLE_RATE,
     )
     .await;
+
+    let started_at = Instant::now();
     let resource = create_delayed_gapless_hls_resource(&harness, &master, temp_dir.path()).await;
 
     harness
         .with_player(move |player| player.insert(resource, TrackId::allocate(), None))
         .await;
 
-    let started_at = Instant::now();
     harness.with_player(PlayerControl::play).await;
     let _ = harness.tick_and_drain().await;
 
@@ -117,6 +125,30 @@ async fn create_delayed_gapless_hls_resource(
         .expect("open delayed gapless HLS resource")
 }
 
+/// Head segments arrive late, the tail far later.
+///
+/// Without the head delay the first segments land before the decoder ever
+/// parks, and the wait the test measures never happens: the assertion passes
+/// on a player that was never asked to wait. Each head segment carries its own
+/// `segment_eq` rule so the first-match-wins evaluation cannot depend on the
+/// order the rules were listed in.
+fn delay_rules() -> Vec<DelayRule> {
+    let head = (0..DELAYED_SEGMENT_INDEX).map(|segment| DelayRule {
+        variant: Some(0),
+        segment_eq: Some(segment),
+        delay_ms: HEAD_DELAY_MS,
+        ..Default::default()
+    });
+    let tail = std::iter::once(DelayRule {
+        variant: Some(0),
+        segment_gte: Some(DELAYED_SEGMENT_INDEX),
+        delay_ms: DELAY_MS,
+        ..Default::default()
+    });
+
+    head.chain(tail).collect()
+}
+
 #[kithara::fixture]
 async fn startup_source() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
@@ -126,12 +158,7 @@ async fn startup_source() -> (TestServerHelper, Url) {
                 .variant_count(1)
                 .segments_per_variant(SEGMENTS_PER_VARIANT)
                 .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
-                .delay_rules(vec![DelayRule {
-                    variant: Some(0),
-                    segment_gte: Some(DELAYED_SEGMENT_INDEX),
-                    delay_ms: DELAY_MS,
-                    ..Default::default()
-                }])
+                .delay_rules(delay_rules())
                 .packaged_audio(PackagedAudioRequest {
                     codec: AudioCodec::AacLc,
                     sample_rate: GAPLESS_SAMPLE_RATE,
