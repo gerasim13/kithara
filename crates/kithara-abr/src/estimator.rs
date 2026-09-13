@@ -200,6 +200,26 @@ mod tests {
     }
 
     #[kithara::test]
+    fn network_sample_uses_its_elapsed_duration() {
+        let estimator = ThroughputEstimator::new();
+        estimator.push_sample(
+            100_000,
+            Duration::from_millis(250),
+            BandwidthSource::Network,
+        );
+
+        assert_eq!(estimator.estimate_bps(), Some(3_200_000));
+    }
+
+    #[kithara::test]
+    fn initial_seed_is_returned_before_a_network_sample() {
+        let estimator = ThroughputEstimator::new();
+        estimator.seed_initial_bps(1_234_567);
+
+        assert_eq!(estimator.estimate_bps(), Some(1_234_567));
+    }
+
+    #[kithara::test]
     fn elapsed_time_weights_later_network_samples() {
         let estimator = ThroughputEstimator::new();
         estimator.push_sample(1_000_000, Duration::from_secs(1), BandwidthSource::Network);
