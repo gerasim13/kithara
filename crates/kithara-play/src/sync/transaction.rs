@@ -7,7 +7,10 @@ use kithara_warp::{
 
 use super::{
     TempoSource,
-    prepare::{AlignmentPolicy, PreparedSync, align_member},
+    prepare::{
+        AlignmentPolicy, FreePreparing, PreparedDisposition, PreparedSync, align_member,
+        handoff_member,
+    },
     topology::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
         preview_topology, routed_group, validate_topology_candidate,
@@ -23,6 +26,7 @@ pub(super) struct GroupSlots<'a, G: SyncGroup<NestedGroup = G>> {
     pub(super) tempo: &'a mut TempoSource,
     pub(super) generations: &'a mut (LoadGeneration, TransportRevision),
     pub(super) warp_map: &'a mut WarpMapRevision,
+    pub(super) preparing: &'a mut Option<FreePreparing>,
     pub(super) prepared: &'a mut Option<PreparedSync>,
     pub(super) locked: &'a mut Option<SyncApplied>,
     pub(super) topology_revision: &'a mut TopologyRevision,
@@ -33,16 +37,28 @@ pub(super) struct GroupSlots<'a, G: SyncGroup<NestedGroup = G>> {
 pub(super) struct StatusSlots {
     pub(super) unavailable: Option<(SyncOperationId, SyncCapability)>,
     pub(super) waiting: Option<(SyncOperationId, MapRegion)>,
+    pub(super) preparing: Option<FreePreparing>,
     pub(super) prepared: Option<PreparedSync>,
     pub(super) locked: Option<SyncApplied>,
 }
 
 pub(super) fn status(topology: TopologyStamp, slots: &StatusSlots) -> SyncStatusSnapshot {
+    debug_assert!(
+        !(slots.preparing.is_some() && slots.prepared.is_some()),
+        "a Free handoff cannot retain a prior prepared map"
+    );
     if let Some((operation, required)) = slots.waiting {
         return SyncStatusSnapshot::WaitingForGrid {
             operation,
             topology,
             required,
+        };
+    }
+    if let Some(preparing) = &slots.preparing {
+        return SyncStatusSnapshot::Preparing {
+            operation: preparing.operation,
+            topology,
+            warp_map: preparing.warp_map,
         };
     }
     if let Some(prepared) = slots.prepared {
@@ -164,12 +180,7 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
                     MapRegion::point(MapPosition::Session(SessionFrame::new(0))),
                 ),
             },
-            SyncIntent::Free => state_changed(
-                grid,
-                &mut slots,
-                (SyncMode::Off, TempoSource::Inherited),
-                operation,
-            ),
+            SyncIntent::Free => prepare_free(grid, &mut slots, operation),
             _ => preserve_rejected(
                 unavailable_admission(
                     grid.id(),
@@ -303,6 +314,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
     *slots.warp_map = warp_map;
     *slots.unavailable = None;
     *slots.waiting = None;
+    *slots.preparing = None;
     *slots.prepared = Some(PreparedSync {
         operation: operation_id,
         warp_map,
@@ -310,12 +322,86 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         activation_beat: aligned.activation_beat,
         source: aligned.source,
         target: *target,
+        disposition: PreparedDisposition::Lock,
     });
     Ok(SyncAdmission::Prepared {
         operation: operation_id,
         topology: TopologyStamp::new(grid.id(), *slots.topology_revision),
         warp_map,
         activation: aligned.activation,
+    })
+}
+
+fn prepare_free<G: SyncGroup<NestedGroup = G>>(
+    grid: &BeatGridSnapshot,
+    slots: &mut GroupSlots<'_, G>,
+    operation: SyncOperation<G>,
+) -> Result<SyncAdmission, SyncRejected<G>> {
+    let SyncOperation::Sync {
+        source,
+        load,
+        transport,
+        ..
+    } = &operation
+    else {
+        unreachable!("Free is only a sync operation");
+    };
+    let source = *source;
+    let Some(manual_rate) = source.playback_rate() else {
+        return deferred(
+            grid,
+            slots,
+            operation,
+            MapRegion::point(MapPosition::Session(source.frontier().output())),
+        );
+    };
+    let Some(warp_map) = slots.warp_map.checked_next() else {
+        return Err(SyncRejected::new(
+            SyncError::WarpMapRevisionExhausted {
+                group_id: grid.id(),
+            },
+            operation,
+        ));
+    };
+    let operation_id = match take_operation(grid.id(), slots.next_operation) {
+        Ok(operation_id) => operation_id,
+        Err(error) => return Err(SyncRejected::new(error, operation)),
+    };
+    let Some((previous, member)) = slots.members.iter().find_map(|member| match member {
+        SyncMember::Grid {
+            alignment: Some(alignment),
+            grid,
+        } => Some((*alignment, grid.snapshot())),
+        SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
+    }) else {
+        return deferred(
+            grid,
+            slots,
+            operation,
+            MapRegion::point(MapPosition::Session(source.frontier().output())),
+        );
+    };
+    match handoff_member(grid, &member, Some(previous), source) {
+        Ok(_) => {}
+        Err(required) => return deferred(grid, slots, operation, required),
+    }
+    *slots.warp_map = warp_map;
+    *slots.unavailable = None;
+    *slots.waiting = None;
+    *slots.prepared = None;
+    *slots.preparing = Some(FreePreparing {
+        operation: operation_id,
+        warp_map,
+        target: member.id(),
+        load: *load,
+        transport: *transport,
+        manual_rate,
+        owner: grid.clone(),
+    });
+    Ok(SyncAdmission::Preparing {
+        operation: operation_id,
+        topology: TopologyStamp::new(grid.id(), *slots.topology_revision),
+        warp_map,
     })
 }
 
@@ -332,6 +418,7 @@ fn state_changed<G: SyncGroup<NestedGroup = G>>(
     (*slots.mode, *slots.tempo) = state;
     *slots.unavailable = None;
     *slots.waiting = None;
+    *slots.preparing = None;
     *slots.prepared = None;
     *slots.locked = None;
     Ok(SyncAdmission::StateChanged {

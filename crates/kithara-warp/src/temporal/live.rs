@@ -328,6 +328,13 @@ pub(crate) struct RenderState {
 }
 
 impl RenderSnapshot {
+    /// Rebind this presentation base to an immutable context selected by a plan activation.
+    #[cfg(feature = "render")]
+    pub(crate) fn with_context(mut self, context: RenderContext) -> Self {
+        self.context = context;
+        self
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn preparation_at(
         context: RenderContext,
@@ -383,6 +390,7 @@ impl RenderSnapshot {
         let frontier = PresentationFrontier::builder()
             .source(source)
             .output(SessionFrame::new(output))
+            .maybe_warp_map(self.frontier.warp_map())
             .build();
         Some(Self {
             frontier,
@@ -397,7 +405,7 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::RenderPublisher;
+    use super::{RenderPublisher, RenderSnapshot};
     use crate::{
         PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
         SyncMode, TransportRevision, WarpMapRevision,
@@ -516,5 +524,30 @@ mod tests {
                 .snapshot
                 .is_none()
         );
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn advancing_a_prepared_snapshot_keeps_its_warp_map() {
+        let previous_map = WarpMapRevision::first();
+        let warp_map = WarpMapRevision::from_raw(
+            std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
+        );
+        let previous = RenderSnapshot::preparation_at(
+            context(3, 1_000),
+            7_900,
+            SessionFrame::new(1_000),
+            previous_map,
+        );
+        let advanced = RenderSnapshot::preparation_at(
+            context(3, 1_000),
+            8_000,
+            SessionFrame::new(1_128),
+            warp_map,
+        )
+        .advance(Some(&previous), 8_128, 128)
+        .expect("monotonic prepared frontier advances");
+
+        assert_eq!(advanced.frontier().warp_map(), Some(warp_map));
     }
 }

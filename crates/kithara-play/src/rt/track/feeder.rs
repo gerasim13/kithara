@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
 };
 
 use kithara_audio::{RevisionFloorStatus, SourceEnd, SourceSpan};
@@ -285,6 +286,31 @@ impl PlayerResource {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.get().decoded_frontier().as_secs_f64()
+    }
+
+    /// Record one PCM underrun and silence the unfilled suffix of `range`.
+    pub(super) fn fill_underrun(
+        &self,
+        context: Option<&RenderContext>,
+        track_id: Option<TrackId>,
+        output: &mut [&mut [f32]],
+        range: Range<usize>,
+        available_frames: usize,
+        metrics: &RtMetrics,
+    ) {
+        metrics.record_underrun();
+        kithara::probe_event!(
+            pcm_underrun,
+            track_id = track_id.map(TrackId::as_u64),
+            output_start = context.map_or(0, |context| i64::from(context.output_frames().start)),
+            requested_frames = range.len(),
+            available_frames = available_frames,
+            source_end = self.last_source_end.map(|source| source.frame()),
+            warp_map_revision = self.last_warp_map_revision
+        );
+        for ch in output.iter_mut() {
+            ch[range.start + available_frames..range.end].fill(0.0);
+        }
     }
 
     pub(super) fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {

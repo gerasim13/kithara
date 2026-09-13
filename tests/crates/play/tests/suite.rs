@@ -17,6 +17,7 @@ pub use kithara_integration_tests::gapless as gapless_common;
 
 mod cochlea_continuity_oracle;
 mod engine_tests;
+mod free_handoff_latency;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;
 mod generated_gapless_hls;

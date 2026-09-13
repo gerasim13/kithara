@@ -33,7 +33,8 @@ use kithara::{
         AlignmentSource, AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, BeatGridState, LoadGeneration, MapPoint, MapPosition, Meter,
         PresentationFrontier, SegmentSet, SessionFrame, StretchControls, SyncAdmission, SyncGroup,
-        SyncIntent, SyncOperation, WarpConfig,
+        SyncIntent, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyStamp, WarpConfig,
+        WarpMapRevision,
     },
 };
 #[cfg(not(target_os = "android"))]
@@ -947,6 +948,78 @@ impl ProductHarness {
         }
     }
 
+    async fn render_until_free_off(
+        &mut self,
+        case: SyncCase,
+        operation: kithara::warp::SyncOperationId,
+        topology: TopologyStamp,
+        warp_map: WarpMapRevision,
+    ) -> SyncStatusSnapshot {
+        let mut activation = None;
+        for _ in 0..16 {
+            let deck = self.decks[0].id();
+            let status = self
+                .host
+                .with(move |host| host.sync_status(deck))
+                .await
+                .expect("canonical deck synchronization status");
+            match status {
+                SyncStatusSnapshot::Preparing {
+                    operation: current,
+                    topology: current_topology,
+                    warp_map: current_map,
+                } => {
+                    assert_eq!(
+                        (current, current_topology, current_map),
+                        (operation, topology, warp_map),
+                        "Free may only retain its admitted Preparing identity"
+                    );
+                    let _ = self.render(case, self.block_frames).await;
+                }
+                SyncStatusSnapshot::Prepared {
+                    operation: current,
+                    topology: current_topology,
+                    warp_map: current_map,
+                    activation: prepared_activation,
+                } => {
+                    assert_eq!(
+                        (current, current_topology, current_map),
+                        (operation, topology, warp_map)
+                    );
+                    activation = Some(
+                        u64::try_from(i64::from(prepared_activation))
+                            .expect("non-negative activation"),
+                    );
+                    break;
+                }
+                other @ SyncStatusSnapshot::Off { .. } => {
+                    let _ = self.render(case, self.block_frames).await;
+                    return other;
+                }
+                other => panic!("unexpected Free status before worker preparation: {other:?}"),
+            }
+        }
+        let activation =
+            activation.expect("Free did not prepare within the bounded worker handoff window");
+        self.sync_activation = Some(activation);
+        self.settle_sync_activation(case).await;
+        let _ = self.render(case, self.block_frames).await;
+
+        let deck = self.decks[0].id();
+        let status = self
+            .host
+            .with(move |host| host.sync_status(deck))
+            .await
+            .expect("canonical deck synchronization status after activation");
+        if matches!(&status, SyncStatusSnapshot::Off { .. }) {
+            // Grid publication acknowledges PCM after the callback has sampled
+            // its render context. The next callback is the first one that can
+            // observe the published Off context.
+            let _ = self.render(case, self.block_frames).await;
+        }
+        status
+    }
+
     async fn play_all(&self) {
         let controls: Vec<_> = self
             .decks
@@ -1050,13 +1123,18 @@ impl ProductHarness {
     }
 
     pub(super) async fn request_sync(&mut self, case: SyncCase) {
-        self.request_sync_intent(case, SyncIntent::Enable).await;
+        let _ = self.request_sync_intent(case, SyncIntent::Enable).await;
         self.sync_requested = true;
     }
 
-    pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
+    pub(super) async fn request_sync_intent(
+        &mut self,
+        case: SyncCase,
+        intent: SyncIntent,
+    ) -> Vec<SyncAdmission> {
         self.mark(&format!("request_sync-{intent:?}"));
         let transport = self.transport_revision(case).await;
+        let mut admissions = Vec::with_capacity(self.decks.len());
         for index in 0..self.decks.len() {
             {
                 let deck = &self.decks[index];
@@ -1137,11 +1215,13 @@ impl ProductHarness {
                             .map_or(activation, |current| current.max(activation)),
                     );
                 }
+                admissions.push(admission);
             }
             if matches!(case.order, OperationOrder::SequentialSync) {
                 let _ = self.render(case, self.block_frames).await;
             }
         }
+        admissions
     }
 
     pub(super) async fn publish_track_grid(
@@ -1550,7 +1630,6 @@ const LISTENING_ALIGNED_DOWNTEMPO_96: &[&str] =
 const LISTENING_PICKUP_DOWNTEMPO_96: &[&str] =
     &["rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s"];
 
-#[ignore = "ignored-red: origin-zero single-deck prepared launch baseline, 2026-09-12"]
 #[kithara::test(
     native,
     tokio,
@@ -2039,7 +2118,6 @@ struct TrackStartPickup {
     expected_next_host_marker: u64,
 }
 
-#[ignore = "ignored-red: TrackStart pickup launch requires real PCM proof, 2026-09-12"]
 #[kithara::test(
     native,
     tokio,
@@ -2224,7 +2302,385 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
     }));
 }
 
-#[ignore = "ignored-red: late grid must arm an already-requested prepared launch, 2026-09-12"]
+#[derive(Clone, Copy, Debug)]
+enum ToggleStart {
+    Off,
+    Local,
+    Host,
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::off_to_local(ToggleStart::Off, SyncIntent::Disable, SyncMode::LocalSync, 1.0)]
+#[case::off_to_host(ToggleStart::Off, SyncIntent::Enable, SyncMode::HostSync, 1.0)]
+#[case::local_to_off(ToggleStart::Local, SyncIntent::Free, SyncMode::Off, 0.75)]
+#[case::local_to_host(ToggleStart::Local, SyncIntent::Enable, SyncMode::HostSync, 1.0)]
+#[case::host_to_off(ToggleStart::Host, SyncIntent::Free, SyncMode::Off, 0.75)]
+#[case::host_to_local(ToggleStart::Host, SyncIntent::Disable, SyncMode::LocalSync, 1.0)]
+async fn directed_sync_toggle_matrix(
+    #[case] start: ToggleStart,
+    #[case] command: SyncIntent,
+    #[case] expected_mode: SyncMode,
+    #[case] expected_rate: f32,
+) {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "directed-sync-toggle",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new(case, &sources, 0).await;
+    prepare_fixture_grids(&mut harness, case, &sources).await;
+    harness.decks[0].set_default_rate(0.75);
+    harness.play_all().await;
+    match start {
+        ToggleStart::Off => {}
+        ToggleStart::Local => {
+            let initial = harness.request_sync_intent(case, SyncIntent::Disable).await;
+            assert!(matches!(
+                initial.as_slice(),
+                [SyncAdmission::Prepared { .. }]
+            ));
+            harness.settle_sync_activation(case).await;
+        }
+        ToggleStart::Host => {
+            harness.request_sync(case).await;
+            harness.settle_sync_activation(case).await;
+        }
+    }
+    let _ = harness
+        .capture_frames(case, harness.block_frames * 4, harness.block_frames)
+        .await;
+    let baseline = recorder.snapshot();
+    let baseline_map = baseline
+        .iter()
+        .filter(|event| event.probe_name() == Some("warp_plan_published"))
+        .filter_map(|event| event.u64("warp_map_revision"))
+        .max();
+    let baseline_underruns = harness.player_controls[0]
+        .rt_metrics()
+        .map_or(0, |metrics| metrics.underruns());
+
+    let admission = harness
+        .request_sync_intent(case, command)
+        .await
+        .pop()
+        .expect("one-deck toggle returns one typed admission");
+    let post = &recorder.snapshot()[baseline.len()..];
+    match expected_mode {
+        SyncMode::Off => {
+            let SyncAdmission::Preparing {
+                operation,
+                topology,
+                warp_map,
+            } = admission
+            else {
+                panic!("{start:?} -> Off must reserve a worker-owned Free handoff: {admission:?}");
+            };
+            assert!(
+                !post.iter().any(|event| matches!(
+                    event.probe_name(),
+                    Some("prepared_sync_acknowledged") | Some("deck_grid_off_published")
+                )),
+                "Free cannot acknowledge or publish Off before worker adoption"
+            );
+            let status = harness
+                .render_until_free_off(case, operation, topology, warp_map)
+                .await;
+            let events = recorder.snapshot();
+            let post = &events[baseline.len()..];
+            assert!(
+                matches!(status, SyncStatusSnapshot::Off { .. }),
+                "Free must publish Off after its prepared activation: {status:?}; retained events: {post:#?}"
+            );
+            let installed_index = post
+                .iter()
+                .position(|event| event.probe_name() == Some("free_adoption_installed"))
+                .expect("worker commits the reserved Free request");
+            let installed = &post[installed_index];
+            assert_eq!(installed.u64("operation"), Some(u64::from(operation)));
+            assert_eq!(installed.u64("warp_map"), Some(u64::from(warp_map)));
+            let activation = post
+                .iter()
+                .find(|event| {
+                    event.probe_name() == Some("free_adoption_activation")
+                        && event.u64("operation") == Some(u64::from(operation))
+                        && event.u64("warp_map") == Some(u64::from(warp_map))
+                })
+                .expect("installed request publishes its exact worker geometry");
+            assert!(activation.u64("source").is_some());
+            assert!(activation.u64("output").is_some());
+            let ack_index = post
+                .iter()
+                .position(|event| {
+                    event.probe_name() == Some("prepared_sync_acknowledged")
+                        && event.u64("free") == Some(1)
+                        && event.u64("warp_map_revision") == Some(u64::from(warp_map))
+                })
+                .expect("the adopted Free map is acknowledged");
+            let off_index = post
+                .iter()
+                .position(|event| {
+                    event.probe_name() == Some("deck_grid_off_published")
+                        && event.u64("warp_map_revision") == Some(u64::from(warp_map))
+                })
+                .expect("the adopted Free map publishes Off");
+            let target_pcm_index = post
+                .iter()
+                .enumerate()
+                .skip(installed_index + 1)
+                .find(|(_, event)| {
+                    event.probe_name() == Some("pcm_consumed")
+                        && event
+                            .u64("render_revision")
+                            .is_some_and(|revision| revision >> u32::BITS == u64::from(warp_map))
+                })
+                .map(|(index, _)| index)
+                .expect("the installed Free map reaches presented PCM");
+            assert!(
+                installed_index < target_pcm_index
+                    && target_pcm_index < ack_index
+                    && ack_index < off_index,
+                "Free event order must remain installed < target pcm_consumed < prepared_sync_acknowledged < deck_grid_off_published"
+            );
+            if matches!(start, ToggleStart::Host) {
+                let pre_publication = post[..off_index]
+                    .iter()
+                    .rev()
+                    .find(|event| event.probe_name() == Some("deck_render_context"))
+                    .expect("the acknowledgement callback sampled its pre-publication context");
+                assert_eq!(
+                    pre_publication.u64("mode"),
+                    Some(2),
+                    "the acknowledgement callback may still carry HostSync before Off publishes"
+                );
+            }
+            assert!(baseline_map.is_none_or(|previous| u64::from(warp_map) > previous));
+            assert!(
+                u64::from(topology.revision()) > 0,
+                "Preparing carries a live topology identity"
+            );
+            post.iter()
+                .skip(off_index)
+                .find(|event| {
+                    event.probe_name() == Some("deck_render_context")
+                        && event.u64("mode") == Some(0)
+                        && event.u64("rate_bits") == Some(u64::from(expected_rate.to_bits()))
+                })
+                .expect("Free publishes the exact manual Off render context");
+            let first_rate_index = post
+                .iter()
+                .position(|event| {
+                    event.probe_name() == Some("rate_applied")
+                        && event.u64("applied_rate_bits")
+                            == Some(u64::from(expected_rate.to_bits()))
+                })
+                .expect("the published Off rate reaches the renderer");
+            let first_rate = &post[first_rate_index];
+            let rate_revision = first_rate
+                .u64("request_revision")
+                .expect("rate application carries its revision");
+            let normal_rate = post
+                .iter()
+                .skip(first_rate_index + 1)
+                .find(|event| {
+                    event.probe_name() == Some("rate_applied")
+                        && event.u64("applied_rate_bits")
+                            == Some(u64::from(expected_rate.to_bits()))
+                        && event.u64("request_revision") == Some(rate_revision)
+                })
+                .expect("Free keeps the exact Off rate and revision after its carrier quantum");
+            let normal_source = normal_rate
+                .u64("source_start")
+                .expect("normal Off rate application carries its source boundary");
+            assert!(
+                !post
+                    .iter()
+                    .any(|event| event.probe_name() == Some("decoder_seek_epoch_observed")),
+                "Free retains the resident decoder without a seek"
+            );
+            let events = recorder.snapshot();
+            let (reader_index, reader_source) = events
+                .iter()
+                .enumerate()
+                .skip(baseline.len())
+                .find_map(|(index, event)| {
+                    if event.probe_name() == Some("pcm_reader_admitted")
+                        && event
+                            .u64("render_revision")
+                            .is_some_and(|revision| revision >> u32::BITS == u64::from(warp_map))
+                        && event
+                            .u64("source_start")
+                            .is_some_and(|source| source >= normal_source)
+                    {
+                        event.u64("source_start").map(|source| (index, source))
+                    } else {
+                        None
+                    }
+                })
+                .expect("Free admits matching post-Off map PCM at the manual source boundary");
+            assert_eq!(
+                harness.block_frames, BLOCK_FRAMES,
+                "the Free response contract is defined for 128-frame callbacks"
+            );
+            let target_frames = BLOCK_FRAMES;
+            let callbacks = (target_frames - 1 + target_frames).div_ceil(target_frames);
+            assert_eq!(callbacks, 2, "127 + 128 frames span exactly two callbacks");
+            let mut event_cursor = reader_index.saturating_add(1);
+            let mut run = None;
+            let mut target_consumed_index = None;
+            for _ in 0..callbacks {
+                let current = recorder.snapshot();
+                for (index, event) in current.iter().enumerate().skip(event_cursor) {
+                    if event.probe_name() != Some("pcm_consumed")
+                        || event
+                            .u64("render_revision")
+                            .is_none_or(|revision| revision >> u32::BITS != u64::from(warp_map))
+                    {
+                        continue;
+                    }
+                    let Some((source_start, source_end, output_start, output_end)) = event
+                        .u64("source_start")
+                        .zip(event.u64("source_end"))
+                        .zip(event.u64("output_start"))
+                        .zip(event.u64("output_end"))
+                        .map(|(((source_start, source_end), output_start), output_end)| {
+                            (source_start, source_end, output_start, output_end)
+                        })
+                    else {
+                        continue;
+                    };
+                    if source_start < reader_source
+                        || source_end <= source_start
+                        || output_end <= output_start
+                    {
+                        continue;
+                    }
+                    match run {
+                        Some((first_source, previous_source, first_output, previous_output))
+                            if source_start == previous_source
+                                && output_start == previous_output =>
+                        {
+                            run = Some((first_source, source_end, first_output, output_end));
+                        }
+                        _ => run = Some((source_start, source_end, output_start, output_end)),
+                    }
+                    let Some((first_source, last_source, first_output, last_output)) = run else {
+                        continue;
+                    };
+                    let source_frames = last_source - first_source;
+                    let output_frames = last_output - first_output;
+                    if output_frames < u64::try_from(target_frames).expect("block fits u64") {
+                        continue;
+                    }
+                    assert!(
+                        ((source_frames as f64) - f64::from(expected_rate) * output_frames as f64)
+                            .abs()
+                            < f64::from(expected_rate),
+                        "Free preserves the manual rate across one coherent renderer quantum: source={source_frames}, output={output_frames}, rate={expected_rate}"
+                    );
+                    target_consumed_index = Some(index);
+                    break;
+                }
+                event_cursor = current.len();
+                if target_consumed_index.is_some() {
+                    break;
+                }
+                let _ = harness.render(case, harness.block_frames).await;
+            }
+            let _target_consumed_index = target_consumed_index.expect(
+                "Free must consume 128 target map PCM frames within two callbacks including admission",
+            );
+        }
+        SyncMode::HostSync | SyncMode::LocalSync => {
+            let SyncAdmission::Prepared { warp_map, .. } = admission else {
+                panic!(
+                    "{start:?} -> {expected_mode:?} must prepare a typed warp map: {admission:?}"
+                );
+            };
+            let plans: Vec<_> = post
+                .iter()
+                .filter(|event| event.probe_name() == Some("warp_plan_published"))
+                .collect();
+            assert_eq!(plans.len(), 1, "one command publishes one correlated plan");
+            let plan = plans[0];
+            assert_eq!(plan.u64("warp_map_revision"), Some(u64::from(warp_map)));
+            assert!(baseline_map.is_none_or(|previous| {
+                plan.u64("warp_map_revision")
+                    .is_some_and(|next| next > previous)
+            }));
+            let activation = plan
+                .u64("activation_output")
+                .expect("planned map has an output activation");
+            while harness.rendered_frames <= activation {
+                let _ = harness.render(case, harness.block_frames).await;
+            }
+            harness.settle(case, 4).await;
+            let events = recorder.snapshot();
+            let adopted = events
+                .iter()
+                .skip(baseline.len())
+                .find(|event| {
+                    event.probe_name() == Some("decoder_seek_epoch_observed")
+                        && event.u64("adopted") == Some(1)
+                })
+                .expect("the command-correlated decoder epoch is adopted");
+            let epoch = adopted.u64("current_epoch").expect("adopted epoch");
+            assert!(events.iter().skip(baseline.len()).any(|event| {
+                event.probe_name() == Some("pcm_reader_admitted")
+                    && event.u64("seek_epoch") == Some(epoch)
+            }));
+        }
+    }
+    let capture = harness
+        .capture_frames(case, harness.block_frames * 16, harness.block_frames)
+        .await;
+    assert!(
+        lane_samples(&capture, 0)
+            .iter()
+            .any(|sample| *sample != 0.0)
+    );
+    assert_eq!(
+        harness.player_controls[0]
+            .rt_metrics()
+            .map_or(0, |metrics| metrics.underruns()),
+        baseline_underruns,
+        "{start:?} -> {expected_mode:?} must not add a PCM underrun"
+    );
+    if expected_mode != SyncMode::Off {
+        let events = recorder.snapshot();
+        let consumed = events
+            .iter()
+            .skip(baseline.len())
+            .rev()
+            .find(|event| event.probe_name() == Some("pcm_consumed"))
+            .expect("post-command output carries an attributed PCM span");
+        let source_frames = consumed
+            .u64("source_end")
+            .expect("PCM source end")
+            .saturating_sub(consumed.u64("source_start").expect("PCM source start"));
+        let output_frames = consumed
+            .u64("output_end")
+            .expect("PCM output end")
+            .saturating_sub(consumed.u64("output_start").expect("PCM output start"));
+        let rate = source_frames as f32 / output_frames as f32;
+        assert!(
+            (rate - expected_rate).abs() < 0.02,
+            "{start:?} -> {expected_mode:?} must expose rate {expected_rate}; actual={rate}, source_frames={source_frames}, output_frames={output_frames}"
+        );
+    }
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -2314,7 +2770,6 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
     assert_eq!(first, Some(69_677));
 }
 
-#[ignore = "ignored-red: Disable must cancel an unarmed late-grid launch, 2026-09-13"]
 #[kithara::test(
     native,
     tokio,
@@ -2474,7 +2929,6 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
     );
 }
 
-#[ignore = "ignored-red: Disable before a grid releases only requested playback, 2026-09-13"]
 #[kithara::test(
     native,
     tokio,
@@ -2510,7 +2964,6 @@ async fn disable_before_grid_respects_requested_playback(#[case] play: bool) {
     assert_eq!(audible, play);
 }
 
-#[ignore = "ignored-red: paused late grid resumes its prepared Host phase, 2026-09-13"]
 #[kithara::test(
     native,
     tokio,
@@ -2564,7 +3017,6 @@ async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
     assert_eq!(first, Some(69_677));
 }
 
-#[ignore = "ignored-red: normal HostSync pause resume keeps PCM continuity, 2026-09-13"]
 #[kithara::test(
     native,
     tokio,
@@ -2684,7 +3136,6 @@ struct ListeningScenario {
     expected_activation: u64,
 }
 
-#[ignore = "writes 30-second one-deck Host-metronome previews, 2026-09-12"]
 #[kithara::test(
     native,
     tokio,
@@ -2859,7 +3310,6 @@ fn host_grid_preview(raw: &[f32], reference: &[f32]) -> (Vec<f32>, usize) {
     (preview, clipped)
 }
 
-#[ignore = "ignored-red: real single-deck prepared launch currently produces no post-activation PCM, 2026-09-12"]
 #[kithara::test(
     native,
     tokio,
@@ -3075,7 +3525,6 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
     );
 }
 
-#[ignore = "ignored-red: Scenario 1's same-session stereo-separated capture proves the left deck starts at its native 96 BPM instead of the shared 124 BPM, 2026-09-12"]
 #[kithara::test(
     native,
     tokio,
@@ -3541,7 +3990,6 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: product Warp alignment is not implemented"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
@@ -3572,7 +4020,6 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: product Warp alignment is not implemented"]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
 #[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
@@ -3654,7 +4101,6 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires KITHARA_REMOTE_FIXTURES at build time and product Warp alignment, 2026-09-07"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC)]

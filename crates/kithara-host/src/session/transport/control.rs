@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis, SessionFrame};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridState, MapAxis, SessionFrame};
 
 use super::{
     commit::{
@@ -451,11 +451,7 @@ fn refresh_observation<B: AudioBackend, S>(
             }
         }
     }
-    for deck in state.root.nested_groups_mut() {
-        if let Err(error) = deck.acknowledge_prepared() {
-            tracing::warn!(%error, deck = %deck.id(), "deck did not acknowledge its warp map");
-        }
-    }
+    acknowledge_prepared_decks(state);
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
@@ -472,6 +468,26 @@ fn refresh_observation<B: AudioBackend, S>(
         return Err(SessionError::TransportCommitRejected);
     }
     Ok(observation)
+}
+
+pub(crate) fn acknowledge_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
+    let mut freed: Vec<BeatGridId> = Vec::new();
+    for deck in state.root.nested_groups_mut() {
+        match deck.acknowledge_prepared() {
+            Ok(Some(kithara_warp::SyncStatusSnapshot::Off { .. })) => freed.push(deck.id()),
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, deck = %deck.id(), "deck did not acknowledge its warp map");
+            }
+        }
+    }
+    for deck in freed {
+        if let Err(error) = state.root.release_nested_alignment(deck) {
+            tracing::warn!(%error, %deck, "Host did not release freed deck alignment");
+        } else {
+            state.publish_root();
+        }
+    }
 }
 
 fn apply_completion<B: AudioBackend, S>(

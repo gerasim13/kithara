@@ -167,7 +167,7 @@ where
             self.service_scratch();
             return;
         }
-        self.sync_plan();
+        self.sync_plan(self.rendered_source_end.map_or(0, |(frame, _)| frame));
 
         self.select_context(self.rendered_source_end.map_or(0, |(frame, _)| frame));
 

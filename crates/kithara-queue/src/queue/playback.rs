@@ -33,7 +33,7 @@ where
     /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
-    fn maybe_arm_crossfade(&self) {
+    pub(super) fn maybe_arm_crossfade(&self) {
         if self.is_paused() {
             return;
         }
@@ -197,7 +197,7 @@ where
         Ok(())
     }
 
-    fn update_cached_position(&self) {
+    pub(super) fn update_cached_position(&self) {
         /// Minimum position threshold used to suppress spurious 0.0 reports
         /// on pause/resume. Values above this are considered a valid
         /// non-zero position.

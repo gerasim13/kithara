@@ -326,7 +326,21 @@ impl RenderPass {
             multiplier_bits = multiplier.to_bits()
         );
         let grid = *self.grid.read();
-        context.and_then(|context| grid.project(context, target.with_speed(multiplier)))
+        let projected =
+            context.and_then(|context| grid.project(context, target.with_speed(multiplier)));
+        if let Some(context) = &projected {
+            kithara::probe_event!(
+                deck_render_context,
+                mode = match context.mode() {
+                    kithara_warp::SyncMode::Off => 0_u64,
+                    kithara_warp::SyncMode::LocalSync => 1,
+                    kithara_warp::SyncMode::HostSync => 2,
+                },
+                rate_bits = context.rate().speed().to_bits(),
+                output = i64::from(context.output_frames().end)
+            );
+        }
+        projected
     }
 
     pub(crate) fn resize(&mut self, max_frames: usize) {

@@ -248,7 +248,6 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "ignored-red: bound Warp tempo retarget is not implemented"]
 async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[future(awt)] sweep_sources: PreparedSources,
 ) {
@@ -316,7 +315,6 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "ignored-red: running Warp alignment can underrun before scheduled activation"]
 async fn running_sync_command_changes_audible_pcm_at_planned_activation(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
@@ -430,7 +428,6 @@ async fn capture_intent_sequence(intents: &[SyncIntent], prepared: &PreparedSour
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "ignored-red: latest Warp target replacement is not implemented"]
 async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: PreparedSources) {
     let first = capture_intent_sequence(&[SyncIntent::Enable], &synthetic_sources).await;
     let second = capture_intent_sequence(&[SyncIntent::Disable], &synthetic_sources).await;
@@ -492,7 +489,6 @@ async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: Prepar
     flash(false),
     timeout(Duration::from_secs(180))
 )]
-#[ignore = "ignored-red: bound Warp render is not implemented"]
 async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: PreparedSources) {
     let control = tempo_retarget_run(BLOCK_FRAMES, 16, false, &sweep_sources).await;
     let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true, &sweep_sources).await;
@@ -566,7 +562,6 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "ignored-red: bound Warp shared-worker path is not implemented"]
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {

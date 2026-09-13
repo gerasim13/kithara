@@ -52,19 +52,29 @@ impl<S> TrackLease<S> {
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<T, S> {
     _lease: TrackLease<S>,
+    free_adoption: Option<super::FreeAdoptionControl>,
     warp: Warp<Audio<T>>,
 }
 
 impl<T, S> RegisteredAudio<T, S> {
-    pub(super) const fn new(warp: Warp<Audio<T>>, lease: TrackLease<S>) -> Self {
+    pub(super) const fn new(
+        warp: Warp<Audio<T>>,
+        lease: TrackLease<S>,
+        free_adoption: super::FreeAdoptionControl,
+    ) -> Self {
         Self {
             warp,
             _lease: lease,
+            free_adoption: Some(free_adoption),
         }
     }
 
     pub(crate) fn priority(&self) -> TrackPriority {
         self._lease.priority()
+    }
+
+    pub(crate) fn take_free_adoption(&mut self) -> Option<super::FreeAdoptionControl> {
+        self.free_adoption.take()
     }
 
     delegate::delegate! {

@@ -114,6 +114,20 @@ impl<S> PlayerRuntime<S> {
             )
     }
 
+    pub(crate) fn presentation_frontier_for(
+        &self,
+        item: crate::api::TrackId,
+        warp_map: Option<kithara_warp::WarpMapRevision>,
+    ) -> Option<PresentationFrontier> {
+        self.slot()
+            .and_then(|slot| {
+                self.core
+                    .engine
+                    .slot_render_snapshot_for(slot, item, warp_map)
+            })
+            .map(|snapshot| snapshot.frontier())
+    }
+
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {

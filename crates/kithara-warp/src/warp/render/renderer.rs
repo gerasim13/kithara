@@ -19,6 +19,7 @@ mod tests;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
+    pub(super) disposition: PreparedDisposition,
     pub(super) activation: Option<PreparedActivation>,
     pub(super) warp_map: Option<WarpMapRevision>,
     pub(super) output_rounding_remainder: Option<f64>,
@@ -26,6 +27,12 @@ pub(super) struct PreparedQuantum {
     pub(super) speed: f32,
     pub(super) active_frames: usize,
     pub(super) frames: usize,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum PreparedDisposition {
+    Normal,
+    CarrierActivation,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +62,11 @@ pub struct WarpRenderer<S> {
     pub(super) activation_scratch: Option<SampleBuffer>,
     /// Initial prefill rate, then the latest rate published by the output owner.
     pub(super) rate: RateTarget,
+    /// Free context held from its exact map activation until live Off observes it.
+    ///
+    /// The latch belongs to the loaded immutable plan and its map cursor;
+    /// `sync_plan` clears it before another plan can be selected.
+    pub(super) free_handoff_latch: Option<(crate::WarpCursor, RateTarget)>,
     pub(super) rate_context: Option<RenderContext>,
     pub(super) prepared_context: Option<RenderSnapshot>,
     pub(super) committed: Option<RenderSnapshot>,
@@ -173,6 +185,7 @@ where
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
             rate,
+            free_handoff_latch: None,
             prepared_context: None,
             rate_context: None,
             applied_pitch: f64::NAN,
@@ -246,6 +259,7 @@ where
         self.output_remainder = 0.0;
         self.prepared_quantum = None;
         self.prepared_context = None;
+        self.free_handoff_latch = None;
         self.rendered_source_end = None;
         self.applied_warp_map = None;
         self.source_frames_admitted = 0;
@@ -413,6 +427,28 @@ where
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
+    }
+
+    /// Returns the coherent same-epoch committed source/output/map frontier.
+    ///
+    /// A worker uses this cursor to install a map before accepting another
+    /// source quantum. Returns `None` before the first commit and after reset;
+    /// callback snapshots that have advanced beyond the committed frontier are
+    /// deliberately not merged into this cursor.
+    #[must_use]
+    pub fn adoption_frontier(&self) -> Option<crate::PresentationFrontier> {
+        let snapshot = self.context.load()?;
+        let source = self.rendered_source_end?.0;
+        let committed = self.committed.as_ref().filter(|committed| {
+            committed.context().session_epoch() == snapshot.context().session_epoch()
+        })?;
+        Some(
+            crate::PresentationFrontier::builder()
+                .source(source)
+                .output(committed.frontier().output())
+                .maybe_warp_map(committed.frontier().warp_map())
+                .build(),
+        )
     }
 
     /// Whether this target has elastic DSP and needs worker staging.

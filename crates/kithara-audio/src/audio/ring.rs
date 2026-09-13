@@ -246,6 +246,7 @@ impl RingConsumer {
                         seek_epoch = epoch,
                         source_start = source.start(),
                         source_end = source.end(),
+                        frames = data.frames(),
                         render_revision = source.render_revision()
                     );
                 }
@@ -615,6 +616,15 @@ mod tests {
             Self::with_wake_mode(preloaded, false, ConsumerWakeMode::RealtimeDeferred)
         }
 
+        fn with_ring_capacity(preloaded: bool, capacity: usize) -> Self {
+            Self::with_parts(
+                preloaded,
+                false,
+                ConsumerWakeMode::RealtimeDeferred,
+                capacity,
+            )
+        }
+
         fn chunk(&self, samples: &[f32]) -> AudioChunk {
             let mut meta = AudioChunkInfo::default();
             meta.spec.channels = 1;
@@ -633,8 +643,17 @@ mod tests {
             block_on_underrun: bool,
             consumer_wake_mode: ConsumerWakeMode,
         ) -> Self {
+            Self::with_parts(preloaded, block_on_underrun, consumer_wake_mode, 4)
+        }
+
+        fn with_parts(
+            preloaded: bool,
+            block_on_underrun: bool,
+            consumer_wake_mode: ConsumerWakeMode,
+            capacity: usize,
+        ) -> Self {
             let pools = pools();
-            let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(4, None);
+            let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(capacity, None);
             let (trash_tx, trash_rx) = connect::<AudioChunk>(8, None);
             let mut ring = RingConsumer::new(RingParts {
                 audio_rx,
@@ -827,6 +846,146 @@ mod tests {
             .expect("chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn free_target_at_the_fifth_ring_entry_follows_at_most_159_old_frames() {
+        const Q: usize = 32;
+        const C: usize = 5;
+        let old_revision =
+            kithara_signal::pack_render_revision(0, 7).expect("fixture old revision fits");
+        let target_revision =
+            kithara_signal::pack_render_revision(11, 8).expect("fixture target revision fits");
+        let mut fixture = RingFixture::with_ring_capacity(true, C);
+
+        let mut current = fixture.chunk(&[1.0; Q]);
+        current.meta.frame_offset = 0;
+        current.meta.render_revision = old_revision;
+        fixture.data_tx.push_direct(Fetch::rendered(
+            current,
+            0,
+            SourceEnd::new(Q as u64, AudioChunkInfo::default().spec.sample_rate),
+        ));
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        let mut first = [0.0; 1];
+        let first_read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut first,
+            )
+            .expect("current old PCM remains readable");
+        assert!(matches!(
+            first_read.outcome,
+            ReadOutcome::Frames { count, .. } if count.get() == 1
+        ));
+        assert_eq!(first, [1.0]);
+
+        for index in 1..=4 {
+            let mut old = fixture.chunk(&[1.0; Q]);
+            old.meta.frame_offset = u64::try_from(index * Q).expect("fixture offset fits");
+            old.meta.render_revision = old_revision;
+            assert!(fixture.data_tx.can_push_direct());
+            fixture.data_tx.push_direct(Fetch::rendered(
+                old,
+                0,
+                SourceEnd::new(
+                    u64::try_from((index + 1) * Q).expect("fixture source end fits"),
+                    AudioChunkInfo::default().spec.sample_rate,
+                ),
+            ));
+        }
+        let mut target = fixture.chunk(&[2.0; Q]);
+        target.meta.frame_offset = u64::try_from(C * Q).expect("fixture offset fits");
+        target.meta.render_revision = target_revision;
+        assert!(fixture.data_tx.can_push_direct());
+        fixture.data_tx.push_direct(Fetch::rendered(
+            target,
+            0,
+            SourceEnd::new(
+                u64::try_from((C + 1) * Q).expect("fixture source end fits"),
+                AudioChunkInfo::default().spec.sample_rate,
+            ),
+        ));
+        assert!(
+            !fixture.data_tx.can_push_direct(),
+            "C=5 admits four queued old chunks and target as its fifth entry"
+        );
+
+        let mut old_output = [0.0; C * Q - 1];
+        let old_read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut old_output,
+            )
+            .expect("admitted old PCM remains readable without underrun");
+        let ReadOutcome::Frames {
+            count,
+            source_span: Some(old_span),
+            ..
+        } = old_read.outcome
+        else {
+            panic!("the old prefix is fully readable");
+        };
+        assert_eq!(count.get(), C * Q - 1);
+        assert_eq!(old_output, [1.0; C * Q - 1]);
+        assert_eq!(old_span.render_revision(), old_revision);
+        for _ in 0..C {
+            assert_eq!(
+                fixture
+                    .trash_rx
+                    .try_pop()
+                    .map(|chunk| chunk.meta.render_revision),
+                Some(old_revision),
+                "only consumed old chunks are recycled before target consumption"
+            );
+        }
+        assert!(fixture.trash_rx.try_pop().is_none());
+
+        let mut target_output = [0.0; Q];
+        let target_read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut target_output,
+            )
+            .expect("the admitted target follows without discard or underrun");
+        let ReadOutcome::Frames {
+            count,
+            source_span: Some(target_span),
+            ..
+        } = target_read.outcome
+        else {
+            panic!("the target quantum is fully readable");
+        };
+        assert_eq!(count.get(), Q);
+        assert_eq!(target_output, [2.0; Q]);
+        assert_eq!(
+            target_read
+                .first_output_meta
+                .map(|meta| meta.render_revision),
+            Some(target_revision)
+        );
+        assert_eq!(target_span.render_revision(), target_revision);
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(target_span.render_revision()),
+            8
+        );
+        assert_eq!(
+            kithara_signal::render_rate_revision(target_span.render_revision()),
+            11
+        );
     }
 
     #[kithara::test]

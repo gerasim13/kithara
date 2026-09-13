@@ -81,6 +81,7 @@ pub struct Resource {
     region_plan: Option<Arc<RegionPlanSlot>>,
     #[field(get, copy)]
     activation_blend_frames: Option<NonZeroUsize>,
+    free_adoption: Option<crate::worker::FreeAdoptionControl>,
     reader: ReaderOwner,
 }
 
@@ -143,8 +144,13 @@ impl Drop for CancelGuard {
 
 impl Resource {
     pub(crate) fn render_activation(&self) -> Option<RenderActivation> {
-        let activation = self.region_plan.as_deref()?.activation()?;
-        let revision = kithara_signal::pack_render_revision(0, u64::from(activation.revision()))?;
+        let plan = self.region_plan.as_deref()?.load()?;
+        let activation = plan.activation().copied()?;
+        let rate = plan
+            .free_handoff()
+            .map_or(0, |activation| activation.rate().revision());
+        let revision =
+            kithara_signal::pack_render_revision(rate, u64::from(activation.revision()))?;
         Some(RenderActivation {
             output: activation.output(),
             revision,
@@ -220,6 +226,7 @@ impl Resource {
             render_publisher: None,
             region_plan: None,
             activation_blend_frames: None,
+            free_adoption: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -248,6 +255,7 @@ impl Resource {
         let mut audio = worker.open(config).await?;
         let priority = audio.priority();
         let region_plan = audio.region_plan();
+        let free_adoption = audio.take_free_adoption();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",
         })?;
@@ -259,8 +267,13 @@ impl Resource {
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
         resource.region_plan = Some(region_plan);
+        resource.free_adoption = free_adoption;
         resource.activation_blend_frames = Some(activation_blend_frames);
         Ok(resource)
+    }
+
+    pub(crate) fn take_free_adoption(&mut self) -> Option<crate::worker::FreeAdoptionControl> {
+        self.free_adoption.take()
     }
 
     /// Create a resource with a bounded observer of decoded audio attached.

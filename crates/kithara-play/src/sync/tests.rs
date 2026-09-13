@@ -1,14 +1,16 @@
 use std::num::NonZeroU32;
 
+use kithara_events::TrackId;
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
-    BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal, BeatsPerMinute,
-    FrameUncertainty, LoadGeneration, MapAxis, MapSegment, Meter, MeterFacts, PresentationFrontier,
-    RateTarget, ReconcileCause, RenderContext, SegmentFacts, SegmentSet, SessionAnchor,
-    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied,
-    SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode,
-    SyncOperation, SyncStatusSnapshot, TopologyOperation, TransportRevision,
+    AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridQuery,
+    BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker,
+    BeatOrdinal, BeatsPerMinute, FrameUncertainty, LoadGeneration, MapAxis, MapPoint, MapPosition,
+    MapSegment, Meter, MeterFacts, PresentationFrontier, RateTarget, ReconcileCause, RenderContext,
+    SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
+    TransportRevision,
 };
 
 use super::{GroupState, host_seek};
@@ -391,17 +393,277 @@ fn free_leaves_the_beat_timeline() {
     let _ = group
         .transact(sync(group.id(), SyncIntent::Disable))
         .expect("disable seeds local sync");
-    let admission = group
-        .transact(sync(group.id(), SyncIntent::Free))
-        .expect("free");
-    assert!(
-        matches!(admission, SyncAdmission::StateChanged { .. }),
-        "{admission:?}"
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::GridAvailable,
+        PresentationFrontier::builder()
+            .source(24_000)
+            .output(SessionFrame::new(24_000))
+            .warp_map(kithara_warp::WarpMapRevision::first())
+            .build(),
     );
+    let previous = group.prepared().expect("reconcile leaves its map prepared");
+    let previous_identity = (previous.operation, previous.warp_map);
+    let admission = group
+        .transact(SyncOperation::Sync {
+            target: group.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(48_000)
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                preparation_source: 48_448,
+                playback_rate: RateTarget::default(),
+            },
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Free,
+        })
+        .expect("free");
+    let SyncAdmission::Preparing {
+        operation,
+        warp_map,
+        ..
+    } = admission
+    else {
+        panic!("Free must reserve identity before worker adoption: {admission:?}");
+    };
+    assert_ne!((operation, warp_map), previous_identity);
+    assert!(group.prepared().is_none());
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Preparing {
+            operation: current_operation,
+            warp_map: current_map,
+            ..
+        } if (current_operation, current_map) == (operation, warp_map)
+    ));
+    let (load, transport) = group.generations();
+    assert!(
+        group.adopt_free(crate::worker::FreeAdoptionReceipt::Installed(
+            crate::worker::FreeAdoptionInstalled {
+                operation,
+                warp_map,
+                item: TrackId(1),
+                load,
+                transport,
+                decode_epoch: 0,
+                source: 48_448,
+                output: SessionFrame::new(48_448),
+                activation_beat: SessionBeat::default(),
+            },
+        ))
+    );
+    let prepared = group.prepared().expect("worker-adopted Free handoff");
+    assert_eq!(prepared.source, 48_448);
+    assert_eq!(prepared.activation, SessionFrame::new(48_448));
+    let applied = SyncApplied::builder()
+        .group(group.snapshot().stamp())
+        .load(load)
+        .frontier(
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .warp_map(warp_map)
+                .build(),
+        )
+        .operation(operation)
+        .topology(group.topology().expect("topology").stamp())
+        .transport(transport)
+        .warp_map(warp_map)
+        .build();
+    assert!(matches!(
+        group.acknowledge(applied).expect("Free applies"),
+        SyncStatusSnapshot::Off { .. }
+    ));
     let rejected = group
         .transact(tempo(group.id(), 126.0))
         .expect_err("a free group has no tempo owner");
     assert_eq!(*rejected.error(), transport_unavailable());
+}
+
+#[kithara::test]
+fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
+    let mut group = live_deck();
+    let _ = group
+        .transact(sync(group.id(), SyncIntent::Disable))
+        .expect("disable seeds local sync");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::GridAvailable,
+        PresentationFrontier::builder()
+            .source(24_000)
+            .output(SessionFrame::new(24_000))
+            .warp_map(kithara_warp::WarpMapRevision::first())
+            .build(),
+    );
+    let SyncAdmission::Preparing {
+        operation,
+        warp_map,
+        ..
+    } = group
+        .transact(SyncOperation::Sync {
+            target: group.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(48_000)
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                preparation_source: 48_448,
+                playback_rate: RateTarget::default(),
+            },
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Free,
+        })
+        .expect("free")
+    else {
+        panic!("Free must prepare")
+    };
+    let (load, transport) = group.generations();
+
+    assert!(
+        group.adopt_free(crate::worker::FreeAdoptionReceipt::Rejected(
+            crate::worker::FreeAdoptionRejected {
+                operation,
+                warp_map,
+                item: TrackId(1),
+                load,
+                transport,
+                decode_epoch: 0,
+                reason: crate::worker::FreeAdoptionRejectReason::Geometry,
+            },
+        ))
+    );
+    assert!(group.preparing().is_none());
+    assert!(group.prepared().is_none());
+}
+
+#[kithara::test]
+fn installed_free_receipt_is_consumed_once() {
+    let mut group = live_deck();
+    let _ = group
+        .transact(sync(group.id(), SyncIntent::Disable))
+        .expect("disable seeds local sync");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::GridAvailable,
+        PresentationFrontier::builder()
+            .source(24_000)
+            .output(SessionFrame::new(24_000))
+            .warp_map(kithara_warp::WarpMapRevision::first())
+            .build(),
+    );
+    let SyncAdmission::Preparing {
+        operation,
+        warp_map,
+        ..
+    } = group
+        .transact(SyncOperation::Sync {
+            target: group.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(48_000)
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                preparation_source: 48_448,
+                playback_rate: RateTarget::default(),
+            },
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Free,
+        })
+        .expect("free")
+    else {
+        panic!("Free must prepare")
+    };
+    let (load, transport) = group.generations();
+    let receipt =
+        crate::worker::FreeAdoptionReceipt::Installed(crate::worker::FreeAdoptionInstalled {
+            operation,
+            warp_map,
+            item: TrackId(1),
+            load,
+            transport,
+            decode_epoch: 0,
+            source: 48_448,
+            output: SessionFrame::new(48_448),
+            activation_beat: SessionBeat::default(),
+        });
+
+    assert!(group.adopt_free(receipt));
+    assert!(!group.adopt_free(receipt));
+}
+
+#[kithara::test]
+fn worker_handoff_geometry_derives_source_output_and_beat_together() {
+    let owner = live_deck().snapshot();
+    let member = asset_grid(BeatGridId::allocate().expect("grid id"), 480_000, 24_000);
+    let alignment = |source, output, preparation_source| {
+        crate::sync::prepare::handoff_member(
+            &owner,
+            &member,
+            None,
+            AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(source)
+                    .output(SessionFrame::new(output))
+                    .build(),
+                preparation_source,
+                playback_rate: RateTarget::default(),
+            },
+        )
+        .expect("fixture geometry covers worker boundary")
+    };
+    let early = alignment(48_000, 48_000, 48_448);
+    let late = alignment(96_000, 96_000, 96_448);
+
+    assert_ne!(
+        (early.source, early.activation, early.activation_beat),
+        (late.source, late.activation, late.activation_beat),
+        "a later worker boundary must not reuse a scalar activation beat"
+    );
+}
+
+#[kithara::test]
+fn free_activation_stays_at_the_renderer_frontier() {
+    let owner = live_deck().snapshot();
+    let frontier = PresentationFrontier::builder()
+        .source(24_192)
+        .output(SessionFrame::new(93_824))
+        .warp_map(kithara_warp::WarpMapRevision::from_raw(
+            std::num::NonZero::new(2).expect("fixture revision"),
+        ))
+        .build();
+
+    let (source, output, beat) =
+        crate::sync::prepare::free_activation_at_frontier(&owner, frontier)
+            .expect("owner grid covers the renderer frontier");
+
+    assert_eq!(source, 24_192);
+    assert_eq!(output, SessionFrame::new(93_824));
+    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(MapPoint::new(
+        owner.stamp(),
+        MapPosition::Session(SessionFrame::new(93_824)),
+    )) else {
+        panic!("owner fixture resolves the frontier beat");
+    };
+    assert_eq!(
+        beat,
+        SessionBeat::new(f64::from(*owner_beat.value().value())).expect("finite beat")
+    );
 }
 
 #[kithara::test]

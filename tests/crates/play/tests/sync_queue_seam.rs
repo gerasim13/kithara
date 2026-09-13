@@ -223,7 +223,6 @@ fn stretch_to(bpm: f64, original: f64) -> f32 {
     (bpm / original) as f32
 }
 
-#[ignore = "ignored-red: the leading track is cut at the queue tick and the deck rate is not carried into the next track (plan 1 Tasks 4-5), 2026-09-07"]
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_rate_persists_into_next_track() {
     let recorder = probe_capture::install();
@@ -377,7 +376,6 @@ async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
     );
 }
 
-#[ignore = "ignored-red: prepared alignment is not yet delivered to the renderer as a versioned source/output map with exact-frame activation (next Warp phase), 2026-09-10"]
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn published_track_grids_align_the_rendered_beats() {
     let case = DOWNTEMPO_HOUSE_SYNC;

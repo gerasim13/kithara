@@ -660,6 +660,13 @@ impl<S> EngineImpl<S> {
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]
             pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
+            #[call(render_snapshot_for)]
+            pub(crate) fn slot_render_snapshot_for(
+                &self,
+                slot: SlotId,
+                item_id: TrackId,
+                warp_map: Option<kithara_warp::WarpMapRevision>,
+            ) -> Option<RenderSnapshot>;
         }
     }
 }

@@ -23,6 +23,7 @@ struct TrackState {
     plan: Option<Arc<RegionPlan>>,
     grid: Option<TrackGrid>,
     initial_source_cue: InitialSourceCue,
+    free_adoption: Option<crate::worker::FreeAdoptionControl>,
 }
 
 #[derive(Default)]
@@ -85,6 +86,11 @@ impl Playlist {
 
     pub(crate) fn clear(&mut self) {
         self.items.clear();
+        for track in self.tracks.values() {
+            if let Some(adoption) = &track.free_adoption {
+                adoption.close();
+            }
+        }
         self.tracks.clear();
         self.current = 0;
         self.last_announced = None;
@@ -94,17 +100,96 @@ impl Playlist {
         if let Some(item) = self.items.get_mut(index)
             && let Some(cleared) = item.take()
         {
+            if let Some(adoption) = self
+                .tracks
+                .get(&cleared.item_id)
+                .and_then(|track| track.free_adoption.as_ref())
+            {
+                adoption.close();
+            }
             self.tracks.remove(&cleared.item_id);
         }
     }
 
-    pub(crate) fn track_loaded(&mut self, item: TrackId, slot: Option<Arc<RegionPlanSlot>>) {
+    pub(crate) fn track_loaded(
+        &mut self,
+        item: TrackId,
+        slot: Option<Arc<RegionPlanSlot>>,
+        free_adoption: Option<crate::worker::FreeAdoptionControl>,
+    ) {
         let Some(slot) = slot else {
             return;
         };
         let track = self.tracks.entry(item).or_default();
+        if let Some(adoption) = &track.free_adoption {
+            adoption.close();
+        }
         slot.install(track.plan.clone());
         track.slot = Some(slot);
+        track.free_adoption = free_adoption;
+    }
+
+    pub(crate) fn publish_free_adoption(
+        &self,
+        item: TrackId,
+        request: crate::worker::FreeAdoptionRequest,
+    ) -> bool {
+        let Some(adoption) = self
+            .tracks
+            .get(&item)
+            .and_then(|track| track.free_adoption.as_ref())
+        else {
+            return false;
+        };
+        adoption.publish(request);
+        true
+    }
+
+    pub(crate) fn free_adoption_receipt(
+        &self,
+        item: TrackId,
+    ) -> Option<crate::worker::FreeAdoptionReceipt> {
+        self.tracks.get(&item)?.free_adoption.as_ref()?.receipt()
+    }
+
+    pub(crate) fn cancel_outgoing_free_adoption(&self, item: TrackId) {
+        if let Some(adoption) = self
+            .tracks
+            .get(&item)
+            .and_then(|track| track.free_adoption.as_ref())
+        {
+            adoption.cancel_pending();
+        }
+    }
+
+    pub(crate) fn transition_free_adoption<R>(
+        &self,
+        item: TrackId,
+        operation: kithara_warp::SyncOperationId,
+        warp_map: kithara_warp::WarpMapRevision,
+        mutate: impl FnOnce() -> (R, bool),
+    ) -> R {
+        let Some(adoption) = self
+            .tracks
+            .get(&item)
+            .and_then(|track| track.free_adoption.as_ref())
+        else {
+            return mutate().0;
+        };
+        adoption.transition(operation, warp_map, mutate)
+    }
+
+    pub(crate) fn free_adoption_transition(
+        &self,
+        item: TrackId,
+    ) -> Option<crate::worker::FreeAdoptionTransition> {
+        Some(
+            self.tracks
+                .get(&item)?
+                .free_adoption
+                .as_ref()?
+                .transition_endpoint(),
+        )
     }
 
     pub(crate) fn track_grid(&self, item: TrackId) -> Option<&TrackGrid> {
@@ -318,10 +403,83 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{
         AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment,
-        MapAxis, RegionPlan, RegionPlanSlot,
+        LoadGeneration, MapAxis, RegionPlan, RegionPlanSlot, SessionAnchor, SessionBeat,
+        SessionEpoch, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
     };
 
     use super::{Playlist, Slot};
+
+    #[kithara::test(native, flash(false))]
+    fn selecting_a_new_track_cancels_only_the_outgoing_free_adoption() {
+        let mut playlist = Playlist::default();
+        let first = TrackId(7);
+        let second = TrackId(8);
+        let (first_adoption, first_worker) = crate::worker::free_adoption();
+        let (second_adoption, second_worker) = crate::worker::free_adoption();
+        playlist.items = vec![
+            Some(Slot {
+                resource: None,
+                item_id: first,
+            }),
+            Some(Slot {
+                resource: None,
+                item_id: second,
+            }),
+        ];
+        playlist.track_loaded(
+            first,
+            Some(Arc::new(RegionPlanSlot::default())),
+            Some(first_adoption),
+        );
+        playlist.track_loaded(
+            second,
+            Some(Arc::new(RegionPlanSlot::default())),
+            Some(second_adoption),
+        );
+
+        assert!(playlist.publish_free_adoption(first, free_adoption_request(first)));
+        assert_ne!(first_worker.pending_generation(), 0);
+        playlist.set_current(1);
+        playlist.cancel_outgoing_free_adoption(first);
+
+        assert_eq!(playlist.item_id(playlist.current()), Some(second));
+        assert!(matches!(
+            playlist.free_adoption_receipt(first),
+            Some(crate::worker::FreeAdoptionReceipt::Rejected(rejection))
+                if rejection.reason == crate::worker::FreeAdoptionRejectReason::Superseded
+        ));
+        assert!(playlist.free_adoption_receipt(second).is_none());
+        assert_eq!(second_worker.pending_generation(), 0);
+    }
+
+    fn free_adoption_request(item: TrackId) -> crate::worker::FreeAdoptionRequest {
+        let sample_rate =
+            std::num::NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::default(),
+            2.0,
+            sample_rate,
+        )
+        .expect("fixture anchor is valid");
+        crate::worker::FreeAdoptionRequest {
+            operation: SyncOperationId::first(),
+            warp_map: WarpMapRevision::first(),
+            item,
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            decode_epoch: 0,
+            manual_rate: kithara_warp::RateTarget::default(),
+            owner: BeatGridSnapshot::session(
+                BeatGridId::allocate().expect("fixture identity"),
+                BeatGridRevision::first(),
+                SessionEpoch::new(0),
+                anchor,
+                None,
+            ),
+            plan: plan(),
+        }
+    }
 
     fn plan() -> Arc<RegionPlan> {
         Arc::new(RegionPlan::new(vec![GridSegment::new(0, 48_000, 1.0)]).expect("fixture plan"))
@@ -433,7 +591,7 @@ mod tests {
         playlist.set_track_plan(item, Some(plan.clone()));
         let slot = Arc::new(RegionPlanSlot::default());
 
-        playlist.track_loaded(item, Some(slot.clone()));
+        playlist.track_loaded(item, Some(slot.clone()), None);
 
         assert!(
             slot.load()
@@ -446,7 +604,7 @@ mod tests {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
         let slot = Arc::new(RegionPlanSlot::default());
-        playlist.track_loaded(item, Some(slot.clone()));
+        playlist.track_loaded(item, Some(slot.clone()), None);
         assert!(slot.load().is_none());
 
         let plan = plan();
@@ -487,7 +645,7 @@ mod tests {
                 segments: segments(),
             },
         );
-        playlist.track_loaded(stale, Some(slot.clone()));
+        playlist.track_loaded(stale, Some(slot.clone()), None);
         playlist.set_track_plan(stale, Some(existing.clone()));
         let replacement = plan();
         let mut committed = false;
@@ -527,7 +685,7 @@ mod tests {
                 segments: segments(),
             },
         );
-        playlist.track_loaded(item, Some(slot.clone()));
+        playlist.track_loaded(item, Some(slot.clone()), None);
         playlist.set_track_plan(item, Some(existing.clone()));
         playlist.publish_track_grid(
             item,

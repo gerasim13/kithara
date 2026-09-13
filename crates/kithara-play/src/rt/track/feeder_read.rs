@@ -333,17 +333,7 @@ impl PlayerResource {
                     frames: frames_to_write,
                 }
             } else {
-                metrics.record_underrun();
-                kithara::probe_event!(
-                    pcm_underrun,
-                    output_start =
-                        context.map_or(0, |context| i64::from(context.output_frames().start)),
-                    requested_frames = frames_to_read,
-                    available_frames = frames_to_write
-                );
-                for ch in output.iter_mut() {
-                    ch[range.start + frames_to_write..range.end].fill(0.0);
-                }
+                self.fill_underrun(context, track_id, output, range, frames_to_write, metrics);
                 ReadOutcome::Full {
                     frames: frames_to_write,
                 }
@@ -352,18 +342,7 @@ impl PlayerResource {
         } else if eof_reached {
             (ReadOutcome::Eof, 0)
         } else {
-            metrics.record_underrun();
-            kithara::probe_event!(
-                pcm_underrun,
-                output_start =
-                    context.map_or(0, |context| i64::from(context.output_frames().start)),
-                requested_frames = frames_to_read,
-                available_frames = 0_usize
-            );
-            let range_len = range.len();
-            for ch in output.iter_mut() {
-                ch[range.start..range.start + range_len].fill(0.0);
-            }
+            self.fill_underrun(context, track_id, output, range, 0, metrics);
             (ReadOutcome::Full { frames: 0 }, 0)
         }
     }

@@ -5,7 +5,7 @@ use kithara_warp::{
 
 use super::super::{
     GroupState,
-    prepare::{PreparedSync, align_member, host_seek_policy},
+    prepare::{PreparedDisposition, PreparedSync, align_member, host_seek_policy},
 };
 
 #[derive(Clone, Copy)]
@@ -84,6 +84,7 @@ where
             activation_beat: alignment.activation_beat,
             source: alignment.source,
             target,
+            disposition: PreparedDisposition::Lock,
         },
         topology: TopologyStamp::new(group.grid.id(), group.topology_revision),
     })

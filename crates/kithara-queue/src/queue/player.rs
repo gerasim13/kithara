@@ -64,8 +64,6 @@ where
         to self {
             #[call(seek_player)]
             fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
-            #[call(tick_player)]
-            fn tick(&self) -> Result<(), PlayError>;
         }
         to self.player {
             #[cfg(not(target_arch = "wasm32"))]
@@ -85,6 +83,17 @@ where
             ) -> Result<SyncAdmission, SyncError>;
             fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
         }
+    }
+
+    fn tick(&mut self) -> Result<(), PlayError> {
+        let _admission = self.control.lock_admission();
+        self.control.ensure_open()?;
+        self.player.tick()?;
+        self.control.player.process_notifications();
+        self.control.drain_player_events();
+        self.control.update_cached_position();
+        self.control.maybe_arm_crossfade();
+        Ok(())
     }
 }
 

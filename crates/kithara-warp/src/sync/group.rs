@@ -20,6 +20,12 @@ pub enum SyncStatusSnapshot {
         topology: TopologyStamp,
         required: MapRegion,
     },
+    /// A Free handoff awaits its worker-owned adoption boundary.
+    Preparing {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        warp_map: WarpMapRevision,
+    },
     /// A warp map is admitted but its activation has not been acknowledged.
     Prepared {
         operation: SyncOperationId,

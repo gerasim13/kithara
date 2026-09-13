@@ -1,6 +1,6 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicU64, Ordering},
 };
 
 use firewheel::{
@@ -26,8 +26,8 @@ use kithara_signal::AudioSpec;
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    GridSegment, RegionPlan, RegionPlanSlot, SessionEpoch, SessionFrame, Warp, WarpConfig, WarpMap,
-    WarpMapRevision,
+    GridSegment, RegionPlan, RegionPlanSlot, SessionEpoch, SessionFrame, StretchControls, Warp,
+    WarpConfig, WarpMap, WarpMapRevision,
 };
 use ringbuf::traits::{Consumer, Producer};
 
@@ -218,6 +218,7 @@ struct RevisionReader {
     position_frames: u64,
     replacement_frames: usize,
     revision: u64,
+    revision_observer: Option<Arc<AtomicU64>>,
     sample: f32,
     spec: AudioSpec,
 }
@@ -230,11 +231,19 @@ impl RevisionReader {
             position_frames: 0,
             replacement_frames,
             revision: 0,
+            revision_observer: None,
             sample: 1.0,
             spec: AudioSpec::new(
                 2,
                 NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
             ),
+        }
+    }
+
+    fn observing_revision(replacement_frames: usize, observer: Arc<AtomicU64>) -> Self {
+        Self {
+            revision_observer: Some(observer),
+            ..Self::new(replacement_frames)
         }
     }
 }
@@ -317,6 +326,9 @@ impl AudioControl for RevisionReader {
             return RevisionFloorStatus::WaitingForReplacement;
         }
         self.revision = revision;
+        if let Some(observer) = &self.revision_observer {
+            observer.store(revision, Ordering::Release);
+        }
         self.sample = 2.0;
         RevisionFloorStatus::Switched
     }
@@ -346,6 +358,110 @@ fn scheduled_revision_resource(
         Some(NonZeroUsize::new(40).expect("fixture activation blend is non-zero"));
     PlayerResource::new(resource, Arc::from("revision"), &pools())
         .unwrap_or_else(|error| panic!("test player resource: {error}"))
+}
+
+#[kithara::test]
+fn free_activation_replaces_a_128_frame_refill_before_its_target_is_presented() {
+    const B: usize = 128;
+    let controls = StretchControls::new(1.0);
+    controls.set_speed(0.75);
+    let manual_rate = controls.rate_target();
+    let warp_map = WarpMapRevision::first();
+    let activation = WarpMap::identity(warp_map).reanchor(
+        128,
+        SessionFrame::new(128),
+        kithara_warp::SessionBeat::default(),
+    );
+    let slot = Arc::new(RegionPlanSlot::default());
+    slot.install(Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(0, 10_000, 2.0)])
+            .expect("fixture plan")
+            .with_free_activation(activation, manual_rate),
+    )));
+    let observed_revision = Arc::new(AtomicU64::new(0));
+    let mut resource = Resource::from_reader(
+        RevisionReader::observing_revision(B, Arc::clone(&observed_revision)),
+        None,
+    );
+    resource.region_plan = Some(slot);
+    assert_eq!(
+        resource
+            .render_activation()
+            .map(|activation| activation.revision),
+        kithara_signal::pack_render_revision(manual_rate.revision(), u64::from(warp_map))
+    );
+    let mut resource = PlayerResource::new(resource, Arc::from("free-refill"), &pools())
+        .unwrap_or_else(|error| panic!("test player resource: {error}"));
+    let metrics = RtMetrics::default();
+    let first_context = RenderContext::new(
+        SessionFrame::new(0)..SessionFrame::new(128),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let target_context = RenderContext::new(
+        SessionFrame::new(128)..SessionFrame::new(256),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut first_left = [0.0; B];
+    let mut first_right = [0.0; B];
+    let mut first_output = [&mut first_left[..], &mut first_right[..]];
+
+    assert!(
+        resource
+            .presentation_source_end(first_context.sample_rate())
+            .is_none(),
+        "decoded PCM is not presented before consumption"
+    );
+    let (first, _) = resource.read_with_context(
+        Some(&first_context),
+        None,
+        &mut first_output,
+        0..B,
+        &metrics,
+    );
+    assert_eq!(first, crate::rt::track::ReadOutcome::Full { frames: B });
+    assert_eq!(first_left, [1.0; B]);
+    assert_eq!(first_right, [1.0; B]);
+
+    assert_eq!(
+        resource
+            .presentation_source_end(target_context.sample_rate())
+            .map(|(_, revision)| revision),
+        Some(0),
+        "the target frontier is not published before its callback consumes target PCM"
+    );
+    let mut target_left = [0.0; B];
+    let mut target_right = [0.0; B];
+    let mut target_output = [&mut target_left[..], &mut target_right[..]];
+    let (target, _) = resource.read_with_context(
+        Some(&target_context),
+        None,
+        &mut target_output,
+        0..B,
+        &metrics,
+    );
+    assert_eq!(target, crate::rt::track::ReadOutcome::Full { frames: B });
+    assert_eq!(target_left, [2.0; B]);
+    assert_eq!(target_right, [2.0; B]);
+    assert!(
+        target_left.iter().filter(|&&sample| sample == 1.0).count() <= B - 1,
+        "the refill boundary leaves fewer than one callback of old PCM before the target"
+    );
+    let (_, warp_map_revision) = resource
+        .presentation_source_end(target_context.sample_rate())
+        .expect("target provenance is presented in its activation callback");
+    assert_eq!(warp_map_revision, u64::from(warp_map));
+    assert_eq!(
+        kithara_signal::render_rate_revision(observed_revision.load(Ordering::Acquire)),
+        manual_rate.revision()
+    );
 }
 
 #[kithara::test]

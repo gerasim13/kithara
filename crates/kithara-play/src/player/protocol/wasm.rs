@@ -10,7 +10,7 @@ use portable_atomic::{AtomicF32, Ordering};
 
 use crate::{
     api::TrackId,
-    sync::{DeckGrid, GroupState, PreparedSync},
+    sync::{DeckGrid, GroupState, PreparedSync, prepare::FreePreparing},
 };
 
 pub(crate) struct PlayerSync {
@@ -37,6 +37,18 @@ impl PlayerSync {
         self.owned
             .as_ref()
             .map_or(self.prepared, GroupState::prepared)
+    }
+
+    pub(crate) fn preparing(&self) -> Option<FreePreparing> {
+        self.owned
+            .as_ref()
+            .and_then(|owned| owned.preparing().cloned())
+    }
+
+    pub(crate) fn adopt_free(&mut self, receipt: crate::worker::FreeAdoptionReceipt) -> bool {
+        self.owned
+            .as_mut()
+            .is_some_and(|owned| owned.adopt_free(receipt))
     }
 
     delegate::delegate! {

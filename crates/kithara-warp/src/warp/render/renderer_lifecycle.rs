@@ -371,7 +371,7 @@ where
             self.applied_warp_map.map_or(0, u64::from),
         )
         .unwrap_or(rate_revision);
-        self.render_at(chunk, speed, snapshot, None)
+        self.render_at(chunk, speed, snapshot, None, false)
     }
 
     fn render_at(
@@ -380,6 +380,7 @@ where
         speed: f32,
         snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
+        carrier_activation: bool,
     ) -> Option<AudioChunk> {
         if let Some(snapshot) = &snapshot {
             self.rate_context = Some(snapshot.context().clone());
@@ -402,7 +403,7 @@ where
         let activates = prepared
             .as_ref()
             .is_some_and(|prepared| prepared.activation.is_some());
-        let output = if !activates && self.unity_passthrough(speed) {
+        let output = if !carrier_activation && !activates && self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
             let mut chunk = chunk;
@@ -448,7 +449,15 @@ where
         )
         .unwrap_or(rate_revision);
         let revision = prepared.warp_map;
-        let mut output = self.render_at(chunk, prepared.speed, snapshot, Some(prepared))?;
+        let carrier_activation =
+            prepared.disposition == super::renderer::PreparedDisposition::CarrierActivation;
+        let mut output = self.render_at(
+            chunk,
+            prepared.speed,
+            snapshot,
+            Some(prepared),
+            carrier_activation,
+        )?;
         if let Some(revision) = revision {
             self.applied_warp_map = Some(revision);
             self.discontinuity_pending = false;

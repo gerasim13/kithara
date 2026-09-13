@@ -10,7 +10,9 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_warp::{DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls};
+use kithara_warp::{
+    DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls, WarpMapRevision,
+};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -131,6 +133,14 @@ enum ScheduledTrackSeekState {
 struct RenderBindings(SmallVec<[RenderBinding; SLOT_TRACKS]>);
 
 type RenderBinding = (TrackId, RenderReader);
+
+fn render_snapshot_key(snapshot: &RenderSnapshot) -> (u64, i64) {
+    let context = snapshot.context();
+    (
+        u64::from(context.session_epoch()),
+        i64::from(context.output_frames().end),
+    )
+}
 
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
@@ -269,6 +279,12 @@ impl SlotControl {
 
     pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
         self.render.0.push((item_id, reader));
+        kithara_test_macros::probe_event!(
+            slot_render_reader_bound,
+            item = item_id.as_u64(),
+            binding_index =
+                u64::try_from(self.render.0.len().saturating_sub(1)).unwrap_or(u64::MAX)
+        );
     }
 
     pub(crate) fn set_prepared_launch_armed(&mut self, item_id: TrackId, armed: bool) -> bool {
@@ -361,10 +377,82 @@ impl SlotControl {
             })
     }
 
+    pub(crate) fn render_snapshot_for(
+        &self,
+        item_id: TrackId,
+        warp_map: Option<WarpMapRevision>,
+    ) -> Option<RenderSnapshot> {
+        let selected = self
+            .render
+            .0
+            .iter()
+            .enumerate()
+            .filter_map(|(binding_index, binding)| {
+                Self::matching_render_snapshot(binding_index, binding, item_id, warp_map)
+            })
+            .max_by_key(render_snapshot_key);
+        kithara_test_macros::probe_event!(
+            targeted_render_snapshot_selected,
+            target_item = item_id.as_u64(),
+            expected_warp_map = warp_map.map_or(0, u64::from),
+            selected = if selected.is_some() { 1_u64 } else { 0 },
+            selected_warp_map = selected
+                .as_ref()
+                .and_then(|snapshot| snapshot.frontier().warp_map())
+                .map_or(0, u64::from),
+            selected_output = selected
+                .as_ref()
+                .map_or(0, |snapshot| i64::from(snapshot.frontier().output()))
+        );
+        selected
+    }
+
+    fn matching_render_snapshot(
+        binding_index: usize,
+        binding: &RenderBinding,
+        item_id: TrackId,
+        warp_map: Option<WarpMapRevision>,
+    ) -> Option<RenderSnapshot> {
+        let (bound_item, reader) = binding;
+        let snapshot = reader.load();
+        let snapshot_map = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.frontier().warp_map());
+        let matches_item = *bound_item == item_id;
+        let matches_map = warp_map.is_none_or(|expected| snapshot_map == Some(expected));
+        let binding_index = u64::try_from(binding_index).unwrap_or(u64::MAX);
+        kithara_test_macros::probe_event!(
+            targeted_render_snapshot_binding,
+            target_item = item_id.as_u64(),
+            expected_warp_map = warp_map.map_or(0, u64::from),
+            bound_item = bound_item.as_u64(),
+            binding_index,
+            matches_item = u64::from(matches_item)
+        );
+        kithara_test_macros::probe_event!(
+            targeted_render_snapshot_state,
+            binding_index,
+            snapshot_present = u64::from(snapshot.is_some()),
+            snapshot_warp_map = snapshot_map.map_or(0, u64::from),
+            snapshot_output = snapshot
+                .as_ref()
+                .map_or(0, |value| i64::from(value.frontier().output())),
+            snapshot_epoch = snapshot
+                .as_ref()
+                .map_or(0, |value| u64::from(value.context().session_epoch())),
+            matches_map = u64::from(matches_map)
+        );
+        matches_item
+            .then_some(snapshot)
+            .flatten()
+            .filter(|_| matches_map)
+    }
+
     pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
         self.render
             .0
             .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);
+        kithara_test_macros::probe_event!(slot_render_reader_unbound, item = item_id.as_u64());
     }
 
     /// Forget the exact resource generation returned by the processor.
@@ -381,7 +469,7 @@ impl SlotControl {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroU64},
         sync::atomic::{AtomicUsize, Ordering},
     };
 
@@ -389,6 +477,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{
         PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch, SessionFrame,
+        WarpMapRevision,
     };
     use ringbuf::traits::Consumer;
 
@@ -396,6 +485,78 @@ mod tests {
     use crate::bridge::PreparedLaunchIdentity;
 
     struct CountSeek(AtomicUsize);
+
+    fn publish_render(publisher: &RenderPublisher, warp_map: WarpMapRevision, output_end: i64) {
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(output_end),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_000)
+                .output(SessionFrame::new(output_end))
+                .warp_map(warp_map)
+                .build(),
+        );
+    }
+
+    #[kithara::test]
+    fn item_targeted_snapshot_ignores_equal_output_other_track_order() {
+        let target = TrackId::allocate();
+        let other = TrackId::allocate();
+        let target_map = WarpMapRevision::first();
+        let other_map =
+            WarpMapRevision::from_raw(NonZeroU64::new(2).expect("fixture revision is non-zero"));
+
+        for target_first in [true, false] {
+            let (_, mut control) = slot_channels(SharedEq::new(0));
+            let target_publisher = RenderPublisher::default();
+            let other_publisher = RenderPublisher::default();
+            if target_first {
+                control.bind_render(target, target_publisher.reader());
+                control.bind_render(other, other_publisher.reader());
+            } else {
+                control.bind_render(other, other_publisher.reader());
+                control.bind_render(target, target_publisher.reader());
+            }
+            publish_render(&target_publisher, target_map, 2_000);
+            publish_render(&other_publisher, other_map, 2_000);
+
+            assert_eq!(
+                control
+                    .render_snapshot_for(target, Some(target_map))
+                    .map(|snapshot| snapshot.frontier().warp_map()),
+                Some(Some(target_map))
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn item_targeted_snapshot_selects_expected_map_across_generations() {
+        let item = TrackId::allocate();
+        let old_map = WarpMapRevision::first();
+        let expected_map =
+            WarpMapRevision::from_raw(NonZeroU64::new(2).expect("fixture revision is non-zero"));
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let old_publisher = RenderPublisher::default();
+        let expected_publisher = RenderPublisher::default();
+        control.bind_render(item, old_publisher.reader());
+        control.bind_render(item, expected_publisher.reader());
+        publish_render(&old_publisher, old_map, 2_000);
+        publish_render(&expected_publisher, expected_map, 2_000);
+
+        assert_eq!(
+            control
+                .render_snapshot_for(item, Some(expected_map))
+                .map(|snapshot| snapshot.frontier().warp_map()),
+            Some(Some(expected_map))
+        );
+    }
 
     impl SeekBegin for CountSeek {
         fn begin(&self, position: Duration) -> SeekOutcome {

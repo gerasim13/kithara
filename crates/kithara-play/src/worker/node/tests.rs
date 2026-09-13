@@ -22,7 +22,7 @@ use super::*;
 use crate::{
     effects::EffectDrain,
     test_pools::{Pools, pools, sample_buffer},
-    worker::{EngineLoad, WarpSource},
+    worker::{EngineLoad, WarpSource, WarpSourceParts},
 };
 
 fn empty_chunk(pools: &Pools) -> AudioChunk {
@@ -147,7 +147,18 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     let config = kithara_warp::WarpConfig::builder().build();
     let warp = kithara_warp::Warp::new((), &config);
     let renderer = warp.renderer(spec, pools.clone());
-    let source = WarpSource::new(source, renderer, effects, drain, spec, pools);
+    let source = WarpSource::new(
+        source,
+        WarpSourceParts {
+            warp: renderer,
+            effects,
+            drain,
+            spec,
+            pools,
+            free_adoption: None,
+            region_plan: Arc::default(),
+        },
+    );
     let (port, mut pop) = ProducerPort::probe(1);
     let bus = EventBus::new(8);
     let mut events = bus.subscribe();

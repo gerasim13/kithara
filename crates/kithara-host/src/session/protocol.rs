@@ -27,6 +27,9 @@ pub(crate) enum HostCmd<S> {
     EnableOutput {
         outputs: OutputGroup,
     },
+    DeckSyncStatus {
+        deck: kithara_warp::BeatGridId,
+    },
     #[cfg(not(target_arch = "wasm32"))]
     SeekDeck {
         deck: kithara_warp::BeatGridId,
@@ -51,6 +54,7 @@ pub(crate) enum HostReply {
     Acknowledged(Result<SyncStatusSnapshot, SyncError>),
     Ok,
     Err(PlayError),
+    DeckSyncStatus(Result<SyncStatusSnapshot, PlayError>),
     #[cfg(not(target_arch = "wasm32"))]
     Seek(Result<SeekOutcome, PlayError>),
 }

@@ -62,6 +62,44 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
     }
 }
 
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Returns the canonical synchronization status of one Host-owned deck.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the deck is no longer owned by this Host or the
+    /// Host dispatcher cannot return its status.
+    pub fn deck_sync_status<P>(&self, deck: &HostOwned<P>) -> Result<SyncStatusSnapshot, PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        self.validate_removal(deck)?;
+        self.sync_status(deck.id())
+    }
+
+    /// Reads one deck's canonical synchronization status by stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no matching deck exists or the Host dispatcher
+    /// cannot return its status.
+    pub fn sync_status(&self, deck: BeatGridId) -> Result<SyncStatusSnapshot, PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::DeckSyncStatus { deck })?
+        {
+            HostReply::DeckSyncStatus(status) => status,
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck synchronization status".into(),
+            )),
+        }
+    }
+}
+
 /// Exclusive owner and dispatcher for one multi-player output session.
 pub struct Host<S> {
     dispatcher: Arc<dyn HostDispatcher<S>>,

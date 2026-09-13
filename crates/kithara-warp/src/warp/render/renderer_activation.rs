@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::{
     ScheduledActivationProgress,
-    renderer::{PreparedActivation, PreparedQuantum, WarpRenderer},
+    renderer::{PreparedActivation, PreparedDisposition, PreparedQuantum, WarpRenderer},
 };
 use crate::{RenderSnapshot, SyncMode, WarpCursor};
 
@@ -18,7 +18,7 @@ where
 {
     /// Report whether producer output has reached the installed discontinuity.
     pub fn scheduled_activation_progress(&mut self) -> ScheduledActivationProgress {
-        self.sync_plan();
+        self.sync_plan(self.rendered_source_end.map_or(0, |(frame, _)| frame));
         let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
             return ScheduledActivationProgress::AwaitingActivation;
         };
@@ -211,7 +211,23 @@ where
     }
 
     pub(super) fn select_state(&mut self, frame: u64) -> Option<crate::RenderState> {
-        let state = self.context.load_state()?;
+        let mut state = self.context.load_state()?;
+        if let Some(free) = self.plan.as_ref().and_then(|plan| plan.free_handoff()) {
+            let handoff = (free.cursor(), free.rate());
+            if self.free_handoff_latch.is_none() && frame == free.cursor().source() {
+                self.free_handoff_latch = Some(handoff);
+            }
+            if self.free_handoff_latch == Some(handoff) {
+                if state.context.mode() == SyncMode::Off && state.context.rate() == free.rate() {
+                    self.free_handoff_latch = None;
+                } else {
+                    state.context = state.context.clone().with_rate(SyncMode::Off, free.rate());
+                    state.snapshot = state
+                        .snapshot
+                        .map(|snapshot| snapshot.with_context(state.context.clone()));
+                }
+            }
+        }
         if !self.awaiting_activation_before(frame) {
             let region = self.region_for(frame);
             self.rate = state
@@ -233,18 +249,15 @@ where
             return None;
         }
         let snapshot = snapshot?;
-        let output = self
-            .committed
-            .as_ref()
-            .filter(|committed| {
-                committed.context().session_epoch() == snapshot.context().session_epoch()
-            })
-            .map_or_else(
-                || snapshot.frontier().output(),
-                |committed| committed.frontier().output(),
-            )
-            .max(snapshot.frontier().output());
-        (output == activation.output()).then_some(*activation)
+        let committed = self.committed.as_ref().filter(|committed| {
+            committed.context().session_epoch() == snapshot.context().session_epoch()
+        });
+        let output = committed.map_or_else(
+            || snapshot.frontier().output(),
+            |value| value.frontier().output(),
+        );
+        let selected = output == activation.output();
+        selected.then_some(*activation)
     }
 
     pub(super) fn prepare_discontinuity_context(
@@ -277,7 +290,7 @@ where
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.
-    pub(super) fn sync_plan(&mut self) {
+    pub(super) fn sync_plan(&mut self, current_source: u64) {
         let want = self.plan_slot.load();
         let same = match (&self.plan, &want) {
             (None, None) => true,
@@ -285,9 +298,19 @@ where
             _ => false,
         };
         if !same {
+            let observed_revision = want
+                .as_ref()
+                .and_then(|plan| plan.activation())
+                .map_or(0, |activation| u64::from(activation.revision()));
+            kithara::probe_event!(
+                region_plan_reader_refreshed,
+                observed_revision,
+                current_source
+            );
             self.plan = want;
             self.region = None;
             self.prepared_context = None;
+            self.free_handoff_latch = None;
         }
     }
 
@@ -320,13 +343,33 @@ where
             })
     }
 
+    pub(super) fn cap_before_activation(&self, source: u64, frames: usize) -> usize {
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return frames;
+        };
+        if self.applied_warp_map == Some(activation.revision()) {
+            return frames;
+        }
+        let Some(distance) = activation.source().checked_sub(source) else {
+            return frames;
+        };
+        let Ok(distance) = usize::try_from(distance) else {
+            return frames;
+        };
+        if distance == 0 || distance >= frames {
+            frames
+        } else {
+            distance
+        }
+    }
+
     /// Select the next source span that fits the configured output quantum.
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
     ) -> Option<FrameCount> {
-        self.sync_plan();
+        self.sync_plan(meta.frame_offset);
         if self
             .rendered_source_end
             .is_some_and(|(frame, sample_rate)| {
@@ -374,6 +417,11 @@ where
                     .checked_add(active_frames)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
+                    disposition: if warp_map.is_some() && activation.is_none() && self.active {
+                        PreparedDisposition::CarrierActivation
+                    } else {
+                        PreparedDisposition::Normal
+                    },
                     activation,
                     warp_map: warp_map.map(|activation| activation.revision()),
                     output_rounding_remainder,

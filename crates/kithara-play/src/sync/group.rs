@@ -16,7 +16,10 @@ use kithara_warp::{
 };
 
 use super::{
-    DeckGrid, TempoSource, prepare::PreparedSync, topology::materialize_topology, transaction,
+    DeckGrid, TempoSource,
+    prepare::{FreePreparing, PreparedDisposition, PreparedSync},
+    topology::materialize_topology,
+    transaction,
 };
 
 /// Canonical mutable state for one recursive synchronization group.
@@ -39,12 +42,42 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     warp_map: WarpMapRevision,
     #[field(get, vis = "pub(crate)", copy)]
     prepared: Option<PreparedSync>,
+    #[field(get, vis = "pub(crate)")]
+    preparing: Option<FreePreparing>,
     locked: Option<SyncApplied>,
     topology_revision: TopologyRevision,
     members: Vec<SyncMember<G>>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
+    /// Makes a Free operation ackable only after the worker installs its map.
+    pub(crate) fn adopt_free(&mut self, receipt: crate::worker::FreeAdoptionReceipt) -> bool {
+        let Some(preparing) = self.preparing.clone() else {
+            return false;
+        };
+        if preparing.operation != receipt.operation()
+            || preparing.warp_map != receipt.warp_map()
+            || (preparing.load, preparing.transport) != (receipt.load(), receipt.transport())
+            || self.generations != (receipt.load(), receipt.transport())
+        {
+            return false;
+        }
+        self.preparing = None;
+        let crate::worker::FreeAdoptionReceipt::Installed(receipt) = receipt else {
+            self.prepared = None;
+            return true;
+        };
+        self.prepared = Some(PreparedSync {
+            operation: preparing.operation,
+            warp_map: preparing.warp_map,
+            source: receipt.source,
+            activation: receipt.output,
+            activation_beat: receipt.activation_beat,
+            target: preparing.target,
+            disposition: PreparedDisposition::Free,
+        });
+        true
+    }
     /// Creates an empty group around an already-published grid.
     #[must_use]
     pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind, mode: SyncMode) -> Self {
@@ -59,6 +92,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             parent_anchor: None,
             warp_map: WarpMapRevision::first(),
             prepared: None,
+            preparing: None,
             locked: None,
             topology_revision: TopologyRevision::first(),
             unavailable: None,
@@ -85,6 +119,28 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             SyncMember::Group { group, .. } => Some(group.as_mut()),
             SyncMember::Grid { .. } => None,
         })
+    }
+
+    /// Releases the parent alignment of one retained nested member.
+    ///
+    /// The member remains part of this topology; only its parent-owned
+    /// alignment is invalid after the member completes a Free handoff.
+    pub fn release_nested_alignment(&mut self, member_id: BeatGridId) -> Result<(), SyncError> {
+        let Some(alignment) = self.members.iter_mut().find_map(|member| match member {
+            SyncMember::Group {
+                alignment, group, ..
+            } if group.id() == member_id => Some(alignment),
+            SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
+        }) else {
+            return Err(SyncError::MemberNotFound {
+                group_id: self.grid.id(),
+                member_id,
+            });
+        };
+        *alignment = None;
+        self.topology_revision =
+            super::topology::next_topology_revision(self.grid.id(), self.topology_revision)?;
+        Ok(())
     }
 
     /// Records the parent's committed session anchor; under
@@ -354,7 +410,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
         ))
     }
+}
 
+impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// The tempo a `Disable` latches from the group or its first live grid.
     pub(crate) fn seed_local_tempo(&self) -> Option<BeatsPerMinute> {
         self.deck_tempo().or_else(|| {
@@ -392,7 +450,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
             .and_then(resolved_tempo)
     }
-
     /// Creates an empty group whose session-axis grid is not available yet.
     #[must_use]
     pub fn unavailable(
@@ -472,11 +529,22 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 given: Box::new(given),
             });
         }
-        self.locked = Some(given);
+        if prepared.disposition == PreparedDisposition::Free {
+            self.mode = SyncMode::Off;
+            self.tempo = TempoSource::Inherited;
+            self.grid = self.unavailable_session_candidate()?;
+            self.locked = None;
+        } else {
+            self.locked = Some(given);
+        }
         self.prepared = None;
-        Ok(SyncStatusSnapshot::Locked {
-            applied: given,
-            phase_error_frames: 0.0,
+        Ok(if prepared.disposition == PreparedDisposition::Free {
+            self.status()
+        } else {
+            SyncStatusSnapshot::Locked {
+                applied: given,
+                phase_error_frames: 0.0,
+            }
         })
     }
 
@@ -486,6 +554,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
             &transaction::StatusSlots {
                 unavailable: self.unavailable,
                 waiting: self.waiting,
+                preparing: self.preparing.clone(),
                 prepared: self.prepared,
                 locked: self.locked,
             },
@@ -508,6 +577,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 tempo: &mut self.tempo,
                 generations: &mut self.generations,
                 warp_map: &mut self.warp_map,
+                preparing: &mut self.preparing,
                 prepared: &mut self.prepared,
                 locked: &mut self.locked,
                 topology_revision: &mut self.topology_revision,

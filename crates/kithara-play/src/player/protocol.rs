@@ -94,7 +94,7 @@ pub trait Player:
     fn set_host_level(&self, level: f32);
 
     /// Advance control-plane and audio-backend work.
-    fn tick(&self) -> Result<(), PlayError>;
+    fn tick(&mut self) -> Result<(), PlayError>;
 }
 
 /// Produces a cloneable command capability without sharing player identity or
@@ -172,13 +172,39 @@ where
                 ..
             }
         );
-        let sync_release = matches!(
+        let free = matches!(
             &operation,
             SyncOperation::Sync {
-                intent: SyncIntent::Disable | SyncIntent::Free,
+                intent: SyncIntent::Free,
                 ..
             }
         );
+        let operation = self.with_free_source(operation)?;
+        let sync_disable = matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: SyncIntent::Disable,
+                ..
+            }
+        );
+        if free {
+            let Some(item) = self.runtime.core.items.current_item_id() else {
+                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
+            };
+            let Some(grid) = self.runtime.core.items.track_grid(item) else {
+                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
+            };
+            if grid.segments.region_plan().is_err()
+                || self
+                    .runtime
+                    .core
+                    .items
+                    .free_adoption_transition(item)
+                    .is_none()
+            {
+                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
+            }
+        }
         let alignment_source = match &operation {
             SyncOperation::Sync { source, .. } => Some(*source),
             SyncOperation::Transport {
@@ -195,7 +221,11 @@ where
         let reconcile_transport = alignment_source.is_some()
             && matches!(&operation, SyncOperation::Transport { .. })
             && self.sync.mode() == SyncMode::HostSync;
-        if sync_release
+        let preparing_before = self
+            .sync
+            .preparing()
+            .map(|preparing| (preparing.operation, preparing.warp_map));
+        if sync_disable
             && let (Some(slot), Some(item)) = (
                 self.runtime.slot(),
                 self.runtime.core.items.current_item_id(),
@@ -209,7 +239,30 @@ where
             return Err(SyncRejected::new(SyncError::SlotChannelFull, operation));
         }
         let now = self.runtime.presentation_frontier().output();
-        let (admission, projection) = self.sync.transact_at(operation, now)?;
+        let result = if let (Some(item), Some((operation_id, warp_map))) =
+            (self.runtime.core.items.current_item_id(), preparing_before)
+        {
+            self.runtime
+                .core
+                .items
+                .transition_free_adoption(item, operation_id, warp_map, || {
+                    let result = self.sync.transact_at(operation, now);
+                    let revoke = result.is_ok()
+                        && self.sync.preparing().is_none_or(|current| {
+                            (current.operation, current.warp_map) != (operation_id, warp_map)
+                        });
+                    (result, revoke)
+                })
+        } else {
+            self.sync.transact_at(operation, now)
+        };
+        let (admission, projection) = result?;
+        if let Some(projection) = projection {
+            self.runtime.core.engine.publish_deck_grid(projection);
+        }
+        if free && matches!(admission, SyncAdmission::Preparing { .. }) {
+            self.prepare_free_handoff();
+        }
         // The mode transition has committed even when reconciliation must wait
         // for a grid, so retain the selected cue before public play can release
         // ordinary PCM.
@@ -219,7 +272,7 @@ where
         {
             self.runtime.core.items.await_initial_source_cue(item);
         }
-        if sync_release
+        if sync_disable
             && self.sync.mode() != SyncMode::HostSync
             && let Some(item) = self.runtime.core.items.current_item_id()
             && self
@@ -245,13 +298,7 @@ where
             && let Some(reconciled) =
                 self.reconcile_current_grid(reconcile_cause, alignment_source, prepared_launch)?
         {
-            if let Some(projection) = projection {
-                self.runtime.core.engine.publish_deck_grid(projection);
-            }
             return Ok(reconciled);
-        }
-        if let Some(projection) = projection {
-            self.runtime.core.engine.publish_deck_grid(projection);
         }
         Ok(admission)
     }
@@ -330,6 +377,10 @@ where
         if self.sync.mode() != SyncMode::HostSync {
             return self.seek_seconds(seconds);
         }
+        let preparing_before = self
+            .sync
+            .preparing()
+            .map(|preparing| (preparing.operation, preparing.warp_map));
         let prepared = self.prepare_host_seek(seconds)?;
         let source = kithara_warp::AlignmentSource::Prepared(
             kithara_warp::PresentationFrontier::builder()
@@ -351,19 +402,48 @@ where
         ));
         let items = &self.runtime.core.items;
         let sync = &mut self.sync;
-        let _ = self.runtime.core.engine.commit_validated_track_seek(
-            prepared.slot,
-            prepared.item,
-            destination,
-            crate::bridge::ScheduledSeekDisposition::SeekOnly {
-                activation: reconcile.prepared.activation,
-            },
-            || {
-                items.commit_current_track_plan(prepared.item, prepared.grid_stamp, plan, || {
-                    crate::sync::host_seek::commit(sync, reconcile).map_err(PlayError::from)
-                })
-            },
-        )?;
+        let transition = items.free_adoption_transition(prepared.item);
+        let revoke = std::cell::Cell::new(false);
+        let commit = || {
+            self.runtime.core.engine.commit_validated_track_seek(
+                prepared.slot,
+                prepared.item,
+                destination,
+                crate::bridge::ScheduledSeekDisposition::SeekOnly {
+                    activation: reconcile.prepared.activation,
+                },
+                || {
+                    items.commit_current_track_plan(
+                        prepared.item,
+                        prepared.grid_stamp,
+                        plan,
+                        || {
+                            let result = crate::sync::host_seek::commit(sync, reconcile)
+                                .map_err(PlayError::from);
+                            revoke.set(preparing_before.is_some_and(|identity| {
+                                result.is_ok()
+                                    && sync.preparing().is_none_or(|current| {
+                                        (current.operation, current.warp_map) != identity
+                                    })
+                            }));
+                            result
+                        },
+                    )
+                },
+            )
+        };
+        let result = if let (Some(transition), Some((operation, warp_map))) =
+            (transition, preparing_before)
+        {
+            transition.transition(operation, warp_map, || {
+                let result = commit();
+                let accepted = result.is_ok();
+                (result, accepted && revoke.get())
+            })
+        } else {
+            commit()
+        };
+        let _ = result?;
         kithara::probe_event!(
             warp_plan_published,
             warp_map_revision = u64::from(reconcile.prepared.warp_map),
@@ -385,8 +465,64 @@ where
         }
     }
 
-    fn tick(&self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(PlayerRuntime::tick)
+    fn tick(&mut self) -> Result<(), PlayError> {
+        self.runtime.with_open_result(PlayerRuntime::tick)?;
+        self.acknowledge_prepared()
+            .map(|_| ())
+            .map_err(PlayError::from)
+    }
+}
+
+impl<S> PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
+    fn free_handoff_source(&self) -> Option<kithara_warp::AlignmentSource> {
+        let item = self.runtime.core.items.current_item_id()?;
+        let presentation = self.runtime.presentation_frontier_for(item, None)?;
+        let manual_rate = self.runtime.core.warp.stretch().rate_target();
+        Some(kithara_warp::AlignmentSource::Audible {
+            presentation,
+            preparation_source: presentation.source(),
+            playback_rate: manual_rate,
+        })
+    }
+
+    fn with_free_source(
+        &self,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncOperation<PlayerMember>, SyncRejected<PlayerMember>> {
+        if !matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: SyncIntent::Free,
+                ..
+            }
+        ) {
+            return Ok(operation);
+        }
+        let Some(source) = self.free_handoff_source() else {
+            return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
+        };
+        let SyncOperation::Sync {
+            target,
+            load,
+            transport,
+            activation,
+            intent,
+            ..
+        } = operation
+        else {
+            unreachable!("Free is only a sync operation");
+        };
+        Ok(SyncOperation::Sync {
+            target,
+            load,
+            transport,
+            source,
+            activation,
+            intent,
+        })
     }
 }
 

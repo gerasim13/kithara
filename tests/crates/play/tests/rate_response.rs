@@ -593,7 +593,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
 #[case::signalsmith_ramp(StretchKind::Signalsmith, response_backends(), RAMP)]
 async fn rate_multiplier_step_is_ramped_across_blocks(
     temp_dir: TestTempDir,
-    response_source: &'static Path,
+    response_source: PathBuf,
     #[case] backend: StretchKind,
     #[case] backends: ElasticBackendConfig,
     #[case] case: ResponseCase,

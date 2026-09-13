@@ -262,7 +262,7 @@ where
         let _ = self.with_open(operation);
     }
 
-    fn ensure_open(&self) -> Result<(), PlayError> {
+    pub(in crate::queue) fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
         } else {

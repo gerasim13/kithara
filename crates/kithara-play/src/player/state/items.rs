@@ -154,7 +154,11 @@ impl ItemQueue {
             return Ok(None);
         };
         let (item_id, mut resource) = (queued.item_id, queued.resource);
-        playlist.track_loaded(item_id, resource.region_plan().cloned());
+        playlist.track_loaded(
+            item_id,
+            resource.region_plan().cloned(),
+            resource.take_free_adoption(),
+        );
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
@@ -195,6 +199,11 @@ impl ItemQueue {
             pub(crate) fn track_grid(&self, item: TrackId) -> Option<TrackGrid>;
             pub(crate) fn publish_track_grid(&self, item: TrackId, grid: TrackGrid);
             pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<RegionPlan>>);
+            pub(crate) fn publish_free_adoption(&self, item: TrackId, request: crate::worker::FreeAdoptionRequest) -> bool;
+            pub(crate) fn free_adoption_receipt(&self, item: TrackId) -> Option<crate::worker::FreeAdoptionReceipt>;
+            pub(crate) fn cancel_outgoing_free_adoption(&self, item: TrackId);
+            pub(crate) fn transition_free_adoption<R>(&self, item: TrackId, operation: kithara_warp::SyncOperationId, warp_map: kithara_warp::WarpMapRevision, mutate: impl FnOnce() -> (R, bool)) -> R;
+            pub(crate) fn free_adoption_transition(&self, item: TrackId) -> Option<crate::worker::FreeAdoptionTransition>;
             #[call(current)]
             pub(crate) fn current_index(&self) -> usize;
             pub(crate) fn has_resource(&self, index: usize) -> bool;

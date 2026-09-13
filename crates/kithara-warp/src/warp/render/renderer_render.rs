@@ -173,7 +173,7 @@ where
                 Some(frames) => frames.get().min(self.source_block_frames.get()),
                 None => self.source_block_frames.get(),
             };
-            return Ok(remaining.min(limit));
+            return Ok(self.cap_before_activation(meta.frame_offset, remaining.min(limit)));
         }
 
         let channels = usize::from(self.spec.channels.max(1));
@@ -211,7 +211,7 @@ where
         if available == 0 {
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
-        Ok(region_frames.min(available))
+        Ok(self.cap_before_activation(meta.frame_offset, region_frames.min(available)))
     }
 }
 

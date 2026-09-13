@@ -2,7 +2,7 @@ use kithara_platform::sync::Arc;
 use kithara_warp::RenderSnapshot;
 
 use crate::{
-    api::SlotId,
+    api::{SlotId, TrackId},
     bridge::{PlaybackShared, SlotControl},
     sync::DeckGrid,
 };
@@ -27,6 +27,16 @@ impl SlotTable {
         self.slots
             .iter_mut()
             .find_map(|(id, control)| (*id == slot).then_some(control))
+    }
+
+    pub(super) fn render_snapshot_for(
+        &self,
+        slot: SlotId,
+        item_id: TrackId,
+        warp_map: Option<kithara_warp::WarpMapRevision>,
+    ) -> Option<RenderSnapshot> {
+        self.get(slot)
+            .and_then(|control| control.render_snapshot_for(item_id, warp_map))
     }
 
     pub(super) fn ids(&self) -> Vec<SlotId> {

@@ -295,6 +295,12 @@ pub enum SyncAdmission {
         /// Exact output boundary at which the warp map takes effect.
         activation: SessionFrame,
     },
+    /// A Free handoff is reserved and awaits worker boundary adoption.
+    Preparing {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        warp_map: WarpMapRevision,
+    },
     /// The requested operation already matches committed state.
     Unchanged {
         /// Identity of the admitted operation.

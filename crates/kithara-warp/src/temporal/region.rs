@@ -1,7 +1,31 @@
 use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
 
-use crate::WarpCursor;
+use crate::{RateTarget, WarpCursor};
+
+/// Immutable manual target paired with one Free map activation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreeActivation {
+    cursor: WarpCursor,
+    rate: RateTarget,
+}
+
+impl FreeActivation {
+    #[must_use]
+    pub const fn new(cursor: WarpCursor, rate: RateTarget) -> Self {
+        Self { cursor, rate }
+    }
+
+    #[must_use]
+    pub const fn cursor(self) -> WarpCursor {
+        self.cursor
+    }
+
+    #[must_use]
+    pub const fn rate(self) -> RateTarget {
+        self.rate
+    }
+}
 
 /// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
 /// source frames with one asset tempo.
@@ -36,6 +60,8 @@ pub struct RegionPlan {
     /// Exact source/output relation prepared for this plan.
     #[field(with, option_set_some)]
     activation: Option<WarpCursor>,
+    /// Free activation context paired atomically with its map cursor.
+    free_activation: Option<FreeActivation>,
     /// Segments sorted by `start_frame`, non-overlapping.
     segments: Vec<GridSegment>,
 }
@@ -80,6 +106,7 @@ impl RegionPlan {
         }
         Ok(Self {
             activation: None,
+            free_activation: None,
             segments,
         })
     }
@@ -105,6 +132,20 @@ impl RegionPlan {
                 None,
             ),
         }
+    }
+
+    /// Attach the manual context that becomes authoritative at this Free activation.
+    #[must_use]
+    pub fn with_free_activation(mut self, cursor: WarpCursor, rate: RateTarget) -> Self {
+        self.activation = Some(cursor);
+        self.free_activation = Some(FreeActivation::new(cursor, rate));
+        self
+    }
+
+    /// The immutable Free handoff context, when this plan was installed by Free adoption.
+    #[must_use]
+    pub const fn free_handoff(&self) -> Option<FreeActivation> {
+        self.free_activation
     }
 }
 

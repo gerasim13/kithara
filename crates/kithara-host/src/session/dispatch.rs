@@ -40,6 +40,9 @@ where
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::DeckSyncStatus { deck } => {
+            HostReply::DeckSyncStatus(deck_sync_status(state, deck))
+        }
         #[cfg(not(target_arch = "wasm32"))]
         HostCmd::SeekDeck { deck, seconds } => HostReply::Seek(seek_deck(state, deck, seconds)),
         #[cfg(any(test, feature = "usdt"))]
@@ -47,6 +50,27 @@ where
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
+}
+
+fn deck_sync_status<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+) -> Result<kithara_warp::SyncStatusSnapshot, PlayError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let host = state.root.id();
+    state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .map(|member| member.status())
+        .ok_or_else(|| {
+            PlayError::from(SessionError::from(SyncError::MemberNotFound {
+                group_id: host,
+                member_id: deck,
+            }))
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -350,6 +374,7 @@ pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -
     if let Some(Err(err)) = update {
         return handle_update_error(state, err);
     }
+    transport::acknowledge_prepared_decks(state);
     Reply::Ok
 }
 

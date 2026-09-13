@@ -1,7 +1,7 @@
 use kithara_warp::{
     AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState,
-    MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, SessionBeat, SessionFrame,
-    SyncOperationId, WarpMapRevision,
+    LoadGeneration, MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, RateTarget,
+    SessionBeat, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
 };
 use num_traits::ToPrimitive;
 
@@ -15,21 +15,47 @@ pub(crate) struct PreparedSync {
     pub(crate) activation_beat: SessionBeat,
     pub(crate) source: u64,
     pub(crate) target: BeatGridId,
+    pub(crate) disposition: PreparedDisposition,
+}
+
+/// Immutable Free handoff input reserved by the group until its worker claims it.
+#[derive(Clone, Debug)]
+pub(crate) struct FreePreparing {
+    pub(crate) operation: SyncOperationId,
+    pub(crate) warp_map: WarpMapRevision,
+    pub(crate) target: BeatGridId,
+    pub(crate) load: LoadGeneration,
+    pub(crate) transport: TransportRevision,
+    pub(crate) manual_rate: RateTarget,
+    pub(crate) owner: BeatGridSnapshot,
+}
+
+/// The owner transition completed when a prepared map reaches presentation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedDisposition {
+    Lock,
+    Free,
+}
+
+impl PreparedSync {
+    pub(crate) fn frees_deck(self) -> bool {
+        self.disposition == PreparedDisposition::Free
+    }
 }
 
 /// The beat alignment of one grid member onto its owner's grid and the
 /// owner-grid frame on which it becomes audible.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct MemberAlignment {
-    pub(super) alignment: BeatAlignment,
-    pub(super) activation: SessionFrame,
-    pub(super) activation_beat: SessionBeat,
-    pub(super) source: u64,
+pub(crate) struct MemberAlignment {
+    pub(crate) alignment: BeatAlignment,
+    pub(crate) activation: SessionFrame,
+    pub(crate) activation_beat: SessionBeat,
+    pub(crate) source: u64,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct AlignmentPolicy {
-    pub(super) playback_rate: Option<kithara_warp::RateTarget>,
+    pub(super) playback_rate: Option<RateTarget>,
     pub(super) align_downbeat: bool,
     pub(super) require_future_source: bool,
     pub(super) source_cue: Option<Beat>,
@@ -152,11 +178,79 @@ pub(super) fn align_member(
     })
 }
 
+/// Preserves the resident member mapping at a decoded-ahead source boundary.
+///
+/// Unlike reconciliation, this does not quantize a source beat or select a new
+/// downbeat: the decoder continues through the exact source frame.
+pub(crate) fn handoff_member(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    previous: Option<BeatAlignment>,
+    source: kithara_warp::AlignmentSource,
+) -> Result<MemberAlignment, MapRegion> {
+    let source_frame = source.preparation_source();
+    let source_position = MapPosition::Asset(
+        source_frame
+            .to_f64()
+            .and_then(|frame| AssetFrame::new(frame).ok())
+            .ok_or_else(|| MapRegion::point(MapPosition::Asset(AssetFrame::default())))?,
+    );
+    let member_point = MapPoint::new(member.stamp(), source_position);
+    let BeatGridQuery::Resolved(member_beat) = member.beat_at(member_point) else {
+        return Err(MapRegion::point(source_position));
+    };
+    let member_beat = *member_beat.value().value();
+    let activation = reachable_output(
+        owner,
+        previous,
+        source.frontier(),
+        source.playback_rate(),
+        member_beat,
+        source_frame,
+    )
+    .ok_or_else(|| MapRegion::point(MapPosition::Session(source.frontier().output())))?;
+    let owner_point = MapPoint::new(owner.stamp(), MapPosition::Session(activation));
+    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(owner_point) else {
+        return Err(MapRegion::point(MapPosition::Session(activation)));
+    };
+    let owner_beat = *owner_beat.value().value();
+    Ok(MemberAlignment {
+        alignment: previous.unwrap_or_else(|| {
+            BeatAlignment::new(
+                MapPoint::new(member.stamp(), member_beat),
+                MapPoint::new(owner.stamp(), owner_beat),
+            )
+        }),
+        activation,
+        activation_beat: SessionBeat::new(f64::from(owner_beat))
+            .map_err(|_| MapRegion::point(MapPosition::Session(activation)))?,
+        source: source_frame,
+    })
+}
+
+/// Computes a Free lane activation at the renderer's exact current frontier.
+/// It does not schedule or correct musical alignment.
+pub(crate) fn free_activation_at_frontier(
+    owner: &BeatGridSnapshot,
+    frontier: PresentationFrontier,
+) -> Result<(u64, SessionFrame, SessionBeat), MapRegion> {
+    let source = frontier.source();
+    let output = frontier.output();
+    let owner_point = MapPoint::new(owner.stamp(), MapPosition::Session(output));
+    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(owner_point) else {
+        return Err(MapRegion::point(MapPosition::Session(output)));
+    };
+    let owner_beat = *owner_beat.value().value();
+    let beat = SessionBeat::new(f64::from(owner_beat))
+        .map_err(|_| MapRegion::point(MapPosition::Session(output)))?;
+    Ok((source, output, beat))
+}
+
 fn reachable_output(
     owner: &BeatGridSnapshot,
     previous: Option<BeatAlignment>,
     frontier: PresentationFrontier,
-    playback_rate: Option<kithara_warp::RateTarget>,
+    playback_rate: Option<RateTarget>,
     member_beat: Beat,
     source: u64,
 ) -> Option<SessionFrame> {
@@ -176,6 +270,15 @@ fn reachable_output(
         };
         return Some(output.max(frontier.output()));
     }
+    output_at_source(frontier, playback_rate, source)
+}
+
+/// Maps a decoded-ahead source frontier onto the live output axis without a seek.
+pub(super) fn output_at_source(
+    frontier: PresentationFrontier,
+    playback_rate: Option<RateTarget>,
+    source: u64,
+) -> Option<SessionFrame> {
     let Some(playback_rate) = playback_rate else {
         return Some(frontier.output());
     };

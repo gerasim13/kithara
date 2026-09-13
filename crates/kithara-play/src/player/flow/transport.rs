@@ -314,6 +314,9 @@ where
             self.commit_next(index)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
+            if let Some(outgoing) = self.core.items.current_item_id() {
+                self.core.items.cancel_outgoing_free_adoption(outgoing);
+            }
             self.core.items.set_current(index);
             self.load_current_item()?;
             self.announce_current_item(index);

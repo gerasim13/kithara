@@ -155,7 +155,6 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "writes opt-in listening WAVs; ignored-red until Warp alignment is implemented"]
 #[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, source_synthetic().await, None)]
 #[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, source_synthetic().await, Some(127.0))]
 #[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, source_sweep().await, Some(145.0))]

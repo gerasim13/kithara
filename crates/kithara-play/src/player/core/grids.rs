@@ -253,11 +253,21 @@ where
     ///
     /// Returns the group's acknowledgement error.
     pub(crate) fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        self.adopt_free_receipt();
         let sync = &self.sync;
         let Some(prepared) = sync.prepared() else {
             return Ok(None);
         };
-        let frontier = self.runtime.presentation_frontier();
+        let free = prepared.frees_deck();
+        let Some(item) = self.runtime.core.items.current_item_id() else {
+            return Ok(None);
+        };
+        let Some(frontier) = self
+            .runtime
+            .presentation_frontier_for(item, Some(prepared.warp_map))
+        else {
+            return Ok(None);
+        };
         if !prepared_is_presented(frontier, prepared.activation, prepared.warp_map) {
             return Ok(None);
         }
@@ -272,7 +282,25 @@ where
             .transport(transport)
             .warp_map(prepared.warp_map)
             .build();
-        self.sync.acknowledge(applied).map(Some)
+        let status = self.sync.acknowledge(applied)?;
+        kithara::probe_event!(
+            prepared_sync_acknowledged,
+            free = if free { 1_u64 } else { 0 },
+            warp_map_revision = u64::from(prepared.warp_map),
+            activation_output = i64::from(prepared.activation)
+        );
+        if free {
+            self.runtime
+                .core
+                .engine
+                .publish_deck_grid(crate::sync::DeckGrid::Off);
+            kithara::probe_event!(
+                deck_grid_off_published,
+                warp_map_revision = u64::from(prepared.warp_map),
+                activation_output = i64::from(prepared.activation)
+            );
+        }
+        Ok(Some(status))
     }
 
     fn replan_track(&self, item: TrackId) {
@@ -288,6 +316,75 @@ where
             .core
             .items
             .set_track_plan(item, plan.map(Arc::new));
+    }
+
+    pub(crate) fn prepare_free_handoff(&self) {
+        let (Some(item), Some(prepared)) = (
+            self.runtime.core.items.current_item_id(),
+            self.sync.preparing(),
+        ) else {
+            return;
+        };
+        let Some(grid) = self.runtime.core.items.track_grid(item) else {
+            return;
+        };
+        let Some(plan) = grid.segments.region_plan().ok().map(Arc::new) else {
+            return;
+        };
+        let (load, transport) = self.sync.generations();
+        let published = self.runtime.core.items.publish_free_adoption(
+            item,
+            crate::worker::FreeAdoptionRequest {
+                operation: prepared.operation,
+                warp_map: prepared.warp_map,
+                item,
+                load,
+                transport,
+                decode_epoch: 0,
+                manual_rate: prepared.manual_rate,
+                owner: prepared.owner.clone(),
+                plan,
+            },
+        );
+        if published {
+            self.runtime.core.worker.wake();
+        }
+    }
+
+    fn adopt_free_receipt(&mut self) {
+        let Some(item) = self.runtime.core.items.current_item_id() else {
+            return;
+        };
+        if let Some(preparing) = self.sync.preparing()
+            && self
+                .runtime
+                .core
+                .items
+                .track_grid(item)
+                .is_none_or(|grid| grid.id != preparing.target)
+        {
+            let (load, transport) = self.sync.generations();
+            let _ = self
+                .sync
+                .adopt_free(crate::worker::FreeAdoptionReceipt::Rejected(
+                    crate::worker::FreeAdoptionRejected {
+                        operation: preparing.operation,
+                        warp_map: preparing.warp_map,
+                        item,
+                        load,
+                        transport,
+                        decode_epoch: 0,
+                        reason: crate::worker::FreeAdoptionRejectReason::Superseded,
+                    },
+                ));
+            return;
+        }
+        let Some(receipt) = self.runtime.core.items.free_adoption_receipt(item) else {
+            return;
+        };
+        if receipt.item() == item {
+            let _ = self.sync.adopt_free(receipt);
+        }
     }
 
     fn transact_sync(

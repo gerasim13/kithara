@@ -79,6 +79,7 @@ where
             .position
             .checked_add(u64::from(frames))
             .ok_or(OfflineSessionError::TimelineOverflow)?;
+        super::transport::acknowledge_prepared_decks(state);
         Ok(output)
     }
 
