@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, env, ffi::OsString};
+use std::{
+    collections::BTreeMap,
+    env,
+    ffi::{OsStr, OsString},
+};
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -6,7 +10,11 @@ use kithara_devtools::Ctx;
 
 use super::declared;
 use crate::{
-    ci::{config::CiPins, process::Process, run::PipelineKind},
+    ci::{
+        config::CiPins,
+        process::Process,
+        run::{PipelineKind, execute_lane},
+    },
     config::{CiLaneConfig, KitharaExt},
 };
 
@@ -52,6 +60,10 @@ fn executor_vars(target_dir: Option<OsString>) -> BTreeMap<OsString, OsString> {
         .unwrap_or_default()
 }
 
+fn uses_sccache(wrapper: Option<&OsStr>) -> bool {
+    wrapper == Some(OsStr::new("sccache"))
+}
+
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
@@ -59,7 +71,12 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
-    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)?;
+    execute_lane(
+        &process,
+        &ctx.config.tools,
+        uses_sccache(env::var_os("RUSTC_WRAPPER").as_deref()),
+        || declared::run(&process, lane, &pins, &ctx.config.tools, args.kind),
+    )?;
     Ok(())
 }
 
@@ -84,6 +101,13 @@ mod tests {
 
         assert_eq!(handed.target_dir(), Path::new("/cache/target"));
         assert_eq!(bare.target_dir(), root.join("target"));
+    }
+
+    #[test]
+    fn only_the_sccache_wrapper_requires_its_server_lifecycle() {
+        assert!(uses_sccache(Some(OsStr::new("sccache"))));
+        assert!(!uses_sccache(Some(OsStr::new("rustc-wrapper"))));
+        assert!(!uses_sccache(None));
     }
 
     // A lane name that is not in the catalog must answer with the catalog,
