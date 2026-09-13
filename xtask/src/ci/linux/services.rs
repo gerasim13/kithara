@@ -493,6 +493,10 @@ mod tests {
             text.contains("--env SCCACHE_DIR=/cache/sccache/kithara-ci-octocat"),
             "{text}"
         );
+        assert!(
+            text.contains("--env SCCACHE_SERVER_UDS=/tmp/kithara-ci-octocat.sock"),
+            "{text}"
+        );
     }
 
     #[test]

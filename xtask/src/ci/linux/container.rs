@@ -128,10 +128,11 @@ impl Container<'_> {
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
-        // The S3 backend is shared, while a daemon's lock and socket state
-        // must belong to one runner. A shared directory makes concurrent
-        // daemon startup time out before rustc can run.
+        // The S3 backend is shared, but each runner needs its own daemon
+        // endpoint. An explicit socket lets the lane start that daemon before
+        // Cargo's parallel compilers can race to start it.
         environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
+        environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
         environment.extend(
             LINUX_LINKER_ENV
                 .iter()
