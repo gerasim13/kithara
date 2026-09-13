@@ -1669,13 +1669,6 @@ kinds = [
 ]
 timeout_minutes = 60
 
-# A CI checkout gives every source file a new mtime. Stable Cargo then rebuilds
-# and relinks all test binaries even when their content is unchanged; sccache
-# cannot cache those links. The pinned nightly Cargo's checksum freshness makes
-# the persistent target content-addressed. Its target is isolated from stable
-# lanes because Cargo fingerprint modes and compiler versions must not alternate
-# in one profile tree.
-#
 # Every Linux test lane caps Cargo at two build jobs. The container has five
 # CPUs and under eight gigabytes, so five compilations at once put the peak past
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
@@ -1689,7 +1682,6 @@ timeout_minutes = 60
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
-target_snapshot = "linux-test-release"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1703,7 +1695,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -1973,7 +1965,7 @@ steps = [
     "run",
     "--flash=off",
     "--timings",
-  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2369,7 +2361,6 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-target_snapshot = "macos-test-release"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
@@ -2386,7 +2377,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [
@@ -2421,7 +2412,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
