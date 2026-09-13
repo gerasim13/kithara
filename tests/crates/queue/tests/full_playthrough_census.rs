@@ -22,7 +22,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use kithara::{
-    encode::EncoderFactory,
     events::TrackId,
     platform::{
         sync::Arc,
@@ -44,6 +43,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{
     asset::Asset,
     assets,
+    hls_fixtures::frame_samples,
     signal::{FrameClass, classify_windows},
 };
 use kithara_test_utils::probe::IntoProbeArg;
@@ -134,8 +134,8 @@ impl Origin {
             Self::Hls => {
                 let requested = usize::try_from(frames_from_secs(SEGMENT_SECS))
                     .expect("a segment carries a positive number of frames");
-                let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac)
-                    .expect("FLAC names its encoder frame size");
+                let frame_samples =
+                    frame_samples(AudioCodec::Flac).expect("FLAC names its encoder frame size");
                 let packaged = packaged_content_frames(requested, frame_samples, SEGMENTS)
                     .expect("the census fixture's packaged length fits usize");
                 i64::try_from(packaged).expect("the packaged length fits the session axis")

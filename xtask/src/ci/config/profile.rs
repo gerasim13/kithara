@@ -112,6 +112,23 @@ mod tests {
     }
 
     #[test]
+    fn the_android_profile_leaves_batch_termination_to_the_adapter() {
+        let nextest: toml::Value = toml::from_str(
+            &fs::read_to_string(workspace_root().join(".config/nextest.toml")).unwrap(),
+        )
+        .unwrap();
+        let android = nextest["profile"]["android"].as_table().unwrap();
+        let slow = android
+            .get("slow-timeout")
+            .expect("explicit Android slow-batch policy");
+        assert!(
+            slow.get("terminate-after").is_none(),
+            "nextest must not attribute a whole-batch timeout to its first test"
+        );
+        assert!(android.contains_key("leak-timeout"));
+    }
+
+    #[test]
     fn tracked_pins_are_valid_on_every_build_platform() {
         CiPins::load(&workspace_root().join(".config/ci-pins.toml")).unwrap();
     }

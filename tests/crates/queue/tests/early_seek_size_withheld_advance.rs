@@ -154,7 +154,7 @@ fn build_hls_source(
             .store(store.clone())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
-                    .backend(DecoderBackend::Symphonia)
+                    .backend(DecoderBackend::default())
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(GATED_VARIANT))

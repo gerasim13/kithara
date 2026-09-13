@@ -191,7 +191,8 @@ fn max_playlist_batch_size(records: &[ProbeEvent], variant_request_ids: &HashSet
 }
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
