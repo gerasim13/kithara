@@ -1000,6 +1000,7 @@ impl ProductHarness {
                 }
                 _ => "beat",
             };
+            self.tap.host_beat(frame, kind == "downbeat");
             self.tap.timeline().point(
                 "host-grid",
                 frame,
@@ -3268,34 +3269,36 @@ async fn listening_single_deck_host_metronome_preview(#[case] scenario: Listenin
     let raw = harness
         .capture_frames(case, AUDIBLE_CAPTURE_FRAMES, harness.block_frames)
         .await;
-    let raw_before_reference = raw.clone();
-    let host_grid = harness
-        .host_grid
-        .as_ref()
-        .expect("sync request retains Host grid");
-    let total_output_frames = harness.rendered_frames;
-    let (reference, _host_markers) = host_grid_reference(host_grid, total_output_frames);
     let activation = harness.sync_activation;
     if !scenario.publish_grid_after_play {
         assert_eq!(activation, Some(scenario.expected_activation));
     }
-    let reference_offset =
-        usize::try_from(audible_start).expect("capture start fits usize") * usize::from(CHANNELS);
-    let reference_capture = &reference[reference_offset..reference_offset + raw.len()];
-    let (preview, preview_clips) = host_grid_preview(&raw, reference_capture);
+    assert!(
+        harness.host_grid.is_some(),
+        "{}: sync request retains Host grid",
+        scenario.id
+    );
+    let audible_end = harness.rendered_frames;
+    let audible_beats = harness
+        .tap
+        .timeline()
+        .events()
+        .iter()
+        .filter(|event| {
+            event.lane == "host-grid" && (audible_start..audible_end).contains(&event.output_start)
+        })
+        .count();
+    assert!(
+        audible_beats > 0,
+        "{}: the metronome must click inside the audible capture",
+        scenario.id
+    );
+    let (_, metronome_clips) = harness.tap.metronome_mix();
     assert_eq!(
-        preview_clips, 0,
-        "derived listening preview must have headroom"
+        metronome_clips, 0,
+        "Host metronome listening mix must have headroom"
     );
     let underruns = harness.underrun_failures();
-    let reference_path = harness
-        .tap
-        .write_reference("host-grid-reference", &reference)
-        .expect("publish Host-grid metronome WAV");
-    let preview_path = harness
-        .tap
-        .write_reference("track-host-grid-preview", &preview)
-        .expect("publish track and Host-grid preview WAV");
     harness.tap.evidence(
         "single_deck_listening_preview",
         serde_json::json!({
@@ -3309,39 +3312,15 @@ async fn listening_single_deck_host_metronome_preview(#[case] scenario: Listenin
             "prepared_host_activation": activation,
             "audible_capture_start": audible_start,
             "audible_capture_frames": AUDIBLE_CAPTURE_FRAMES,
-            "host_grid_reference": reference_path,
-            "track_host_grid_preview": preview_path,
-            "mix": {"track_gain": 0.8, "metronome_gain": 0.2, "preview_clipped_samples": preview_clips},
+            "audible_capture_pcm_frames": raw.len() / usize::from(CHANNELS),
             "underruns": underruns,
             "raw_note": "output.wav is unmodified Host PCM; this artifact does not prove synchronization",
         }),
-    );
-    assert_eq!(
-        raw, raw_before_reference,
-        "reference export must not alter raw Host PCM"
     );
     assert!(
         underruns.is_empty(),
         "listening capture underruns: {underruns:?}"
     );
-}
-
-fn host_grid_preview(raw: &[f32], reference: &[f32]) -> (Vec<f32>, usize) {
-    let mut clipped = 0;
-    let preview = raw
-        .iter()
-        .zip(reference)
-        .map(|(track, click)| {
-            let sample = *track * 0.8 + *click * 0.2;
-            if sample.abs() > 1.0 {
-                clipped += 1;
-                sample.clamp(-1.0, 1.0)
-            } else {
-                sample
-            }
-        })
-        .collect();
-    (preview, clipped)
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
@@ -4168,75 +4147,6 @@ fn lane_samples(interleaved: &[f32], channel: usize) -> Vec<f32> {
         .chunks_exact(usize::from(CHANNELS))
         .map(|frame| frame[channel])
         .collect()
-}
-
-fn host_grid_reference(grid: &BeatGridSnapshot, frames: u64) -> (Vec<f32>, Vec<(u64, bool)>) {
-    let ordinal_at = |frame: u64| {
-        let query = grid.beat_at(MapPoint::new(
-            grid.stamp(),
-            MapPosition::Session(SessionFrame::new(
-                i64::try_from(frame).expect("reference frame fits i64"),
-            )),
-        ));
-        let BeatGridQuery::Resolved(beat) = query else {
-            panic!("Host grid must resolve the listening reference bounds");
-        };
-        f64::from(*beat.value().value())
-            .round()
-            .to_i64()
-            .expect("Host beat ordinal fits i64")
-    };
-    let first = ordinal_at(0);
-    let last = ordinal_at(frames.saturating_sub(1));
-    let mut pcm = vec![0.0; usize::try_from(frames).expect("reference frames fit usize") * 2];
-    let mut markers = Vec::new();
-    for ordinal in first..=last {
-        let beat = Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal))
-            .expect("Host beat ordinal is valid");
-        let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
-        else {
-            continue;
-        };
-        let MapPosition::Session(position) = *position.value().value() else {
-            continue;
-        };
-        let Ok(frame) = u64::try_from(i64::from(position)) else {
-            continue;
-        };
-        if frame >= frames {
-            continue;
-        }
-        let downbeat = matches!(
-            grid.meter_at(MapPoint::new(grid.stamp(), beat)),
-            BeatGridQuery::Resolved(meter)
-                if (ordinal - i64::from(meter.value().downbeat()))
-                    .rem_euclid(i64::from(meter.value().beats_per_bar())) == 0
-        );
-        const BURST_FRAMES: usize = 480;
-        const BEAT_HZ: f32 = 1_760.0;
-        const DOWNBEAT_HZ: f32 = 2_200.0;
-        let (amplitude, frequency) = if downbeat {
-            (0.72, DOWNBEAT_HZ)
-        } else {
-            (0.45, BEAT_HZ)
-        };
-        let start = usize::try_from(frame).expect("reference frame fits usize");
-        for offset in 0..BURST_FRAMES {
-            let Some(index) = start
-                .checked_add(offset)
-                .filter(|index| *index < frames as usize)
-            else {
-                break;
-            };
-            let phase = (offset as f32 * frequency / 48_000.0).fract();
-            let envelope = 1.0 - offset as f32 / BURST_FRAMES as f32;
-            let sample = amplitude * (phase.mul_add(2.0, -1.0)) * envelope;
-            pcm[index * 2] = sample;
-            pcm[index * 2 + 1] = sample;
-        }
-        markers.push((frame, downbeat));
-    }
-    (pcm, markers)
 }
 
 async fn hls(
