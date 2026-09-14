@@ -153,7 +153,7 @@ fn reserve(cache: &Path, stamp: &str) -> Result<(PathBuf, PathBuf, String)> {
 fn activate(root: &Path, generation: &Path, suffix: &str) -> Result<()> {
     let locator = layout::locator(root);
     let temporary = locator.with_file_name(format!(".xtask-cache.{suffix}"));
-    let body = format!("{}\n", generation.display());
+    let body = format!("{}\n", shell_readable(generation));
     let result = (|| -> Result<()> {
         write_new(&temporary, body.as_bytes())?;
         fs::rename(&temporary, &locator)
@@ -170,6 +170,21 @@ fn activate(root: &Path, generation: &Path, suffix: &str) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Render a generation path the way the shell that reads the locator can use it.
+///
+/// Every path here is canonical, and on Windows that means the extended-length
+/// form `\\?\C:\...`. The justfile transport reads this file with `sh`, which
+/// knows a leading slash and a drive letter and nothing else, so the prefix
+/// turns a healthy cache into "cached xtask transport is unavailable". Stripping
+/// it changes nothing for the reader that canonicalises the path again.
+fn shell_readable(generation: &Path) -> String {
+    let rendered = generation.display().to_string();
+    rendered
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&rendered)
+        .to_owned()
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -284,8 +299,23 @@ mod tests {
 
     use anyhow::{Result, anyhow};
 
-    use super::{CacheManifest, layout, publish, publish_with_activation};
+    use super::{CacheManifest, layout, publish, publish_with_activation, shell_readable};
     use crate::config::XtaskCacheConfig;
+
+    /// The locator is read by the justfile's `sh`, which accepts a leading slash
+    /// or a drive letter. A canonical Windows path carries neither until the
+    /// extended-length prefix comes off, and the transport refuses what is left.
+    #[test]
+    fn the_locator_names_a_generation_a_shell_can_read() {
+        assert_eq!(
+            shell_readable(&PathBuf::from(r"\\?\C:\work\.git\xtask-cache\generation-1")),
+            r"C:\work\.git\xtask-cache\generation-1"
+        );
+        assert_eq!(
+            shell_readable(&PathBuf::from("/work/.git/xtask-cache/generation-1")),
+            "/work/.git/xtask-cache/generation-1"
+        );
+    }
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, CacheManifest)> {
         let temp = tempfile::tempdir()?;

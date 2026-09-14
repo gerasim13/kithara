@@ -539,7 +539,6 @@ fn append_core_coverage(coverage: &mut Vec<ToolCoverage>) {
         "ast-grep",
         "typos",
         "cargo-modules-orphans",
-        "cargo-workspace-unused-pub",
         "manifest-hygiene",
         "quality-report",
         "rstest-audit",

@@ -13,6 +13,9 @@ struct Consts;
 
 impl Consts {
     const HASH_BYTES: usize = 16;
+    /// Windows hashes a path as wide units under a domain of its own, so this
+    /// one names no platform there.
+    #[cfg(not(windows))]
     const LOCAL_UNIX_DOMAIN: &[u8] = b"kithara.asset-root.local.unix.v1\0";
     #[cfg(windows)]
     const LOCAL_WINDOWS_DOMAIN: &[u8] = b"kithara.asset-root.local.windows.v1\0";

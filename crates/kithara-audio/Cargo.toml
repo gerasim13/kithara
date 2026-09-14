@@ -105,6 +105,7 @@ kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 axum = { workspace = true }
 hotpath = { workspace = true }

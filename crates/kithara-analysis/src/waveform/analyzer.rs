@@ -351,7 +351,7 @@ fn normalize_bands(
     mags
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_fixtures::analysis_fixtures::{
         analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,

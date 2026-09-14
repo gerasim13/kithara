@@ -53,15 +53,11 @@ impl ImageCommand {
         }
     }
 
-    pub(crate) fn build_args(
-        self,
-        pins: &CiPins,
-        root: &std::path::Path,
-    ) -> Result<Vec<(&'static str, String)>> {
+    pub(crate) fn build_args(self, pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
         match self {
             Self::Toolchain => linux_build_args(pins),
             Self::Runner => Ok(runner_build_args(pins, &pins.linux_image)),
-            Self::Android => android_build_args(pins, root),
+            Self::Android => android_build_args(pins),
             Self::AndroidRunner => Ok(runner_build_args(pins, &pins.linux_android_image)),
         }
     }
@@ -78,7 +74,7 @@ pub(crate) fn run(args: &ImageArgs) -> Result<()> {
         args.tag
             .as_deref()
             .unwrap_or_else(|| args.command.tag(&pins)),
-        &args.command.build_args(&pins, &root)?,
+        &args.command.build_args(&pins)?,
     )
 }
 
@@ -193,17 +189,14 @@ pub(crate) fn runner_build_args(pins: &CiPins, base: &str) -> Vec<(&'static str,
     ]
 }
 
-/// The emulator this image carries is the one the workspace boots, so its name
-/// is read from the workspace rather than repeated here. Two names for one
-/// device is a machine that builds an emulator nothing asks for.
-fn android_build_args(
-    pins: &CiPins,
-    root: &std::path::Path,
-) -> Result<Vec<(&'static str, String)>> {
-    let android = crate::config::KitharaExt::load(root)?.android;
+/// The emulator this image carries is the one the Android lane boots, and the
+/// lane names it by the pin the Mac runner creates, so both hosts read one name.
+/// Two names for one device is a machine that builds an emulator nothing asks
+/// for.
+fn android_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
     Ok(vec![
         ("CI_IMAGE", pins.linux_image.clone()),
-        ("ANDROID_AVD", android.default_avd),
+        ("ANDROID_AVD", pins.android_avd.clone()),
         (
             "ANDROID_BUILD_TOOLS_VERSION",
             pins.android_build_tools_version.clone(),
@@ -266,11 +259,21 @@ mod tests {
             ImageCommand::AndroidRunner,
         ] {
             let dockerfile = image.dockerfile();
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("the crate sits inside the workspace");
-            let configured = configured_arguments(image.build_args(pins, root).unwrap());
+            let configured = configured_arguments(image.build_args(pins).unwrap());
             assert_eq!(declared_arguments(dockerfile), configured, "{dockerfile}");
         }
+    }
+
+    // The Android lane boots the AVD its pin names on every host, so the Linux
+    // image has to create that AVD rather than the workspace's demo default.
+    #[test]
+    fn android_image_creates_the_avd_the_lane_boots() {
+        let pins = &fixture().pins;
+        let arguments = ImageCommand::Android.build_args(pins).unwrap();
+        let avd = arguments
+            .iter()
+            .find(|(name, _)| *name == "ANDROID_AVD")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(avd, Some(pins.android_avd.as_str()));
     }
 }

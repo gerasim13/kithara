@@ -469,7 +469,7 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;

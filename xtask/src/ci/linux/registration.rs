@@ -1,4 +1,4 @@
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process};
+use std::{fs, path::Path, process};
 
 use anyhow::{Context, Result, bail};
 use reqwest::{
@@ -17,6 +17,7 @@ struct Registration {
     id: u64,
     name: String,
     status: String,
+    busy: bool,
 }
 
 #[derive(Deserialize)]
@@ -159,7 +160,7 @@ fn prune_offline(client: &Client, endpoint: &str, prefix: &str) -> Result<()> {
     for stale in listing
         .runners
         .iter()
-        .filter(|runner| runner.status == "offline" && runner.name.starts_with(prefix))
+        .filter(|runner| is_prunable(runner, prefix))
     {
         let removed = client
             .delete(format!("{endpoint}/{}", stale.id))
@@ -175,6 +176,10 @@ fn prune_offline(client: &Client, endpoint: &str, prefix: &str) -> Result<()> {
         info!(runner = stale.name, "stale registration removed");
     }
     Ok(())
+}
+
+fn is_prunable(runner: &Registration, prefix: &str) -> bool {
+    runner.status == "offline" && !runner.busy && runner.name.starts_with(prefix)
 }
 
 fn client(token: &str) -> Result<Client> {
@@ -210,6 +215,26 @@ fn read_token(path: &Path) -> Result<String> {
 /// through a command line where every process on the machine could read them.
 fn write_secret(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("restricting {}", path.display()))
+    super::permissions::set_mode(path, super::permissions::OWNER_ONLY)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Registration, is_prunable};
+
+    fn runner(status: &str, busy: bool) -> Registration {
+        Registration {
+            id: 1,
+            name: "gerasim13-04-old".to_owned(),
+            status: status.to_owned(),
+            busy,
+        }
+    }
+
+    #[test]
+    fn a_busy_offline_runner_does_not_block_a_new_jit_registration() {
+        assert!(!is_prunable(&runner("offline", true), "gerasim13-04"));
+        assert!(is_prunable(&runner("offline", false), "gerasim13-04"));
+        assert!(!is_prunable(&runner("online", false), "gerasim13-04"));
+    }
 }

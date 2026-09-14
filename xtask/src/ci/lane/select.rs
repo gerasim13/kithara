@@ -27,9 +27,8 @@ pub(crate) struct LanesArgs {
     #[arg(long, value_enum)]
     pub(crate) kind: PipelineKind,
     /// Render only these lanes, whatever their kinds say. This is how a single
-    /// subtask is run on its own. A name must be a declared lane, and one this
-    /// role owns must reach this fleet; a name another role owns simply leaves
-    /// this role empty.
+    /// subtask is run on its own. A lane with no kinds belongs to a dedicated
+    /// workflow and leaves this fan-out empty.
     #[arg(long, value_delimiter = ' ')]
     pub(crate) only: Vec<String>,
     #[arg(long, value_enum, default_value_t = Fleet::Github)]
@@ -56,6 +55,7 @@ pub(crate) struct Entry {
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    pub(crate) isolated_target: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +67,7 @@ pub(crate) struct Dependent {
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    pub(crate) isolated_target: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,23 +92,24 @@ fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
 /// system is therefore not one GitHub schedules from the catalog, whatever its
 /// membership says - rendering it would run a macOS recipe on a Linux runner.
 fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
-    fleet != Fleet::Github || lane.os.as_deref() == Some("linux")
+    fleet != Fleet::Github || lane.runs_only_on_linux()
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
-/// `--only` named directly. A lane with `needs` still has to pass this before
-/// it can land in `matrix`; `dependent` below never calls it, because a
-/// consumer's own membership is not what admits it.
+/// `--only` named directly. A lane with no membership belongs to a dedicated
+/// workflow and never enters this fleet's fan-out, even by name.
 fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> bool {
     if lane.role != args.role || !reachable(lane, args.fleet) {
         return false;
     }
+    let membership = membership(lane, args.fleet);
+    if membership.is_empty() {
+        return false;
+    }
     if args.only.is_empty() {
-        membership(lane, args.fleet)
-            .iter()
-            .any(|entry| entry == kind)
+        membership.iter().any(|entry| entry == kind)
     } else {
-        args.only.iter().any(|only| only == name)
+        args.only.iter().any(|only| only == "all" || only == name)
     }
 }
 
@@ -122,7 +124,7 @@ pub(crate) fn render(
             LANE_ROLES.join(", ")
         );
     }
-    for name in &args.only {
+    for name in args.only.iter().filter(|name| name.as_str() != "all") {
         if !lanes.contains_key(name) {
             bail!(
                 "`{name}` is not a CI lane; this repository has {}",
@@ -142,6 +144,7 @@ pub(crate) fn render(
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
             runner: github_runner(lane, args.kind),
+            isolated_target: lane.target_snapshot.is_some(),
         })
         .collect();
 
@@ -179,6 +182,7 @@ pub(crate) fn render(
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
+            isolated_target: lane.target_snapshot.is_some(),
         })
         .collect();
 
@@ -199,8 +203,10 @@ pub(crate) fn render(
         .only
         .iter()
         .map(String::as_str)
+        .filter(|name| *name != "all")
         .filter(|name| !landed.contains(name))
         .filter(|name| lanes[*name].role == args.role)
+        .filter(|name| !membership(&lanes[*name], args.fleet).is_empty())
         .collect();
     if !missing.is_empty() {
         bail!(
@@ -255,7 +261,7 @@ mod tests {
             needs: needs.iter().map(|need| (*need).to_owned()).collect(),
             timeout_minutes: 30,
             cache_group: "linux".to_owned(),
-            os: Some("linux".to_owned()),
+            os: vec!["linux".to_owned()],
             program: "just".to_owned(),
             ..CiLaneConfig::default()
         }
@@ -361,7 +367,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"},"isolated_target":false}]"#
         );
     }
 
@@ -392,13 +398,29 @@ mod tests {
     }
 
     #[test]
+    fn all_selects_every_reachable_lane_the_role_owns() {
+        let mut lanes = catalog();
+        lanes.insert("linux-extra".to_owned(), lane("gate", &["weekly"], &[]));
+        lanes.insert("deep-extra".to_owned(), lane("deep", &["weekly"], &[]));
+
+        let selection = render(&lanes, &args("gate", PipelineKind::Branch, &["all"]))
+            .expect("all gate lanes render regardless of kind");
+        let names: Vec<&str> = selection
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["linux-extra", "linux-lint"]);
+    }
+
+    #[test]
     fn an_only_this_role_owns_that_this_fleet_cannot_reach_is_refused_rather_than_empty() {
         // A name bypasses its lane's kinds, so what is left to refuse is the
         // machine: asking this fleet for a macOS lane must fail rather than
         // return an empty selection a caller reads as success.
         let mut lanes = catalog();
         let mut elsewhere = lane("deep", &["nightly"], &[]);
-        elsewhere.os = Some("macos".to_owned());
+        elsewhere.os = vec!["macos".to_owned()];
         lanes.insert("deep-apple".to_owned(), elsewhere);
 
         let error = render(
@@ -422,6 +444,18 @@ mod tests {
             &args("gate", PipelineKind::Nightly, &["deep-miri"]),
         )
         .expect("a lane another role owns is not this role's to refuse");
+        assert!(selection.matrix.is_empty());
+        assert!(selection.dependent.is_empty());
+    }
+
+    #[test]
+    fn an_only_with_no_membership_stays_in_its_dedicated_workflow() {
+        let mut lanes = catalog();
+        lanes.insert("deep-ui".to_owned(), lane("deep", &[], &[]));
+
+        let selection = render(&lanes, &args("deep", PipelineKind::Nightly, &["deep-ui"]))
+            .expect("a dedicated lane is not part of the generic fan-out");
+
         assert!(selection.matrix.is_empty());
         assert!(selection.dependent.is_empty());
     }
@@ -500,11 +534,31 @@ mod tests {
     // Windows work runs from workflows with runner labels of their own. A macOS
     // lane rendered here would run its recipe on a Linux machine and report a
     // green gate for a sanitizer that never ran.
+    // A lane that also runs on another machine needs a device the shared Linux
+    // pool lacks, so the fan-out leaves it to the workflow naming that pool.
+    #[test]
+    fn the_github_fleet_leaves_a_lane_that_also_names_another_machine_to_its_own_pool() {
+        let mut lanes = catalog();
+        let mut device = lane("gate", &["main"], &[]);
+        device.os = vec!["macos".to_owned(), "linux".to_owned()];
+        lanes.insert("android-test".to_owned(), device);
+
+        let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
+            .expect("the GitHub fleet renders");
+        assert!(
+            github
+                .matrix
+                .iter()
+                .all(|entry| entry.lane != "android-test"),
+            "the shared fan-out has no emulator"
+        );
+    }
+
     #[test]
     fn the_github_fleet_never_schedules_a_lane_from_another_operating_system() {
         let mut lanes = catalog();
         let mut elsewhere = lane("gate", &["main"], &[]);
-        elsewhere.os = Some("macos".to_owned());
+        elsewhere.os = vec!["macos".to_owned()];
         lanes.insert("deep-rtsan".to_owned(), elsewhere);
 
         let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))

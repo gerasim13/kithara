@@ -25,7 +25,7 @@ pub(crate) fn xcframework(
     package: &str,
     kind: PipelineKind,
 ) -> Result<()> {
-    process.require_os("macos", "Apple release")?;
+    process.require_os(&["macos"], "Apple release")?;
     let profile = ext.release.package(package)?;
     let version = version_variable(kind).map(required_env).transpose()?;
     let expected = expected_checksum(version.as_deref(), &ctx.root.join(&ext.release.manifest))?;
@@ -149,7 +149,7 @@ fn expected_checksum(version: Option<&str>, manifest_path: &Path) -> Result<Opti
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "Apple documentation release")?;
+    process.require_os(&["macos"], "Apple documentation release")?;
     // The documentation is generated against the local Swift package, and the
     // package resolves its binary target from the debug build tree. Without
     // it the manifest itself refuses to load, long before anything is
@@ -174,7 +174,7 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 }
 
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "WASM release")?;
+    process.require_os(&["macos"], "WASM release")?;
     process.run(
         ctx.config.tools.program("just"),
         &["platform", "wasm", "build", "--profile", "release"],
@@ -190,7 +190,7 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "Android release")?;
+    process.require_os(&["macos"], "Android release")?;
     // The archive builds the libraries and generates the bindings itself, for
     // the release profile the artifact ships. A native build before it took
     // thirteen minutes for both ABIs in the debug profile, and the archive

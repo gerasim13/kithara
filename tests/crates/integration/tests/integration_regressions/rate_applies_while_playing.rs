@@ -3,8 +3,8 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    events::{PlayerEvent, TrackId},
-    play::Resource,
+    events::TrackId,
+    play::{PlayerEvent, Resource},
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{

@@ -27,3 +27,10 @@ pub(crate) const SCCACHE_SLOT_CONTROL_NAMESPACE: &str = ".kithara-ci-sccache-slo
 
 /// CI-owned compiler-cache slots, kept disjoint from the local cache directory.
 pub(crate) const SCCACHE_SLOT_CACHE_NAMESPACE: &str = "sccache-slots";
+
+/// A runner owns one cache daemon for the life of its job or container.
+///
+/// The daemon can be ready well before a lane reaches its first compiler
+/// process, so the default idle expiry would make an otherwise initialized
+/// cache disappear and force concurrent clients to race its restart.
+pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";

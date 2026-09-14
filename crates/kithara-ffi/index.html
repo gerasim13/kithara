@@ -274,6 +274,8 @@
         // `AudioPlayer` is the wasm-bindgen class generated from the
         // #[wasm_bindgen] impl in src/web/surface.rs. `checkRuntime()` is
         // appended to kithara-ffi.js by `just tooling xtask wasm postbuild`.
+        // Trunk's injected loader owns `init()`; a second concurrent call
+        // instantiates a second module over the same shared memory.
         const wasm = await import('./kithara-ffi.js');
 
         const runtime = wasm.checkRuntime();
@@ -286,7 +288,10 @@
             throw new Error(runtime.reason);
         }
 
-        await wasm.default();
+        if (!window.wasmBindings) {
+            await new Promise(resolve =>
+                addEventListener('TrunkApplicationStarted', resolve, { once: true }));
+        }
 
         // One AudioPlayer instance owns the engine worker + queue.
         const player = new wasm.AudioPlayer();

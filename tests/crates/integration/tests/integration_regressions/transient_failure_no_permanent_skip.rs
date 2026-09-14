@@ -10,11 +10,11 @@ use kithara::{
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir,
-    bufpool_ext::{TestPools, pools},
+    bufpool_ext::pools,
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},

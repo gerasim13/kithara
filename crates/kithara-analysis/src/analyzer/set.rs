@@ -183,7 +183,12 @@ where
     }
 }
 
-#[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]
+#[cfg(all(
+    test,
+    feature = "analysis-beat",
+    feature = "analysis-waveform",
+    not(target_arch = "wasm32")
+))]
 mod tests {
     use std::num::NonZeroU32;
 

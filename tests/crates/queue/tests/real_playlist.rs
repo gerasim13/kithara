@@ -15,9 +15,7 @@ use kithara_integration_tests::{
     Xorshift64,
     event::TestEvent,
     kithara,
-    offline::{
-        AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue, offline_gain_window,
-    },
+    offline::{AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 

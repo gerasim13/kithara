@@ -15,11 +15,11 @@ use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
 
 pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
+pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
 
 struct Consts;
 
 impl Consts {
-    const HEARTBEAT_FILE: &'static str = ".kithara-job-heartbeat";
     // Two cleanup intervals tolerate a paused VM while bounding a killed job's
     // stale claim. A live helper refreshes this every 30 seconds.
     const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
@@ -34,6 +34,9 @@ pub(crate) struct CacheEntry {
 
 struct CacheContents {
     entries: Vec<CacheEntry>,
+    /// Entries a live job builds in. They are charged against the ceiling and
+    /// never evicted, but they do not make their siblings unevictable.
+    held: Vec<CacheEntry>,
     active: bool,
     locks: Vec<FileLock>,
 }
@@ -113,16 +116,25 @@ fn collect(
         let contents = candidate_entries(target_dir)?;
         locks.extend(contents.locks);
         let bytes = total_bytes(&contents.entries);
+        let held = total_bytes(&contents.held);
         if contents.active {
-            held_bytes = held_bytes.saturating_add(bytes);
+            held_bytes = held_bytes.saturating_add(bytes).saturating_add(held);
             info!(
                 path = %target_dir.display(),
-                bytes_before = bytes,
+                bytes_before = bytes.saturating_add(held),
                 bytes_freed = 0,
                 budget_bytes,
                 "keeping active build cache"
             );
             continue;
+        }
+        held_bytes = held_bytes.saturating_add(held);
+        if held > 0 {
+            info!(
+                path = %target_dir.display(),
+                held_bytes = held,
+                "keeping the build directories live jobs hold"
+            );
         }
         candidates.extend(contents.entries);
     }
@@ -155,6 +167,21 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
     Ok(())
 }
 
+/// What a listed entry still is, or nothing when it is already gone.
+///
+/// The cache being measured is one a job may be building in, and a compiler
+/// writes a temporary file and removes it again. A name the listing returned
+/// and the build has since deleted is that race, not a broken cache: there is
+/// nothing left to count or to reclaim. Any other failure is a real one, and
+/// stopping the sweep on it is why the budget went unenforced.
+fn still_there(metadata: io::Result<fs::Metadata>) -> io::Result<Option<fs::Metadata>> {
+    match metadata {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
     if !target_dir.is_absolute() || target_dir.parent().is_none() {
         bail!(
@@ -174,6 +201,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         .with_context(|| format!("reading build cache {}", target_dir.display()))?;
     let mut contents = CacheContents {
         entries: Vec::new(),
+        held: Vec::new(),
         // A target a live job leased is active even between compilations,
         // when no `.cargo-lock` is held.
         active: lease_is_held(target_dir, FileLock::try_exclusive),
@@ -183,11 +211,14 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         let entry = entry
             .with_context(|| format!("reading an entry in build cache {}", target_dir.display()))?;
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)
-            .with_context(|| format!("reading build cache metadata for {}", path.display()))?;
+        let Some(metadata) = still_there(fs::symlink_metadata(&path))
+            .with_context(|| format!("reading build cache metadata for {}", path.display()))?
+        else {
+            continue;
+        };
         if !metadata.file_type().is_dir() {
             if metadata.file_type().is_file()
-                && path.file_name() == Some(OsStr::new(Consts::HEARTBEAT_FILE))
+                && path.file_name() == Some(OsStr::new(TARGET_HEARTBEAT_FILE))
             {
                 contents.active |= heartbeat_is_fresh(&path, &metadata);
             }
@@ -197,13 +228,17 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             .modified()
             .with_context(|| format!("reading modification time for {}", path.display()))?;
         let scan = scan_directory(&path)?;
-        contents.active |= scan.active;
         contents.locks.extend(scan.locks);
-        contents.entries.push(CacheEntry {
+        let entry = CacheEntry {
             path,
             size_bytes: scan.bytes,
             modified: scan.last_used.map_or(modified, |used| used.max(modified)),
-        });
+        };
+        if scan.active {
+            contents.held.push(entry);
+        } else {
+            contents.entries.push(entry);
+        }
     }
     Ok(contents)
 }
@@ -465,19 +500,36 @@ mod tests {
 
     /// The Linux volume root is scanned, and the lane builds one level down
     /// and claims that level. The scan has to see the claim where the lane
-    /// makes it.
+    /// makes it, and it has to charge that one directory rather than the root:
+    /// a runner always has some job, so a root held whole was 1.4 TB the
+    /// ceiling could never reclaim, and every hourly pass answered the
+    /// shortfall by evicting every warm lane directory instead.
     #[test]
-    fn a_lease_held_in_a_child_keeps_the_scanned_root() {
+    fn a_lease_held_in_a_child_keeps_that_child_and_not_its_siblings() {
         let root = tempfile::tempdir().unwrap();
         let build = root.path().join("flash-off");
+        let idle = root.path().join("flash-on");
+        fs::create_dir_all(&idle).unwrap();
         let lease = lease::hold(&build).expect("claim the directory the lane builds into");
 
         let contents = candidate_entries(root.path()).unwrap();
 
         assert!(
-            contents.active,
+            !contents.active,
+            "one live child made the whole root unevictable"
+        );
+        assert!(
+            contents.held.iter().any(|entry| entry.path == build),
             "the scan did not see the lease the lane holds in {}",
             build.display()
+        );
+        assert!(
+            contents.entries.iter().any(|entry| entry.path == idle),
+            "a directory nobody holds stayed out of the candidates"
+        );
+        assert!(
+            contents.entries.iter().all(|entry| entry.path != build),
+            "the directory a lane is building in was offered for eviction"
         );
         drop(lease);
     }
@@ -693,7 +745,15 @@ mod tests {
             .unwrap();
         let lock = FileLock::exclusive(file).unwrap();
 
-        assert!(candidate_entries(directory.path()).unwrap().active);
+        let contents = candidate_entries(directory.path()).unwrap();
+        assert!(
+            contents.held.iter().any(|entry| entry.path == profile),
+            "the profile a compilation holds was not charged as live"
+        );
+        assert!(
+            contents.entries.is_empty(),
+            "the profile a compilation holds was offered for eviction"
+        );
         drop(lock);
     }
 
@@ -728,7 +788,7 @@ mod tests {
     #[test]
     fn a_fresh_cross_vm_heartbeat_defers_eviction() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join(Consts::HEARTBEAT_FILE), b"").unwrap();
+        fs::write(directory.path().join(TARGET_HEARTBEAT_FILE), b"").unwrap();
 
         assert!(candidate_entries(directory.path()).unwrap().active);
     }
@@ -736,7 +796,7 @@ mod tests {
     #[test]
     fn a_stale_cross_vm_heartbeat_leaves_the_target_evictable() {
         let directory = tempfile::tempdir().unwrap();
-        let heartbeat = directory.path().join(Consts::HEARTBEAT_FILE);
+        let heartbeat = directory.path().join(TARGET_HEARTBEAT_FILE);
         let file = File::create(&heartbeat).unwrap();
         file.set_times(
             FileTimes::new().set_modified(
@@ -867,5 +927,28 @@ mod tests {
             "the live cache is charged against the ceiling, so the idle one is evicted"
         );
         drop((job, lane));
+    }
+
+    /// A sweep runs over a cache a job is building in, so a name the listing
+    /// returned can be gone before it is read. Treating that as a failure
+    /// aborted the whole sweep, and the budget it exists to enforce was never
+    /// applied: the disk kept growing while the timer reported a failed unit.
+    #[test]
+    fn an_entry_a_live_build_removed_mid_sweep_is_skipped() {
+        let gone = still_there(Err(io::Error::from(io::ErrorKind::NotFound)))
+            .expect("a vanished entry is not a failure");
+        assert!(gone.is_none(), "a vanished entry is counted as nothing");
+
+        let refused = still_there(Err(io::Error::from(io::ErrorKind::PermissionDenied)));
+        assert!(
+            refused.is_err(),
+            "a cache this sweep cannot read is a real failure, not a race"
+        );
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let present = still_there(fs::symlink_metadata(directory.path()))
+            .expect("reading an entry that is there")
+            .expect("an entry that is there is measured");
+        assert!(present.file_type().is_dir());
     }
 }

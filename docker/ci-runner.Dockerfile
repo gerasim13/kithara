@@ -47,6 +47,10 @@ RUN case "$(dpkg --print-architecture)" in \
  && tar -xzf /tmp/runner.tar.gz -C /runner \
  && rm /tmp/runner.tar.gz
 
-# The just-in-time configuration is read once and dropped from the environment,
-# so a job's own steps never inherit the credentials that registered them.
-ENTRYPOINT ["/bin/sh", "-c", "config=${ACTIONS_RUNNER_JITCONFIG:?the host must supply a just-in-time runner configuration}; unset ACTIONS_RUNNER_JITCONFIG; exec ./run.sh --jitconfig \"$config\""]
+# The daemon is ready before this one-shot runner registers for a job. A cache
+# backend that cannot initialize must recycle the runner before it can accept a
+# job, rather than fail after the checkout and bootstrap have begun.
+# The just-in-time configuration is then read once and dropped from the
+# environment, so a job's own steps never inherit the credentials that
+# registered them.
+ENTRYPOINT ["/bin/sh", "-c", "config=${ACTIONS_RUNNER_JITCONFIG:?the host must supply a just-in-time runner configuration}; unset ACTIONS_RUNNER_JITCONFIG; sccache --start-server || exit $?; exec ./run.sh --jitconfig \"$config\""]
