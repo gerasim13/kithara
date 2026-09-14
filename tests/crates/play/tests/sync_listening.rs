@@ -1,7 +1,7 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{
@@ -198,11 +198,13 @@ async fn record_sync_listening_wavs(
     #[case] provider: PreparedSources,
     #[case] target_bpm: Option<f64>,
 ) {
-    let artifacts = AudioArtifactSet::from_env(artifact_case, case.sample_rate, CHANNELS)
-        .expect("configure sync listening artifacts")
-        .unwrap_or_else(|| {
-            panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder")
-        });
+    let artifacts = AudioArtifactSet::from_env_or(
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        artifact_case,
+        case.sample_rate,
+        CHANNELS,
+    )
+    .expect("configure sync listening artifacts");
     let mut paths = Vec::with_capacity(case.decks() + 1);
     let mut deck_pcm = Vec::with_capacity(case.decks());
     let mut deck_reports = Vec::with_capacity(case.decks());

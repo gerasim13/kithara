@@ -527,7 +527,7 @@ pub(super) struct ProductHarness {
     host_grid: Option<BeatGridSnapshot>,
     sync_requested: bool,
     sync_activation: Option<u64>,
-    tap: Option<AudioArtifactTap>,
+    tap: AudioArtifactTap,
     server: Option<TestServerHelper>,
     paced: bool,
 }
@@ -609,7 +609,7 @@ pub(super) async fn prepared_sources(provider: Provider) -> PreparedSources {
 
 impl ProductHarness {
     pub(super) fn underrun_failures(&self) -> Vec<String> {
-        let ledger = self.tap.as_ref().map(AudioArtifactTap::underrun_ledger);
+        let ledger = self.tap.underrun_ledger();
         let mut failures: Vec<String> = self
             .player_controls
             .iter()
@@ -617,15 +617,13 @@ impl ProductHarness {
             .filter_map(|(deck, control)| {
                 let count = control.rt_metrics()?.underruns();
                 (count > 0).then(|| {
-                    let site = ledger
-                        .as_ref()
-                        .map(|ledger| self.underrun_site(ledger, deck))
-                        .unwrap_or_default();
+                    let site = self.underrun_site(&ledger, deck);
                     format!("deck {deck} rendered with {count} PCM underruns{site}")
                 })
             })
             .collect();
-        if let Some(unparsed) = ledger.map(|ledger| ledger.unparsed).filter(|n| *n > 0) {
+        if ledger.unparsed > 0 {
+            let unparsed = ledger.unparsed;
             failures.push(format!(
                 "{unparsed} PCM underrun probes carried no output interval"
             ));
@@ -829,7 +827,8 @@ impl ProductHarness {
             host_grid: None,
             sync_requested: false,
             sync_activation: None,
-            tap: AudioArtifactTap::from_env(
+            tap: AudioArtifactTap::from_env_or(
+                std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
                 &format!("{}-{}", artifact_label(), case.id),
                 case.sample_rate,
                 CHANNELS,
@@ -935,17 +934,15 @@ impl ProductHarness {
         self.tick_all(case).await;
         self.rendered_frames = end;
         self.record_host_grid(start, end);
-        if let Some(tap) = self.tap.as_mut() {
-            tap.timeline().span(
-                "host-output",
-                start,
-                end,
-                "presented",
-                "offline Host render",
-                None,
-            );
-            tap.push(&samples);
-        }
+        self.tap.timeline().span(
+            "host-output",
+            start,
+            end,
+            "presented",
+            "offline Host render",
+            None,
+        );
+        self.tap.push(&samples);
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -1003,14 +1000,12 @@ impl ProductHarness {
                 }
                 _ => "beat",
             };
-            if let Some(tap) = self.tap.as_mut() {
-                tap.timeline().point(
-                    "host-grid",
-                    frame,
-                    "grid",
-                    &format!("Host {kind} {ordinal}"),
-                );
-            }
+            self.tap.timeline().point(
+                "host-grid",
+                frame,
+                "grid",
+                &format!("Host {kind} {ordinal}"),
+            );
         }
     }
 
@@ -1159,17 +1154,15 @@ impl ProductHarness {
                         .unwrap_or_else(|| panic!("{}: missing deck {index} start", case.id))
                 },
             );
-            if let Some(tap) = self.tap.as_mut() {
-                let source = (seconds * f64::from(case.sample_rate)).round() as u64;
-                tap.timeline().span(
-                    &format!("deck-{index}"),
-                    self.rendered_frames,
-                    self.rendered_frames,
-                    "command",
-                    &format!("seek request {seconds:.6}s"),
-                    Some((source, source)),
-                );
-            }
+            let source = (seconds * f64::from(case.sample_rate)).round() as u64;
+            self.tap.timeline().span(
+                &format!("deck-{index}"),
+                self.rendered_frames,
+                self.rendered_frames,
+                "command",
+                &format!("seek request {seconds:.6}s"),
+                Some((source, source)),
+            );
             let (deck, result) = self
                 .host
                 .with(move |host| {
@@ -1295,14 +1288,12 @@ impl ProductHarness {
                 if let SyncAdmission::Prepared { activation, .. } = admission {
                     let activation = u64::try_from(i64::from(activation))
                         .expect("fixture activation must be non-negative");
-                    if let Some(tap) = self.tap.as_mut() {
-                        tap.timeline().point(
-                            &format!("deck-{index}"),
-                            activation,
-                            "planned",
-                            "sync activation",
-                        );
-                    }
+                    self.tap.timeline().point(
+                        &format!("deck-{index}"),
+                        activation,
+                        "planned",
+                        "sync activation",
+                    );
                     self.sync_activation = Some(
                         self.sync_activation
                             .map_or(activation, |current| current.max(activation)),
@@ -1324,16 +1315,14 @@ impl ProductHarness {
         segments: SegmentSet,
         state: BeatGridState,
     ) -> Result<SyncAdmission, PlayError> {
-        if let Some(tap) = self.tap.as_mut() {
-            let diagnostic = BeatGridSnapshot::segments(
-                BeatGridId::allocate().expect("diagnostic grid identity"),
-                BeatGridRevision::first(),
-                state,
-                segments.clone(),
-            )
-            .expect("published track grid is valid for artifact diagnostics");
-            tap.source_grid(item.as_u64(), diagnostic);
-        }
+        let diagnostic = BeatGridSnapshot::segments(
+            BeatGridId::allocate().expect("diagnostic grid identity"),
+            BeatGridRevision::first(),
+            state,
+            segments.clone(),
+        )
+        .expect("published track grid is valid for artifact diagnostics");
+        self.tap.source_grid(item.as_u64(), diagnostic);
         let target = self.decks[deck].id();
         self.host
             .with(move |host| host.publish_track_grid(target, item, segments, state))
@@ -1341,9 +1330,7 @@ impl ProductHarness {
     }
 
     pub(super) fn mark(&mut self, label: &str) {
-        if let Some(tap) = self.tap.as_mut() {
-            tap.mark(label);
-        }
+        self.tap.mark(label);
     }
 
     pub(super) async fn run_operations(&mut self, case: SyncCase) {
@@ -2035,40 +2022,38 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
             })
         })
         .collect::<Vec<_>>();
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "single_deck_origin_zero_control",
-            serde_json::json!({
-                "verdict": "capture-complete-before-assertions",
-                "fixture_generation": "generated rhythm score with source origin 0",
-                "source": control.source,
-                "source_bpm": control.source_bpm,
-                "requested_source": {
-                    "seconds": control.requested_source_seconds,
-                    "frame": control.requested_source_frame,
-                },
-                "selected_source": {
-                    "beat": control.selected_source_beat,
-                    "frame": control.selected_source_frame,
-                    "next_beat_frame": control.next_source_frame,
-                },
-                "host": { "bpm": 124, "beat_4": ASSIGNED_OUTPUT_FRAME, "beat_5": NEXT_OUTPUT_FRAME },
-                "rate": control.rate,
-                "capture": {
-                    "start": capture_start,
-                    "frames": capture_frames,
-                    "pre_activation_nonzero_samples": pre_activation_nonzero,
-                    "post_activation_nonzero_samples": post_activation_nonzero,
-                    "first_nonzero_host_frame": first_nonzero,
-                    "score_marker_host_frames": markers,
-                    "gate_settled_frames": gate_settled_frames,
-                    "equal_rate_waveform_exact_after_gate": equal_rate_waveform,
-                    "underruns": underruns,
-                    "probes": probe_events,
-                },
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "single_deck_origin_zero_control",
+        serde_json::json!({
+            "verdict": "capture-complete-before-assertions",
+            "fixture_generation": "generated rhythm score with source origin 0",
+            "source": control.source,
+            "source_bpm": control.source_bpm,
+            "requested_source": {
+                "seconds": control.requested_source_seconds,
+                "frame": control.requested_source_frame,
+            },
+            "selected_source": {
+                "beat": control.selected_source_beat,
+                "frame": control.selected_source_frame,
+                "next_beat_frame": control.next_source_frame,
+            },
+            "host": { "bpm": 124, "beat_4": ASSIGNED_OUTPUT_FRAME, "beat_5": NEXT_OUTPUT_FRAME },
+            "rate": control.rate,
+            "capture": {
+                "start": capture_start,
+                "frames": capture_frames,
+                "pre_activation_nonzero_samples": pre_activation_nonzero,
+                "post_activation_nonzero_samples": post_activation_nonzero,
+                "first_nonzero_host_frame": first_nonzero,
+                "score_marker_host_frames": markers,
+                "gate_settled_frames": gate_settled_frames,
+                "equal_rate_waveform_exact_after_gate": equal_rate_waveform,
+                "underruns": underruns,
+                "probes": probe_events,
+            },
+        }),
+    );
     drop(harness);
     let warp_plan = probe_events
         .iter()
@@ -2309,8 +2294,6 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
         .collect();
     harness
         .tap
-        .as_mut()
-        .expect("TrackStart product proof requires KITHARA_AUDIO_ARTIFACT_DIR")
         .evidence(
             "track_start_pickup_124",
             serde_json::json!({
@@ -2852,16 +2835,14 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
             })
         })
         .collect::<Vec<_>>();
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "late_grid_lifecycle",
-            serde_json::json!({
-                "grid_before_play": grid_before_play,
-                "first_pcm": first,
-                "probe_events": probe_events,
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "late_grid_lifecycle",
+        serde_json::json!({
+            "grid_before_play": grid_before_play,
+            "first_pcm": first,
+            "probe_events": probe_events,
+        }),
+    );
     assert_eq!(first, Some(69_677));
 }
 
@@ -3307,34 +3288,34 @@ async fn listening_single_deck_host_metronome_preview(#[case] scenario: Listenin
         "derived listening preview must have headroom"
     );
     let underruns = harness.underrun_failures();
-    if let Some(tap) = harness.tap.as_mut() {
-        let reference_path = tap
-            .write_reference("host-grid-reference", &reference)
-            .expect("publish Host-grid metronome WAV");
-        let preview_path = tap
-            .write_reference("track-host-grid-preview", &preview)
-            .expect("publish track and Host-grid preview WAV");
-        tap.evidence(
-            "single_deck_listening_preview",
-            serde_json::json!({
-                "verdict": "listening-preview-only",
-                "scenario": scenario.id,
-                "cue_in": format!("{:?}", scenario.cue_in),
-                "source": scenario.source,
-                "requested_source_seconds": scenario.seek_seconds,
-                "grid_published_after_play": scenario.publish_grid_after_play,
-                "expected_host_activation": scenario.expected_activation,
-                "prepared_host_activation": activation,
-                "audible_capture_start": audible_start,
-                "audible_capture_frames": AUDIBLE_CAPTURE_FRAMES,
-                "host_grid_reference": reference_path,
-                "track_host_grid_preview": preview_path,
-                "mix": {"track_gain": 0.8, "metronome_gain": 0.2, "preview_clipped_samples": preview_clips},
-                "underruns": underruns,
-                "raw_note": "output.wav is unmodified Host PCM; this artifact does not prove synchronization",
-            }),
-        );
-    }
+    let reference_path = harness
+        .tap
+        .write_reference("host-grid-reference", &reference)
+        .expect("publish Host-grid metronome WAV");
+    let preview_path = harness
+        .tap
+        .write_reference("track-host-grid-preview", &preview)
+        .expect("publish track and Host-grid preview WAV");
+    harness.tap.evidence(
+        "single_deck_listening_preview",
+        serde_json::json!({
+            "verdict": "listening-preview-only",
+            "scenario": scenario.id,
+            "cue_in": format!("{:?}", scenario.cue_in),
+            "source": scenario.source,
+            "requested_source_seconds": scenario.seek_seconds,
+            "grid_published_after_play": scenario.publish_grid_after_play,
+            "expected_host_activation": scenario.expected_activation,
+            "prepared_host_activation": activation,
+            "audible_capture_start": audible_start,
+            "audible_capture_frames": AUDIBLE_CAPTURE_FRAMES,
+            "host_grid_reference": reference_path,
+            "track_host_grid_preview": preview_path,
+            "mix": {"track_gain": 0.8, "metronome_gain": 0.2, "preview_clipped_samples": preview_clips},
+            "underruns": underruns,
+            "raw_note": "output.wav is unmodified Host PCM; this artifact does not prove synchronization",
+        }),
+    );
     assert_eq!(
         raw, raw_before_reference,
         "reference export must not alter raw Host PCM"
@@ -3519,32 +3500,30 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
             })
         })
         .collect::<Vec<_>>();
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "scenario_1_single_deck",
-            serde_json::json!({
-                "requested_output_frontier": REQUEST_OUTPUT_FRONTIER,
-                "requested_source_frontier": REQUESTED_SOURCE_FRONTIER,
-                "source_meter": { "beats_per_bar": 4, "downbeat": 0 },
-                "host_meter": { "beats_per_bar": 4, "downbeat": 0 },
-                "selected_source": { "beat": 0, "frame": SELECTED_SOURCE_FRAME },
-                "assigned_host": { "beat": SELECTED_HOST_BEAT, "frame": assigned_output },
-                "next_source": { "beat": 1, "frame": NEXT_SOURCE_BEAT_FRAME },
-                "next_host": { "beat": NEXT_HOST_BEAT, "frame": next_output },
-                "rate": { "host_over_source": "31/24", "source_bpm": 96, "host_bpm": 124 },
-                "capture": {
-                    "start": capture_start,
-                    "frames": capture_frames,
-                    "pre_activation_nonzero_samples": pre_activation_nonzero,
-                    "post_activation_nonzero_samples": post_activation_nonzero,
-                    "score_marker_host_frames": markers,
-                    "underruns": underruns,
-                    "probes": probe_events,
-                },
-                "provenance_limit": "A score marker is required for source/phase proof. Nonzero energy alone never passes this regression."
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "scenario_1_single_deck",
+        serde_json::json!({
+            "requested_output_frontier": REQUEST_OUTPUT_FRONTIER,
+            "requested_source_frontier": REQUESTED_SOURCE_FRONTIER,
+            "source_meter": { "beats_per_bar": 4, "downbeat": 0 },
+            "host_meter": { "beats_per_bar": 4, "downbeat": 0 },
+            "selected_source": { "beat": 0, "frame": SELECTED_SOURCE_FRAME },
+            "assigned_host": { "beat": SELECTED_HOST_BEAT, "frame": assigned_output },
+            "next_source": { "beat": 1, "frame": NEXT_SOURCE_BEAT_FRAME },
+            "next_host": { "beat": NEXT_HOST_BEAT, "frame": next_output },
+            "rate": { "host_over_source": "31/24", "source_bpm": 96, "host_bpm": 124 },
+            "capture": {
+                "start": capture_start,
+                "frames": capture_frames,
+                "pre_activation_nonzero_samples": pre_activation_nonzero,
+                "post_activation_nonzero_samples": post_activation_nonzero,
+                "score_marker_host_frames": markers,
+                "underruns": underruns,
+                "probes": probe_events,
+            },
+            "provenance_limit": "A score marker is required for source/phase proof. Nonzero energy alone never passes this regression."
+        }),
+    );
     drop(harness);
     assert!(
         post_activation_nonzero > 0,
@@ -3585,24 +3564,22 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
         BLOCK_FRAMES,
     )
     .await;
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "scenario_1",
-            serde_json::json!({
-                "verdict": "capture-incomplete",
-                "fixture_generation": {
-                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
-                    "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
-                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
-                },
-                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
-                "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
-                "requested_source_start_frames": [0, 0],
-                "prelaunch_frames": PRELAUNCH_FRAMES,
-                "capture_frames_after_start": CAPTURE_FRAMES,
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "scenario_1",
+        serde_json::json!({
+            "verdict": "capture-incomplete",
+            "fixture_generation": {
+                "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
+                "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
+            },
+            "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
+            "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
+            "requested_source_start_frames": [0, 0],
+            "prelaunch_frames": PRELAUNCH_FRAMES,
+            "capture_frames_after_start": CAPTURE_FRAMES,
+        }),
+    );
     for deck in &harness.decks {
         let control = deck.control().clone();
         harness.host.run(move || control.set_muted(false)).await;
@@ -3656,36 +3633,34 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
         harness.block_frames,
     ));
     initial_launch_failures.extend(harness.failures.iter().cloned());
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "scenario_1",
-            serde_json::json!({
-                "verdict": if initial_launch_failures.is_empty() { "pass" } else { "fail" },
-                "reason": "same-session L/R fixture routing exposes each deck in the Host output; the left start intervals are checked against the requested shared Host tempo",
-                "fixture_generation": {
-                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
-                    "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
-                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
-                },
-                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
-                "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
-                "requested_source_start_frames": [0, 0],
-                "prelaunch_frames": PRELAUNCH_FRAMES,
-                "capture_frames_after_start": CAPTURE_FRAMES,
-                "sync_activation_frame": harness.sync_activation,
-                "per_lane_early_measurement": {
-                    "capture_host_start_frame": capture_start,
-                    "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
-                    "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
-                    "interpretation": "observations use the calibrated score-marker detector without shifts or onset tolerance; they report from each lane's first digital non-silence and detected beat marker through the full capture",
-                    "post_activation_left_marker_limitation": "left post-activation PCM remains non-silent, but its peak is below the full-lane relative detector threshold; absent left markers after activation are not a missing-PCM or missing-cue verdict"
-                },
-                "initial_launch_failures": initial_launch_failures,
-                "audible_measurement": report,
-                "harness_failures": harness.failures,
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "scenario_1",
+        serde_json::json!({
+            "verdict": if initial_launch_failures.is_empty() { "pass" } else { "fail" },
+            "reason": "same-session L/R fixture routing exposes each deck in the Host output; the left start intervals are checked against the requested shared Host tempo",
+            "fixture_generation": {
+                "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                "deck_1": "rhythm_wav_scenario_1_house_124_right_only / rhythm_expected_analysis_scenario_1_house_124_right_only",
+                "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output"
+            },
+            "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only; not a centered production listening mix",
+            "fixture_lead_in": "both fixtures retain their one-beat digital-silence count-in; requested source 0 is not an immediate musical downbeat",
+            "requested_source_start_frames": [0, 0],
+            "prelaunch_frames": PRELAUNCH_FRAMES,
+            "capture_frames_after_start": CAPTURE_FRAMES,
+            "sync_activation_frame": harness.sync_activation,
+            "per_lane_early_measurement": {
+                "capture_host_start_frame": capture_start,
+                "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+                "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+                "interpretation": "observations use the calibrated score-marker detector without shifts or onset tolerance; they report from each lane's first digital non-silence and detected beat marker through the full capture",
+                "post_activation_left_marker_limitation": "left post-activation PCM remains non-silent, but its peak is below the full-lane relative detector threshold; absent left markers after activation are not a missing-PCM or missing-cue verdict"
+            },
+            "initial_launch_failures": initial_launch_failures,
+            "audible_measurement": report,
+            "harness_failures": harness.failures,
+        }),
+    );
     drop(harness);
     assert!(
         initial_launch_failures.is_empty(),
@@ -3750,26 +3725,24 @@ async fn scenario_2_simultaneous_different_bpm_with_a_pickup(
         (case.start_bpm(), harness.block_frames),
     ));
     failures.extend(harness.failures.iter().cloned());
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            "scenario_2",
-            serde_json::json!({
-                "verdict": if failures.is_empty() { "pass" } else { "fail" },
-                "fixture_generation": {
-                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
-                    "deck_1": "rhythm_wav_scenario_2_house_124_right_only_pickup / rhythm_expected_analysis_scenario_2_house_124_right_only_pickup",
-                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output",
-                    "pickup": "deck 1 opens on the last beat of a bar; its first downbeat is its second beat"
-                },
-                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only",
-                "sync_activation_frame": activation,
-                "capture_host_start_frame": capture_start,
-                "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
-                "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
-                "failures": failures,
-            }),
-        );
-    }
+    harness.tap.evidence(
+        "scenario_2",
+        serde_json::json!({
+            "verdict": if failures.is_empty() { "pass" } else { "fail" },
+            "fixture_generation": {
+                "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                "deck_1": "rhythm_wav_scenario_2_house_124_right_only_pickup / rhythm_expected_analysis_scenario_2_house_124_right_only_pickup",
+                "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output",
+                "pickup": "deck 1 opens on the last beat of a bar; its first downbeat is its second beat"
+            },
+            "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only",
+            "sync_activation_frame": activation,
+            "capture_host_start_frame": capture_start,
+            "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+            "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+            "failures": failures,
+        }),
+    );
     drop(harness);
     assert!(
         failures.is_empty(),
@@ -3877,21 +3850,19 @@ async fn staggered_launch_failures(
         failures.extend(pickup_lead_failures(&right_beats, &right_downbeats, period));
     }
     failures.extend(harness.underrun_failures());
-    if let Some(tap) = harness.tap.as_mut() {
-        tap.evidence(
-            if pickup { "scenario_4" } else { "scenario_3" },
-            serde_json::json!({
-                "verdict": if failures.is_empty() { "pass" } else { "fail" },
-                "mix_layout": "same-session diagnostic mix: playing deck left only, joining deck right only",
-                "stagger_frames": stagger,
-                "sync_activation_frame": activation,
-                "capture_host_start_frame": capture_start,
-                "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
-                "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
-                "failures": failures,
-            }),
-        );
-    }
+    harness.tap.evidence(
+        if pickup { "scenario_4" } else { "scenario_3" },
+        serde_json::json!({
+            "verdict": if failures.is_empty() { "pass" } else { "fail" },
+            "mix_layout": "same-session diagnostic mix: playing deck left only, joining deck right only",
+            "stagger_frames": stagger,
+            "sync_activation_frame": activation,
+            "capture_host_start_frame": capture_start,
+            "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+            "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+            "failures": failures,
+        }),
+    );
     failures
 }
 

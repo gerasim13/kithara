@@ -67,8 +67,14 @@ impl AudioArtifactTap {
         let Some(set) = AudioArtifactSet::from_env(case, sample_rate, channels)? else {
             return Ok(None);
         };
+        Self::over(set).map(Some)
+    }
+
+    /// Open the tap over an artifact set that is already placed on disk.
+    fn over(set: AudioArtifactSet) -> io::Result<Self> {
+        let channels = set.channels;
         let recording = set.recording("output", None)?;
-        Ok(Some(Self {
+        Ok(Self {
             set,
             recording: Some(recording),
             markers: Vec::new(),
@@ -78,7 +84,28 @@ impl AudioArtifactTap {
             source_grids: BTreeMap::new(),
             probes: probe_capture::install(),
             evidence: BTreeMap::new(),
-        }))
+        })
+    }
+
+    /// Build a tap in the opt-in directory, falling back to `fallback` when unset.
+    ///
+    /// A harness whose product is the recording itself must have somewhere to
+    /// write in every ordinary run, not only under the opt-in variable.
+    pub fn from_env_or(
+        fallback: &Path,
+        case: &str,
+        sample_rate: u32,
+        channels: u16,
+    ) -> io::Result<Self> {
+        if let Some(tap) = Self::from_env(case, sample_rate, channels)? {
+            return Ok(tap);
+        }
+        Self::over(AudioArtifactSet::new(
+            fallback,
+            case,
+            sample_rate,
+            channels,
+        )?)
     }
 
     pub fn push(&mut self, pcm: &[f32]) {
@@ -226,6 +253,22 @@ impl AudioArtifactSet {
             return Ok(None);
         };
         Self::new(&root, case, sample_rate, channels).map(Some)
+    }
+
+    /// Build an artifact set in the opt-in directory, or in `fallback` when unset.
+    ///
+    /// A recorder whose whole product is the artifact must run in every
+    /// ordinary suite run, so it needs a directory unconditionally.
+    pub fn from_env_or(
+        fallback: &Path,
+        case: &str,
+        sample_rate: u32,
+        channels: u16,
+    ) -> io::Result<Self> {
+        if let Some(set) = Self::from_env(case, sample_rate, channels)? {
+            return Ok(set);
+        }
+        Self::new(fallback, case, sample_rate, channels)
     }
 
     /// Build an artifact set in an explicit absolute directory.
