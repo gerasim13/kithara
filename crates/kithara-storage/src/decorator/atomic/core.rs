@@ -84,6 +84,9 @@ impl<D: DriverIo> Atomic<D> {
                     .map_err(|e| crate::StorageError::Failed(format!("atomic sync_data: {e}")))?;
             }
 
+            // WHY: The inner still maps the canonical path, and Windows refuses to replace a mapped file; the commit below reopens it.
+            self.inner.release_backing_in_place()?;
+
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
