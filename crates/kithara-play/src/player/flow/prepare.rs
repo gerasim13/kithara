@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig, session::SessionError};
+use crate::{PlayError, resource::ResourceConfig, rt::StreamShape};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -41,17 +41,7 @@ where
             let (preload, ring) = if let Some(shape) = stream_shape {
                 shape.playback_buffers(quantum, budget)?
             } else {
-                let preload = budget
-                    .get()
-                    .checked_add(1)
-                    .map(|frames| frames / quantum.get())
-                    .and_then(|chunks| chunks.checked_sub(2))
-                    .and_then(NonZeroUsize::new)
-                    .ok_or(SessionError::ResponseGeometryOverflow)?;
-                let ring = preload
-                    .checked_add(1)
-                    .ok_or(SessionError::ResponseGeometryOverflow)?;
-                (preload, ring)
+                StreamShape::budget_buffers(quantum, budget)?
             };
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
@@ -121,16 +111,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_assets::AssetStore;
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
 
     use super::*;
     use crate::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
-        rt::StreamShape,
+        session::SessionError,
         test_pools::{TestPools, pools},
     };
 
@@ -277,7 +269,7 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::industry_budget(32, 128, 441, 4, 5)]
+    #[case::industry_budget(32, 128, 441, 11, 12)]
     #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
     fn prepare_config_derives_playback_buffering(
         #[case] quantum: usize,

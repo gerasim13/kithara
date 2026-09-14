@@ -105,8 +105,11 @@ pub struct StreamShape {
 impl StreamShape {
     /// Compute decoder buffer depths within the output response budget.
     ///
+    /// The output block sets the minimum preload; the buffers then take the
+    /// largest quantum-aligned share of the budget.
+    ///
     /// # Errors
-    /// Returns an error when the geometry overflows or exceeds the budget.
+    /// Returns an error when the geometry overflows or one block exceeds the budget.
     pub fn playback_buffers(
         self,
         quantum: NonZeroUsize,
@@ -114,12 +117,9 @@ impl StreamShape {
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let preload = output_frames.div_ceil(quantum.get());
-        let ring = preload
-            .checked_add(1)
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
-        let required_frames = ring
-            .checked_add(1)
+        let required_frames = output_frames
+            .div_ceil(quantum.get())
+            .checked_add(2)
             .and_then(|chunks| chunks.checked_mul(quantum.get()))
             .and_then(|frames| frames.checked_sub(1))
             .ok_or(SessionError::ResponseGeometryOverflow)?;
@@ -131,10 +131,27 @@ impl StreamShape {
                 budget_frames: budget.get(),
             });
         }
-        Ok((
-            NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
-            NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
-        ))
+        Self::budget_buffers(quantum, budget)
+    }
+
+    /// Fill the response budget with a preload and a one-chunk-deeper ring.
+    ///
+    /// # Errors
+    /// Returns an error when the budget holds no preload chunk.
+    pub(crate) fn budget_buffers(
+        quantum: NonZeroUsize,
+        budget: NonZeroUsize,
+    ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+        let (budget, quantum) = (budget.get(), quantum.get());
+        let whole = budget / quantum + usize::from(budget % quantum == quantum - 1);
+        let preload = whole
+            .checked_sub(2)
+            .and_then(NonZeroUsize::new)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let ring = preload
+            .checked_add(1)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        Ok((preload, ring))
     }
 
     #[must_use]
