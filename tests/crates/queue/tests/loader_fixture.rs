@@ -45,19 +45,15 @@ impl LocalWav {
             .tempfile()
             .expect("create local WAV fixture");
         write_wav_header(&mut file, sample_rate.get(), channels, data_bytes);
-        for frame in 0..frames {
-            let start = frame * size_of::<f32>();
-            let sample = f32::from_le_bytes(
-                samples[start..start + size_of::<f32>()]
-                    .try_into()
-                    .expect("prepared PCM sample"),
-            );
-            let pcm = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16;
+        let mut data = Vec::with_capacity(data_bytes);
+        for sample in samples[..frames * size_of::<f32>()].chunks_exact(size_of::<f32>()) {
+            let sample = f32::from_le_bytes(sample.try_into().expect("prepared PCM sample"));
+            let pcm = ((sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16).to_le_bytes();
             for _ in 0..channels {
-                file.write_all(&pcm.to_le_bytes())
-                    .expect("write WAV sample");
+                data.extend_from_slice(&pcm);
             }
         }
+        file.write_all(&data).expect("write WAV samples");
         Self { file }
     }
 

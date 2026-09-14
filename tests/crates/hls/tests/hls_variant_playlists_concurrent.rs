@@ -21,6 +21,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -28,8 +29,6 @@ use kithara_integration_tests::{
     usdt_trace::{self, ProbeEvent},
 };
 use url::Url;
-
-use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -178,16 +177,27 @@ async fn observe_until_loaded(
 /// Largest USDT-observed `BatchGroup::process` batch whose first request is a
 /// variant media playlist. Serial playlist loading yields one request per
 /// batch; concurrent loading produces a batch of at least two.
-fn max_playlist_batch_size(records: &[ProbeEvent], variant_request_ids: &HashSet<u64>) -> Option<u64> {
+fn max_playlist_batch_size(
+    records: &[ProbeEvent],
+    variant_request_ids: &HashSet<u64>,
+) -> Option<u64> {
     records
         .iter()
         .filter(|record| record.probe == "process")
         .filter_map(|record| {
             let batch_size = record.field("batch_size")?;
             let first_request_id = record.field("first_request_id")?;
-            variant_request_ids.contains(&first_request_id).then_some(batch_size)
+            variant_request_ids
+                .contains(&first_request_id)
+                .then_some(batch_size)
         })
         .max()
+}
+
+fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
+    let mut request_ids: Vec<_> = request_ids.iter().copied().collect();
+    request_ids.sort_unstable();
+    format!("{request_ids:?}")
 }
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
@@ -238,6 +248,7 @@ async fn variant_media_playlists_load_concurrently(
         }
     };
     let records = trace.events();
+    drop(trace);
     tick_handle.stop().await;
 
     let max_batch = max_playlist_batch_size(&records, &variant_request_ids);

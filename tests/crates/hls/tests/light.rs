@@ -26,9 +26,11 @@ mod deferred_abr;
 mod driver_test;
 #[path = "ephemeral.rs"]
 mod ephemeral;
-#[cfg(all(feature = "usdt", target_os = "macos"))]
 #[path = "forward_withheld_segment_busy_spin.rs"]
 mod forward_withheld_segment_busy_spin;
+#[cfg(feature = "usdt")]
+#[path = "hls_variant_playlists_concurrent.rs"]
+mod hls_variant_playlists_concurrent;
 #[path = "html_error_body.rs"]
 mod html_error_body;
 #[path = "html_error_cleanup.rs"]
