@@ -1870,6 +1870,11 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
 /// then compiles the whole dependency tree and links every binary again. The
 /// store the fixtures are read from is already on a volume that outlives the
 /// job, and the build directory belongs on the same one.
+///
+/// It is named after the lane rather than shared by all of them: artefacts are
+/// valid only for the features, profile and toolchain that produced them, and a
+/// lane asks for the same ones every run. A lane has no affinity for a runner,
+/// so one directory per runner was cold whenever a lane moved.
 #[test]
 fn a_lane_builds_on_the_volume_that_outlives_it() {
     let workflow = github_workflow("lane.yml");
@@ -1892,8 +1897,8 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
         .display()
         .to_string();
     assert!(
-        target.contains(&format!("'{cache_root}/target'")),
-        "ordinary lanes must keep the runner's persistent target: {target}"
+        target.contains(&format!("'{cache_root}/target/lane-{{0}}'")),
+        "an ordinary lane must build in the directory named after it: {target}"
     );
     assert!(
         target.contains(&format!("'{cache_root}/target/jobs/")),
