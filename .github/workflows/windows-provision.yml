@@ -14,9 +14,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Install the prebuilt FFmpeg the crate expects
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $ProgressPreference = 'SilentlyContinue'
           $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $stage = Join-Path $env:RUNNER_TEMP 'ffmpeg-stage'
@@ -31,9 +33,11 @@ jobs:
           Get-ChildItem $dest
 
       - name: Point the machine at it
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $ProgressPreference = 'SilentlyContinue'
           $dest = 'C:\kithara-ci\ffmpeg'
           [Environment]::SetEnvironmentVariable('FFMPEG_DIR', $dest, 'Machine')
           $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
