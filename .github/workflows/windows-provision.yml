@@ -13,6 +13,24 @@ jobs:
     runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
     timeout-minutes: 60
     steps:
+      - name: Report what the cached xtask transport sees
+        shell: bash
+        run: |
+          cd /c/kithara-ci/runner/_work/kithara/kithara || exit 0
+          echo "uname: $(uname -s)"
+          echo "--- pointer"
+          ls -l xtask/.xtask-cache || true
+          cat xtask/.xtask-cache || true
+          echo "--- generation"
+          gen=$(head -1 xtask/.xtask-cache 2>/dev/null) || true
+          echo "gen=[$gen]"
+          ls -l "$gen" || true
+          for f in "$gen/xtask.exe" "$gen/xtask"; do
+            echo "$f: exists=$([ -f "$f" ] && echo y || echo n) exec=$([ -x "$f" ] && echo y || echo n)"
+          done
+          echo "--- self-cache dir"
+          ls -l target/xtask-self-cache/debug/ 2>/dev/null | head -20 || true
+
       - name: Install the prebuilt FFmpeg the crate expects
         shell: powershell
         run: |
