@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{
     dsp::{
@@ -321,17 +321,23 @@ impl RenderPass {
     /// value biases each block the same way and the bias accumulates into a
     /// permanent phase offset instead of cancelling. The mean also makes the
     /// advance independent of how the callback partitions its frames.
+    /// An empty block advances neither the smoother nor the source, so it
+    /// carries the standing target rather than a mean over no values.
     fn block_multiplier(rate: &mut SmoothedParam, frames: usize) -> f32 {
-        let mut sum = 0.0_f64;
         let mut value = rate.target_value();
-        for _ in 0..frames {
+        let Some(frames) = NonZeroUsize::new(frames) else {
+            return value;
+        };
+        let mut sum = 0.0_f64;
+        for _ in 0..frames.get() {
             value = rate.next_smoothed();
             sum += f64::from(value);
         }
-        frames
-            .to_f64()
-            .and_then(|frames| (sum / frames).to_f32())
-            .unwrap_or(value)
+        // Both conversions are total for a non-empty block: the divisor is a
+        // frame count and the quotient is finite. `to_f32` names the narrowing
+        // the multiplier travels in; it is not error handling.
+        let count = frames.get().to_f64().unwrap_or(f64::INFINITY);
+        (sum / count).to_f32().unwrap_or(value)
     }
 
     fn render_context(
@@ -506,6 +512,19 @@ mod block_multiplier_tests {
             (one_block - many_blocks).abs() < 1e-3,
             "the same 2048 frames of a moving target must consume the same source \
              whether rendered as one block or sixteen: {one_block} vs {many_blocks}",
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_empty_block_carries_the_standing_target() {
+        let mut rate = smoother();
+        rate.set_value(Consts::TARGET);
+
+        assert_eq!(
+            RenderPass::block_multiplier(&mut rate, 0),
+            Consts::TARGET,
+            "a block with no frames advances no source, so it reports the standing \
+             target instead of a mean over no values",
         );
     }
 
