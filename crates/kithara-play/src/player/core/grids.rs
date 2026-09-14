@@ -313,38 +313,6 @@ where
         Ok(Some(status))
     }
 
-    /// Rebuilds the resident plan when the host moves the output rate under a
-    /// running session.
-    ///
-    /// A region plan counts the output frames the decoder emits, so a route
-    /// change onto a new rate leaves every segment on an axis the stream no
-    /// longer carries and the deck loses its beat markers.
-    fn replan_on_output_rate_change(&mut self) {
-        let rate = self.runtime.core.engine.output_sample_rate();
-        if self.planned_output_rate == rate {
-            return;
-        }
-        self.planned_output_rate = rate;
-        if let Some(item) = self.runtime.core.items.current_item_id() {
-            self.replan_track(item);
-        }
-    }
-
-    fn replan_track(&self, item: TrackId) {
-        let Some(grid) = self.runtime.core.items.track_grid(item) else {
-            return;
-        };
-        let plan = grid
-            .segments
-            .region_plan(self.runtime.core.engine.output_sample_rate())
-            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-            .ok();
-        self.runtime
-            .core
-            .items
-            .set_track_plan(item, plan.map(Arc::new));
-    }
-
     pub(crate) fn prepare_free_handoff(&self) {
         let (Some(item), Some(prepared)) = (
             self.runtime.core.items.current_item_id(),
@@ -478,5 +446,47 @@ mod tests {
 
         assert!(!prepared_is_presented(old_pcm, activation, revision));
         assert!(prepared_is_presented(applied_pcm, activation, revision));
+    }
+}
+
+/// Region planning for the deck: the plan counts the output frames the
+/// decoder emits, so it is owned separately from grid reconciliation.
+impl<S> PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
+    /// Rebuilds the resident plan when the host moves the output rate under a
+    /// running session.
+    ///
+    /// A region plan counts the output frames the decoder emits, so a route
+    /// change onto a new rate leaves every segment on an axis the stream no
+    /// longer carries and the deck loses its beat markers.
+    fn replan_on_output_rate_change(&mut self) {
+        let rate = self.runtime.core.engine.output_sample_rate();
+        if self.planned_output_rate == rate {
+            return;
+        }
+        self.planned_output_rate = rate;
+        if let Err(rejected) =
+            self.reconcile_current_grid(ReconcileCause::TransportChanged, None, false)
+        {
+            let (error, _) = rejected.into();
+            warn!(%error, "output rate change could not reconcile the deck grid");
+        }
+    }
+
+    fn replan_track(&self, item: TrackId) {
+        let Some(grid) = self.runtime.core.items.track_grid(item) else {
+            return;
+        };
+        let plan = grid
+            .segments
+            .region_plan(self.runtime.core.engine.output_sample_rate())
+            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
+            .ok();
+        self.runtime
+            .core
+            .items
+            .set_track_plan(item, plan.map(Arc::new));
     }
 }

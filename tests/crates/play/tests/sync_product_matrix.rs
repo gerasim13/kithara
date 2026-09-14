@@ -1338,6 +1338,7 @@ impl ProductHarness {
                 .push(format!("{}: restart host output rate: {error}", case.id));
         }
         self.settle(case, 4).await;
+        let _ = self.transport_revision(case).await;
     }
 
     async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
