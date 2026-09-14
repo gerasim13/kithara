@@ -6,31 +6,43 @@
 //! `src/signal/` and `src/store/disk.rs` are shared: the same sources, reached
 //! from two roots.
 
+#[cfg(feature = "native-fixtures")]
 #[path = "src/context.rs"]
 mod context;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/defs/mod.rs"]
 mod defs;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/registry.rs"]
 mod registry;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/remote_file.rs"]
 mod remote_file;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/variant_input.rs"]
 pub mod variant_input;
 // `fmp4`, `signal`, and `store` keep the visibility they have in the library:
 // the same source files, reached from two roots.
+#[cfg(feature = "native-fixtures")]
 #[path = "src/fmp4/mod.rs"]
 pub mod fmp4;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/graph.rs"]
 mod graph;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/hls/hydrate.rs"]
 mod hls_hydrate;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/hls/manifest.rs"]
 mod hls_manifest;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/signal/mod.rs"]
 pub mod signal;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/store/disk.rs"]
 pub mod store;
 
+#[cfg(feature = "native-fixtures")]
 use std::{
     collections::{HashMap, HashSet},
     fmt::Write as _,
@@ -40,13 +52,17 @@ use std::{
     thread,
 };
 
+#[cfg(feature = "native-fixtures")]
 use registry::{AssetBuild, AssetDef};
 
+#[cfg(feature = "native-fixtures")]
 use self::context::BuildContext;
 
+#[cfg(feature = "native-fixtures")]
 const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
 
 /// Rejects two cases that would produce one accessor, before either is written.
+#[cfg(feature = "native-fixtures")]
 fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef)> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut resolved = Vec::with_capacity(defs.len());
@@ -63,6 +79,7 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
     resolved
 }
 
+#[cfg(feature = "native-fixtures")]
 fn materialize(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -101,6 +118,7 @@ fn materialize(
     unavailable
 }
 
+#[cfg(feature = "native-fixtures")]
 fn materialize_one(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -177,6 +195,7 @@ fn materialize_one(
     None
 }
 
+#[cfg(feature = "native-fixtures")]
 fn codegen(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -244,6 +263,7 @@ fn codegen(
     out
 }
 
+#[cfg(feature = "native-fixtures")]
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
     println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
@@ -290,3 +310,6 @@ fn main() {
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: write assets.rs: {error}"));
 }
+
+#[cfg(not(feature = "native-fixtures"))]
+fn main() {}

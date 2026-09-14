@@ -23,7 +23,7 @@ use offline::OfflineRuntime;
 use platform::{Platform, PlatformResult};
 
 use crate::{
-    api::{HostLevel, SessionTransportSnapshot},
+    api::HostLevel,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -249,23 +249,6 @@ impl<S> Host<S> {
         self.root_view.grid().axis().sample_rate()
     }
 
-    /// Apply the output rate measured after a platform audio-route change.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot recreate its output stream.
-    pub fn update_audio_route(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::UpdateOutputRoute { sample_rate })?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for route update".into(),
-            )),
-        }
-    }
-
     /// Reads the current output-rate observation without exposing the lower
     /// session handle.
     ///
@@ -304,20 +287,6 @@ impl<S> Host<S> {
     /// Returns an error when the Host rejects or cannot dispatch the update.
     pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::SetSessionTempo { tempo })
-    }
-
-    /// Read the canonical session transport state.
-    ///
-    /// # Errors
-    /// Returns an error when the Host cannot answer the query.
-    pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
-            Reply::SessionTransport(snapshot) => Ok(snapshot),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for transport query".into(),
-            )),
-        }
     }
 
     fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>

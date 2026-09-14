@@ -28,7 +28,6 @@ mod driver_test;
 mod ephemeral;
 #[path = "forward_withheld_segment_busy_spin.rs"]
 mod forward_withheld_segment_busy_spin;
-#[cfg(feature = "usdt")]
 #[path = "hls_variant_playlists_concurrent.rs"]
 mod hls_variant_playlists_concurrent;
 #[path = "html_error_body.rs"]

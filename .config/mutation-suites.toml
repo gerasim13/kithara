@@ -34,6 +34,10 @@ timeout_seconds = 120
 name = "seek-state"
 package = "kithara-stream"
 files = ["crates/kithara-stream/src/seek_state.rs"]
+# The suite protects seek protocol decisions. Its diagnostic `Debug` formatter
+# has no protocol consumer, so formatting-only mutants do not warrant tests
+# against an incidental representation.
+exclude_re = ["<impl fmt::Debug for SeekState>::fmt"]
 test_filters = ["test(/seek_state::tests::/)"]
 timeout_seconds = 180
 

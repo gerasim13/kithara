@@ -9,6 +9,7 @@
 //! `run_crossfade_flac_case` and its kin.
 #![recursion_limit = "256"]
 
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_test_dylib as _;
 
 mod thread_budget;

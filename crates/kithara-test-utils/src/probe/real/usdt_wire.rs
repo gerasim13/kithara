@@ -13,6 +13,14 @@ mod prov {
     pub(super) fn probe_5(_operation: u64, _a0: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64) {}
 }
 
+#[cfg_attr(
+    feature = "usdt",
+    expect(
+        clippy::cast_possible_truncation,
+        clippy::items_after_statements,
+        reason = "USDT probe macros from the external `usdt` crate emit `u64 as usize` casts and per-call `static` items in the same scope; both shapes are fixed by upstream."
+    )
+)]
 pub fn fire_0(operation: u64) {
     let _ = operation;
     #[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]

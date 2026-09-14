@@ -122,7 +122,7 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
     }
 }
 
-/// Register the macOS DTrace probes embedded in the binary. Other targets use
+/// Register the macOS `DTrace` probes embedded in the binary. Other targets use
 /// the tracing USDT backend and do not require registration.
 pub fn register_probes() {
     imp::register();

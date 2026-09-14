@@ -4,6 +4,7 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_test_dylib as _;
 
 mod phase_continuity;

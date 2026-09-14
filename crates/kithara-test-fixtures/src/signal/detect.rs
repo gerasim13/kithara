@@ -48,7 +48,7 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 

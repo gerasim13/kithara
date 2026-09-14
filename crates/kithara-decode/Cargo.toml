@@ -105,6 +105,7 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

@@ -3,6 +3,7 @@ mod command;
 mod compose;
 mod container;
 mod firewall;
+mod permissions;
 mod profile;
 mod registration;
 mod services;

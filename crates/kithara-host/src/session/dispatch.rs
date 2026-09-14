@@ -38,8 +38,6 @@ where
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
-        HostCmd::UpdateOutputRoute { sample_rate } => restart_stream(state, sample_rate.get())
-            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }

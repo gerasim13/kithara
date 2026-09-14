@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     env,
-    ffi::OsStr,
     path::{Path, PathBuf},
     process::Output,
 };
@@ -310,18 +309,15 @@ fn execute_lane(
     process: &Process,
     tools: &ToolsConfig,
     uses_sccache: bool,
-    has_server_uds: bool,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     if uses_sccache {
         retire_sccache_server(process, tools)?;
-        if has_server_uds {
-            process.run(
-                tools.program("sccache"),
-                &["--start-server"],
-                "start the compiler cache",
-            )?;
-        }
+        process.run(
+            tools.program("sccache"),
+            &["--start-server"],
+            "start the compiler cache",
+        )?;
     }
     let result = dispatch();
     if uses_sccache {
@@ -364,7 +360,16 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
     let image_attestation = LinuxImageAttestation::from_gitlab()?;
     require_provisioned_linux_image(lane.cache_group(), &ci_config, image_attestation.as_ref())?;
-    let environment = CiEnvironment::prepare(ctx, &ci_config, lane.cache_group())?;
+    let environment = CiEnvironment::prepare(
+        ctx,
+        &ci_config,
+        lane.cache_group(),
+        ext.ci
+            .lanes
+            .get(&args.lane)
+            .is_some_and(|lane| lane.target_snapshot.is_some()),
+        Some(args.lane.as_str()),
+    )?;
     info!(
         lane = %args.lane,
         kind = ?args.kind,
@@ -375,7 +380,6 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let temp = environment.temp.clone();
     let uses_sccache = environment.uses_sccache();
     let vars = environment.vars();
-    let has_server_uds = vars.contains_key(OsStr::new("SCCACHE_SERVER_UDS"));
     let process = Process::new(&ctx.root, vars);
     // sccache is a daemon, and a running one keeps the cache directory it was
     // started with — a client inherits the server's configuration, not its
@@ -396,36 +400,30 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    execute_lane(
-        &process,
-        &ctx.config.tools,
-        uses_sccache,
-        has_server_uds,
-        || match lane {
-            Lane::ReleaseXcframework => {
-                super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
-            }
-            Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
-            Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
-            Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-            Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-            Lane::Verdict => verdict::lane(
-                &ctx.root,
-                environment.shared_root(),
-                args.kind,
-                &ext.ci.verdict.id_aliases,
-            ),
-            ref lane => command_lane(
-                lane,
-                args.kind,
-                &process,
-                &ci_config,
-                &ctx.config.tools,
-                &swiftpm_cache,
-                &ext.ci.lanes,
-            ),
-        },
-    )
+    execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
+        Lane::ReleaseXcframework => {
+            super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
+        }
+        Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
+        Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
+        Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
+        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
+        Lane::Verdict => verdict::lane(
+            &ctx.root,
+            environment.shared_root(),
+            args.kind,
+            &ext.ci.verdict.id_aliases,
+        ),
+        ref lane => command_lane(
+            lane,
+            args.kind,
+            &process,
+            &ci_config,
+            &ctx.config.tools,
+            &swiftpm_cache,
+            &ext.ci.lanes,
+        ),
+    })
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
@@ -606,7 +604,10 @@ mod tests {
                 .map(|(program, args, _)| (program.as_str(), args.clone()))
                 .collect::<Vec<_>>(),
             vec![
-                ("<require os>", vec!["macos".to_owned()]),
+                (
+                    "<require os>",
+                    ["macos", "linux"].map(str::to_owned).to_vec()
+                ),
                 (
                     "<require tools>",
                     [
@@ -647,6 +648,9 @@ mod tests {
         let github = fs::read_to_string(repo().join(".github/workflows/android.yml")).unwrap();
         let gitlab = fs::read_to_string(repo().join(".gitlab/ci/android.yml")).unwrap();
         assert!(github.contains("run: just ci lane android-test --kind platforms"));
+        let ci = fs::read_to_string(repo().join(".github/workflows/ci.yml")).unwrap();
+        assert!(ci.contains("' android-test '"));
+        assert!(ci.contains("uses: ./.github/workflows/android.yml"));
         assert!(gitlab.contains("- just ci run android-test"));
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
     }
@@ -834,26 +838,19 @@ mod tests {
 
     #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
-        const UDS_READY: &str = "--stop-server\n--start-server\nlane\n--show-stats\n";
-        const NON_UDS: &str = "--stop-server\nlane\n--show-stats\n";
+        const READY: &str = "--stop-server\n--start-server\nlane\n--show-stats\n";
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
         super::super::host::testing::install_double(&bin, "sccache");
         let trace = directory.path().join("trace");
 
-        for (scenario, uses_sccache, has_server_uds, expected_trace) in [
-            ("success", true, true, UDS_READY),
-            ("already-stopped", true, true, UDS_READY),
-            ("stop-failure", true, true, "--stop-server\n"),
-            (
-                "start-failure",
-                true,
-                true,
-                "--stop-server\n--start-server\n",
-            ),
-            ("success", true, false, NON_UDS),
-            ("success", false, false, "lane\n"),
+        for (scenario, uses_sccache, expected_trace) in [
+            ("success", true, READY),
+            ("already-stopped", true, READY),
+            ("stop-failure", true, "--stop-server\n"),
+            ("start-failure", true, "--stop-server\n--start-server\n"),
+            ("success", false, "lane\n"),
         ] {
             let _ = fs::remove_file(&trace);
             let mut vars = BTreeMap::from([
@@ -893,18 +890,12 @@ mod tests {
             }
             let process = Process::new(directory.path(), vars);
 
-            let outcome = execute_lane(
-                &process,
-                &ToolsConfig::default(),
-                uses_sccache,
-                has_server_uds,
-                || {
-                    let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
-                    sequence.push_str("lane\n");
-                    fs::write(&trace, sequence)?;
-                    Ok(())
-                },
-            );
+            let outcome = execute_lane(&process, &ToolsConfig::default(), uses_sccache, || {
+                let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
+                sequence.push_str("lane\n");
+                fs::write(&trace, sequence)?;
+                Ok(())
+            });
 
             let succeeds = !scenario.ends_with("failure");
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");

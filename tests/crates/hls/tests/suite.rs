@@ -13,7 +13,6 @@ mod driver_test;
 mod ephemeral;
 mod html_error_body;
 mod html_error_cleanup;
-#[cfg(feature = "usdt")]
 mod hls_variant_playlists_concurrent;
 mod keys_integration;
 mod live_stress_real_stream;

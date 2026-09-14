@@ -45,7 +45,12 @@ pub(crate) struct CiLaneConfig {
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
     pub(crate) label: String,
-    pub(crate) os: Option<String>,
+    /// Every operating system the lane runs on. The shared GitHub fan-out
+    /// reaches a lane that names Linux alone; one that also names another
+    /// machine needs a device the shared pool lacks and runs from a workflow
+    /// naming a pool of its own.
+    #[serde(deserialize_with = "one_or_many")]
+    pub(crate) os: Vec<String>,
     pub(crate) tools: Vec<String>,
     /// Tools whose reported version has to match a reviewed pin before the lane
     /// spends a runner on a build it would have to throw away.
@@ -90,6 +95,29 @@ pub(crate) struct CiLaneConfig {
     /// Lanes whose artifacts this one consumes. A lane with needs runs after
     /// them and only when at least one of them was selected.
     pub(crate) needs: Vec<String>,
+}
+
+impl CiLaneConfig {
+    /// Whether the shared Linux fan-out can carry the lane.
+    pub(crate) fn runs_only_on_linux(&self) -> bool {
+        matches!(self.os.as_slice(), [os] if os == "linux")
+    }
+}
+
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(os) => vec![os],
+        OneOrMany::Many(os) => os,
+    })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -204,10 +232,14 @@ impl CiProjectConfig {
             // runner pool and it is Linux, so a lane that named none would be
             // scheduled onto it by omission rather than by declaration, and run
             // an emulator recipe with no emulator under it.
-            let Some(os) = lane.os.as_deref() else {
+            if lane.os.is_empty() {
                 bail!("ext.ci.lanes.{name} must name the operating system it runs on");
-            };
-            if !matches!(os, "linux" | "macos" | "windows") {
+            }
+            if let Some(os) = lane
+                .os
+                .iter()
+                .find(|os| !matches!(os.as_str(), "linux" | "macos" | "windows"))
+            {
                 bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
             }
             // `kinds_github` is a statement that GitHub schedules this lane, and
@@ -215,9 +247,10 @@ impl CiProjectConfig {
             // would be refused at selection and never run, which is a lane
             // declared into a schedule it cannot reach - the failure this
             // catalog exists to make impossible, not one to restate quietly.
-            if !lane.kinds_github.is_empty() && os != "linux" {
+            if !lane.kinds_github.is_empty() && !lane.runs_only_on_linux() {
                 bail!(
-                    "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
+                    "ext.ci.lanes.{name}.kinds_github schedules a `{}` lane, and the GitHub fleet is Linux",
+                    lane.os.join(" or ")
                 );
             }
             if lane.github_runner.as_deref().is_some_and(str::is_empty) {
@@ -858,6 +891,33 @@ timeout_minutes = 30
             error.to_string().contains("the GitHub fleet is Linux"),
             "the error must name the fleet: {error}"
         );
+    }
+
+    #[test]
+    fn a_lane_may_name_every_operating_system_it_runs_on() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.device]
+cache_group = "host"
+label = "Android"
+os = ["macos", "linux"]
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 30
+"#,
+        );
+
+        let ci = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci;
+        ci.validate().expect("a lane may run on two machines");
+        assert_eq!(ci.lanes["device"].os, ["macos", "linux"]);
+        assert!(!ci.lanes["device"].runs_only_on_linux());
     }
 
     #[test]

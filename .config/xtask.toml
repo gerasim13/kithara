@@ -87,12 +87,15 @@ top_contours = 10
 
 [health]
 # Crates excluded from the generic powerset need product-context checks in the
-# owning `just deps hack` recipe.
+# owning `just deps hack` recipe. The integration test root is held out because
+# its closures name a target, not a feature set: `wasm` is the browser build and
+# cannot compile natively, and the test lanes build each closure on its target.
 feature_powerset_exclude = [
   "kithara-play",
   "kithara-app",
   "kithara-fuzz",
   "kithara-warp",
+  "kithara-integration-tests",
 ]
 # The package whose public API is a contract outside this workspace: the facade
 # a consumer depends on. Internal crates are free to break (AGENTS.md says so)
@@ -493,7 +496,7 @@ features = []
 shared_paths = [
   ".config/xtask.toml",
   ".config/nextest.toml",
-  "tests/crates/integration/Cargo.toml",
+  "tests/Cargo.toml",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -911,6 +914,7 @@ default_features = [
   "kithara-test-utils/client-reqwest",
   "kithara-test-utils/tls-rustls",
   "kithara-platform/flash",
+  "kithara-platform/tokio-rt-multi-thread",
   "kithara-test-utils/flash",
 ]
 prefix_args = [
@@ -937,12 +941,13 @@ prefix_args = [
 [test.lanes.fixtures]
 program = "cargo"
 owns = [
-  "tests/crates/integration/src/",
+  "tests/src/",
   "tests/crates/harness/tests/suite_harness.rs",
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
-default_features = ["harness", "kithara-test-fixtures/generate"]
+default_backend = "none"
+default_features = ["harness"]
 prefix_args = [
   "nextest",
   "run",
@@ -963,6 +968,7 @@ prefix_args = [
 program = "cargo"
 owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
 default_features = [
+  "kithara-app/backend-cpal",
   "kithara-ui/capture",
   "kithara-ui/gpu",
   "kithara-ui/masonry",
@@ -987,6 +993,7 @@ suffix_args = [
 
 [test.lanes.ui-perf]
 program = "cargo"
+default_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry", "kithara-ui/perf"]
 default_flash = false
 prefix_args = [
@@ -996,12 +1003,15 @@ prefix_args = [
   "kithara-ui",
   "--cargo-profile",
   "test-release",
+  "--test-threads",
+  "1",
   "--ignore-default-filter",
 ]
 suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
 
 [test.lanes.ui-doc]
 program = "cargo"
+default_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]
@@ -1460,8 +1470,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "branch"]
+kinds = ["weekly", "release"]
 timeout_minutes = 60
 fetch_depth = 0
 
@@ -1790,13 +1799,6 @@ kinds = [
 ]
 timeout_minutes = 60
 
-# A CI checkout gives every source file a new mtime. Stable Cargo then rebuilds
-# and relinks all test binaries even when their content is unchanged; sccache
-# cannot cache those links. The pinned nightly Cargo's checksum freshness makes
-# the persistent target content-addressed. Its target is isolated from stable
-# lanes because Cargo fingerprint modes and compiler versions must not alternate
-# in one profile tree.
-#
 # Every Linux test lane caps Cargo at two build jobs. The container has five
 # CPUs and under eight gigabytes, so five compilations at once put the peak past
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
@@ -1810,7 +1812,6 @@ timeout_minutes = 60
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
-target_snapshot = "linux-test-release"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1824,7 +1825,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2094,7 +2095,7 @@ steps = [
     "run",
     "--flash=off",
     "--timings",
-  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2114,7 +2115,10 @@ steps = [
     "test",
     "run",
     "--touched",
-  ], label = "suites this push touches" },
+    "--lane=tooling",
+    "--lane=harness",
+    "--lane=fixtures",
+  ], label = "support suites this push touches" },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2406,15 +2410,15 @@ role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 120
 
-# Both Android lanes name a Mac, so neither declares `kinds_github`: the GitHub
-# fan-out reaches one pool and that pool is Linux, and a lane declared into a
-# schedule that cannot reach it is a lane that never runs. GitHub starts the
+# Both Android lanes boot an emulator, which the Mac mini and the Linux KVM
+# runners each carry, so both name the two machines and neither declares
+# `kinds_github`: the shared GitHub fan-out has no emulator. GitHub starts the
 # emulator through `.github/workflows/android.yml`, which names the runner pool
 # the catalog cannot yet name.
 [ext.ci.lanes.android-build]
 cache_group = "host"
 label = "Android"
-os = "macos"
+os = ["macos", "linux"]
 tools = ["cargo", "java", "just", "sccache"]
 program = "just"
 steps = [
@@ -2438,7 +2442,7 @@ timeout_minutes = 45
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
-os = "macos"
+os = ["macos", "linux"]
 tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
@@ -2534,7 +2538,6 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-target_snapshot = "macos-test-release"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
@@ -2551,7 +2554,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [
@@ -2586,7 +2589,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

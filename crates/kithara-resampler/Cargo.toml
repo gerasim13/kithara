@@ -43,6 +43,7 @@ kithara-test-utils = { workspace = true }
 criterion = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 serde_yaml_ng = { workspace = true }
 
 [[bench]]

@@ -127,7 +127,7 @@ impl RawSnapshot {
             None
         };
         let transport_revision =
-            NonZeroU64::new(self.transport_revision).map(TransportRevision::from_raw);
+            NonZeroU64::new(self.transport_revision).map(TransportRevision::from);
         let context = RenderContext::new(
             SessionFrame::new(self.output_start)..SessionFrame::new(self.output_end),
             sample_rate,

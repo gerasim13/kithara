@@ -13,7 +13,7 @@ use crate::{
 /// for the length of a run - a package cache, a server, a simulator - and one
 /// of them answers with the test's outcome rather than the build's.
 fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
-    process.require_os("macos", "Apple")?;
+    process.require_os(&["macos"], "Apple")?;
     let xcodebuild = tools.program("xcodebuild");
     process.require_tools(&[
         "cargo",

@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, ops::Deref};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    ops::Deref,
+};
 
 use kithara::{
     bufpool::{HasPool, PoolRegion},
@@ -13,7 +16,7 @@ use kithara::{
         },
         time::Duration,
     },
-    play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
+    play::{MixTapWriter, PlayError, SessionError, TransportRevision, player::PlayerControlSource},
     queue::Queue,
     signal::AudioSpec,
 };
@@ -23,6 +26,7 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+use crate::usdt_trace;
 
 const CHANNELS: u16 = 2;
 /// Cadence a device-free harness renders itself at when the test is not
@@ -78,6 +82,7 @@ where
 
     /// Like [`Self::new`], with the Host rendering itself at `interval` so the
     /// playhead advances while the test waits on state rather than on renders.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn paced(
         config: HostConfig<S>,
         player: P,
@@ -141,6 +146,9 @@ where
     /// Build the same offline Host used by product rendering. The playhead
     /// then moves only where the test renders.
     pub async fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+        #[cfg(target_arch = "wasm32")]
+        return Self::open(config).await;
+        #[cfg(not(target_arch = "wasm32"))]
         Self::open(config, None).await
     }
 
@@ -148,15 +156,20 @@ where
     /// thread spends idle. This is the audio-device tick an offline session
     /// has no device to receive: it lets a test wait on playback state the way
     /// an app does, instead of pulling every block itself.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn paced(config: HostConfig<S>, interval: Duration) -> Result<Self, PlayError> {
         Self::open(config, Some(interval)).await
     }
 
-    async fn open(config: HostConfig<S>, pacing: Option<Duration>) -> Result<Self, PlayError> {
+    async fn open(
+        config: HostConfig<S>,
+        #[cfg(not(target_arch = "wasm32"))] pacing: Option<Duration>,
+    ) -> Result<Self, PlayError> {
         let spec = AudioSpec::new(CHANNELS, config.sample_rate());
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
+        #[cfg(not(target_arch = "wasm32"))]
         let block = u64::from(max_block_frames.get());
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
@@ -166,6 +179,9 @@ where
                 position: owned,
             })
         };
+        #[cfg(target_arch = "wasm32")]
+        let off = HostOwner::spawn("offline-host", start).await?;
+        #[cfg(not(target_arch = "wasm32"))]
         let off = match pacing {
             None => HostOwner::spawn("offline-host", start).await?,
             Some(interval) => {
@@ -303,12 +319,6 @@ where
             .await
     }
 
-    pub async fn update_audio_route(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.update_audio_route(sample_rate))
-            .await
-    }
-
     pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,
@@ -319,15 +329,18 @@ where
             .await
     }
 
+    /// The canonical transport revision the running session last committed,
+    /// read from the `render_committed` probe the renderer fires on every
+    /// committed render.
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        self.off
-            .call(|state| {
-                state
-                    .host
-                    .session_transport()
-                    .map(|snapshot| snapshot.revision())
-            })
-            .await
+        usdt_trace::events()
+            .iter()
+            .rev()
+            .filter(|event| event.probe == "render_committed")
+            .find_map(|event| event.field("transport_revision"))
+            .and_then(NonZeroU64::new)
+            .map(TransportRevision::from)
+            .ok_or(PlayError::Session(SessionError::TransportNotProcessed))
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {

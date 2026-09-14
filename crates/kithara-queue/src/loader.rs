@@ -349,6 +349,42 @@ mod tests {
         assert_eq!(state.load(Ordering::SeqCst), 1);
     }
 
+    #[kithara::test(tokio)]
+    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
+        let fixture = LoaderFixtureSpec::default()
+            .with_cap(NonZeroUsize::MIN)
+            .build();
+        let permit = Arc::clone(&fixture.loader.prefetch_lane)
+            .acquire_owned()
+            .await
+            .expect("loader keeps the prefetch semaphore open");
+        let id = TrackId::allocate();
+        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
+        fixture
+            .tracks
+            .lock()
+            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let handle = fixture
+            .loader
+            .spawn_load(id, source, LoadClass::Prefetch)
+            .expect("fresh track starts one load attempt");
+        assert!(fixture.tracks.lock().iter().any(|track| {
+            track.id == id && track.load.as_ref().is_some_and(|attempt| attempt.waiting)
+        }));
+
+        fixture.loader.cancel.cancel();
+
+        let result = kithara_platform::tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("cancellation must wake the pending loader")
+            .expect("loader task must not panic");
+        assert!(matches!(
+            result,
+            Err(QueueError::Cancelled(cancelled)) if cancelled == id
+        ));
+        drop(permit);
+    }
+
     /// Test fixture: the [`Loader`] under test, the shared
     /// [`Tracks`] store (so tests can seed entries), and the root
     /// [`EventBus`] (so tests can subscribe for assertions).

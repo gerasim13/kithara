@@ -3,7 +3,7 @@ use kithara_play::{PlayError, SeekOutcome};
 
 use super::{
     QueueControl,
-    types::{CachedPosition, PendingSelect, PlaybackView, Transition},
+    types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
 use crate::{error::QueueError, event::TrackStatus};
 
@@ -102,6 +102,9 @@ where
         match status {
             TrackStatus::Loaded => self.set_status(id, TrackStatus::Consumed),
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
+                if matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_)) {
+                    return;
+                }
                 self.override_pending_select(PendingSelect {
                     id,
                     transition: Transition::None,

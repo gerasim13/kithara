@@ -59,6 +59,8 @@ struct MutationSuite {
     files: Vec<PathBuf>,
     #[serde(default)]
     features: Vec<String>,
+    #[serde(default)]
+    exclude_re: Vec<String>,
     test_filters: Vec<String>,
     timeout_seconds: u64,
 }
@@ -201,6 +203,12 @@ impl MutationSuite {
                 self.name
             );
         }
+        if self.exclude_re.iter().any(String::is_empty) {
+            bail!(
+                "mutation suite {} must not define an empty exclude_re pattern",
+                self.name
+            );
+        }
         if !(10..=900).contains(&self.timeout_seconds) {
             bail!(
                 "mutation suite {} timeout must be between 10 and 900 seconds",
@@ -229,6 +237,11 @@ impl MutationSuite {
 
     fn command(&self, root: &Path, output: &Path, jobs: usize) -> Command {
         let mut command = Command::new("cargo");
+        // cargo-mutants gives every mutant its own copied source tree. A CI
+        // runner's shared target directory would make concurrent mutant builds
+        // overwrite artifacts for the same package/version, so leave target
+        // selection to cargo-mutants' isolated tree.
+        command.env_remove("CARGO_TARGET_DIR");
         command
             .current_dir(root)
             .arg("mutants")
@@ -255,6 +268,9 @@ impl MutationSuite {
 
         for file in &self.files {
             command.arg("--file").arg(file);
+        }
+        for pattern in &self.exclude_re {
+            command.arg("--exclude-re").arg(pattern);
         }
         if !self.features.is_empty() {
             command.arg("--features").arg(self.features.join(","));
@@ -311,6 +327,7 @@ mod tests {
 name = "small"
 package = "example"
 files = ["crates/example/src/lib.rs"]
+exclude_re = ["example::debug"]
 test_filters = ["test(/tests::value/)"]
 timeout_seconds = 30
 "#,
@@ -328,10 +345,19 @@ timeout_seconds = 30
             args.windows(2)
                 .any(|args| args == ["--file", "crates/example/src/lib.rs"])
         );
+        assert!(
+            args.windows(2)
+                .any(|args| args == ["--exclude-re", "example::debug"])
+        );
         assert!(args.contains(&"--cargo-test-arg=--lib".to_string()));
         assert!(args.contains(&"--cargo-test-arg=test(/tests::value/)".to_string()));
         assert!(!args.contains(&"--workspace".to_string()));
         assert!(!args.iter().any(|arg| arg.starts_with("--test-workspace")));
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == "CARGO_TARGET_DIR" && value.is_none() })
+        );
     }
 
     #[test]

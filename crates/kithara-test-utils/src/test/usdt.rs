@@ -53,10 +53,17 @@ pub fn scope() -> Scope {
     }
 }
 
+/// Every probe recorded so far, readable without holding a [`Scope`] so a
+/// harness can observe the running product between test-owned scopes.
+#[must_use]
+pub fn events() -> Vec<ProbeEvent> {
+    lock(&EVENTS).events.clone()
+}
+
 impl Scope {
     #[must_use]
     pub fn events(&self) -> Vec<ProbeEvent> {
-        lock(&EVENTS).events.clone()
+        events()
     }
 
     /// Resolves once the probes recorded so far satisfy `holds`, re-checking

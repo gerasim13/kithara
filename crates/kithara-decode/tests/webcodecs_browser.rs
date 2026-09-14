@@ -12,10 +12,7 @@ use kithara_platform::time::{self, Duration};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_fixtures::{
-    assets,
-    signal::{SignalDirection, detect_direction},
-};
+use kithara_test_fixtures::signal::{SignalDirection, detect_direction};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
@@ -46,7 +43,8 @@ struct DecodeSummary {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn mp3_parity(signal_mp3_track_sine440_187s: &'static [u8]) {
+async fn mp3_parity() {
+    let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let webcodecs = decode_file(
@@ -72,7 +70,8 @@ async fn mp3_parity(signal_mp3_track_sine440_187s: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn flac_parity_direction(flac_unknown_length_saw_6s: &'static [u8]) {
+async fn flac_parity_direction() {
+    let flac_unknown_length_saw_6s = fetch_signal("flac_unknown_length_saw_6s.flac").await;
     prepare_webcodecs("flac", flac_unknown_length_saw_6s).await;
 
     let webcodecs = decode_file(
@@ -104,7 +103,8 @@ async fn flac_parity_direction(flac_unknown_length_saw_6s: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn seek_generation(signal_mp3_track_sine440_187s: &'static [u8]) {
+async fn seek_generation() {
+    let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let mut decoder = create_file_decoder(
@@ -164,7 +164,8 @@ async fn seek_generation(signal_mp3_track_sine440_187s: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn seek_trim_no_preroll_leak(signal_mp3_track_sine440_187s: &'static [u8]) {
+async fn seek_trim_no_preroll_leak() {
+    let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let mut decoder = create_file_decoder(
@@ -220,7 +221,8 @@ async fn seek_trim_no_preroll_leak(signal_mp3_track_sine440_187s: &'static [u8])
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn eof_tail_drain(signal_mp3_track_sine440_187s: &'static [u8]) {
+async fn eof_tail_drain() {
+    let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let webcodecs = decode_file(
@@ -252,7 +254,8 @@ async fn eof_tail_drain(signal_mp3_track_sine440_187s: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn aac_parity(aac_lc: &'static [u8]) {
+async fn aac_parity() {
+    let aac_lc = fetch_signal("aac_lc.mp4").await;
     prepare_webcodecs("mp4a.40.2", aac_lc).await;
 
     let bytes = aac_lc;
@@ -269,7 +272,8 @@ async fn aac_parity(aac_lc: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn he_aac_v1_decode(he_aac_v1: &'static [u8]) {
+async fn he_aac_v1_decode() {
+    let he_aac_v1 = fetch_signal("he_aac_v1.mp4").await;
     prepare_webcodecs("mp4a.40.5", he_aac_v1).await;
 
     let decoded = decode_he_aac_v1(he_aac_v1).await;
@@ -295,7 +299,8 @@ async fn he_aac_v1_decode(he_aac_v1: &'static [u8]) {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn he_aac_v2_decode(he_aac_v2: &'static [u8]) {
+async fn he_aac_v2_decode() {
+    let he_aac_v2 = fetch_signal("he_aac_v2.mp4").await;
     prepare_webcodecs("mp4a.40.29", he_aac_v2).await;
 
     let decoded = decode_he_aac_v2(he_aac_v2).await;
@@ -582,27 +587,32 @@ fn assert_common_parity(
     );
 }
 
-#[kithara::fixture]
-fn aac_lc() -> &'static [u8] {
-    assets::aac_lc().bytes()
-}
+/// The unified test server the wasm runner starts serves every generated body by
+/// name; the browser cannot reach the host store the native accessors read.
+const SERVER_URL: &str = "http://127.0.0.1:3444";
 
-#[kithara::fixture]
-fn flac_unknown_length_saw_6s() -> &'static [u8] {
-    assets::flac_unknown_length_saw_6s().bytes()
-}
-
-#[kithara::fixture]
-fn he_aac_v1() -> &'static [u8] {
-    assets::he_aac_v1().bytes()
-}
-
-#[kithara::fixture]
-fn he_aac_v2() -> &'static [u8] {
-    assets::he_aac_v2().bytes()
-}
-
-#[kithara::fixture]
-fn signal_mp3_track_sine440_187s() -> &'static [u8] {
-    assets::signal_mp3_track_sine440_187s().bytes()
+async fn fetch_signal(file: &str) -> &'static [u8] {
+    let global = js_sys::global();
+    let fetch: js_sys::Function = js_sys::Reflect::get(&global, &"fetch".into())
+        .expect("global fetch")
+        .unchecked_into();
+    let url = format!("{SERVER_URL}/signal/{file}");
+    let response = JsFuture::from(js_sys::Promise::from(
+        fetch.call1(&global, &url.into()).expect("fetch call"),
+    ))
+    .await
+    .expect("fetch generated fixture");
+    let status = js_sys::Reflect::get(&response, &"status".into())
+        .expect("response status")
+        .as_f64();
+    assert_eq!(status, Some(200.0), "the test server serves `{file}`");
+    let array_buffer: js_sys::Function = js_sys::Reflect::get(&response, &"arrayBuffer".into())
+        .expect("response body reader")
+        .unchecked_into();
+    let body = JsFuture::from(js_sys::Promise::from(
+        array_buffer.call0(&response).expect("read body"),
+    ))
+    .await
+    .expect("fixture body");
+    Uint8Array::new(&body).to_vec().leak()
 }

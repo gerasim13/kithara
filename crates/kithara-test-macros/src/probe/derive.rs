@@ -125,7 +125,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     #(#bindings)*
                     ::kithara_test_utils::probe::#fire_fn(operation, #(#slot_idents),*);
                 }
-                #[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+                #[cfg(feature = "usdt")]
                 {
                     #(#bindings)*
                     ::kithara_test_utils::tracing::event!(
@@ -161,11 +161,7 @@ mod tests {
             expanded
                 .contains("cfg (all (feature = \"usdt\" , target_os = \"macos\" , not (miri)))")
         );
-        assert!(
-            expanded.contains(
-                "cfg (all (feature = \"usdt\" , any (not (target_os = \"macos\") , miri)))"
-            )
-        );
+        assert!(expanded.contains("cfg (feature = \"usdt\")"));
         assert!(expanded.contains("kithara_test_utils :: tracing :: event"));
         assert!(expanded.contains("frames = __probe_slot_0"));
         assert!(!expanded.contains("cfg (test)"));

@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 use firewheel::FirewheelCtx;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
@@ -23,7 +21,6 @@ pub(crate) enum HostCmd<S> {
     Sync(SyncCmd),
     ApplyMix { levels: Box<[HostLevel]> },
     EnableOutput { outputs: OutputGroup },
-    UpdateOutputRoute { sample_rate: NonZeroU32 },
     Shutdown,
 }
 

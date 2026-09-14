@@ -260,6 +260,7 @@ coverage:
       --ignore-default-filter || test_rc=$?
     cargo llvm-cov nextest --no-report \
       -p kithara-app \
+      --features kithara-app/backend-cpal \
       --cargo-profile test-release \
       --ignore-default-filter \
       -E 'package(kithara-app) & test(/^gui::/)' || test_rc=$?
@@ -349,6 +350,7 @@ miri *ARGS:
     # crates reads on the way to its first assertion.
     MIRIFLAGS="-Zmiri-disable-isolation" \
         cargo +nightly miri test --lib \
+        --features kithara-platform/tokio-rt-multi-thread \
         -p kithara-abr \
         -p kithara-bufpool \
         -p kithara-download \

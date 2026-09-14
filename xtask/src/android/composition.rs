@@ -11,11 +11,18 @@ use crate::BuildProfile;
 
 type Features = BTreeMap<String, BTreeSet<String>>;
 
+/// A `cargo tree` whose output is parsed, so it never inherits a forced colour:
+/// a runner that sets `CARGO_TERM_COLOR=always` wraps the duplicate marker in
+/// escapes, and the marker then reads as a feature name.
+fn tree(root: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(root).args(["tree", "--color", "never"]);
+    command
+}
+
 fn product(root: &Path, target: &str) -> Result<Features> {
-    let output = Command::new("cargo")
-        .current_dir(root)
+    let output = tree(root)
         .args([
-            "tree",
             "-p",
             "kithara-ffi",
             "--no-default-features",
@@ -75,9 +82,8 @@ pub(super) fn verify(
         bail!("Android test inventory must disable package defaults");
     }
     let expected = product(root, target)?;
-    let mut tree = Command::new("cargo");
-    tree.current_dir(root).args([
-        "tree",
+    let mut tree = tree(root);
+    tree.args([
         "--edges",
         "normal,dev",
         "--prefix",
@@ -260,6 +266,25 @@ mod tests {
         ] {
             assert!(compare(&product, &parse(tree).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn parsed_trees_ask_cargo_for_uncoloured_output() {
+        let args: Vec<_> = tree(Path::new("."))
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(2).any(|pair| pair == ["--color", "never"]),
+            "cargo tree must not inherit a forced colour: {args:?}"
+        );
+        let coloured =
+            parse("kithara v1|warp \u{1b}[33m\u{1b}[2m(*)\u{1b}[39m\u{1b}[22m\n").unwrap();
+        assert_ne!(
+            coloured,
+            parse("kithara v1|warp (*)\n").unwrap(),
+            "a coloured duplicate marker is not stripped, so colour must be off"
+        );
     }
 
     #[test]

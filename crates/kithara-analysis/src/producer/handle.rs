@@ -74,7 +74,7 @@ impl AudioObserver for AnalysisProducer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::num::NonZeroU32;
 

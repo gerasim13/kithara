@@ -57,6 +57,10 @@ on:
         description: Stable runner label for a lane-owned persistent build cache.
         default: ''
         type: string
+      isolated-target:
+        description: Use an empty private target for an immutable snapshot restore.
+        default: false
+        type: boolean
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -68,9 +72,17 @@ env:
   # called workflow inherits nothing from its caller, so every workflow that
   # runs a lane on that fleet says it for itself.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  # The target is private to this job. A lane restores a verified immutable
-  # snapshot before Cargo starts; no two jobs can write the restored tree.
-  CARGO_TARGET_DIR: /cache/target/jobs/${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}
+  # Bootstrap xtask beside the runner's persistent Cargo target. Without this,
+  # every fresh Actions checkout recompiles xtask before the lane can start.
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  # Every runner mounts one build root, and a lane builds in the directory named
+  # after it under that root. Artefacts are valid only for the features, profile
+  # and toolchain that produced them, and a lane asks for the same ones every
+  # run — while it has no affinity for a runner, so a directory named after the
+  # runner was cold whenever the lane moved, which was most runs. Snapshot lanes
+  # alone need an empty job directory because they restore a verified immutable
+  # tree.
+  CARGO_TARGET_DIR: ${{ inputs.isolated-target && format('/cache/lanes/jobs/{0}-{1}-{2}', github.run_id, github.run_attempt, inputs.lane) || format('/cache/lanes/lane-{0}', inputs.lane) }}
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow
@@ -108,7 +120,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cargo-timings-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: /cache/target/**/cargo-timings/cargo-timing.html
+          path: ${{ env.CARGO_TARGET_DIR }}/**/cargo-timings/cargo-timing.html
           if-no-files-found: error
 
       # `artifact-when: always` uploads even when the lane failed: a budget

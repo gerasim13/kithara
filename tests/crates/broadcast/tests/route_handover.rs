@@ -39,7 +39,6 @@ use super::origin::Playlist;
 
 const CHANNELS: u16 = 2;
 const OLD_RATE: u32 = 44_100;
-const NEW_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 512;
 const BLOCKS_PER_RATE: usize = 64;
 
@@ -124,7 +123,7 @@ fn wav_rate(store: &AssetStore<TestPools>, key: &ResourceKey) -> u32 {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcast_tone: Vec<f32>) {
+async fn route_change_keeps_recording_and_broadcast_running(broadcast_tone: Vec<f32>) {
     let harness = playing_harness(broadcast_tone).await;
     let pools = pools();
     let worker = Worker::new(WorkerConfig::new());
@@ -182,9 +181,9 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
     let before = render_blocks(&harness).await;
     harness
         .host()
-        .update_audio_route(NonZeroU32::new(NEW_RATE).expect("new device rate is non-zero"))
+        .invalidate_audio_route("device route change")
         .await
-        .expect("apply the measured new device rate");
+        .expect("restart the output stream after the route change");
     let after = render_blocks(&harness).await;
 
     assert_eq!(broadcast_handle.url(), url);
@@ -207,11 +206,10 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
         report.frames,
         u64::try_from(2 * BLOCKS_PER_RATE * BLOCK_FRAMES).expect("rendered frames fit")
     );
-    assert_eq!(report.parts, 2);
+    assert_eq!(report.parts, 1);
     let committed = keys.lock().clone();
-    assert_eq!(committed.len(), 2);
+    assert_eq!(committed.len(), 1);
     assert_eq!(wav_rate(&store, &committed[0]), OLD_RATE);
-    assert_eq!(wav_rate(&store, &committed[1]), NEW_RATE);
     assert_eq!(broadcast_handle.status().dropped_samples, 0);
 
     let playlist_url = base.join("v/0/live.m3u8").expect("playlist URL");
@@ -221,7 +219,6 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
         .expect("fetch route-change playlist");
     let playlist =
         Playlist::parse(String::from_utf8(playlist.to_vec()).expect("playlist is UTF-8"));
-    assert!(playlist.text.contains("#EXT-X-DISCONTINUITY\n"));
     assert!(
         playlist
             .sequences()

@@ -1,6 +1,6 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 
-/// DTrace is the native USDT backend on macOS. Other targets use the tracing
+/// `DTrace` is the native USDT backend on macOS. Other targets use the tracing
 /// backend emitted by the probe macro.
 #[cfg(all(target_os = "macos", not(miri)))]
 mod usdt_wire;

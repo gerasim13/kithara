@@ -268,7 +268,7 @@ fn build_emit_entry_event(
                 ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
             ::kithara_test_utils::probe::#fire_fn(__KITHARA_USDT_OPERATION, #(#probe_idents),*);
         }
-        #[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+        #[cfg(feature = "usdt")]
         {
             ::kithara_test_utils::tracing::event!(
                 target: #target,
@@ -325,11 +325,7 @@ mod tests {
             expanded
                 .contains("cfg (all (feature = \"usdt\" , target_os = \"macos\" , not (miri)))")
         );
-        assert!(
-            expanded.contains(
-                "cfg (all (feature = \"usdt\" , any (not (target_os = \"macos\") , miri)))"
-            )
-        );
+        assert!(expanded.contains("cfg (feature = \"usdt\")"));
         assert!(!expanded.contains("cfg (test)"));
         assert!(!expanded.contains("probe-capture"));
         assert!(expanded.contains("kithara_test_utils :: tracing :: event"));

@@ -178,11 +178,12 @@ impl Process {
     /// The platform a lane refuses to run anywhere but on. Recorded rather than
     /// enforced while recording: the shape of a macOS lane is worth capturing
     /// from a Linux runner too.
-    pub(crate) fn require_os(&self, expected: &str, label: &str) -> Result<()> {
-        if self.record(Step::requirement(label, "os", &[expected.to_owned()])) {
+    pub(crate) fn require_os<S: AsRef<str>>(&self, expected: &[S], label: &str) -> Result<()> {
+        let expected: Vec<String> = expected.iter().map(|os| os.as_ref().to_owned()).collect();
+        if self.record(Step::requirement(label, "os", &expected)) {
             return Ok(());
         }
-        require_os(expected, label)
+        require_os(&expected, label)
     }
 
     /// What a predecessor job has to have left behind. Recorded rather than
@@ -324,10 +325,11 @@ impl Step {
     }
 }
 
-pub(crate) fn require_os(expected: &str, label: &str) -> Result<()> {
-    if env::consts::OS != expected {
+pub(crate) fn require_os(expected: &[String], label: &str) -> Result<()> {
+    if !expected.iter().any(|os| os == env::consts::OS) {
         bail!(
-            "{label} lane requires {expected}, current platform is {}",
+            "{label} lane requires {}, current platform is {}",
+            expected.join(" or "),
             env::consts::OS
         );
     }

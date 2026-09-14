@@ -18,6 +18,7 @@ default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
+backend-cpal = ["kithara/backend-cpal"]
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
@@ -142,6 +143,9 @@ tempfile = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "client-reqwest", "net", "tls-rustls"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`

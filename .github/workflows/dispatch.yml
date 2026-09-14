@@ -91,7 +91,7 @@ jobs:
   network:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/network.yml
     # A called workflow starts with no secrets of its own, so the keys its
@@ -103,27 +103,29 @@ jobs:
   # own until the catalog can name a pool.
   #
   # `only` names lanes, and the fan-out is what selects lanes, so a request for
-  # one lane leaves these out - the UI suite excepted, because it is a declared
-  # lane and this is the only caller that can start it. Each of these workflows
+  # one lane leaves these out - the UI suite and the Android baseline excepted,
+  # because each is a declared lane and this is the only caller that can start
+  # it. Each of these workflows
   # also starts on its own, which is how one of them is run by hand.
   windows:
     if: >-
       vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
-      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/windows.yml
 
+  # The Android baseline runs every night and every week, and a request for
+  # it by name starts it alone.
   android:
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
-      && (inputs.kind || 'nightly') == 'nightly'
-      && (inputs.only || '') == ''
+      && ((inputs.only || '') == '' || contains(inputs.only, 'android-test'))
     uses: ./.github/workflows/android.yml
 
   ui:
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
-      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
     uses: ./.github/workflows/ui.yml
 
@@ -134,6 +136,6 @@ jobs:
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
-      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/stress.yml

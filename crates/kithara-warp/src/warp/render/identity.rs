@@ -98,18 +98,7 @@ where
             if let Some(committed) =
                 snapshot.advance(self.committed.as_ref(), source, chunk.frames())
             {
-                kithara::probe_event!(
-                    render_committed,
-                    session_epoch = u64::from(committed.context().session_epoch()),
-                    transport_revision = committed
-                        .context()
-                        .transport_revision()
-                        .map_or(0, u64::from),
-                    output_start,
-                    source_start,
-                    source_end = committed.frontier().source()
-                );
-                self.committed = Some(committed);
+                self.commit(committed, output_start, source_start);
             }
         }
         Some(chunk)
