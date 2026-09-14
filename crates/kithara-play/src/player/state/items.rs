@@ -197,6 +197,7 @@ impl ItemQueue {
             pub(crate) fn clear_all(&self);
             #[expr($.cloned())]
             pub(crate) fn track_grid(&self, item: TrackId) -> Option<TrackGrid>;
+            pub(crate) fn tracks_with_grids(&self) -> Vec<TrackId>;
             pub(crate) fn publish_track_grid(&self, item: TrackId, grid: TrackGrid);
             pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<RegionPlan>>);
             pub(crate) fn publish_free_adoption(&self, item: TrackId, request: crate::worker::FreeAdoptionRequest) -> bool;

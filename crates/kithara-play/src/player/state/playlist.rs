@@ -196,6 +196,14 @@ impl Playlist {
         self.tracks.get(&item).and_then(|track| track.grid.as_ref())
     }
 
+    /// The tracks holding a grid, whose region plans count output frames.
+    pub(crate) fn tracks_with_grids(&self) -> Vec<TrackId> {
+        self.tracks
+            .iter()
+            .filter_map(|(item, track)| track.grid.as_ref().map(|_| *item))
+            .collect()
+    }
+
     pub(crate) fn publish_track_grid(&mut self, item: TrackId, grid: TrackGrid) {
         self.tracks.entry(item).or_default().grid = Some(grid);
     }

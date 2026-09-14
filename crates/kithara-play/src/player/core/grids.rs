@@ -467,6 +467,9 @@ where
             return;
         }
         self.planned_output_rate = rate;
+        for item in self.runtime.core.items.tracks_with_grids() {
+            self.replan_track(item);
+        }
         if let Err(rejected) =
             self.reconcile_current_grid(ReconcileCause::TransportChanged, None, false)
         {
