@@ -34,6 +34,9 @@ pub(crate) struct CacheEntry {
 
 struct CacheContents {
     entries: Vec<CacheEntry>,
+    /// Entries a live job builds in. They are charged against the ceiling and
+    /// never evicted, but they do not make their siblings unevictable.
+    held: Vec<CacheEntry>,
     active: bool,
     locks: Vec<FileLock>,
 }
@@ -113,16 +116,25 @@ fn collect(
         let contents = candidate_entries(target_dir)?;
         locks.extend(contents.locks);
         let bytes = total_bytes(&contents.entries);
+        let held = total_bytes(&contents.held);
         if contents.active {
-            held_bytes = held_bytes.saturating_add(bytes);
+            held_bytes = held_bytes.saturating_add(bytes).saturating_add(held);
             info!(
                 path = %target_dir.display(),
-                bytes_before = bytes,
+                bytes_before = bytes.saturating_add(held),
                 bytes_freed = 0,
                 budget_bytes,
                 "keeping active build cache"
             );
             continue;
+        }
+        held_bytes = held_bytes.saturating_add(held);
+        if held > 0 {
+            info!(
+                path = %target_dir.display(),
+                held_bytes = held,
+                "keeping the build directories live jobs hold"
+            );
         }
         candidates.extend(contents.entries);
     }
@@ -189,6 +201,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         .with_context(|| format!("reading build cache {}", target_dir.display()))?;
     let mut contents = CacheContents {
         entries: Vec::new(),
+        held: Vec::new(),
         // A target a live job leased is active even between compilations,
         // when no `.cargo-lock` is held.
         active: lease_is_held(target_dir, FileLock::try_exclusive),
@@ -215,13 +228,17 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             .modified()
             .with_context(|| format!("reading modification time for {}", path.display()))?;
         let scan = scan_directory(&path)?;
-        contents.active |= scan.active;
         contents.locks.extend(scan.locks);
-        contents.entries.push(CacheEntry {
+        let entry = CacheEntry {
             path,
             size_bytes: scan.bytes,
             modified: scan.last_used.map_or(modified, |used| used.max(modified)),
-        });
+        };
+        if scan.active {
+            contents.held.push(entry);
+        } else {
+            contents.entries.push(entry);
+        }
     }
     Ok(contents)
 }
@@ -483,19 +500,36 @@ mod tests {
 
     /// The Linux volume root is scanned, and the lane builds one level down
     /// and claims that level. The scan has to see the claim where the lane
-    /// makes it.
+    /// makes it, and it has to charge that one directory rather than the root:
+    /// a runner always has some job, so a root held whole was 1.4 TB the
+    /// ceiling could never reclaim, and every hourly pass answered the
+    /// shortfall by evicting every warm lane directory instead.
     #[test]
-    fn a_lease_held_in_a_child_keeps_the_scanned_root() {
+    fn a_lease_held_in_a_child_keeps_that_child_and_not_its_siblings() {
         let root = tempfile::tempdir().unwrap();
         let build = root.path().join("flash-off");
+        let idle = root.path().join("flash-on");
+        fs::create_dir_all(&idle).unwrap();
         let lease = lease::hold(&build).expect("claim the directory the lane builds into");
 
         let contents = candidate_entries(root.path()).unwrap();
 
         assert!(
-            contents.active,
+            !contents.active,
+            "one live child made the whole root unevictable"
+        );
+        assert!(
+            contents.held.iter().any(|entry| entry.path == build),
             "the scan did not see the lease the lane holds in {}",
             build.display()
+        );
+        assert!(
+            contents.entries.iter().any(|entry| entry.path == idle),
+            "a directory nobody holds stayed out of the candidates"
+        );
+        assert!(
+            contents.entries.iter().all(|entry| entry.path != build),
+            "the directory a lane is building in was offered for eviction"
         );
         drop(lease);
     }
@@ -711,7 +745,15 @@ mod tests {
             .unwrap();
         let lock = FileLock::exclusive(file).unwrap();
 
-        assert!(candidate_entries(directory.path()).unwrap().active);
+        let contents = candidate_entries(directory.path()).unwrap();
+        assert!(
+            contents.held.iter().any(|entry| entry.path == profile),
+            "the profile a compilation holds was not charged as live"
+        );
+        assert!(
+            contents.entries.is_empty(),
+            "the profile a compilation holds was offered for eviction"
+        );
         drop(lock);
     }
 
