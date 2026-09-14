@@ -16,20 +16,22 @@ jobs:
       - name: Report what the cached xtask transport sees
         shell: bash
         run: |
-          cd /c/kithara-ci/runner/_work/kithara/kithara || exit 0
+          set +e
+          just _xtask-bootstrap; echo "bootstrap exit=$?"
           echo "uname: $(uname -s)"
-          echo "--- pointer"
-          ls -l xtask/.xtask-cache || true
-          cat xtask/.xtask-cache || true
-          echo "--- generation"
-          gen=$(head -1 xtask/.xtask-cache 2>/dev/null) || true
+          pointer="$PWD/xtask/.xtask-cache"
+          ls -l "$pointer"; echo "--- body ---"; cat -A "$pointer"; echo "--- end ---"
+          gen=$(head -1 "$pointer")
           echo "gen=[$gen]"
-          ls -l "$gen" || true
-          for f in "$gen/xtask.exe" "$gen/xtask"; do
-            echo "$f: exists=$([ -f "$f" ] && echo y || echo n) exec=$([ -x "$f" ] && echo y || echo n)"
-          done
-          echo "--- self-cache dir"
-          ls -l target/xtask-self-cache/debug/ 2>/dev/null | head -20 || true
+          case "$gen" in
+            /*) echo "shape: absolute" ;;
+            [A-Za-z]:[\\/]*) echo "shape: drive" ;;
+            *) echo "shape: REJECTED" ;;
+          esac
+          bin="$gen/xtask.exe"
+          echo "bin=[$bin] f=$([ -f "$bin" ] && echo y || echo n) L=$([ -L "$bin" ] && echo y || echo n) x=$([ -x "$bin" ] && echo y || echo n)"
+          echo "size=$(wc -c < "$pointer")"
+          just _xtask-cached strict self-cache status; echo "status exit=$?"
 
       - name: Install the prebuilt FFmpeg the crate expects
         shell: powershell
