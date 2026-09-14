@@ -98,7 +98,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_test_utils::kithara;
-    use kithara_warp::{SessionAnchor, SessionBeat, SessionFrame};
+    use kithara_warp::{SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame};
 
     use super::SlotTable;
     use crate::{
@@ -116,7 +116,10 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::default(),
             1.5,
-            NonZeroU32::new(48_000).expect("sample rate"),
+            SessionAxis::new(
+                NonZeroU32::new(48_000).expect("sample rate"),
+                SessionEpoch::new(0),
+            ),
         )
         .expect("anchor");
         slots.publish_deck_grid(DeckGrid::Local(anchor));

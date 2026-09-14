@@ -1,10 +1,10 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::ops::Range;
 
 use firewheel::{
     event::ProcEvents,
     node::{ProcInfo, ProcStore},
 };
-use kithara_warp::{SessionAnchor, SessionBeat, SessionEpoch, SessionFrame};
+use kithara_warp::{SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame};
 use triple_buffer::Input;
 
 use super::commit::{
@@ -195,7 +195,7 @@ impl TransportCommitState {
             stamp.target_frame(),
             beat,
             stamp.next().tempo(),
-            stamp.sample_rate(),
+            SessionAxis::new(stamp.sample_rate(), self.session_grid.epoch()),
         )?;
         let session_grid_revision = self.session_grid.next_revision()?;
         self.active = Some(stamp.next());
@@ -267,9 +267,9 @@ impl TransportCommitState {
         frame: SessionFrame,
         beat: SessionBeat,
         tempo: Tempo,
-        sample_rate: NonZeroU32,
+        axis: SessionAxis,
     ) -> Result<SessionAnchor, TransportProcessError> {
-        let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), sample_rate)
+        let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), axis)
             .map_err(|_| TransportProcessError::InvalidBeatRange)?;
         if anchor
             .frame_at(beat)
@@ -383,7 +383,7 @@ impl TransportCommitState {
             SessionFrame::new(info.clock_samples.0),
             beat,
             commit.tempo(),
-            info.sample_rate,
+            SessionAxis::new(info.sample_rate, self.session_grid.epoch()),
         )?;
         let revision = self.session_grid.next_revision()?;
         self.anchor = Some(anchor);

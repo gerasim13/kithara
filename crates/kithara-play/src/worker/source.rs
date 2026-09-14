@@ -789,9 +789,9 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{
         BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment, LoadGeneration,
-        PresentationFrontier, RegionPlan, RenderContext, SessionAnchor, SessionBeat, SessionEpoch,
-        SessionFrame, StretchControls, StretchKind, SyncMode, SyncOperationId, TransportRevision,
-        Warp, WarpMapRevision,
+        PresentationFrontier, RegionPlan, RenderContext, SessionAnchor, SessionAxis, SessionBeat,
+        SessionEpoch, SessionFrame, StretchControls, StretchKind, SyncMode, SyncOperationId,
+        TransportRevision, Warp, WarpMapRevision,
     };
 
     use super::*;
@@ -1326,7 +1326,7 @@ mod tests {
                 SessionFrame::new(0),
                 SessionBeat::default(),
                 2.0,
-                spec.sample_rate,
+                SessionAxis::new(spec.sample_rate, SessionEpoch::new(0)),
             )
             .expect("fixture anchor"),
             None,
@@ -1699,7 +1699,7 @@ mod tests {
                 SessionFrame::new(0),
                 SessionBeat::default(),
                 2.0,
-                spec.sample_rate,
+                SessionAxis::new(spec.sample_rate, SessionEpoch::new(0)),
             )
             .expect("fixture anchor"),
             None,

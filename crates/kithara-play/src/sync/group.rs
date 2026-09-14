@@ -237,15 +237,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     SessionBeat::new(beat).map_err(|_| SyncError::InvalidGroupGridState {
                         state: self.grid.state(),
                     })?;
-                let anchor = SessionAnchor::new(
-                    now,
-                    beat,
-                    f64::from(tempo) / 60.0,
-                    self.grid.axis().sample_rate(),
-                )
-                .map_err(|_| SyncError::InvalidGroupGridState {
-                    state: self.grid.state(),
-                })?;
+                let anchor =
+                    SessionAnchor::new(now, beat, f64::from(tempo) / 60.0, self.session_axis()?)
+                        .map_err(|_| SyncError::InvalidGroupGridState {
+                            state: self.grid.state(),
+                        })?;
                 self.session_candidate(anchor)
                     .map(|grid| (grid, DeckGrid::Local(anchor)))
             }
@@ -282,8 +278,28 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
     }
 
+    /// Builds this deck's session grid from the owner's anchor.
+    ///
+    /// The anchor carries the session axis, so the deck adopts the owner's
+    /// rate and epoch rather than reconstructing them from its own replica.
+    /// An axis only changes across an epoch boundary, and that boundary is an
+    /// unavailable grid, so a deck that still holds the previous axis takes
+    /// that step first and adopts the anchor once the axes agree. An anchor
+    /// that moves the axis without succeeding the epoch is a disagreement
+    /// rather than a route change, and the deck keeps its committed grid.
+    /// A deck whose grid is unavailable holds no live axis to move, so it
+    /// adopts the anchor on the axis it already carries.
     fn session_candidate(&self, anchor: SessionAnchor) -> Result<BeatGridSnapshot, SyncError> {
         let axis = self.session_axis()?;
+        if self.grid.state() == BeatGridState::Live && axis != anchor.axis() {
+            if !is_successor_epoch(axis.epoch(), anchor.axis().epoch()) {
+                return Err(SyncError::GridAxisChanged {
+                    expected: MapAxis::Session(axis),
+                    given: MapAxis::Session(anchor.axis()),
+                });
+            }
+            return self.unavailable_axis_candidate(anchor.axis());
+        }
         let revision = self.next_grid_revision()?;
         Ok(BeatGridSnapshot::session(
             self.grid.id(),
@@ -291,6 +307,16 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             axis.epoch(),
             anchor,
             None,
+        ))
+    }
+
+    /// Steps this deck onto `axis` with an unavailable grid.
+    fn unavailable_axis_candidate(&self, axis: SessionAxis) -> Result<BeatGridSnapshot, SyncError> {
+        let revision = self.next_grid_revision()?;
+        Ok(BeatGridSnapshot::unavailable(
+            self.grid.id(),
+            revision,
+            MapAxis::Session(axis),
         ))
     }
 

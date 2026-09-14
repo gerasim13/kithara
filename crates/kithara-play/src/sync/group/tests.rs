@@ -4,8 +4,8 @@ use kithara_test_utils::kithara;
 use kithara_warp::{
     AlignmentSource, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
     BeatGridState, BeatsPerMinute, MapPoint, MapPosition, PresentationFrontier, SessionAnchor,
-    SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncError, SyncGroup, SyncIntent,
-    SyncMemberKind, SyncMode, SyncOperation,
+    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncError, SyncGroup,
+    SyncIntent, SyncMemberKind, SyncMode, SyncOperation,
 };
 
 use super::GroupState;
@@ -68,7 +68,10 @@ fn rejected_parent_anchor_preserves_the_committed_grid_and_anchor() {
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("beat"),
             2.0,
-            NonZeroU32::new(rate).expect("sample rate"),
+            SessionAxis::new(
+                NonZeroU32::new(rate).expect("sample rate"),
+                SessionEpoch::new(0),
+            ),
         )
         .expect("session anchor")
     };
@@ -99,7 +102,10 @@ fn rejected_grid_change_preserves_the_whole_deck_transaction() {
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("beat"),
             2.0,
-            NonZeroU32::new(rate).expect("sample rate"),
+            SessionAxis::new(
+                NonZeroU32::new(rate).expect("sample rate"),
+                SessionEpoch::new(0),
+            ),
         )
         .expect("anchor")
     };
@@ -155,7 +161,10 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
                 SessionFrame::new(0),
                 SessionBeat::new(0.0).expect("beat"),
                 2.0,
-                NonZeroU32::new(48_000).expect("sample rate"),
+                SessionAxis::new(
+                    NonZeroU32::new(48_000).expect("sample rate"),
+                    SessionEpoch::new(0),
+                ),
             )
             .expect("anchor"),
         )
@@ -207,8 +216,13 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
 fn enabling_without_a_parent_withdraws_local_geometry() {
     let id = BeatGridId::allocate().expect("group identity");
     let rate = NonZeroU32::new(48_000).expect("sample rate");
-    let anchor = SessionAnchor::new(SessionFrame::new(0), SessionBeat::default(), 1.5, rate)
-        .expect("anchor");
+    let anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        1.5,
+        SessionAxis::new(rate, SessionEpoch::new(0)),
+    )
+    .expect("anchor");
     let grid = BeatGridSnapshot::session(
         id,
         BeatGridRevision::first(),

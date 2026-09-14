@@ -171,8 +171,8 @@ mod tests {
     use super::SessionGridView;
     use crate::{
         Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridView, BeatOrdinal,
-        FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame,
+        FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis,
+        SessionBeat, SessionEpoch, SessionFrame,
     };
 
     #[kithara::test]
@@ -184,7 +184,10 @@ mod tests {
                 SessionFrame::new(1_000),
                 SessionBeat::new(2.0).expect("finite anchor beat"),
                 2.0,
-                NonZeroU32::new(sample_rate).expect("sample rate"),
+                SessionAxis::new(
+                    NonZeroU32::new(sample_rate).expect("sample rate"),
+                    SessionEpoch::new(0),
+                ),
             )
             .expect("session anchor");
             let meter = Meter::new(beats_per_bar)
@@ -232,7 +235,10 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("finite beat"),
             2.0,
-            NonZeroU32::new(48_000).expect("sample rate"),
+            SessionAxis::new(
+                NonZeroU32::new(48_000).expect("sample rate"),
+                SessionEpoch::new(0),
+            ),
         )
         .expect("session anchor");
         let view = SessionGridView::new(

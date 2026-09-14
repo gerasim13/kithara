@@ -43,8 +43,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        RateTarget, RenderContext, SessionAnchor, SessionBeat, SessionEpoch, SessionFrame,
-        SyncMode, TransportRevision,
+        RateTarget, RenderContext, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+        SessionFrame, SyncMode, TransportRevision,
     };
 
     use super::DeckGrid;
@@ -67,7 +67,7 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::default(),
             1.5,
-            host.sample_rate(),
+            SessionAxis::new(host.sample_rate(), SessionEpoch::new(0)),
         )
         .expect("local anchor");
         let local = DeckGrid::Local(anchor)

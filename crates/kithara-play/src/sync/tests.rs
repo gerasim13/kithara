@@ -38,7 +38,7 @@ fn session_grid_at_rate(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
         beats_per_second,
-        sample_rate,
+        SessionAxis::new(sample_rate, SessionEpoch::new(0)),
     )
     .expect("invariant: fixture session anchor is valid");
     BeatGridSnapshot::session(id, revision, epoch, anchor, None)

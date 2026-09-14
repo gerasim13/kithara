@@ -2,6 +2,8 @@ use std::num::NonZeroU32;
 
 use num_traits::cast::ToPrimitive;
 
+use crate::SessionAxis;
+
 /// An invalid session coordinate or coordinate rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -59,9 +61,14 @@ impl SessionFrame {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionAnchor {
-    /// Returns the session sample rate this anchor counts frames in.
+    /// Returns the session coordinate system this anchor counts frames in.
+    ///
+    /// The axis is the session's own rate and epoch, so it travels from the
+    /// owner that chose it. A deck holds a replica of the axis and must not
+    /// reconstruct it, because a rate only changes across an epoch boundary
+    /// the owner declares.
     #[field(get, copy)]
-    sample_rate: NonZeroU32,
+    axis: SessionAxis,
     /// Returns the session beat playing at [`Self::frame`].
     #[field(get, copy)]
     beat: SessionBeat,
@@ -84,9 +91,9 @@ impl SessionAnchor {
         frame: SessionFrame,
         beat: SessionBeat,
         beats_per_second: f64,
-        sample_rate: NonZeroU32,
+        axis: SessionAxis,
     ) -> Result<Self, CoordinateError> {
-        let beats_per_frame = beats_per_second / f64::from(sample_rate.get());
+        let beats_per_frame = beats_per_second / f64::from(axis.sample_rate().get());
         if !beats_per_second.is_finite()
             || beats_per_second <= 0.0
             || !beats_per_frame.is_finite()
@@ -95,7 +102,7 @@ impl SessionAnchor {
             return Err(CoordinateError::NonInvertibleRate);
         }
         Ok(Self {
-            sample_rate,
+            axis,
             beat,
             frame,
             beats_per_second,
@@ -116,10 +123,16 @@ impl SessionAnchor {
         SessionBeat::new(f64::from(self.beat) + frames * self.beats_per_frame())
     }
 
+    /// The session sample rate this anchor counts frames in.
+    #[must_use]
+    pub fn sample_rate(self) -> NonZeroU32 {
+        self.axis.sample_rate()
+    }
+
     /// Session beats one output frame advances at this tempo.
     #[must_use]
     pub fn beats_per_frame(self) -> f64 {
-        self.beats_per_second / f64::from(self.sample_rate.get())
+        self.beats_per_second / f64::from(self.axis.sample_rate().get())
     }
 
     /// Inverse of [`Self::beat_at`], rounded to the nearest frame.
@@ -146,7 +159,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
+    use super::{CoordinateError, SessionAnchor, SessionAxis, SessionBeat, SessionFrame};
+    use crate::SessionEpoch;
 
     struct Consts;
 
@@ -169,7 +183,7 @@ mod tests {
             SessionFrame::new(frame),
             beat(at_beat),
             Consts::BEATS_PER_SECOND,
-            rate(),
+            SessionAxis::new(rate(), SessionEpoch::new(0)),
         )
         .expect("invariant: the fixture tempo is a positive rate")
     }
@@ -191,7 +205,12 @@ mod tests {
     fn a_tempo_that_is_not_a_positive_rate_is_refused() {
         for refused in [0.0, -2.0, f64::from_bits(1), f64::NAN, f64::INFINITY] {
             assert_eq!(
-                SessionAnchor::new(SessionFrame::new(0), beat(0.0), refused, rate()),
+                SessionAnchor::new(
+                    SessionFrame::new(0),
+                    beat(0.0),
+                    refused,
+                    SessionAxis::new(rate(), SessionEpoch::new(0)),
+                ),
                 Err(CoordinateError::NonInvertibleRate),
                 "tempo {refused} is not an invertible slope",
             );

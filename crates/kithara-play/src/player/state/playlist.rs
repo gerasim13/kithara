@@ -403,8 +403,9 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{
         AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment,
-        LoadGeneration, MapAxis, RegionPlan, RegionPlanSlot, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
+        LoadGeneration, MapAxis, RegionPlan, RegionPlanSlot, SessionAnchor, SessionAxis,
+        SessionBeat, SessionEpoch, SessionFrame, SyncOperationId, TransportRevision,
+        WarpMapRevision,
     };
 
     use super::{Playlist, Slot};
@@ -459,7 +460,7 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::default(),
             2.0,
-            sample_rate,
+            SessionAxis::new(sample_rate, SessionEpoch::new(0)),
         )
         .expect("fixture anchor is valid");
         crate::worker::FreeAdoptionRequest {

@@ -291,7 +291,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{
         BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment, RegionPlan, SessionAnchor,
-        SessionBeat, SessionEpoch, SessionFrame,
+        SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
     };
 
     use super::*;
@@ -303,7 +303,7 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::default(),
             2.0,
-            sample_rate,
+            SessionAxis::new(sample_rate, SessionEpoch::new(0)),
         )
         .expect("fixture anchor is valid");
         let owner = BeatGridSnapshot::session(

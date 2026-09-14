@@ -244,8 +244,8 @@ mod tests {
         AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRegion,
         BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
-        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
+        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis,
+        SessionBeat, SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
     };
 
     struct Consts;
@@ -321,7 +321,7 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
             2.0,
-            sample_rate(),
+            SessionAxis::new(sample_rate(), SessionEpoch::new(0)),
         )
         .expect("invariant: fixture tempo is invertible");
         let session = SessionGridView::new(
