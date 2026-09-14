@@ -416,15 +416,28 @@ impl<S> AudioControl for Audio<S> {
         required_frames: NonZeroUsize,
         presented_source: Option<SourceEnd>,
     ) -> RevisionFloorStatus {
-        self.ring.set_render_revision_floor(
+        let replacement_epoch = (self.session.seek_obs.epoch() != self.ring.validator.epoch)
+            .then(|| self.session.seek_obs.epoch());
+        let status = self.ring.set_render_revision_floor(
             revision,
             required_frames,
             presented_source,
-            (self.session.seek_obs.epoch() != self.ring.validator.epoch)
-                .then(|| self.session.seek_obs.epoch()),
+            replacement_epoch,
             &mut self.cursor,
             recv_ctx(&self.session, &self.runtime),
-        )
+        );
+        // A replacement epoch becomes presentable only once the producer has
+        // staged its configured preload for that epoch. Presenting on the
+        // frames one block happens to need discards the accumulated scratch
+        // and leaves the following callbacks starving.
+        match (status, replacement_epoch) {
+            (RevisionFloorStatus::ReadyForSeekPresentation, Some(epoch))
+                if !self.session.preload_gate.is_ready_for_epoch(epoch) =>
+            {
+                RevisionFloorStatus::WaitingForReplacement
+            }
+            _ => status,
+        }
     }
 
     fn sync_seek(&mut self) {
@@ -610,6 +623,42 @@ mod tests {
         assert_eq!(
             AudioControl::present_seek(&mut fixture.audio, scheduled.epoch),
             SeekPresentation::Current
+        );
+    }
+
+    #[kithara::test]
+    fn scheduled_seek_presentation_waits_for_the_epoch_preload(trim_silence: Vec<f32>) {
+        let mut fixture = AudioFixture::default();
+        let scheduled = fixture
+            .audio
+            .seek_handle()
+            .begin_scheduled(Duration::from_millis(250));
+        assert_eq!(
+            fixture.audio.session.seek.activate_scheduled(),
+            kithara_stream::ScheduledSeekActivation::Activated {
+                epoch: scheduled.epoch,
+            }
+        );
+        fixture
+            .data_tx
+            .try_push(Fetch::data(staged_chunk(&trim_silence), scheduled.epoch))
+            .expect("replacement pcm reaches the ring");
+
+        let required = NonZeroUsize::new(1).expect("one frame is non-zero");
+        assert_eq!(
+            AudioControl::set_render_revision_floor(&mut fixture.audio, 0, required, None),
+            RevisionFloorStatus::WaitingForReplacement
+        );
+
+        fixture
+            .audio
+            .session
+            .preload_gate
+            .signal_epoch(scheduled.epoch);
+
+        assert_eq!(
+            AudioControl::set_render_revision_floor(&mut fixture.audio, 0, required, None),
+            RevisionFloorStatus::ReadyForSeekPresentation
         );
     }
 
