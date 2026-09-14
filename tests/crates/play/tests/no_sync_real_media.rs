@@ -27,7 +27,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::PackagedSignal,
-    memory_asset_store, offline::OfflineHostHarness,
+    memory_asset_store, offline::OfflineHostHarness, usdt_trace,
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
@@ -285,6 +285,7 @@ async fn run_case(
     let max_block_frames =
         NonZeroU32::new(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
             .expect("block frames must be non-zero");
+    let _trace = usdt_trace::scope();
     let host = OfflineHostHarness::new(
         HostConfig::offline(pool_region.clone())
             .sample_rate(sample_rate)

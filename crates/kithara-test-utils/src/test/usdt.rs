@@ -1,4 +1,7 @@
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{
+    Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicBool, Ordering},
+};
 
 use kithara_platform::sync::{Arc, Notify};
 use tracing::{
@@ -31,6 +34,8 @@ struct State {
 static EVENTS: Mutex<State> = Mutex::new(State { events: Vec::new() });
 static SCOPE: Mutex<()> = Mutex::new(());
 static RECORDED: Mutex<Option<Arc<Notify>>> = Mutex::new(None);
+/// Lock-free gate for the probe hot path: set only while a [`Scope`] lives.
+static ARMED: AtomicBool = AtomicBool::new(false);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -47,14 +52,15 @@ pub fn scope() -> Scope {
     lock(&EVENTS).events.clear();
     let recorded = Arc::new(Notify::default());
     *lock(&RECORDED) = Some(Arc::clone(&recorded));
+    ARMED.store(true, Ordering::Release);
     Scope {
         recorded,
         _serial: serial,
     }
 }
 
-/// Every probe recorded so far, readable without holding a [`Scope`] so a
-/// harness can observe the running product between test-owned scopes.
+/// Every probe recorded by the live [`Scope`]. Probes fired while no scope
+/// is alive are dropped, so a test that never observes pays nothing.
 #[must_use]
 pub fn events() -> Vec<ProbeEvent> {
     lock(&EVENTS).events.clone()
@@ -84,6 +90,7 @@ impl Scope {
 
 impl Drop for Scope {
     fn drop(&mut self) {
+        ARMED.store(false, Ordering::Release);
         lock(&RECORDED).take();
     }
 }
@@ -101,6 +108,12 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
     }
 
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if !ARMED.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(recorded) = lock(&RECORDED).clone() else {
+            return;
+        };
         let mut visitor = ProbeVisitor::default();
         event.record(&mut visitor);
         let Some(probe) = visitor.probe else {
@@ -111,9 +124,7 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
             probe,
             fields: visitor.fields,
         });
-        if let Some(recorded) = lock(&RECORDED).as_ref() {
-            recorded.notify_one();
-        }
+        recorded.notify_one();
     }
 }
 
