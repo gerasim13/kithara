@@ -17,7 +17,7 @@ use kithara_integration_tests::{
     TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
-    usdt_trace::{self, ProbeEvent},
+    usdt_trace::{self, ProbeEvent, Scope},
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
@@ -145,6 +145,16 @@ fn tone_is_dominant(samples: &[f32], target: usize) -> bool {
         })
 }
 
+fn first_target_onset(samples: &[f32], command_frame: usize, target: usize) -> Option<usize> {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    (command_frame + TARGET_WINDOW_FRAMES..=frames).find_map(|end| {
+        let start = end - TARGET_WINDOW_FRAMES;
+        tone_is_dominant(&samples[start * channels..end * channels], target)
+            .then_some(start - command_frame)
+    })
+}
+
 async fn capture_frames(
     harness: &OfflinePlayerHarness,
     frames: usize,
@@ -163,15 +173,22 @@ async fn capture_frames(
 
 async fn capture_command_boundary(
     harness: &OfflinePlayerHarness,
+    trace: &Scope,
     target: usize,
     callback_frames: usize,
 ) -> Vec<f32> {
+    let mut publish_count = probe_count(&trace.events(), "publish");
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         let block = capture_frames(harness, callback_frames, callback_frames).await;
         samples.extend_from_slice(&block);
+        let after = trace.events();
+        let current_publish_count = probe_count(&after, "publish");
+        let published = current_publish_count > publish_count;
+        publish_count = current_publish_count;
         let frames = samples.len() / usize::from(CHANNELS);
-        if frames >= TARGET_WINDOW_FRAMES
+        if published
+            && frames >= TARGET_WINDOW_FRAMES
             && tone_is_dominant(
                 &samples[(frames - TARGET_WINDOW_FRAMES) * usize::from(CHANNELS)..],
                 target,
@@ -180,10 +197,31 @@ async fn capture_command_boundary(
             return samples;
         }
     }
+    let events = trace.events();
+    let publish = events
+        .iter()
+        .filter(|event| event.probe == "publish")
+        .count();
+    let rendered = events
+        .iter()
+        .filter(|event| event.probe == "render_committed")
+        .count();
+    let consumed = events
+        .iter()
+        .filter(|event| event.probe == "pcm_consumed")
+        .count();
+    let applied = events
+        .iter()
+        .filter(|event| event.probe == "rate_applied")
+        .count();
     panic!(
-        "precondition: no callback presented the initial tone at a transport boundary; last_rms={}",
+        "precondition: no callback presented the initial tone at a transport boundary; publish={publish}, rendered={rendered}, rate_applied={applied}, pcm_consumed={consumed}, last_rms={}",
         signal_rms(&samples)
     );
+}
+
+fn probe_count(events: &[ProbeEvent], name: &str) -> usize {
+    events.iter().filter(|event| event.probe == name).count()
 }
 
 async fn playing_queue(
@@ -253,98 +291,165 @@ async fn playing_queue(
     (harness, queue)
 }
 
-fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[ProbeEvent]) {
-    let target_rate_bits = u64::from(case.target_rate.to_bits());
-    let request_index = records
+fn revision_probe<'a>(
+    events: &'a [ProbeEvent],
+    name: &str,
+    field: &str,
+    revision: u64,
+) -> Option<&'a ProbeEvent> {
+    events
         .iter()
-        .rposition(|record| {
-            record.probe == "rate_requested"
-                && record.field("target_rate_bits") == Some(target_rate_bits)
-        })
+        .find(|event| event.probe == name && event.field(field) == Some(revision))
+}
+
+fn assert_response(
+    backend: StretchKind,
+    case: ResponseCase,
+    command_frame: usize,
+    samples: &[f32],
+    events: &[ProbeEvent],
+) {
+    let requested = events
+        .iter()
+        .rfind(|event| event.probe == "rate_requested")
         .unwrap_or_else(|| {
-            panic!("{backend} emitted no rate_requested USDT record for target rate")
+            let publish = events
+                .iter()
+                .filter(|event| event.probe == "publish")
+                .count();
+            let consumed = events
+                .iter()
+                .filter(|event| event.probe == "pcm_consumed")
+                .count();
+            let applied = events
+                .iter()
+                .filter(|event| event.probe == "rate_applied")
+                .count();
+            panic!(
+                "{backend} emitted no rate_requested probe; publish={publish}, rate_applied={applied}, pcm_consumed={consumed}"
+            )
         });
-    let revision = records[request_index]
+    let revision = requested
         .field("request_revision")
-        .expect("rate_requested carries request_revision");
-    let applied_index = records
-        .iter()
-        .enumerate()
-        .skip(request_index + 1)
-        .find_map(|(index, record)| {
-            (record.probe == "rate_applied" && record.field("request_revision") == Some(revision))
-                .then_some(index)
-        })
-        .unwrap_or_else(|| {
-            panic!("{backend} emitted no rate_applied USDT record for revision {revision}")
-        });
-    let consumed_index = records
-        .iter()
-        .enumerate()
-        .skip(applied_index + 1)
-        .find_map(|(index, record)| {
-            (record.probe == "pcm_consumed" && record.field("render_revision") == Some(revision))
-                .then_some(index)
-        })
-        .unwrap_or_else(|| {
-            panic!("{backend} emitted no pcm_consumed USDT record for revision {revision}")
-        });
-    let committed = records
-        .iter()
-        .skip(request_index + 1)
-        .find(|record| record.probe == "render_committed")
-        .unwrap_or_else(|| {
-            panic!("{backend} emitted no render_committed USDT record after the request")
-        });
-    let requested = &records[request_index];
-    let applied = &records[applied_index];
-    let consumed = &records[consumed_index];
+        .unwrap_or_else(|| panic!("{backend} request probe has no revision"));
     assert_eq!(
         requested.field("target_rate_bits"),
-        Some(target_rate_bits),
-        "wrong requested target rate"
+        Some(u64::from(case.target_rate.to_bits())),
+        "{backend} correlated the wrong final rate request"
     );
-    assert_eq!(
-        applied.field("request_revision"),
-        Some(revision),
-        "wrong applied revision"
+    let request_frame = requested
+        .field("session_frame")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} request probe has no session frame"));
+    let budget = i64::try_from(case.response_budget_frames).expect("case budget fits i64");
+    let observed_frames = samples
+        .len()
+        .checked_div(usize::from(CHANNELS))
+        .and_then(|frames| frames.checked_sub(command_frame))
+        .expect("captured output includes the command boundary");
+    let applied = revision_probe(events, "rate_applied", "request_revision", revision)
+        .unwrap_or_else(|| {
+            let applied: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "rate_applied")
+                .map(|event| {
+                    (
+                        event.field("request_revision"),
+                        event.field("session_frame"),
+                        event
+                            .field("applied_rate_bits")
+                            .and_then(|bits| u32::try_from(bits).ok())
+                            .map(f32::from_bits),
+                        event.field("source_start"),
+                        event.field("source_end"),
+                    )
+                })
+                .collect();
+            let presented: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "pcm_consumed")
+                .filter_map(|event| {
+                    event
+                        .field("render_revision")
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let rendered: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "render_committed")
+                .filter_map(|event| {
+                    event
+                        .field("source_start")
+                        .zip(event.field("source_end"))
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let published: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "publish")
+                .filter_map(|event| {
+                    event
+                        .field("source")
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let target_onset = first_target_onset(samples, command_frame, case.target_tone);
+            panic!(
+                "{backend} did not apply revision {revision} within {observed_frames} rendered output frames; response budget is {budget}; target_onset={target_onset:?}; applied={applied:?}; presented={presented:?}; rendered={rendered:?}; published={published:?}"
+            )
+        });
+    let consumed = revision_probe(events, "pcm_consumed", "render_revision", revision)
+        .unwrap_or_else(|| panic!("{backend} presented no PCM for {revision}"));
+    let applied_frame = applied
+        .field("session_frame")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} apply probe has no session frame"));
+    let applied_rate = applied
+        .field("applied_rate_bits")
+        .and_then(|bits| u32::try_from(bits).ok())
+        .map(f32::from_bits)
+        .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
+    let consumed_frame = consumed
+        .field("output_start")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} PCM probe has no output start"));
+    let applied_response = applied_frame
+        .checked_sub(request_frame)
+        .unwrap_or_else(|| panic!("{backend} applied revision before its request"));
+    let presented_response = consumed_frame
+        .checked_sub(request_frame)
+        .unwrap_or_else(|| panic!("{backend} presented revision before its request"));
+    assert!(
+        applied_response <= budget,
+        "{backend} applied revision {revision} after {applied_response} frames; budget is {budget}"
     );
-    assert_eq!(
-        consumed.field("render_revision"),
-        Some(revision),
-        "wrong consumed revision"
-    );
-    let applied_rate = f32::from_bits(
-        u32::try_from(
-            applied
-                .field("applied_rate_bits")
-                .expect("rate_applied carries rate"),
-        )
-        .expect("rate_applied rate bits fit into u32"),
+    assert!(
+        presented_response <= budget,
+        "{backend} presented revision {revision} after {presented_response} frames; applied after {applied_response} frames; apply-to-presentation delay is {} frames; budget is {budget}",
+        presented_response - applied_response
     );
     if case.smooth_frames > 1 {
         let low = case.initial_rate.min(case.target_rate);
         let high = case.initial_rate.max(case.target_rate);
         assert!(
             applied_rate > low && applied_rate < high,
-            "{backend} applied {applied_rate} instead of a smoothed rate between {low} and {high}"
+            "{backend} jumped from {} directly to {} instead of smoothing over {} output frames",
+            case.initial_rate,
+            applied_rate,
+            case.smooth_frames
         );
     }
+    let onset = first_target_onset(samples, command_frame, case.target_tone)
+        .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
+    let primed = revision_probe(events, "prime_activation", "request_revision", revision)
+        .map(|event| (event.field("source_frames"), event.field("output_frames")));
     assert!(
-        applied.field("source_start") <= applied.field("source_end"),
-        "invalid applied source span"
-    );
-    assert!(
-        consumed.field("output_start") <= consumed.field("output_end"),
-        "invalid consumed output span"
-    );
-    assert!(
-        consumed.field("source_start") <= consumed.field("source_end"),
-        "invalid consumed source span"
-    );
-    assert!(
-        committed.field("source_start") <= committed.field("source_end"),
-        "invalid committed source span"
+        onset <= case.response_budget_frames,
+        "{backend} target tone began after {onset} frames; applied after {applied_response}; presented after {presented_response}; budget is {}; primed={primed:?}",
+        case.response_budget_frames
     );
 }
 
@@ -356,19 +461,39 @@ async fn run_case(
     response_source: PathBuf,
 ) {
     let (harness, queue) = playing_queue(temp_dir, backend, backends, case, response_source).await;
+    let trace = usdt_trace::scope();
     let mut samples =
-        capture_command_boundary(&harness, case.initial_tone, case.callback_frames).await;
+        capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
     let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
     );
-    let trace = usdt_trace::scope();
+    let ready = trace.events();
+    let published_end = ready
+        .iter()
+        .rfind(|event| event.probe == "publish")
+        .and_then(|event| event.field("output_end"));
+    let consumed_end = ready
+        .iter()
+        .rfind(|event| event.probe == "pcm_consumed")
+        .and_then(|event| event.field("output_end"));
+    let published_end = published_end
+        .unwrap_or_else(|| panic!("{backend} command boundary has no published transport"));
+    let consumed_end = consumed_end
+        .unwrap_or_else(|| panic!("{backend} command boundary has no presented transport"));
+    assert!(
+        consumed_end <= published_end,
+        "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
+    );
     for command in 0..case.burst {
         queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
     }
     queue.set_rate(case.target_rate);
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
+    let events = trace.events();
+    drop(trace);
+
     let precommand_start = command_frame.saturating_sub(TARGET_WINDOW_FRAMES);
     let precommand =
         &samples[precommand_start * usize::from(CHANNELS)..command_frame * usize::from(CHANNELS)];
@@ -380,8 +505,7 @@ async fn run_case(
         !tone_is_dominant(precommand, case.target_tone),
         "{backend} already contained the target tone before set_rate"
     );
-    let records = trace.events();
-    assert_usdt_response(backend, case, &records);
+    assert_response(backend, case, command_frame, &samples, &events);
     drop(queue);
     harness.close().await;
 }

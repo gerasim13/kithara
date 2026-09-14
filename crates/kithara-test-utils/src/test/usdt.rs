@@ -128,4 +128,12 @@ impl Visit for ProbeVisitor {
     fn record_u64(&mut self, field: &Field, value: u64) {
         self.fields.push((field.name().to_owned(), value));
     }
+
+    /// Session-axis frames arrive as `i64`; a negative one has no `u64`
+    /// reading, so it stays absent and the reader asking for it fails loudly.
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        if let Ok(value) = u64::try_from(value) {
+            self.fields.push((field.name().to_owned(), value));
+        }
+    }
 }

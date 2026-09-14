@@ -1972,6 +1972,8 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
     CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls-stress --profile ci
@@ -1982,6 +1984,8 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -1994,6 +1998,8 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
     CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls-stress --profile ci
@@ -2004,6 +2010,8 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2016,6 +2024,8 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
     CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls-stress --profile ci
@@ -2026,6 +2036,8 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2038,6 +2050,8 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
     CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls-stress --profile ci
@@ -2048,6 +2062,8 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
