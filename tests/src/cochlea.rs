@@ -224,12 +224,7 @@ fn synchronization_failures_with(
             failures.push(format!("{label}: track {index} has no detected tempo"));
             continue;
         };
-        let marker_bpm = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
-        if (marker_bpm - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
-            failures.push(format!(
-                "{label}: track {index} tempo is {marker_bpm:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
-            ));
-        } else if estimate {
+        if estimate {
             let tempo = estimate_tempo(
                 &Audio {
                     samples: samples.to_vec(),
@@ -244,6 +239,13 @@ fn synchronization_failures_with(
                     "{label}: track {index} estimated tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 )),
                 None => failures.push(format!("{label}: track {index} has no detected tempo")),
+            }
+        } else {
+            let marker_bpm = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
+            if (marker_bpm - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
+                failures.push(format!(
+                    "{label}: track {index} tempo is {marker_bpm:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
+                ));
             }
         }
         if let Some(pair) = markers
