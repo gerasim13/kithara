@@ -32,6 +32,23 @@ jobs:
           Move-Item $root $dest
           Get-ChildItem $dest
 
+      - name: Install libclang, which bindgen loads at build time
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi'
+          $msi = Join-Path $env:RUNNER_TEMP 'llvm.msi'
+          $dest = 'C:\kithara-ci\llvm'
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          # An administrative install unpacks the payload and needs no
+          # elevation, which the runner account does not have.
+          $p = Start-Process msiexec -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=$dest") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec exited with $($p.ExitCode)" }
+          Get-ChildItem -Recurse -Filter 'libclang.dll' $dest | Select-Object -ExpandProperty FullName
+
       - name: Hand it to the runner service
         shell: powershell
         run: |
