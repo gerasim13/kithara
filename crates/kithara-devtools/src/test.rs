@@ -28,7 +28,9 @@ pub struct TestArgs {
 #[derive(Debug)]
 struct TestRequest {
     flash: Option<bool>,
-    lane: Option<String>,
+    /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
+    /// they bound what the touched paths may select.
+    lanes: Vec<String>,
     loom: Option<bool>,
     net_backend: Option<String>,
     no_block: Option<bool>,
@@ -39,7 +41,7 @@ struct TestRequest {
 impl TestRequest {
     fn parse(args: &[String]) -> Result<Self> {
         let mut request = Self {
-            lane: None,
+            lanes: Vec::new(),
             no_block: None,
             loom: None,
             net_backend: None,
@@ -79,7 +81,7 @@ impl TestRequest {
                     let value = iter
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--lane requires a value"))?;
-                    request.lane = Some(value.clone());
+                    request.lanes.push(value.clone());
                 }
                 "--net-backend" => {
                     let value = iter
@@ -101,7 +103,7 @@ impl TestRequest {
                 }
                 _ if arg.starts_with("--lane=") => {
                     let value = arg.trim_start_matches("--lane=");
-                    request.lane = Some(value.to_owned());
+                    request.lanes.push(value.to_owned());
                 }
                 _ if arg.starts_with("--net-backend=") => {
                     let value = arg.trim_start_matches("--net-backend=");
@@ -130,11 +132,8 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
 /// Run every lane the branch touched, serially, without letting the first
 /// failure hide the rest: this exists to name which lane broke.
 fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
-    if request.lane.is_some() {
-        bail!("--touched selects its own lanes and conflicts with --lane");
-    }
     let test = &project.test;
-    let selected = touched::lanes(test)?;
+    let selected = touched::lanes(test, &request.lanes)?;
     if selected.is_empty() {
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());
@@ -271,7 +270,11 @@ fn select_lane<'a>(
     config: &'a TestCommandConfig,
     request: &'a TestRequest,
 ) -> Result<(&'a str, &'a TestLaneConfig)> {
-    let explicit_lane = request.lane.as_deref();
+    let explicit_lane = match request.lanes.as_slice() {
+        [] => None,
+        [lane] => Some(lane.as_str()),
+        _ => bail!("more than one --lane needs --touched to choose between them"),
+    };
     let lane_name = match request.loom {
         Some(true) => {
             if config.loom_lane.is_empty() {

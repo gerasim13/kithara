@@ -2022,7 +2022,10 @@ steps = [
     "test",
     "run",
     "--touched",
-  ], label = "suites this push touches" },
+    "--lane=tooling",
+    "--lane=harness",
+    "--lane=fixtures",
+  ], label = "support suites this push touches" },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
