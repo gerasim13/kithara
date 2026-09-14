@@ -54,6 +54,12 @@ fn rhythm_wav_scenario_1(style: Style, layout: ChannelLayout) -> Vec<u8> {
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::house_124_right_only_pickup(Style::House, ChannelLayout::RightOnly)]
+fn rhythm_wav_scenario_2(style: Style, layout: ChannelLayout) -> Vec<u8> {
+    score::wav_with_layout(style, Control::OneBeatBarLate, layout)
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::house_124_left_only(Style::House)]
 #[case::downtempo_96_left_only(Style::Downtempo)]
 fn rhythm_wav_scenario_1_origin_zero(style: Style) -> Vec<u8> {
@@ -173,6 +179,19 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
 fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
         BeatArtifact::from(score::truth(style, Control::Aligned)),
+        Consts::RHYTHM_FRAMES,
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["rhythm_wav_scenario_2_{case}"]
+)]
+#[case::house_124_right_only_pickup(Style::House)]
+fn rhythm_expected_analysis_scenario_2(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth(style, Control::OneBeatBarLate)),
         Consts::RHYTHM_FRAMES,
     )
 }

@@ -393,6 +393,10 @@ const SCENARIO_1_DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_scenario_1_downtempo_96_left_only",
     "rhythm_wav_scenario_1_house_124_right_only",
 ];
+const SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP: &[&str] = &[
+    "rhythm_wav_scenario_1_downtempo_96_left_only",
+    "rhythm_wav_scenario_2_house_124_right_only_pickup",
+];
 const TECHNO_BREAKBEAT: &[&str] = &[
     "rhythm_wav_techno_132_aligned",
     "rhythm_wav_breakbeat_140_aligned",
@@ -423,6 +427,8 @@ pub(super) enum Provider {
 pub(super) const AMBIENT_TRIP_HOP_PROVIDER: Provider = Provider::Rhythm(AMBIENT_TRIP_HOP);
 pub(super) const DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(DOWNTEMPO_HOUSE);
 const SCENARIO_1_DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(SCENARIO_1_DOWNTEMPO_HOUSE);
+const SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP_PROVIDER: Provider =
+    Provider::Rhythm(SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP);
 pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_BREAKBEAT);
 pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
 
@@ -3570,8 +3576,11 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
     harness.failures.extend(underruns);
 
     let report = CochleaReport::measure(&capture, CHANNELS, case.sample_rate);
-    let (left_markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
-    let initial_launch_failures = scenario_1_scheduled_launch_failures(
+    let (left_markers, left_downbeats) =
+        lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let (right_markers, right_downbeats) =
+        lane_score_markers(&capture, 1, capture_start, case.sample_rate);
+    let mut initial_launch_failures = scenario_1_scheduled_launch_failures(
         &capture,
         &left_markers,
         capture_start,
@@ -3582,6 +3591,16 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
         case.sample_rate,
         case.start_bpm(),
     );
+    initial_launch_failures.extend(shared_phase_failures(
+        (&left_markers, &left_downbeats),
+        (&right_markers, &right_downbeats),
+        harness
+            .sync_activation
+            .expect("Scenario 1 sync request records its activation frame"),
+        case.sample_rate,
+        harness.block_frames,
+    ));
+    initial_launch_failures.extend(harness.failures.iter().cloned());
     if let Some(tap) = harness.tap.as_mut() {
         tap.evidence(
             "scenario_1",
@@ -3615,9 +3634,198 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
     drop(harness);
     assert!(
         initial_launch_failures.is_empty(),
-        "scenario 1 initial shared-tempo contract failed: {}",
+        "scenario 1 shared launch contract failed: {}",
         initial_launch_failures.join("; ")
     );
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn scenario_2_simultaneous_different_bpm_with_a_pickup(
+    #[future(awt)] source_scenario_2_downtempo_house_pickup_provider: PreparedSources,
+) {
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+    const CAPTURE_FRAMES: usize = 48_000 * 10;
+    let sources = &source_scenario_2_downtempo_house_pickup_provider;
+    let case = DOWNTEMPO_HOUSE_SYNC.paused();
+    let mut harness = ProductHarness::new_track_start(case, sources, 0).await;
+    for deck in &harness.decks {
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
+    }
+    prepare_fixture_grids(&mut harness, case, sources).await;
+
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(
+        prelaunch.iter().all(|sample| *sample == 0.0),
+        "scenario 2: prelaunch Host output must remain silent"
+    );
+    harness.mark("scenario-2-enable");
+    harness.request_sync(case).await;
+    harness.mark("scenario-2-simultaneous-host-start");
+    harness.play_all().await;
+    let capture_start = harness.rendered_frames;
+    let capture = harness
+        .capture_frames(case, CAPTURE_FRAMES, harness.block_frames)
+        .await;
+    harness.failures.extend(harness.underrun_failures());
+
+    let (left_markers, left_downbeats) =
+        lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let (right_markers, right_downbeats) =
+        lane_score_markers(&capture, 1, capture_start, case.sample_rate);
+    let activation = harness
+        .sync_activation
+        .expect("Scenario 2 sync request records its activation frame");
+    let mut failures = scenario_1_scheduled_launch_failures(
+        &capture,
+        &left_markers,
+        capture_start,
+        harness
+            .host_grid
+            .as_ref()
+            .expect("Scenario 2 sync request records the authoritative Host grid"),
+        case.sample_rate,
+        case.start_bpm(),
+    );
+    failures.extend(pickup_phase_failures(
+        (&left_markers, &left_downbeats),
+        (&right_markers, &right_downbeats),
+        activation,
+        case.sample_rate,
+        (case.start_bpm(), harness.block_frames),
+    ));
+    failures.extend(harness.failures.iter().cloned());
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "scenario_2",
+            serde_json::json!({
+                "verdict": if failures.is_empty() { "pass" } else { "fail" },
+                "fixture_generation": {
+                    "deck_0": "rhythm_wav_scenario_1_downtempo_96_left_only / rhythm_expected_analysis_scenario_1_downtempo_96_left_only",
+                    "deck_1": "rhythm_wav_scenario_2_house_124_right_only_pickup / rhythm_expected_analysis_scenario_2_house_124_right_only_pickup",
+                    "grid_source": "expected_analysis is serialized BeatArtifact::from(score::truth), not analyzer output",
+                    "pickup": "deck 1 opens on the last beat of a bar; its first downbeat is its second beat"
+                },
+                "mix_layout": "same-session diagnostic mix: deck 0 left only, deck 1 right only",
+                "sync_activation_frame": activation,
+                "capture_host_start_frame": capture_start,
+                "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+                "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+                "failures": failures,
+            }),
+        );
+    }
+    drop(harness);
+    assert!(
+        failures.is_empty(),
+        "scenario 2 shared launch contract with a pickup failed: {}",
+        failures.join("; ")
+    );
+}
+
+/// A deck whose track opens on a pickup leads into the shared downbeat.
+///
+/// The pickup is musical geometry: its beat sounds one beat before the bar it
+/// leads into, so the lane starts earlier than the aligned lane while both
+/// lanes still place their downbeats on the same Host frames.
+fn pickup_phase_failures(
+    aligned: (&[u64], &[u64]),
+    pickup: (&[u64], &[u64]),
+    activation: u64,
+    sample_rate: u32,
+    (target_bpm, block_frames): (f64, usize),
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let period = (f64::from(sample_rate) * 60.0 / target_bpm).round() as u64;
+    match (aligned.0.first(), pickup.0.first()) {
+        (Some(first_aligned), Some(first_pickup))
+            if *first_aligned == first_pickup.saturating_add(period) => {}
+        (Some(first_aligned), Some(first_pickup)) => failures.push(format!(
+            "pickup lane opens at Host frame {first_pickup}, expected one {period}-frame beat before the aligned lane's {first_aligned}"
+        )),
+        (aligned_first, pickup_first) => failures.push(format!(
+            "a lane has no beat marker: aligned {aligned_first:?}, pickup {pickup_first:?}"
+        )),
+    }
+    failures.extend(shared_bar_phase_failures(
+        aligned.1,
+        pickup.1,
+        activation,
+        sample_rate,
+        block_frames,
+    ));
+    failures
+}
+
+/// Beat and bar phase two same-session lanes must share once both decks sound.
+///
+/// Beats compare from the launch onward. Downbeats compare only after the
+/// launch gate has settled: the gate opens smoothly, so the first accent of
+/// every deck is attenuated by the same amount and a relative-threshold
+/// detector may classify it differently on lanes of different loudness.
+fn shared_phase_failures(
+    left: (&[u64], &[u64]),
+    right: (&[u64], &[u64]),
+    activation: u64,
+    sample_rate: u32,
+    block_frames: usize,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if right.0 != left.0 {
+        failures.push(format!(
+            "right deck beats {:?} do not land on the left deck's Host beats {:?}",
+            right.0, left.0
+        ));
+    }
+    failures.extend(shared_bar_phase_failures(
+        left.1,
+        right.1,
+        activation,
+        sample_rate,
+        block_frames,
+    ));
+    failures
+}
+
+/// Bar phase two lanes must share once the launch gate has settled.
+///
+/// The gate opens smoothly, so the first accent of every deck is attenuated by
+/// the same amount and a relative-threshold detector may classify it
+/// differently on lanes of different loudness; comparison starts past it.
+fn shared_bar_phase_failures(
+    left: &[u64],
+    right: &[u64],
+    activation: u64,
+    sample_rate: u32,
+    block_frames: usize,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let gate = kithara::play::DEFAULT_GATE_SMOOTHING;
+    let settle = (f64::from(sample_rate)
+        * f64::from(gate.smooth_seconds)
+        * (1.0 / (2.0 * f64::from(gate.settle_epsilon))).ln())
+    .ceil() as u64
+        + u64::try_from(block_frames).expect("block frames fit u64");
+    let settled_from = activation + settle;
+    let settled = |downbeats: &[u64]| {
+        downbeats
+            .iter()
+            .copied()
+            .filter(|frame| *frame >= settled_from)
+            .collect::<Vec<_>>()
+    };
+    let (left_bars, right_bars) = (settled(left), settled(right));
+    if left_bars.is_empty() {
+        failures.push(format!(
+            "the aligned lane has no downbeat after the launch gate settles at Host frame {settled_from}"
+        ));
+    }
+    if right_bars != left_bars {
+        failures.push(format!(
+            "one lane's downbeats {right_bars:?} do not share the other lane's bar phase {left_bars:?}"
+        ));
+    }
+    failures
 }
 
 fn scenario_1_scheduled_launch_failures(
@@ -4112,6 +4320,11 @@ async fn source_downtempo_house_provider() -> PreparedSources {
 #[kithara::fixture]
 async fn source_scenario_1_downtempo_house_provider() -> PreparedSources {
     prepared_sources(SCENARIO_1_DOWNTEMPO_HOUSE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_scenario_2_downtempo_house_pickup_provider() -> PreparedSources {
+    prepared_sources(SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP_PROVIDER).await
 }
 
 #[kithara::fixture]
