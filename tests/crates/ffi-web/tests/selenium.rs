@@ -29,6 +29,9 @@ impl Consts {
     const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
     const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
+    /// The `script.RealmType` a Web Worker's realm reports.
+    const DEDICATED_WORKER_REALM: &'static str = "dedicated-worker";
+
     /// Installed before the page's own scripts run (via CDP
     /// `Page.addScriptToEvaluateOnNewDocument` for Chrome, and again as a
     /// same-origin script right after `goto()` for browsers without CDP
@@ -1066,6 +1069,13 @@ impl WasmPlayerSelenium {
     /// service workers, shared workers or worklets. The equivalent Chrome
     /// `DevTools` call answers this browser only; every browser this lane can
     /// name speaks `BiDi`.
+    ///
+    /// The realm type is selected here rather than by the `type` argument of
+    /// `script.getRealms`: Firefox implements only `"window"` there and
+    /// rejects every other value as an unsupported operation, so asking the
+    /// browser to filter answers nothing in one of the two browsers this lane
+    /// names. Every realm carries its own type, and reading it is the same
+    /// answer in both.
     async fn count_web_workers(&self) -> Result<(usize, Vec<String>), String> {
         let bidi = self
             .driver
@@ -1075,7 +1085,7 @@ impl WasmPlayerSelenium {
         let realms = bidi
             .send(GetRealms {
                 context: None,
-                r#type: Some("dedicated-worker".to_owned()),
+                r#type: None,
             })
             .await
             .map_err(|err| format!("BiDi script.getRealms failed: {err}"))?;
@@ -1083,6 +1093,7 @@ impl WasmPlayerSelenium {
         let workers: Vec<String> = realms
             .realms
             .into_iter()
+            .filter(|realm| realm.realm_type == Consts::DEDICATED_WORKER_REALM)
             .map(|realm| realm.origin)
             .collect();
 
