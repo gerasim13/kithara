@@ -56,4 +56,4 @@ jobs:
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.
       - name: Run tests
-        run: just test --net-backend=none
+        run: just test run --net-backend=none
