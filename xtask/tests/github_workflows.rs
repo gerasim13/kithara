@@ -1184,7 +1184,7 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        "(inputs.kind || 'nightly') == 'nightly'",
+        "(inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'",
     ] {
         assert!(
             condition.contains(contract),
@@ -1266,6 +1266,23 @@ fn the_dispatcher_has_one_cron_per_cadence() {
         assert_eq!(
             mapping_field(with, "only").as_str(),
             Some("${{ inputs.only || '' }}")
+        );
+    }
+
+    // The workflows a night runs beside the fan-out admit themselves by that
+    // same cadence. Written as `inputs.kind || 'nightly'`, a scheduled run
+    // carries no input and each of them called itself nightly whichever cron
+    // fired: the Saturday run then drove the fan-out weekly and these four
+    // nightly, and a week's run also spent the fleet's hours on the repeated
+    // run that is declared nightly-only.
+    let cadence_expression = cadence.trim_start_matches("${{ ").trim_end_matches(" }}");
+    for name in ["network", "windows", "ui", "stress"] {
+        let condition = mapping_field(workflow_job(jobs, name), "if")
+            .as_str()
+            .expect("a nightly-only workflow states the cadence it runs in");
+        assert!(
+            condition.contains(&format!("({cadence_expression}) == 'nightly'")),
+            "job `{name}` resolves its cadence without reading the cron: {condition}"
         );
     }
 
