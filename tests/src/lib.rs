@@ -104,6 +104,7 @@ pub mod rng;
 pub mod server_url;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod storage_ext;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod swallow_detector;
 #[cfg(all(
     any(feature = "all", feature = "audio", feature = "wasm"),
