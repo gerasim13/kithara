@@ -24,6 +24,7 @@ use serde_json::Value;
 use crate::{
     artifact_timeline::ArtifactTimeline,
     bufpool_ext::{TestPools, pools},
+    underrun_ledger::UnderrunLedger,
 };
 
 const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
@@ -111,6 +112,16 @@ impl AudioArtifactTap {
         self.evidence.insert(key.to_owned(), value);
     }
 
+    /// Per-track ledger of every starved render this capture observed.
+    ///
+    /// Each entry carries the output interval the feeder silenced and the source
+    /// frontier it stopped at, so a starved capture is read at its own frames
+    /// instead of through a bare counter.
+    #[must_use]
+    pub fn underrun_ledger(&self) -> UnderrunLedger {
+        UnderrunLedger::from_probes(&self.probes.snapshot())
+    }
+
     /// Publish a separately labeled test reference without altering the raw tap output.
     pub fn write_reference(&self, label: &str, pcm: &[f32]) -> io::Result<PathBuf> {
         if !pcm.len().is_multiple_of(usize::from(self.channels)) {
@@ -140,7 +151,10 @@ impl Drop for AudioArtifactTap {
                 None
             }
         };
-        self.timeline.record_probes(&self.probes.snapshot());
+        let probes = self.probes.snapshot();
+        let underruns = UnderrunLedger::from_probes(&probes);
+        self.timeline.record_probes(&probes);
+        self.timeline.record_underruns(&underruns);
         for (&track, grid) in &self.source_grids {
             self.timeline.record_source_grid(track, grid);
         }
@@ -165,6 +179,7 @@ impl Drop for AudioArtifactTap {
             "output": output,
             "timeline": timeline,
             "timeline_events": self.timeline.events(),
+            "underruns": underruns,
             "evidence": self.evidence,
         });
         match self

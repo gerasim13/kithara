@@ -10,6 +10,8 @@ use kithara_test_utils::probe::capture::ProbeEvent;
 use num_traits::ToPrimitive;
 use serde::Serialize;
 
+use crate::underrun_ledger::UnderrunLedger;
+
 const WIDTH: u64 = 1_280;
 const LEFT: u64 = 180;
 const RIGHT: u64 = 24;
@@ -195,7 +197,7 @@ impl ArtifactTimeline {
         let plot_width = WIDTH - LEFT - RIGHT;
         let x = |frame: u64| LEFT + frame.saturating_sub(start) * plot_width / (end - start);
         let mut svg = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {WIDTH} {height}\"><style>text{{font:12px monospace;fill:#d7dde8}}.lane{{stroke:#465064}}.grid{{stroke:#70809b}}.command{{stroke:#f4c95d}}.planned{{stroke:#80cbc4}}.presented{{stroke:#81c784}}.error{{stroke:#ef5350}}.event{{stroke-width:3}}</style><rect width=\"100%\" height=\"100%\" fill=\"#11151d\"/>"
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {WIDTH} {height}\"><style>text{{font:12px monospace;fill:#d7dde8}}.lane{{stroke:#465064}}.grid{{stroke:#70809b}}.command{{stroke:#f4c95d}}.planned{{stroke:#80cbc4}}.presented{{stroke:#81c784}}.error{{stroke:#ef5350}}.underrun{{stroke:#ef5350;stroke-width:7}}.event{{stroke-width:3}}</style><rect width=\"100%\" height=\"100%\" fill=\"#11151d\"/>"
         );
         for (lane, index) in &lanes {
             let y = 30 + u64::try_from(*index).unwrap_or(0) * LANE_HEIGHT;
@@ -261,6 +263,36 @@ impl ArtifactTimeline {
             &format!("consumed PCM revision {revision}"),
             Some((source_start, source_end)),
         );
+    }
+
+    /// Place the silenced suffix of every starved render on its track's lane.
+    ///
+    /// Each span starts where real PCM stopped and ends where the block did: the
+    /// drawn interval is the silence an oracle later reads as a missing event.
+    pub fn record_underruns(&mut self, ledger: &UnderrunLedger) {
+        for event in &ledger.events {
+            let silence = event.silence();
+            let lane = event.track_id.map_or_else(
+                || "pcm-untracked".to_owned(),
+                |track| format!("pcm-track-{track}"),
+            );
+            let source_end = event
+                .source_end
+                .map_or_else(String::new, |frame| format!(", source end {frame}"));
+            self.span(
+                &lane,
+                silence.start,
+                silence.end,
+                "underrun",
+                &format!(
+                    "silenced {} of {} frames{source_end}",
+                    silence.end - silence.start,
+                    event.requested_frames,
+                ),
+                None,
+            );
+        }
+        self.compact();
     }
 
     fn record_warp_plan(&mut self, probe: &ProbeEvent) {

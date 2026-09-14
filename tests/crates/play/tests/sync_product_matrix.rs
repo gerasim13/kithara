@@ -52,6 +52,7 @@ use kithara_integration_tests::{
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
+    underrun_ledger::UnderrunLedger,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -608,12 +609,48 @@ pub(super) async fn prepared_sources(provider: Provider) -> PreparedSources {
 
 impl ProductHarness {
     pub(super) fn underrun_failures(&self) -> Vec<String> {
-        self.player_controls
+        let ledger = self.tap.as_ref().map(AudioArtifactTap::underrun_ledger);
+        let mut failures: Vec<String> = self
+            .player_controls
             .iter()
             .enumerate()
             .filter_map(|(deck, control)| {
                 let count = control.rt_metrics()?.underruns();
-                (count > 0).then(|| format!("deck {deck} rendered with {count} PCM underruns"))
+                (count > 0).then(|| {
+                    let site = ledger
+                        .as_ref()
+                        .map(|ledger| self.underrun_site(ledger, deck))
+                        .unwrap_or_default();
+                    format!("deck {deck} rendered with {count} PCM underruns{site}")
+                })
+            })
+            .collect();
+        if let Some(unparsed) = ledger.map(|ledger| ledger.unparsed).filter(|n| *n > 0) {
+            failures.push(format!(
+                "{unparsed} PCM underrun probes carried no output interval"
+            ));
+        }
+        failures
+    }
+
+    /// Name the output frames each of this deck's tracks lost, from the capture's ledger.
+    fn underrun_site(&self, ledger: &UnderrunLedger, deck: usize) -> String {
+        let tracks = ledger.tracks();
+        self.ids
+            .get(deck)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| {
+                let track = tracks
+                    .iter()
+                    .find(|track| track.track_id == Some(id.as_u64()))?;
+                Some(format!(
+                    "; track {}: {} frames silenced in output {}..{}",
+                    id.as_u64(),
+                    track.silenced_frames,
+                    track.first_output_frame,
+                    track.last_output_frame,
+                ))
             })
             .collect()
     }
