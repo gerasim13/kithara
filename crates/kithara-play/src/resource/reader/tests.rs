@@ -338,6 +338,11 @@ impl AudioControl for RevisionReader {
     }
 }
 
+/// The rate the fixture plans count asset frames of.
+fn fixture_rate() -> NonZeroU32 {
+    NonZeroU32::new(Consts::SAMPLE_RATE).expect("invariant: fixture rate is non-zero")
+}
+
 fn scheduled_revision_resource(
     activation_output: i64,
     replacement_frames: usize,
@@ -347,7 +352,7 @@ fn scheduled_revision_resource(
         SessionFrame::new(activation_output),
         kithara_warp::SessionBeat::default(),
     );
-    let plan = RegionPlan::new(vec![GridSegment::new(0, 10_000, 2.0)])
+    let plan = RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 10_000, 2.0)])
         .expect("fixture plan")
         .with_activation(activation);
     let slot = Arc::new(RegionPlanSlot::default());
@@ -374,7 +379,7 @@ fn free_activation_replaces_a_128_frame_refill_before_its_target_is_presented() 
     );
     let slot = Arc::new(RegionPlanSlot::default());
     slot.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 10_000, 2.0)])
+        RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 10_000, 2.0)])
             .expect("fixture plan")
             .with_free_activation(activation, manual_rate),
     )));

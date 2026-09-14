@@ -102,12 +102,15 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(controls);
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 0.125),
-            GridSegment::new(1, 2, 0.25),
-            GridSegment::new(2, 3, 0.125),
-            GridSegment::new(3, 4, 0.5),
-        ])
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![
+                GridSegment::new(0, 1, 0.125),
+                GridSegment::new(1, 2, 0.25),
+                GridSegment::new(2, 3, 0.125),
+                GridSegment::new(3, 4, 0.5),
+            ],
+        )
         .expect("one-frame regions are ordered and non-empty"),
     )));
     let pools = fx.pools.clone();
@@ -154,11 +157,14 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(controls);
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 1.0),
-            GridSegment::new(1, 2, 0.75),
-            GridSegment::new(2, 3, 0.25),
-        ])
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![
+                GridSegment::new(0, 1, 1.0),
+                GridSegment::new(1, 2, 0.75),
+                GridSegment::new(2, 3, 0.25),
+            ],
+        )
         .expect("fixture regions are contiguous"),
     )));
     let pools = fx.pools.clone();
@@ -222,11 +228,14 @@ fn rendered_source_frontier_excludes_pending_source(
         .source_frames();
     assert!(source_latency <= fx.source_block_frames.get());
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(
-            u64::try_from(source_latency).expect("source latency fits u64") + 1,
-            u64::try_from(source_latency).expect("source latency fits u64") + 2,
-            0.25,
-        )])
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![GridSegment::new(
+                u64::try_from(source_latency).expect("source latency fits u64") + 1,
+                u64::try_from(source_latency).expect("source latency fits u64") + 2,
+                0.25,
+            )],
+        )
         .expect("fixture region is valid"),
     )));
 
@@ -262,7 +271,8 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 0.75)])
+            .expect("fixture region is valid"),
     )));
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
@@ -486,7 +496,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     reference_controls.set_backend(backend);
     let (mut reference, reference_plan) = planned_renderer(Arc::clone(&reference_controls));
     reference_plan.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 2.0)]).expect("fixture region is valid"),
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 2.0)])
+            .expect("fixture region is valid"),
     )));
     let pools = reference.pools.clone();
     let reference_first = render_serviced(
@@ -511,10 +522,10 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 1.6),
-            GridSegment::new(1, 2, 0.25),
-        ])
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![GridSegment::new(0, 1, 1.6), GridSegment::new(1, 2, 0.25)],
+        )
         .expect("fixture regions are contiguous"),
     )));
     let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
@@ -562,7 +573,8 @@ fn reset_discards_pending_span_before_new_timeline(
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
     plan.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 0.75)])
+            .expect("fixture region is valid"),
     )));
     let pools = fx.pools.clone();
     let source = warp_sine[..(2) * 2].to_vec();

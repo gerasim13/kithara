@@ -150,9 +150,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return false;
         };
-        grid.segments
-            .region_plan(self.runtime.core.engine.output_sample_rate())
-            .is_ok()
+        grid.segments.region_plan().is_ok()
             && self
                 .runtime
                 .core
@@ -565,7 +563,7 @@ where
         let grid_stamp = grid.snapshot.stamp();
         let plan = Arc::new(
             grid.segments
-                .region_plan(self.runtime.core.engine.output_sample_rate())
+                .region_plan()
                 .map_err(|_| PlayError::InvalidTrackGrid { item })?,
         );
         let slot = self.runtime.slot().ok_or(PlayError::NoActiveSlot)?;

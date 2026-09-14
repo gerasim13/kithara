@@ -407,18 +407,22 @@ where
         ));
     }
 
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
+    /// Region covering the decoded frame `frame`, plus whether the playhead
+    /// just crossed out of a previously resolved region (a plan boundary or a
+    /// seek).
+    ///
+    /// The plan measures the asset, so the boundaries reach this axis through
+    /// the rate the decoded stream carries. The resolved region is cached, and
+    /// the conversion runs only when the playhead leaves it.
     pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
         if let Some(r) = self.region
             && r.contains(frame)
         {
             return r;
         }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
+        let next = self.plan.as_ref().map_or(ActiveRegion::UNBOUNDED, |p| {
+            p.region_at(frame, self.spec.sample_rate)
+        });
         self.region = Some(next);
         next
     }

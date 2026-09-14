@@ -209,7 +209,7 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     let manual_rate = controls.rate_target();
     let (mut renderer, slot, publisher) = planned_renderer_with_publisher(Arc::clone(&controls));
     let revision = WarpMapRevision::first();
-    let plan = RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+    let plan = RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
         .expect("fixture plan")
         .with_free_activation(
             WarpMap::identity(revision).reanchor(0, SessionFrame::new(0), SessionBeat::default()),
@@ -325,7 +325,7 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     controls.set_speed(0.5);
     let reset_rate = controls.rate_target();
     slot.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("replacement Free plan")
             .with_free_activation(
                 WarpMap::identity(reset_revision).reanchor(
@@ -357,7 +357,7 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         .checked_next()
         .expect("fixture map revision advances again");
     slot.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("supersedable Free plan")
             .with_free_activation(
                 WarpMap::identity(superseded_revision).reanchor(
@@ -377,7 +377,7 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         .expect("supersedable Free activation is plannable");
     assert!(renderer.free_handoff_latch.is_some());
     slot.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("plan superseding the Free map"),
     )));
     renderer.prepare(spec());
@@ -420,7 +420,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
 fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_frames: usize) {
     let controls = StretchControls::new(1.0);
     let (mut renderer, slot) = planned_renderer(controls);
-    let plan = RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+    let plan = RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
         .expect("fixture plan")
         .with_activation(WarpMap::identity(WarpMapRevision::first()).reanchor(
             16,
@@ -450,7 +450,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let mut renderer = warp.renderer(spec(), pools());
     let revision = WarpMapRevision::from_raw(NonZero::new(3).expect("fixture revision"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("fixture plan")
             .with_activation(WarpMap::identity(revision).reanchor(
                 16,
@@ -544,7 +544,7 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
     let revision =
         WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.6)])
+        RegionPlan::new(spec.sample_rate, vec![GridSegment::new(0, u64::MAX, 1.6)])
             .expect("fixture plan")
             .with_activation(WarpMap::identity(revision).reanchor(
                 cue,
@@ -610,7 +610,7 @@ fn post_seek_pcm_passing_the_activation_source_keeps_its_own_output_frontier() {
     let revision =
         WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
             .expect("fixture plan")
             .with_activation(WarpMap::identity(revision).reanchor(
                 cue,
@@ -661,7 +661,8 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
         .prepare_quantum(input.meta, input.frames())
         .expect("current plan accepts the source quantum");
     slot.install(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)]).expect("replacement plan"),
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("replacement plan"),
     )));
     renderer.prepare(spec());
 

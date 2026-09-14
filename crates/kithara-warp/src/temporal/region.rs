@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
 
@@ -27,8 +29,12 @@ impl FreeActivation {
     }
 }
 
-/// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
-/// source frames with one asset tempo.
+/// One uniform-tempo region of the grid: `[start_frame, end_frame)` in asset
+/// frames with one asset tempo.
+///
+/// The boundaries count frames of the asset itself, so together with the
+/// plan's asset rate they name an exact instant in the recording rather than a
+/// position on whatever axis a deck happens to render.
 #[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]
@@ -52,11 +58,20 @@ impl GridSegment {
 }
 
 /// Per-region stretch plan: sorted, non-overlapping `[start, end)` segments in
-/// source frames (`AudioChunkInfo.frame_offset` space), each with its asset tempo.
+/// asset frames, each with its asset tempo.
+///
+/// A segment boundary is the exact ratio of its frame to `asset_rate`, so the
+/// plan describes instants of the recording and outlives any output rate. The
+/// renderer names the rate its decoded stream carries when it looks a region
+/// up, and the boundaries cross to that axis there in exact integer
+/// arithmetic.
 #[derive(Debug, Clone, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct RegionPlan {
+    /// Returns the sample rate the segment boundaries count frames of.
+    #[field(get, copy)]
+    asset_rate: NonZeroU32,
     /// Exact source/output relation prepared for this plan.
     #[field(with, option_set_some)]
     activation: Option<WarpCursor>,
@@ -85,11 +100,15 @@ pub enum RegionPlanError {
 }
 
 impl RegionPlan {
-    /// Build a plan from `segments`, validating order and non-overlap.
+    /// Build a plan from `segments` measured in frames of `asset_rate`,
+    /// validating order and non-overlap.
     ///
     /// # Errors
     /// Returns a [`RegionPlanError`] naming the first offending segment.
-    pub fn new(segments: Vec<GridSegment>) -> Result<Self, RegionPlanError> {
+    pub fn new(
+        asset_rate: NonZeroU32,
+        segments: Vec<GridSegment>,
+    ) -> Result<Self, RegionPlanError> {
         for (index, s) in segments.iter().enumerate() {
             if s.start_frame() >= s.end_frame() {
                 return Err(RegionPlanError::Inverted { index });
@@ -105,33 +124,68 @@ impl RegionPlan {
             }
         }
         Ok(Self {
+            asset_rate,
             activation: None,
             free_activation: None,
             segments,
         })
     }
 
-    /// Resolve the region covering `frame`: a plan segment, or the gap
-    /// between segments (unknown tempo).
+    /// Resolve the region covering the decoded frame `frame` of a stream
+    /// carried at `output_rate`: a plan segment, or the gap between segments
+    /// (unknown tempo).
+    ///
+    /// The query crosses into asset frames and the resolved boundaries cross
+    /// back, both as exact integer ratios, so a plan resolves the same instant
+    /// of the recording at every output rate.
     #[must_use]
-    pub fn region_at(&self, frame: u64) -> ActiveRegion {
-        let idx = self.segments.partition_point(|s| s.end_frame() <= frame);
-        match self.segments.get(idx) {
-            Some(s) if s.start_frame() <= frame => {
-                ActiveRegion::new(s.start_frame(), s.end_frame(), Some(s.beats_per_second()))
+    pub fn region_at(&self, frame: u64, output_rate: NonZeroU32) -> ActiveRegion {
+        let asset_frame = self.asset_frame(frame, output_rate);
+        let idx = self
+            .segments
+            .partition_point(|s| s.end_frame() <= asset_frame);
+        let region = match self.segments.get(idx) {
+            Some(s) if s.start_frame() <= asset_frame => {
+                (s.start_frame(), s.end_frame(), Some(s.beats_per_second()))
             }
-            Some(s) => ActiveRegion::new(
+            Some(s) => (
                 idx.checked_sub(1)
                     .map_or(0, |prev| self.segments[prev].end_frame()),
                 s.start_frame(),
                 None,
             ),
-            None => ActiveRegion::new(
+            None => (
                 self.segments.last().map_or(0, GridSegment::end_frame),
                 u64::MAX,
                 None,
             ),
-        }
+        };
+        ActiveRegion::new(
+            self.output_frame(region.0, output_rate),
+            self.output_frame(region.1, output_rate),
+            region.2,
+        )
+    }
+
+    /// The asset frame a decoded frame of an `output_rate` stream falls in.
+    ///
+    /// Flooring the exact ratio keeps the comparison against a whole segment
+    /// boundary faithful, because a boundary is itself a whole asset frame.
+    fn asset_frame(&self, frame: u64, output_rate: NonZeroU32) -> u64 {
+        let scaled = u128::from(frame) * u128::from(self.asset_rate.get());
+        u64::try_from(scaled / u128::from(output_rate.get())).unwrap_or(u64::MAX)
+    }
+
+    /// The first decoded frame of an `output_rate` stream that reaches the
+    /// asset frame `frame`.
+    ///
+    /// Rounding up makes the converted bounds the exact preimage of the asset
+    /// span, so a region covers precisely the output frames whose asset
+    /// instants lie inside it.
+    fn output_frame(&self, frame: u64, output_rate: NonZeroU32) -> u64 {
+        let rate = u128::from(self.asset_rate.get());
+        let scaled = u128::from(frame) * u128::from(output_rate.get());
+        u64::try_from(scaled.div_ceil(rate)).unwrap_or(u64::MAX)
     }
 
     /// Attach the manual context that becomes authoritative at this Free activation.
@@ -216,36 +270,76 @@ impl ActiveRegion {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{GridSegment, RegionPlan, RegionPlanError, RegionPlanSlot};
     use crate::{SessionFrame, WarpMap, WarpMapRevision};
 
+    const ASSET_RATE: u32 = 48_000;
+
+    fn asset_rate() -> NonZeroU32 {
+        NonZeroU32::new(ASSET_RATE).expect("invariant: fixture asset rate is non-zero")
+    }
+
     fn seg(start: u64, end: u64, ratio: f64) -> GridSegment {
         GridSegment::new(start, end, ratio)
+    }
+
+    fn plan_of(segments: Vec<GridSegment>) -> Result<RegionPlan, RegionPlanError> {
+        RegionPlan::new(asset_rate(), segments)
     }
 
     #[kithara::test(native)]
     fn plan_rejects_invalid_segments() {
         assert!(matches!(
-            RegionPlan::new(vec![seg(10, 10, 1.0)]),
+            plan_of(vec![seg(10, 10, 1.0)]),
             Err(RegionPlanError::Inverted { index: 0 })
         ));
         assert!(matches!(
-            RegionPlan::new(vec![seg(0, 10, 0.0)]),
+            plan_of(vec![seg(0, 10, 0.0)]),
             Err(RegionPlanError::Ratio { index: 0, .. })
         ));
         assert!(matches!(
-            RegionPlan::new(vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]),
+            plan_of(vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]),
             Err(RegionPlanError::Overlap { index: 1 })
         ));
     }
 
     #[kithara::test(native)]
+    fn a_plan_resolves_the_same_instant_at_every_output_rate() {
+        let native_rate = NonZeroU32::new(44_100).expect("invariant: fixture rate is non-zero");
+        let plan = RegionPlan::new(native_rate, vec![seg(0, 44_100, 2.0)]).expect("valid plan");
+
+        let native = plan.region_at(0, native_rate);
+        let resampled = plan.region_at(0, asset_rate());
+
+        assert_eq!(
+            (native.start(), native.end()),
+            (0, 44_100),
+            "one asset second is one second of a 44.1k stream"
+        );
+        assert_eq!(
+            (resampled.start(), resampled.end()),
+            (0, 48_000),
+            "the same asset second is one second of a 48k stream"
+        );
+        assert!(
+            resampled.contains(47_999) && !resampled.contains(48_000),
+            "the converted bound is the exact preimage of the asset span"
+        );
+        assert_eq!(
+            native.beats_per_second(),
+            resampled.beats_per_second(),
+            "resampling moves frames, not tempo"
+        );
+    }
+
+    #[kithara::test(native)]
     fn lookup_covers_segments_and_gaps() {
-        let plan =
-            RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
+        let plan = plan_of(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
         let cases = [
             (0_u64, 0_u64, 100_u64, None),
             (150, 100, 200, Some(1.1)),
@@ -254,7 +348,7 @@ mod tests {
             (450, 400, u64::MAX, None),
         ];
         for (frame, start, end, correction) in cases {
-            let region = plan.region_at(frame);
+            let region = plan.region_at(frame, asset_rate());
             assert_eq!((region.start(), region.end()), (start, end));
             assert_eq!(region.beats_per_second(), correction);
             assert!(region.contains(frame));
@@ -268,7 +362,7 @@ mod tests {
             SessionFrame::new(48_000),
             crate::SessionBeat::default(),
         );
-        let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
+        let plan = plan_of(vec![seg(0, 96_000, 2.0)])
             .expect("fixture plan")
             .with_activation(activation);
 
@@ -283,7 +377,7 @@ mod tests {
             SessionFrame::new(48_000),
             crate::SessionBeat::default(),
         );
-        let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
+        let plan = plan_of(vec![seg(0, 96_000, 2.0)])
             .expect("fixture plan")
             .with_activation(activation);
         let slot = RegionPlanSlot::default();

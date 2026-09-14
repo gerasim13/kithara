@@ -296,6 +296,11 @@ mod tests {
 
     use super::*;
 
+    /// The rate the fixture plans count asset frames of.
+    fn fixture_rate() -> NonZeroU32 {
+        NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
     fn request(item: TrackId) -> FreeAdoptionRequest {
         let epoch = SessionEpoch::new(0);
         let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
@@ -323,7 +328,7 @@ mod tests {
             manual_rate: RateTarget::default(),
             owner,
             plan: Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, 48_000, 2.0)])
+                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 48_000, 2.0)])
                     .expect("fixture plan is valid"),
             ),
         }

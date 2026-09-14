@@ -75,8 +75,11 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) 
         .expect("initial passthrough renders");
     assert_eq!(&first.samples[..], &warp_sine[..first_frames * 2]);
     slot.install(Some(Arc::new(
-        crate::RegionPlan::new(vec![crate::GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("unity grid plan"),
+        crate::RegionPlan::new(
+            spec().sample_rate,
+            vec![crate::GridSegment::new(0, u64::MAX, 1.0)],
+        )
+        .expect("unity grid plan"),
     )));
 
     let mut meta = AudioChunkInfo {
@@ -211,13 +214,16 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(warp_sine: Vec<f32>) {
 
     let revision = crate::WarpMapRevision::first();
     slot.install(Some(Arc::new(
-        crate::RegionPlan::new(vec![crate::GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("same-rate replacement plan")
-            .with_activation(crate::WarpMap::identity(revision).reanchor(
-                initial_frames as u64 + 768,
-                crate::SessionFrame::new(initial_frames as i64 + 36_032),
-                crate::SessionBeat::default(),
-            )),
+        crate::RegionPlan::new(
+            spec().sample_rate,
+            vec![crate::GridSegment::new(0, u64::MAX, 1.0)],
+        )
+        .expect("same-rate replacement plan")
+        .with_activation(crate::WarpMap::identity(revision).reanchor(
+            initial_frames as u64 + 768,
+            crate::SessionFrame::new(initial_frames as i64 + 36_032),
+            crate::SessionBeat::default(),
+        )),
     )));
     let meta = AudioChunkInfo {
         frame_offset: initial_frames as u64,

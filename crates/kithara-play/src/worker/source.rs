@@ -797,6 +797,11 @@ mod tests {
     use super::*;
     use crate::test_pools::{TestPools, pools, pools_with_budget};
 
+    /// The rate the fixture plans count asset frames of.
+    fn fixture_rate() -> NonZeroU32 {
+        NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
     fn flush_deferred<S>(source: &mut S)
     where
         S: AudioSource,
@@ -1257,7 +1262,7 @@ mod tests {
         let region_plan = Arc::clone(warp.region_plan());
         let old_warp_map = WarpMapRevision::first();
         region_plan.install(Some(Arc::new(
-            RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 2.0)])
+            RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
                 .expect("fixture old plan")
                 .with_activation(WarpMap::identity(old_warp_map).reanchor(
                     0,
@@ -1347,7 +1352,8 @@ mod tests {
             manual_rate,
             owner,
             plan: Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 2.0)]).expect("fixture plan"),
+                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
+                    .expect("fixture plan"),
             ),
         });
 
@@ -1717,7 +1723,8 @@ mod tests {
             manual_rate,
             owner,
             plan: Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 2.0)]).expect("fixture plan"),
+                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
+                    .expect("fixture plan"),
             ),
         });
         let TrackStep::Produced(Fetch::Data { data: target, .. }) = source.step_track() else {

@@ -202,7 +202,7 @@ where
             );
             let plan = grid
                 .segments
-                .region_plan(output_rate)
+                .region_plan()
                 .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
                 .ok()
                 .map(|plan| {
@@ -262,7 +262,6 @@ where
     ///
     /// Returns the group's acknowledgement error.
     pub(crate) fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
-        self.replan_on_output_rate_change();
         self.adopt_free_receipt();
         let sync = &self.sync;
         let Some(prepared) = sync.prepared() else {
@@ -323,12 +322,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
-        let Some(plan) = grid
-            .segments
-            .region_plan(self.runtime.core.engine.output_sample_rate())
-            .ok()
-            .map(Arc::new)
-        else {
+        let Some(plan) = grid.segments.region_plan().ok().map(Arc::new) else {
             return;
         };
         let (load, transport) = self.sync.generations();
@@ -455,36 +449,13 @@ impl<S> PlayerImpl<S>
 where
     S: Send + Sync + 'static,
 {
-    /// Rebuilds the resident plan when the host moves the output rate under a
-    /// running session.
-    ///
-    /// A region plan counts the output frames the decoder emits, so a route
-    /// change onto a new rate leaves every segment on an axis the stream no
-    /// longer carries and the deck loses its beat markers.
-    fn replan_on_output_rate_change(&mut self) {
-        let rate = self.runtime.core.engine.output_sample_rate();
-        if self.planned_output_rate == rate {
-            return;
-        }
-        self.planned_output_rate = rate;
-        for item in self.runtime.core.items.tracks_with_grids() {
-            self.replan_track(item);
-        }
-        if let Err(rejected) =
-            self.reconcile_current_grid(ReconcileCause::TransportChanged, None, false)
-        {
-            let (error, _) = rejected.into();
-            warn!(%error, "output rate change could not reconcile the deck grid");
-        }
-    }
-
     fn replan_track(&self, item: TrackId) {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
         let plan = grid
             .segments
-            .region_plan(self.runtime.core.engine.output_sample_rate())
+            .region_plan()
             .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
             .ok();
         self.runtime

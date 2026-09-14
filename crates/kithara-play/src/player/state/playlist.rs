@@ -196,14 +196,6 @@ impl Playlist {
         self.tracks.get(&item).and_then(|track| track.grid.as_ref())
     }
 
-    /// The tracks holding a grid, whose region plans count output frames.
-    pub(crate) fn tracks_with_grids(&self) -> Vec<TrackId> {
-        self.tracks
-            .iter()
-            .filter_map(|(item, track)| track.grid.as_ref().map(|_| *item))
-            .collect()
-    }
-
     pub(crate) fn publish_track_grid(&mut self, item: TrackId, grid: TrackGrid) {
         self.tracks.entry(item).or_default().grid = Some(grid);
     }
@@ -490,8 +482,16 @@ mod tests {
         }
     }
 
+    /// The rate the fixture plans count asset frames of.
+    fn fixture_rate() -> std::num::NonZeroU32 {
+        std::num::NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
     fn plan() -> Arc<RegionPlan> {
-        Arc::new(RegionPlan::new(vec![GridSegment::new(0, 48_000, 1.0)]).expect("fixture plan"))
+        Arc::new(
+            RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 48_000, 1.0)])
+                .expect("fixture plan"),
+        )
     }
 
     fn grid(id: BeatGridId, revision: BeatGridRevision) -> BeatGridSnapshot {
