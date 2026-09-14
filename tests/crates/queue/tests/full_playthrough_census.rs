@@ -37,6 +37,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
 };
