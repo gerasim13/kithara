@@ -583,10 +583,12 @@ mod tests {
     }
 
     /// A build directory holds artefacts valid only for the configuration that
-    /// made them, so runners must not share one. The registry and the compiler
-    /// cache are shared on purpose: both are keyed by content.
+    /// made them, and a lane asks for the same configuration every run. So the
+    /// build root is one for the whole fleet and the lane claims its directory
+    /// underneath: a lane that lands on another runner still finds its own warm
+    /// build instead of compiling the workspace again.
     #[test]
-    fn each_runner_builds_in_a_directory_of_its_own() {
+    fn every_runner_mounts_the_same_build_root() {
         let host = host_fixture();
         let first = Container::mounts(&host, host.runner("kithara-ci-octocat").expect("runner"));
         let second = Container::mounts(&host, host.runner("kithara-ci-hubot").expect("runner"));
@@ -599,11 +601,8 @@ mod tests {
                 .0
                 .clone()
         };
-        assert_ne!(target(&first), target(&second));
-        assert_eq!(
-            target(&first),
-            "/var/lib/kithara-ci/target/kithara-ci-octocat"
-        );
+        assert_eq!(target(&first), target(&second));
+        assert_eq!(target(&first), "/var/lib/kithara-ci/target");
 
         let workspace = |mounts: &[(String, &str)]| {
             mounts

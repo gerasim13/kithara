@@ -144,6 +144,9 @@ tempfile = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "client-reqwest", "net", "tls-rustls"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`
 # production path), every other desktop runs client-reqwest. Without this
@@ -151,9 +154,6 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 # production path and compile both stacks into the test binary.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "client-wreq", "net"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 [lints]
 workspace = true

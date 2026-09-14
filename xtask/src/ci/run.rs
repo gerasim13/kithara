@@ -368,6 +368,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             .lanes
             .get(&args.lane)
             .is_some_and(|lane| lane.target_snapshot.is_some()),
+        Some(args.lane.as_str()),
     )?;
     info!(
         lane = %args.lane,

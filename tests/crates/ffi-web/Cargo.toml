@@ -36,6 +36,7 @@ thirtyfour = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-integration-tests = { workspace = true, default-features = false, features = ["wasm"] }
+
 gloo-timers = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }

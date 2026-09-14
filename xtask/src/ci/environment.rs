@@ -269,6 +269,7 @@ impl CiEnvironment {
         config: &CiConfig,
         cache_group: CacheGroup,
         isolated_target: bool,
+        lane: Option<&str>,
     ) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
@@ -290,6 +291,7 @@ impl CiEnvironment {
             &target_scope,
             config,
             isolated_target,
+            lane,
         )?;
 
         ensure_room_for_a_job(config, &shared_root)?;
@@ -520,10 +522,23 @@ enum TargetOwner {
     Checkout,
     Job(String),
     Slot(String, usize),
+    /// The fleet's build root and the lane that builds in it.
+    Lane(PathBuf, String),
 }
 
-fn target_owner(config: &CiConfig, isolated: bool) -> Result<TargetOwner> {
+/// Where a runner mounts the build root every lane claims a directory under.
+/// Absent on an executor that builds in its checkout.
+const TARGET_ROOT_ENV: &str = "KITHARA_CI_TARGET_ROOT";
+
+fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result<TargetOwner> {
     if !is_gitlab() || cfg!(windows) {
+        // A runner that mounts the fleet's build root lets the lane own its
+        // build directory: the same lane asks for the same features, profile
+        // and toolchain every run, so it finds that build warm on whichever
+        // runner picked the job up.
+        if let (Some(root), Some(lane)) = (env::var_os(TARGET_ROOT_ENV), lane) {
+            return Ok(TargetOwner::Lane(PathBuf::from(root), lane.to_owned()));
+        }
         return Ok(TargetOwner::Checkout);
     }
     if isolated {
@@ -546,6 +561,7 @@ fn build_target_dir(
 ) -> Result<PathBuf> {
     let owner = match owner {
         TargetOwner::Checkout => return Ok(project_root.join("target")),
+        TargetOwner::Lane(root, lane) => return Ok(root.join(format!("lane-{lane}"))),
         TargetOwner::Job(job_id) => {
             format!("job-{}", parse_decimal_id("CI_JOB_ID", &job_id)?)
         }
@@ -565,8 +581,9 @@ fn prepare_build_target(
     target_scope: &str,
     config: &CiConfig,
     isolated_target: bool,
+    lane: Option<&str>,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let owner = target_owner(config, isolated_target)?;
+    let owner = target_owner(config, isolated_target, lane)?;
     let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
@@ -974,7 +991,7 @@ mod tests {
             let config = super::super::config::fixture();
 
             let environment =
-                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false).unwrap();
+                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, None).unwrap();
             let vars = environment.vars();
             assert_eq!(
                 vars.get(OsStr::new("KITHARA_FIXTURE_CACHE"))
@@ -1081,7 +1098,8 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false) else {
+            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, None)
+            else {
                 panic!("prepare unexpectedly succeeded");
             };
             assert!(error.to_string().contains("joining CI PATH"));
@@ -1212,6 +1230,33 @@ mod tests {
         let reclaimed_from = reclaim(root.path());
 
         assert_eq!(reclaimed_from, 0);
+    }
+
+    /// The runner that mounts the fleet's build root hands reuse to the lane:
+    /// the same lane asks for the same features, profile and toolchain every
+    /// run, so its directory is warm on whichever runner picked the job up. A
+    /// runner-owned directory made a moved lane compile the workspace again.
+    #[test]
+    fn a_lane_builds_in_its_own_directory_under_the_shared_root() {
+        let target = build_target_dir(
+            Path::new("/runner/_work/kithara/kithara"),
+            Path::new("/cache"),
+            "review-linux-x86_64",
+            TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-test".to_owned()),
+        )
+        .unwrap();
+
+        assert_eq!(target, Path::new("/cache/target/lane-linux-test"));
+        assert_ne!(
+            target,
+            build_target_dir(
+                Path::new("/runner/_work/kithara/kithara"),
+                Path::new("/cache"),
+                "review-linux-x86_64",
+                TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-lint".to_owned()),
+            )
+            .unwrap()
+        );
     }
 
     #[test]

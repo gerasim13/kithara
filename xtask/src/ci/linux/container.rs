@@ -12,7 +12,11 @@ const CACHE_ENVIRONMENT: [&str; 6] = [
     // content-addressed and namespaced by a build fingerprint, so sharing them
     // across runners cannot serve one build's bytes to another.
     "KITHARA_FIXTURE_CACHE=/cache/fixtures",
-    "CARGO_TARGET_DIR=/cache/target",
+    // Every runner mounts the same build root, and a lane claims the directory
+    // named after it: a lane that lands on a different runner than last time
+    // then still finds its own warm build. A runner-owned directory made that
+    // a full rebuild, which is most of what a lane spent its time on.
+    "KITHARA_CI_TARGET_ROOT=/cache/target",
     "RUSTC_WRAPPER=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
     // incremental compilation, and cargo leaves incremental on by default.
@@ -65,14 +69,15 @@ impl Container<'_> {
     /// for, and the compiler cache because `sccache` keys on the inputs of a
     /// compilation, so one runner's entry is another's hit.
     ///
-    /// The build directory is not shared. Its artefacts are valid only for the exact
-    /// features, profile and toolchain that produced them, so runners of
-    /// different shapes reuse none of each other's and only contend for the
-    /// same directory — which is how one grew past two hundred gigabytes while
-    /// every job still compiled from source. Each runner keeps its own and
-    /// warms it with its own repeat work. A host path keeps that write-heavy
-    /// cache on the disk selected by the machine profile instead of wherever
-    /// Docker stores named volumes.
+    /// The build root is shared, and a lane claims the directory named after it
+    /// underneath. Build artefacts are valid only for the exact features,
+    /// profile and toolchain that produced them, which is why one directory for
+    /// every job reuses nothing — but a lane asks for the same shape on every
+    /// run, so the directory it claims is warm whichever runner picked the job
+    /// up. A runner-owned directory instead decided reuse by which runner
+    /// happened to be free, and a lane that moved compiled the workspace again.
+    /// A host path keeps that write-heavy cache on the disk selected by the
+    /// machine profile instead of wherever Docker stores named volumes.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
         vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
@@ -85,9 +90,7 @@ impl Container<'_> {
                 "/runner/_work",
             ),
             (
-                Self::target_dir(host, runner)
-                    .to_string_lossy()
-                    .into_owned(),
+                Self::target_root(host).to_string_lossy().into_owned(),
                 "/cache/target",
             ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
@@ -95,8 +98,10 @@ impl Container<'_> {
         ]
     }
 
-    pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
-        host.cache_root.join("target").join(&runner.name)
+    /// Where every runner's build directories live. A lane owns one directory
+    /// under it; the budget is enforced over the root.
+    pub(super) fn target_root(host: &LinuxHost) -> PathBuf {
+        host.cache_root.join("target")
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -132,6 +137,14 @@ impl Container<'_> {
         // The S3 backend is shared, but each runner needs its own daemon
         // endpoint. An explicit socket lets the lane start that daemon before
         // Cargo's parallel compilers can race to start it.
+        // What a job builds into when it does not claim a lane directory — a
+        // command outside a lane, or a branch whose xtask predates the lane
+        // keying. It stays one directory per runner, which is what those jobs
+        // reused before, so nothing that does not opt in gets slower.
+        environment.push(format!(
+            "CARGO_TARGET_DIR=/cache/target/runner-{}",
+            runner.name
+        ));
         environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
         environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
         environment.extend(
