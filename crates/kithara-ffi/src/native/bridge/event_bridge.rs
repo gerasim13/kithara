@@ -992,8 +992,10 @@ mod tests {
             wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
             "real local track must load before playback"
         );
-        queue
-            .select(id, Transition::None)
+        let selecting = queue.clone();
+        spawn_blocking(move || selecting.select(id, Transition::None))
+            .await
+            .expect("select task completes")
             .expect("loaded track starts through the real queue lifecycle");
 
         let cancel = CancelToken::root();
