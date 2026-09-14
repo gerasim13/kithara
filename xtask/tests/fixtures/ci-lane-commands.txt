@@ -1723,35 +1723,35 @@
 # linux-support / branch
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / platforms
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / merge-request
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / quarantine
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / main
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / nightly
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / weekly
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-support / release
   <require os> linux
   <require tools> cargo just
-  just test run --touched
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just
