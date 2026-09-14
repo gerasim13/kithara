@@ -2212,3 +2212,30 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         );
     }
 }
+
+/// The guest carries FFmpeg and libclang, and the build scripts find them only
+/// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
+/// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
+/// loads no library. Either way a build script panics before a single test
+/// runs — which is what the lane did for as long as it existed. Where they sit
+/// is machine state, so both are read the way the pool's labels are: from a
+/// repository variable rather than pinned in the workflow.
+#[test]
+fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
+    let workflow = github_workflow("windows.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "windows");
+    let environment = mapping_field(job, "env")
+        .as_mapping()
+        .expect("the lane names the environment its build scripts read");
+
+    for (name, variable) in [
+        ("FFMPEG_DIR", "KITHARA_WINDOWS_FFMPEG_DIR"),
+        ("LIBCLANG_PATH", "KITHARA_WINDOWS_LIBCLANG_PATH"),
+    ] {
+        assert_eq!(
+            mapping_field(environment, name).as_str(),
+            Some(format!("${{{{ vars.{variable} }}}}").as_str()),
+            "`{name}` pins a path instead of reading the machine's own"
+        );
+    }
+}

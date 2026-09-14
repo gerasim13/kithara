@@ -167,42 +167,6 @@ kithara = { workspace = true, default-features = false, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
 
-# Only `architecture_trace` reaches for it, and that module is already native# only: the crate's LSP client builds file URLs, which `url` offers everywhere# but wasm.
-
-# fdk-aac came from kithara-decode defaults before Phase 2 (workspace
-# default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
-# stress-seek tests decode through the symphonia path, and without fdk-aac
-# they are reported as LC-only, so add it explicitly.
-assert_no_alloc = { workspace = true }
-axum = { workspace = true }
-
-cochlea-features = { workspace = true }
-firewheel = { workspace = true }
-
-# Performance monitoring (optional)
-hotpath = { workspace = true, optional = true }
-
-# RSS memory profiling
-memory-stats = { workspace = true }
-
-# Storage
-mmap-io = { workspace = true }
-
-# Seeded RNG for user-simulation e2e scenarios. Tests in
-# `tests/crates/queue/tests/user_simulation/` need a deterministic
-# random stream so failures stay reproducible across CI re-runs.
-rand = { workspace = true }
-
-# HTTP server (axum stack not available on WASM)
-reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
-
-tokio-stream = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
-
-# Mocking
-unimock = { workspace = true }
-
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
@@ -228,9 +192,38 @@ kithara = { workspace = true, default-features = false, optional = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
-
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
+assert_no_alloc = { workspace = true }
+
+# HTTP server. The axum stack is not available on WASM, which is the whole
+# reason these are declared per target rather than plainly.
+axum = { workspace = true }
+cochlea-features = { workspace = true }
+firewheel = { workspace = true }
+
+# Performance monitoring (optional)
+hotpath = { workspace = true, optional = true }
+
+# RSS memory profiling
+memory-stats = { workspace = true }
+
+# Storage
+mmap-io = { workspace = true }
+
+# Seeded RNG for user-simulation e2e scenarios. Tests in
+# `tests/crates/queue/tests/user_simulation/` need a deterministic
+# random stream so failures stay reproducible across CI re-runs.
+rand = { workspace = true }
+
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 tokio = { workspace = true, features = ["process"] }
+tokio-stream = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Mocking
+unimock = { workspace = true }
 
 # `v4` mints the random tokens the test server hands out; the workspace
 # default carries only `v5`. It stays off wasm: `v4` needs an RNG, and

@@ -1,4 +1,4 @@
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process};
+use std::{fs, path::Path, process};
 
 use anyhow::{Context, Result, bail};
 use reqwest::{
@@ -215,8 +215,7 @@ fn read_token(path: &Path) -> Result<String> {
 /// through a command line where every process on the machine could read them.
 fn write_secret(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("restricting {}", path.display()))
+    super::permissions::set_mode(path, super::permissions::OWNER_ONLY)
 }
 
 #[cfg(test)]
