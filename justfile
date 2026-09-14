@@ -95,6 +95,8 @@ _xtask-cached MODE *ARGS:
       esac; \
       unavailable() { \
         printf 'DIAG unavailable at %s\n' "${1:-?}" >&2; \
+        printf 'DIAG generation bytes: ' >&2; printf '%s' "${generation:-<unset>}" | od -c | head -3 >&2; \
+        printf 'DIAG windows=%s suffix=[%s] pwd=%s\n' "${windows:-?}" "${suffix:-?}" "$PWD" >&2; \
         if [ "$mode" = optional ]; then \
           printf 'warning: cached xtask transport is unavailable; run just tooling xtask --help to install it\n' >&2; \
           exit 0; \
