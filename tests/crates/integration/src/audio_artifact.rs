@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
-    env, io,
+    env, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -34,6 +35,8 @@ pub type AudioArtifactRecording = RecordingCore<AssetPartSink<TestPools>>;
 pub struct AudioArtifactSet {
     channels: u16,
     sample_rate: u32,
+    case: String,
+    root: PathBuf,
     scope: AssetScope<TestPools>,
 }
 
@@ -154,6 +157,7 @@ impl Drop for AudioArtifactTap {
                 .ok()
         };
         let manifest = serde_json::json!({
+            "case": self.set.case,
             "frames": self.frames,
             "channels": self.channels,
             "sample_rate": self.set.sample_rate,
@@ -168,7 +172,15 @@ impl Drop for AudioArtifactTap {
             .write_manifest(&manifest)
             .and_then(|reader| audio_artifact_path(&reader))
         {
-            Ok(path) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest: {}", path.display()),
+            Ok(path) => {
+                if let Err(error) =
+                    self.set
+                        .append_index(&path, output.as_deref(), timeline.as_deref())
+                {
+                    eprintln!("KITHARA_AUDIO_ARTIFACT index not extended: {error}");
+                }
+                eprintln!("KITHARA_AUDIO_ARTIFACT manifest: {}", path.display());
+            }
             Err(error) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest not published: {error}"),
         }
     }
@@ -229,6 +241,8 @@ impl AudioArtifactSet {
         Ok(Self {
             channels,
             sample_rate,
+            case: case.to_owned(),
+            root: root.to_path_buf(),
             scope,
         })
     }
@@ -262,6 +276,31 @@ impl AudioArtifactSet {
     pub fn write_manifest<T: Serialize>(&self, manifest: &T) -> io::Result<AssetReader<TestPools>> {
         let bytes = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
         self.write_bytes("manifest.json", &bytes)
+    }
+
+    /// Append this artifact to the run-wide index so a reader can find the
+    /// WAV and SVG of a named case without opening every hashed directory.
+    pub fn append_index(
+        &self,
+        manifest: &Path,
+        output: Option<&Path>,
+        timeline: Option<&Path>,
+    ) -> io::Result<()> {
+        let entry = serde_json::json!({
+            "case": self.case,
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "manifest": manifest,
+            "output": output,
+            "timeline": timeline,
+        });
+        let mut line = serde_json::to_vec(&entry).map_err(io::Error::other)?;
+        line.push(b'\n');
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.root.join("index.jsonl"))?;
+        file.write_all(&line)
     }
 
     /// Atomically publish one non-audio artifact in this set.
