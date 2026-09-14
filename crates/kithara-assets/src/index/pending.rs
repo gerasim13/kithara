@@ -24,9 +24,6 @@ use crate::{
     store::{AssetReader, AssetStore, ResourceAcquisition},
 };
 
-#[cfg(test)]
-type AttachProbe = Arc<dyn Fn() + Send + Sync>;
-
 /// One consumer's contribution to the aggregate demand. `read_pos` is
 /// shared with the consumer (advances seen without an update call);
 /// `look_ahead = None` means "whole file" and collapses the watermark to
@@ -115,8 +112,6 @@ pub(super) struct PendingResourceInner<S> {
     /// Parent of every slot's `writer_cancel` (the store cancel).
     pub(super) cancel: CancelToken,
     pub(super) slots: DashMap<ResourceKey, Arc<PendingResource<S>>>,
-    #[cfg(test)]
-    attach_probe: Mutex<Option<AttachProbe>>,
 }
 
 /// Opaque index of resources that are not yet ready in this store.
@@ -146,8 +141,6 @@ where
             inner: Arc::new(PendingResourceInner {
                 cancel,
                 slots: DashMap::new(),
-                #[cfg(test)]
-                attach_probe: Mutex::default(),
             }),
         }
     }
@@ -178,8 +171,6 @@ where
                 }
                 state.entries.push(Arc::clone(&entry));
                 let epoch = slot.elect_writer(&mut state, &entry);
-                #[cfg(test)]
-                self.run_attach_probe_for_test();
                 let Some(reader) = state.reader.as_ref().cloned() else {
                     panic!("BUG: active pending resource lost its reader");
                 };
@@ -227,31 +218,6 @@ where
             writer,
             lease,
         }))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_slot_for_test(&self, key: &ResourceKey) -> bool {
-        self.inner.slots.contains_key(key)
-    }
-
-    #[cfg(test)]
-    fn run_attach_probe_for_test(&self) {
-        let probe = self.inner.attach_probe.lock().take();
-        if let Some(probe) = probe {
-            probe();
-        }
-    }
-
-    #[cfg(test)]
-    fn set_attach_probe_for_test(&self, probe: impl Fn() + Send + Sync + 'static) {
-        *self.inner.attach_probe.lock() = Some(Arc::new(probe));
-    }
-
-    #[cfg(test)]
-    fn slot_locked_for_test(&self, key: &ResourceKey) -> bool {
-        use dashmap::try_result::TryResult;
-
-        matches!(self.inner.slots.try_get(key), TryResult::Locked)
     }
 }
 

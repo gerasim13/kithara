@@ -6,7 +6,6 @@ mod wake;
 use std::{
     error::Error as StdError,
     sync::{
-        Barrier,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
@@ -14,6 +13,7 @@ use std::{
     thread,
 };
 
+use dashmap::try_result::TryResult;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use kithara_storage::StorageError;
 use kithara_test_utils::kithara;
