@@ -32,17 +32,21 @@ jobs:
           Move-Item $root $dest
           Get-ChildItem $dest
 
-      - name: Point the machine at it
+      - name: Hand it to the runner service
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          $ProgressPreference = 'SilentlyContinue'
           $dest = 'C:\kithara-ci\ffmpeg'
-          [Environment]::SetEnvironmentVariable('FFMPEG_DIR', $dest, 'Machine')
-          $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-          if ($path -notlike "*$dest\bin*") {
-            [Environment]::SetEnvironmentVariable('Path', "$path;$dest\bin", 'Machine')
+          # The runner account is not an administrator, so the machine
+          # environment is closed to it. The service reads this file when it
+          # starts, and what it reads is what every lane inherits.
+          $file = 'C:\kithara-ci\runner\.env'
+          $lines = @()
+          if (Test-Path $file) {
+            $lines = @(Get-Content $file | Where-Object { $_ -notmatch '^(FFMPEG_DIR|PATH)=' })
           }
-          [Environment]::GetEnvironmentVariable('FFMPEG_DIR', 'Machine')
+          $lines += "FFMPEG_DIR=$dest"
+          $lines += "PATH=$env:PATH;$dest\bin"
+          Set-Content -Path $file -Value $lines -Encoding ASCII
+          Get-Content $file
           & "$dest\bin\ffmpeg.exe" -hide_banner -version
