@@ -47,11 +47,8 @@ pub(super) fn install(
         std::fs::copy(executable, LAYOUT.executable)
             .with_context(|| format!("installing {}", LAYOUT.executable))?;
     }
-    std::fs::set_permissions(
-        LAYOUT.executable,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .with_context(|| format!("making {} executable", LAYOUT.executable))?;
+    super::permissions::set_mode(Path::new(LAYOUT.executable), super::permissions::EXECUTABLE)
+        .with_context(|| format!("making {} executable", LAYOUT.executable))?;
 
     let cores = std::thread::available_parallelism()
         .context("reading this machine's core count")?
@@ -362,14 +359,15 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use clap::Parser;
 
     use super::*;
     use crate::{
         Cli,
-        ci::{config::fixture, linux::profile::tests::host_fixture},
+        ci::{
+            config::fixture,
+            linux::{permissions, profile::tests::host_fixture},
+        },
     };
 
     /// The container must see as many cores as it was given, because that
@@ -508,7 +506,7 @@ mod tests {
             "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write cache environment");
-        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600))
+        permissions::set_mode(&env_file, permissions::OWNER_ONLY)
             .expect("restrict cache environment");
 
         let mut host = host_fixture();
