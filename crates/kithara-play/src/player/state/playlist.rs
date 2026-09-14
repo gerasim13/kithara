@@ -409,7 +409,7 @@ mod tests {
 
     use super::{Playlist, Slot};
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn selecting_a_new_track_cancels_only_the_outgoing_free_adoption() {
         let mut playlist = Playlist::default();
         let first = TrackId(7);
@@ -553,7 +553,7 @@ mod tests {
         assert!(playlist.mark_announced(1));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn awaiting_source_cue_remains_preparable_for_a_late_grid() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(playlist.initial_source_cue(item), Some(cue));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn unresolved_source_cue_releases_selected_and_awaiting_playback() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
@@ -583,7 +583,7 @@ mod tests {
         assert!(!playlist.hold_or_consume_initial_source_cue(item));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn a_plan_stored_before_the_lane_loads_is_installed_on_load() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
@@ -599,7 +599,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn a_plan_set_after_the_lane_loads_is_installed_at_once() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
@@ -616,7 +616,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn stale_host_seek_current_item_leaves_the_existing_plan_untouched() {
         let mut playlist = Playlist::default();
         let stale = TrackId(7);
@@ -663,7 +663,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn stale_host_seek_track_grid_stamp_leaves_the_existing_plan_untouched() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);

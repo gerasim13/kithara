@@ -42,7 +42,7 @@ impl Fixture {
     const SOLO_TECHNO: &[&str] = &[Self::RHYTHM_TECHNO_132];
     const SOLO: SyncCase = SyncCase::queued("solo", Self::SAMPLE_RATE, 1, 0.0);
     const SEAM_RATE_PERSISTS: SyncCase =
-        SyncCase::queued("seam_rate_persists", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
+        SyncCase::queued("seam_rate_persists", Self::SAMPLE_RATE, 2, Self::FADE_SECS).paused();
     const SEAM_OFF: SyncCase = SyncCase::queued("seam_off", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
     const SEAM_FADE_LENGTH: SyncCase =
         SyncCase::queued("seam_fade_length", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
@@ -233,6 +233,7 @@ async fn seam_rate_persists_into_next_track() {
     )
     .await;
     let block = block_frames(&harness);
+    harness.play_all().await;
     harness.decks[0].set_rate(Fixture::RATE);
     let _pcm = harness
         .capture_frames(
@@ -242,6 +243,41 @@ async fn seam_rate_persists_into_next_track() {
         )
         .await;
     let spans = spans(&recorder);
+    let rate_bits = u64::from(Fixture::RATE.to_bits());
+    let smoothed = recorder.events_with_probe("rate_smoothed");
+    let requested = smoothed
+        .iter()
+        .position(|event| event.u64("target_bits") == Some(rate_bits))
+        .expect("the deck receives the requested rate");
+    assert!(
+        smoothed[requested..]
+            .iter()
+            .all(|event| event.u64("target_bits") == Some(rate_bits)),
+        "no selection may retarget the deck away from {} after it was requested",
+        Fixture::RATE
+    );
+    let settled = smoothed
+        .iter()
+        .position(|event| event.u64("multiplier_bits") == Some(rate_bits))
+        .expect("the owner smoother reaches the requested rate");
+    assert!(
+        smoothed[settled..]
+            .iter()
+            .all(|event| event.u64("multiplier_bits") == Some(rate_bits)),
+        "the queue seam must keep the deck multiplier at {}",
+        Fixture::RATE
+    );
+    let ramp_deficit: f64 = smoothed[..settled]
+        .iter()
+        .filter(|event| event.u64("target_bits") == Some(rate_bits))
+        .map(|event| {
+            let frames = event.u64("frames").expect("rate_smoothed names its frames") as f64;
+            let multiplier = f32::from_bits(
+                u32::try_from(event.u64("multiplier_bits").expect("multiplier")).expect("f32 bits"),
+            );
+            frames * (1.0 - f64::from(multiplier) / f64::from(Fixture::RATE))
+        })
+        .sum();
     for (index, name) in Fixture::HOUSE_THEN_TECHNO.iter().enumerate() {
         let id: TrackId = harness.ids[0][index];
         let span = spans
@@ -252,7 +288,8 @@ async fn seam_rate_persists_into_next_track() {
             span.served, len,
             "track {index} `{name}` served every media frame"
         );
-        let expected = (len as f64 / f64::from(Fixture::RATE)).round() as i64;
+        let ramp = if index == 0 { ramp_deficit } else { 0.0 };
+        let expected = (len as f64 / f64::from(Fixture::RATE) + ramp).round() as i64;
         let rendered = span.last - span.first;
         assert!(
             (rendered - expected).abs() <= block,

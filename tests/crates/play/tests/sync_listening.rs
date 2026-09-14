@@ -112,14 +112,7 @@ fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> Path
         .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"))
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(60))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     #[future(awt)] listening_sources: PreparedSources,
 ) {
@@ -147,14 +140,7 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, source_synthetic().await, None)]
 #[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, source_synthetic().await, Some(127.0))]
 #[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, source_sweep().await, Some(145.0))]

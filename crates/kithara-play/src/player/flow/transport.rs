@@ -6,7 +6,7 @@ use kithara_platform::time::Duration;
 use kithara_warp::AssetFrame;
 use tracing::{debug, warn};
 
-use super::super::core::PlayerRuntime;
+use super::super::{core::PlayerRuntime, state::phase::PlayerPhaseKind};
 use crate::{
     api::{PlayerStatus, TrackId},
     bridge::{PlayerCmd, TrackTransition},
@@ -26,9 +26,14 @@ impl<S> PlayerRuntime<S>
 where
     S: HasPool<f32>,
 {
-    fn apply_autoplay(&self, autoplay: bool) {
+    /// Starts or holds the selected item. A start from a stopped player plays at
+    /// the default rate; a transition while already playing keeps the live rate,
+    /// so a queue seam never resets the deck tempo.
+    fn apply_autoplay(&self, autoplay: bool, continuing: bool) {
         if autoplay {
-            self.set_rate(self.default_rate());
+            if !continuing {
+                self.set_rate(self.default_rate());
+            }
             if !self.arm_prepared_launch_or_hold_source_cue() {
                 let _ = self.send_to_slot(PlayerCmd::SetPaused {
                     paused: false,
@@ -275,6 +280,7 @@ where
             autoplay,
             crossfade_seconds,
         } = transition;
+        let continuing = autoplay && self.phase_kind() == PlayerPhaseKind::Playing;
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::IndexOutOfRange {
@@ -300,7 +306,7 @@ where
             return Err(PlayError::ItemConsumed { index });
         }
 
-        if autoplay {
+        if autoplay && !continuing {
             self.core.warp.stretch().set_speed(self.default_rate());
         }
 
@@ -328,7 +334,7 @@ where
                 .set_initial_source_cue(item, initial_source_cue);
         }
 
-        self.apply_autoplay(autoplay);
+        self.apply_autoplay(autoplay, continuing);
         Ok(())
     }
 

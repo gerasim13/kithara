@@ -188,7 +188,7 @@ impl SyncCase {
         case
     }
 
-    const fn paused(mut self) -> Self {
+    pub(super) const fn paused(mut self) -> Self {
         self.paused = true;
         self
     }
@@ -792,6 +792,7 @@ impl ProductHarness {
         harness
     }
 
+    #[kithara::flash(true)]
     async fn wait_loaded(&mut self, case: SyncCase) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         loop {
@@ -839,6 +840,7 @@ impl ProductHarness {
             .await;
     }
 
+    #[kithara::flash(true)]
     pub(super) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
         let started = Instant::now();
         self.tick_all(case).await;
@@ -943,8 +945,15 @@ impl ProductHarness {
                 self.failures.join("; ")
             )
         });
+        self.render_through(case, activation).await;
+    }
+
+    /// Render callback blocks until the harness timeline passes `activation`.
+    #[kithara_test_utils::kithara::hang_watchdog]
+    pub(super) async fn render_through(&mut self, case: SyncCase, activation: u64) {
         while self.rendered_frames <= activation {
             let _ = self.render(case, self.block_frames).await;
+            hang_reset!();
         }
     }
 
@@ -1020,7 +1029,7 @@ impl ProductHarness {
         status
     }
 
-    async fn play_all(&self) {
+    pub(super) async fn play_all(&self) {
         let controls: Vec<_> = self
             .decks
             .iter()
@@ -1035,6 +1044,7 @@ impl ProductHarness {
             .await;
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog]
     async fn start_staggered(&mut self, case: SyncCase) {
         let stagger_frames =
             (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0 / case.start_bpm()).round() as usize;
@@ -1047,6 +1057,7 @@ impl ProductHarness {
                     let frames = remaining.min(self.block_frames);
                     let _ = self.render(case, frames).await;
                     remaining -= frames;
+                    hang_reset!();
                 }
             }
         }
@@ -1321,6 +1332,7 @@ impl ProductHarness {
             .await
     }
 
+    #[kithara::flash(true)]
     async fn capture_blocks(
         &mut self,
         case: SyncCase,
@@ -1630,14 +1642,7 @@ const LISTENING_ALIGNED_DOWNTEMPO_96: &[&str] =
 const LISTENING_PICKUP_DOWNTEMPO_96: &[&str] =
     &["rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s"];
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::equal_124(SingleDeckTempoControl {
     id: "origin-zero-equal-124",
     provider: Provider::Rhythm(ORIGIN_ZERO_HOUSE_124),
@@ -1791,10 +1796,6 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
     const EXPECTED_WARP_MAP_REVISION: u64 = 2;
 
-    let code_identity =
-        env::var("KITHARA_SCENARIO_CODE_IDENTITY").expect("scenario code identity is required");
-    let dirty_scope =
-        env::var("KITHARA_SCENARIO_DIRTY_SCOPE").expect("scenario dirty scope is required");
     let recorder = probe_capture::install();
     let case = SyncCase::running(control.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
@@ -1964,8 +1965,6 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
                     "underruns": underruns,
                     "probes": probe_events,
                 },
-                "code_identity": code_identity,
-                "dirty_scope": dirty_scope,
             }),
         );
     }
@@ -2118,14 +2117,7 @@ struct TrackStartPickup {
     expected_next_host_marker: u64,
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::house_124(TrackStartPickup { id: "track-start-pickup-124", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: None, expected_source_frame: 0, expected_host_onset: 69_677, expected_next_host_marker: 92_903 })]
 #[case::downtempo_96(TrackStartPickup { id: "track-start-pickup-96", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: None, expected_source_frame: 0, expected_host_onset: 69_677, expected_next_host_marker: 92_903 })]
 #[case::house_124_seek_zero(TrackStartPickup { id: "track-start-pickup-124-seek-zero", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: Some(0.0), expected_source_frame: 23_226, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
@@ -2188,6 +2180,32 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
     });
     let underruns = harness.underrun_failures();
     let events = recorder.snapshot();
+    let pcm_flow: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.probe_name(),
+                Some(
+                    "producer_pcm_admitted"
+                        | "pcm_reader_admitted"
+                        | "pcm_consumed"
+                        | "pcm_underrun"
+                )
+            )
+        })
+        .map(|event| {
+            serde_json::json!({
+                "probe": event.probe_name(),
+                "seq": event.seq(),
+                "thread": event.thread_id(),
+                "output_start": event.u64("output_start"),
+                "frames": event.u64("frames"),
+                "requested": event.u64("requested_frames"),
+                "available": event.u64("available_frames"),
+                "source_start": event.u64("source_start"),
+            })
+        })
+        .collect();
     harness
         .tap
         .as_mut()
@@ -2203,6 +2221,7 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
                 "capture_origin": capture_start,
                 "markers": markers,
                 "underruns": underruns,
+                "pcm_flow": pcm_flow,
             }),
         );
     drop(harness);
@@ -2221,14 +2240,7 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
     assert_eq!(plan.fields["activation_output"], pickup.expected_host_onset);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination() {
     let recorder = probe_capture::install();
     let case = SyncCase::running(
@@ -2282,9 +2294,7 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
         .u64("activation_output")
         .expect("Host seek plan has an exact activation");
     harness.play_all().await;
-    while harness.rendered_frames <= activation {
-        let _ = harness.render(case, harness.block_frames).await;
-    }
+    harness.render_through(case, activation).await;
     let events = recorder.snapshot();
     let adopted = events
         .iter()
@@ -2309,14 +2319,7 @@ enum ToggleStart {
     Host,
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::off_to_local(ToggleStart::Off, SyncIntent::Disable, SyncMode::LocalSync, 1.0)]
 #[case::off_to_host(ToggleStart::Off, SyncIntent::Enable, SyncMode::HostSync, 1.0)]
 #[case::local_to_off(ToggleStart::Local, SyncIntent::Free, SyncMode::Off, 0.75)]
@@ -2622,9 +2625,7 @@ async fn directed_sync_toggle_matrix(
             let activation = plan
                 .u64("activation_output")
                 .expect("planned map has an output activation");
-            while harness.rendered_frames <= activation {
-                let _ = harness.render(case, harness.block_frames).await;
-            }
+            harness.render_through(case, activation).await;
             harness.settle(case, 4).await;
             let events = recorder.snapshot();
             let adopted = events
@@ -2681,14 +2682,7 @@ async fn directed_sync_toggle_matrix(
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::grid_before_play(true)]
 #[case::grid_after_play(false)]
 async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) {
@@ -2770,14 +2764,7 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
     assert_eq!(first, Some(69_677));
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
     let recorder = probe_capture::install();
     let case = SyncCase::running(
@@ -2826,14 +2813,7 @@ async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
     let recorder = probe_capture::install();
     let case = SyncCase::running(
@@ -2929,14 +2909,7 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::playing(true)]
 #[case::paused(false)]
 async fn disable_before_grid_respects_requested_playback(#[case] play: bool) {
@@ -2964,14 +2937,7 @@ async fn disable_before_grid_respects_requested_playback(#[case] play: bool) {
     assert_eq!(audible, play);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
     let case = SyncCase::running(
         "paused-late-grid-resume",
@@ -3017,14 +2983,7 @@ async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
     assert_eq!(first, Some(69_677));
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
     let recorder = probe_capture::install();
     let case = SyncCase::running(
@@ -3136,14 +3095,7 @@ struct ListeningScenario {
     expected_activation: u64,
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::first_downbeat_96_start_10(ListeningScenario {
     id: "listening-first-downbeat-96-start-10",
     source: "rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s",
@@ -3310,14 +3262,7 @@ fn host_grid_preview(raw: &[f32], reference: &[f32]) -> (Vec<f32>, usize) {
     (preview, clipped)
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
     #[future(awt)] source_scenario_1_downtempo_house_provider: PreparedSources,
 ) {
@@ -3525,24 +3470,13 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn scenario_1_simultaneous_different_bpm_exact_grids(
     #[future(awt)] source_scenario_1_downtempo_house_provider: PreparedSources,
 ) {
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
     const CAPTURE_FRAMES: usize = 48_000 * 10;
     let case = DOWNTEMPO_HOUSE_SYNC.paused();
-    let code_identity =
-        env::var("KITHARA_SCENARIO_CODE_IDENTITY").expect("scenario code identity is required");
-    let dirty_scope =
-        env::var("KITHARA_SCENARIO_DIRTY_SCOPE").expect("scenario dirty scope is required");
     let mut harness = ProductHarness::new_for_block(
         case,
         &source_scenario_1_downtempo_house_provider,
@@ -3565,8 +3499,6 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
                 "requested_source_start_frames": [0, 0],
                 "prelaunch_frames": PRELAUNCH_FRAMES,
                 "capture_frames_after_start": CAPTURE_FRAMES,
-                "code_identity": code_identity.clone(),
-                "dirty_scope": dirty_scope.clone(),
             }),
         );
     }
@@ -3637,8 +3569,6 @@ async fn scenario_1_simultaneous_different_bpm_exact_grids(
                 "initial_launch_failures": initial_launch_failures,
                 "audible_measurement": report,
                 "harness_failures": harness.failures,
-                "code_identity": code_identity,
-                "dirty_scope": dirty_scope,
             }),
         );
     }
@@ -3730,7 +3660,9 @@ fn next_host_downbeat(grid: &BeatGridSnapshot, meter: Meter, frontier: u64) -> O
     let beats_per_bar = i64::from(meter.beats_per_bar());
     for bar_offset in -64_i64..=64 {
         let ordinal = downbeat.checked_add(bar_offset.checked_mul(beats_per_bar)?)?;
-        let beat = Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal)).ok()?;
+        let Ok(beat) = Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal)) else {
+            continue;
+        };
         let position = match grid.position_at(MapPoint::new(grid.stamp(), beat)) {
             BeatGridQuery::Resolved(position) => position,
             _ => continue,
@@ -3738,7 +3670,9 @@ fn next_host_downbeat(grid: &BeatGridSnapshot, meter: Meter, frontier: u64) -> O
         let MapPosition::Session(frame) = *position.value().value() else {
             continue;
         };
-        let frame = u64::try_from(i64::from(frame)).ok()?;
+        let Ok(frame) = u64::try_from(i64::from(frame)) else {
+            continue;
+        };
         if frame >= frontier {
             return Some((frame, ordinal));
         }
@@ -3953,14 +3887,7 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(60))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
@@ -3982,14 +3909,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
@@ -4012,14 +3932,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
 #[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
@@ -4093,14 +4006,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC)]

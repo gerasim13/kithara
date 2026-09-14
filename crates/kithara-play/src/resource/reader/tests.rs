@@ -793,9 +793,11 @@ fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
     let _ = processor.process(&info, buffers, &mut events, extra);
 }
 
+#[kithara::hang_watchdog]
 fn rate_notifications(control: &mut crate::bridge::SlotControl) -> Vec<f32> {
     let mut rates = Vec::new();
     while let Some(notification) = control.notif_rx.try_pop() {
+        hang_reset!();
         if let PlayerNotification::RateChanged { rate } = notification {
             rates.push(rate);
         }
@@ -803,7 +805,7 @@ fn rate_notifications(control: &mut crate::bridge::SlotControl) -> Vec<f32> {
     rates
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn playback_rate_reports_only_a_real_warp_control() {
     let fixed = Resource::from_reader(EofReader::default(), None);
     assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
@@ -825,7 +827,7 @@ fn playback_rate_reports_only_a_real_warp_control() {
     }
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(half: Vec<f32>) {
     let controls = StretchControls::new(1.0);
     let pools = pools();
@@ -934,7 +936,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
 /// `T.child()`, so `Audio::Drop` alone would only reach its own child and
 /// leave the stream-side fetch loops running. `Resource::Drop` must cancel
 /// `T` so the stream subtree (modelled here by `stream_sub`) is torn down.
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn drop_cancels_whole_per_track_subtree_not_just_audio() {
     let track = CancelToken::never();
     let stream_sub = track.child(); // File/Hls subtree F = T.child()
@@ -955,13 +957,13 @@ fn drop_cancels_whole_per_track_subtree_not_just_audio() {
 
 /// A resource with no per-track cancel wired in (custom reader) drops
 /// without panicking and cancels nothing.
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn drop_without_cancel_is_passive() {
     let resource = Resource::from_reader(EofReader::default(), None);
     drop(resource);
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn drop_cancels_before_inner_reader_teardown() {
     let track = CancelToken::never();
     let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
@@ -974,7 +976,7 @@ fn drop_cancels_before_inner_reader_teardown() {
     assert_eq!(state.load(Ordering::SeqCst), DropState::AFTER_CANCEL);
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn reader_unwrap_disarms_resource_cancel() {
     let track = CancelToken::never();
     let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
@@ -993,7 +995,7 @@ fn reader_unwrap_disarms_resource_cancel() {
     assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
     let mut warp = Warp::new((), &WarpConfig::builder().build());
     let publisher = warp

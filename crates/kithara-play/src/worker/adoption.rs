@@ -343,7 +343,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn closing_control_prevents_worker_installation() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -359,7 +359,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn dropping_control_revokes_worker_request() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -368,7 +368,7 @@ mod tests {
         assert!(worker.snapshot(1, 0).is_none());
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn newest_request_is_the_only_request_worker_can_claim() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -391,7 +391,7 @@ mod tests {
         assert!(committed.get());
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn stale_decode_epoch_never_reaches_installation() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -406,7 +406,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn commit_time_decode_epoch_rejection_never_installs() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -436,7 +436,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn supersede_before_commit_never_installs_the_stale_plan() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(latest.item, TrackId(8));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn stale_control_invalidation_preserves_a_newer_request() {
         let (control, worker) = free_adoption();
         let stale = request(TrackId(7));
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(request.warp_map, current.warp_map);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn worker_snapshot_skips_a_contended_control_transition() {
         let (control, worker) = free_adoption();
         let request = request(TrackId(7));

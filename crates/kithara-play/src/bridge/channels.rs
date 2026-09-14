@@ -10,6 +10,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
+use kithara_test_utils::kithara;
 use kithara_warp::{
     DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls, WarpMapRevision,
 };
@@ -211,6 +212,7 @@ impl SlotControl {
         });
     }
 
+    #[kithara::hang_watchdog]
     pub(crate) fn service_scheduled_seeks(&mut self, preparation_frames: usize) {
         let preparation_end = self.latest_render_snapshot().map(|snapshot| {
             i64::from(snapshot.frontier().output())
@@ -218,6 +220,7 @@ impl SlotControl {
         });
         let mut index = 0;
         while index < self.scheduled_seeks.len() {
+            hang_reset!();
             let request = self.scheduled_seeks[index];
             if request.disposition.is_prepared_launch()
                 && !request.armed
@@ -474,7 +477,6 @@ mod tests {
     };
 
     use kithara_audio::SeekOutcome;
-    use kithara_test_utils::kithara;
     use kithara_warp::{
         PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch, SessionFrame,
         WarpMapRevision,
@@ -503,6 +505,14 @@ mod tests {
                 .warp_map(warp_map)
                 .build(),
         );
+    }
+
+    /// Fill the command ring so the next control-side push is refused.
+    #[kithara::hang_watchdog]
+    fn fill_command_ring(control: &mut SlotControl, command: impl Fn() -> PlayerCmd) {
+        while control.cmd_tx.try_push(command()).is_ok() {
+            hang_reset!();
+        }
     }
 
     #[kithara::test]
@@ -755,14 +765,10 @@ mod tests {
                 .output(SessionFrame::new(1_000))
                 .build(),
         );
-        while control
-            .cmd_tx
-            .try_push(PlayerCmd::SetPaused {
-                paused: false,
-                item_id: None,
-            })
-            .is_ok()
-        {}
+        fill_command_ring(&mut control, || PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        });
         control.schedule_track_seek(
             item,
             Duration::from_secs(3),
@@ -808,14 +814,10 @@ mod tests {
                 .output(SessionFrame::new(1_000))
                 .build(),
         );
-        while control
-            .cmd_tx
-            .try_push(PlayerCmd::SetPaused {
-                paused: false,
-                item_id: None,
-            })
-            .is_ok()
-        {}
+        fill_command_ring(&mut control, || PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        });
         control.schedule_track_seek(
             item,
             Duration::from_secs(3),
@@ -868,11 +870,7 @@ mod tests {
             warp_map: kithara_warp::WarpMapRevision::first(),
         });
         control.schedule_track_seek(item, Duration::from_secs(3), disposition);
-        while control
-            .cmd_tx
-            .try_push(PlayerCmd::SetFadeDuration(1.0))
-            .is_ok()
-        {}
+        fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
         control.service_scheduled_seeks(448);
@@ -923,11 +921,7 @@ mod tests {
             warp_map: kithara_warp::WarpMapRevision::first(),
         });
         control.schedule_track_seek(item, Duration::from_secs(3), disposition);
-        while control
-            .cmd_tx
-            .try_push(PlayerCmd::SetFadeDuration(1.0))
-            .is_ok()
-        {}
+        fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
         control.service_scheduled_seeks(448);
@@ -1025,14 +1019,10 @@ mod tests {
         );
         assert!(control.set_prepared_launch_armed(item, true));
 
-        while control
-            .cmd_tx
-            .try_push(PlayerCmd::SetPaused {
-                paused: false,
-                item_id: None,
-            })
-            .is_ok()
-        {}
+        fill_command_ring(&mut control, || PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        });
         assert!(control.cancel_prepared_launches(item, true));
         assert!(!control.set_prepared_launch_armed(item, true));
         assert_eq!(

@@ -123,7 +123,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
     panic!("Free did not reach a consumption-owned acknowledgement in 16 deterministic callbacks");
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, flash(false))]
+#[kithara::test(native, tokio, multi_thread, serial)]
 async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissions() {
     // `target_only` keeps the second deck silent: producer and reader probes
     // are generic audio seams, so their event stream is one adopted lane here.
@@ -186,7 +186,7 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, flash(false))]
+#[kithara::test(native, tokio, multi_thread, serial)]
 async fn free_handoff_default_nonblocking_has_no_post_request_underrun() {
     let (events, warp_map, underruns) = free_events(false).await;
     let track_id = events
@@ -244,7 +244,7 @@ async fn free_handoff_default_nonblocking_has_no_post_request_underrun() {
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, flash(false))]
+#[kithara::test(native, tokio, multi_thread, serial)]
 async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() {
     let (events, warp_map, _) = free_events(false).await;
     let (installed, track_id) = events

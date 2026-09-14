@@ -158,6 +158,7 @@ fn first_target_onset(samples: &[f32], command_frame: usize, target: usize) -> O
     })
 }
 
+#[kithara::flash(true)]
 async fn capture_frames(
     harness: &OfflinePlayerHarness,
     frames: usize,
@@ -532,7 +533,6 @@ async fn run_case(
     tokio,
     multi_thread,
     serial,
-    flash(false),
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
@@ -586,7 +586,6 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     tokio,
     multi_thread,
     serial,
-    flash(false),
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]

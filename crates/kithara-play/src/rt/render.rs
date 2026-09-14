@@ -130,7 +130,7 @@ impl RenderPass {
         let tracks = targets.tracks;
         let prepared_ready = prepared_launch_ready(tracks, context, frames, is_playing);
         let is_playing = is_playing || prepared_ready.is_some();
-        self.update_gate(is_playing);
+        self.update_gate(is_playing, prepared_ready.is_some());
         // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, false, None);
@@ -292,7 +292,12 @@ impl RenderPass {
         )
     }
 
-    fn update_gate(&mut self, is_playing: bool) {
+    /// Opens or closes the play/pause gate. A prepared launch opens a settled
+    /// closed gate at once: nothing sounded before its prefix, so a ramp would
+    /// only attenuate the launch attack. A gate still closing keeps its ramp,
+    /// which fades the outgoing audio.
+    fn update_gate(&mut self, is_playing: bool, prepared_launch: bool) {
+        let open_at_once = self.priming || (prepared_launch && self.gate.has_settled());
         self.gate.set_mix(
             if is_playing {
                 Mix::FULLY_DRY
@@ -301,7 +306,7 @@ impl RenderPass {
             },
             Self::GATE_CURVE,
         );
-        if self.priming {
+        if open_at_once {
             self.priming = false;
             self.gate.reset_to_target();
         }
