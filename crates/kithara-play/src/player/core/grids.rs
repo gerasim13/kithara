@@ -1,11 +1,14 @@
+use std::num::NonZeroU32;
+
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use kithara_warp::{
     AlignmentSource, AssetFrame, Beat, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
-    BeatGridSnapshot, BeatGridState, MapPoint, MapPosition, ReconcileCause, SegmentSet,
-    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember, SyncOperation, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation, WarpMap,
+    BeatGridSnapshot, BeatGridState, MapAxis, MapPoint, MapPosition, PresentationFrontier,
+    ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember,
+    SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation, WarpMap,
 };
+use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::PlayerImpl;
@@ -139,7 +142,10 @@ where
             let sync = &self.sync;
             sync.generations()
         };
-        let frontier = self.runtime.presentation_frontier();
+        let output_rate = self.runtime.core.engine.output_sample_rate();
+        let axis = grid.snapshot.axis();
+        let observed = self.runtime.presentation_frontier();
+        let frontier = observed.on_axis(axis, output_rate);
         let source = source.unwrap_or_else(|| {
             self.runtime.playback_snapshot().map_or(
                 AlignmentSource::Prepared(frontier),
@@ -147,9 +153,13 @@ where
                     if snapshot.is_playing() {
                         AlignmentSource::Audible {
                             presentation: frontier,
-                            preparation_source: snapshot.preparation_source(
-                                frontier.source(),
-                                self.runtime.core.response_budget_frames,
+                            preparation_source: native_frame(
+                                snapshot.preparation_source(
+                                    observed.source(),
+                                    self.runtime.core.response_budget_frames,
+                                ),
+                                axis,
+                                output_rate,
                             ),
                             playback_rate: kithara_warp::RateTarget::default()
                                 .with_speed(snapshot.rate),
@@ -190,14 +200,18 @@ where
                 activation_source = prepared.source,
                 activation_output = i64::from(prepared.activation)
             );
+            let asset_axis = axis;
             let plan = grid
                 .segments
-                .region_plan()
+                .region_plan(output_rate)
                 .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
                 .ok()
                 .map(|plan| {
                     let activation = WarpMap::identity(prepared.warp_map).reanchor(
-                        prepared.source,
+                        asset_axis.output_frame(
+                            prepared.source.to_f64().unwrap_or_default(),
+                            output_rate,
+                        ),
                         prepared.activation,
                         prepared.activation_beat,
                     );
@@ -206,8 +220,7 @@ where
             self.runtime.core.items.set_track_plan(item, plan);
 
             if let Some(slot) = self.runtime.slot() {
-                let sample_rate = self.runtime.core.engine.master_sample_rate().max(1);
-                let sample_rate = u64::from(sample_rate);
+                let sample_rate = u64::from(asset_axis.sample_rate().get());
                 let target =
                     kithara_platform::time::Duration::from_secs(prepared.source / sample_rate)
                         + kithara_platform::time::Duration::from_nanos(
@@ -309,7 +322,7 @@ where
         };
         let plan = grid
             .segments
-            .region_plan()
+            .region_plan(self.runtime.core.engine.output_sample_rate())
             .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
             .ok();
         self.runtime
@@ -328,7 +341,12 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
-        let Some(plan) = grid.segments.region_plan().ok().map(Arc::new) else {
+        let Some(plan) = grid
+            .segments
+            .region_plan(self.runtime.core.engine.output_sample_rate())
+            .ok()
+            .map(Arc::new)
+        else {
             return;
         };
         let (load, transport) = self.sync.generations();
@@ -406,8 +424,17 @@ fn source_cue_beat(grid: &BeatGridSnapshot, cue: AssetFrame) -> Option<Beat> {
     Some(*beat.value().value())
 }
 
+/// One output-frame coordinate on the grid's own axis, rounded to a whole
+/// frame because every position sync compares is a whole frame.
+fn native_frame(output_frame: u64, axis: MapAxis, output_rate: NonZeroU32) -> u64 {
+    axis.native_frame(output_frame, output_rate)
+        .round()
+        .to_u64()
+        .unwrap_or_default()
+}
+
 fn prepared_is_presented(
-    frontier: kithara_warp::PresentationFrontier,
+    frontier: PresentationFrontier,
     activation: kithara_warp::SessionFrame,
     warp_map: kithara_warp::WarpMapRevision,
 ) -> bool {

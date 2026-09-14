@@ -14,7 +14,7 @@ pub(crate) struct PreparedHostSeek {
     pub(crate) item: TrackId,
     pub(crate) grid_stamp: kithara_warp::BeatGridStamp,
     pub(crate) plan: kithara_platform::sync::Arc<kithara_warp::RegionPlan>,
-    pub(crate) sample_rate: u32,
+    pub(crate) axis: kithara_warp::MapAxis,
     pub(crate) slot: crate::api::SlotId,
     pub(crate) source_frame: u64,
 }

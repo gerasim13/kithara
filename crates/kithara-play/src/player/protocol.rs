@@ -136,6 +136,32 @@ where
     }
 }
 
+impl<S> PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
+    /// Whether the current track can hand its own mapping to a free
+    /// adoption: it must be resident, planned on the output frame axis and
+    /// already holding a transition to adopt.
+    fn owns_free_adoption(&self) -> bool {
+        let Some(item) = self.runtime.core.items.current_item_id() else {
+            return false;
+        };
+        let Some(grid) = self.runtime.core.items.track_grid(item) else {
+            return false;
+        };
+        grid.segments
+            .region_plan(self.runtime.core.engine.output_sample_rate())
+            .is_ok()
+            && self
+                .runtime
+                .core
+                .items
+                .free_adoption_transition(item)
+                .is_some()
+    }
+}
+
 impl<S> SyncGroup for PlayerImpl<S>
 where
     S: Send + Sync + 'static,
@@ -187,23 +213,8 @@ where
                 ..
             }
         );
-        if free {
-            let Some(item) = self.runtime.core.items.current_item_id() else {
-                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
-            };
-            let Some(grid) = self.runtime.core.items.track_grid(item) else {
-                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
-            };
-            if grid.segments.region_plan().is_err()
-                || self
-                    .runtime
-                    .core
-                    .items
-                    .free_adoption_transition(item)
-                    .is_none()
-            {
-                return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
-            }
+        if free && !self.owns_free_adoption() {
+            return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
         }
         let alignment_source = match &operation {
             SyncOperation::Sync { source, .. } => Some(*source),
@@ -391,11 +402,19 @@ where
         let reconcile =
             crate::sync::host_seek::prepare(&self.sync, prepared.grid_stamp, source, transport)
                 .map_err(PlayError::from)?;
-        let destination =
-            target::duration_for_source(reconcile.prepared.source, prepared.sample_rate);
+        let destination = target::duration_for_source(
+            reconcile.prepared.source,
+            prepared.axis.sample_rate().get(),
+        );
+        // Sync answers on the grid's own axis; the plan and every frontier the
+        // renderer compares it with count the output frames of decoded PCM.
+        let activation_source = prepared.axis.output_frame(
+            reconcile.prepared.source.to_f64().unwrap_or_default(),
+            self.runtime.core.engine.output_sample_rate(),
+        );
         let plan = Arc::new(prepared.plan.as_ref().clone().with_activation(
             WarpMap::identity(reconcile.prepared.warp_map).reanchor(
-                reconcile.prepared.source,
+                activation_source,
                 reconcile.prepared.activation,
                 reconcile.prepared.activation_beat,
             ),
@@ -479,7 +498,10 @@ where
 {
     fn free_handoff_source(&self) -> Option<kithara_warp::AlignmentSource> {
         let item = self.runtime.core.items.current_item_id()?;
-        let presentation = self.runtime.presentation_frontier_for(item, None)?;
+        let observed = self.runtime.presentation_frontier_for(item, None)?;
+        let axis = self.runtime.core.items.track_grid(item)?.snapshot.axis();
+        let output_rate = self.runtime.core.engine.output_sample_rate();
+        let presentation = observed.on_axis(axis, output_rate);
         let manual_rate = self.runtime.core.warp.stretch().rate_target();
         Some(kithara_warp::AlignmentSource::Audible {
             presentation,
@@ -551,13 +573,13 @@ where
         let grid_stamp = grid.snapshot.stamp();
         let plan = Arc::new(
             grid.segments
-                .region_plan()
+                .region_plan(self.runtime.core.engine.output_sample_rate())
                 .map_err(|_| PlayError::InvalidTrackGrid { item })?,
         );
         let slot = self.runtime.slot().ok_or(PlayError::NoActiveSlot)?;
         self.runtime.core.engine.validate_track_seek(slot, item)?;
-        let sample_rate = grid.snapshot.axis().sample_rate().get();
-        let source_frame = (seconds * f64::from(sample_rate)).round();
+        let axis = grid.snapshot.axis();
+        let source_frame = (seconds * f64::from(axis.sample_rate().get())).round();
         let source_frame = source_frame
             .to_u64()
             .ok_or(PlayError::InvalidHostSeekPosition { seconds })?;
@@ -573,7 +595,7 @@ where
             item,
             grid_stamp,
             plan,
-            sample_rate,
+            axis,
             slot,
             source_frame,
         })

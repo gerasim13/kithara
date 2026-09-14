@@ -1,6 +1,9 @@
 mod registration;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
@@ -219,6 +222,37 @@ mod tests {
     }
 }
 
+/// The sample rates the engine runs on. Decoded audio is resampled to the
+/// output rate before it reaches a renderer, so every frame coordinate that
+/// crosses the decoder boundary is measured against this axis.
+impl<S> EngineImpl<S> {
+    pub(crate) const fn configured_sample_rate(&self) -> u32 {
+        self.config.sample_rate.get()
+    }
+
+    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
+    ///
+    /// Returns the config default if the engine is not running yet.
+    /// Used to pre-initialise the resampler in `ResourceConfig` so that
+    /// `make_sincs` runs while the resource is prepared (off the worker thread)
+    /// instead of lazily on the first `step_track()` call.
+    pub fn master_sample_rate(&self) -> u32 {
+        if !self.running.load(Ordering::Acquire) {
+            return self.config.sample_rate.get();
+        }
+        self.session
+            .sample_rate()
+            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
+    }
+
+    /// The output frame axis as a rate, for the coordinate conversions that
+    /// cannot accept a zero. The configured rate is non-zero by construction
+    /// and stands in until the session reports its own.
+    pub(crate) fn output_sample_rate(&self) -> NonZeroU32 {
+        NonZeroU32::new(self.master_sample_rate()).unwrap_or(self.config.sample_rate)
+    }
+}
+
 /// Slot lifecycle owns allocation and release of session resources.
 impl<S> EngineImpl<S> {
     pub fn active_slots(&self) -> Vec<SlotId> {
@@ -423,10 +457,6 @@ impl<S> EngineImpl<S> {
         self.master_volume.store(level, Ordering::Relaxed);
     }
 
-    pub(crate) const fn configured_sample_rate(&self) -> u32 {
-        self.config.sample_rate.get()
-    }
-
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         self.session.consumer_wake_mode()
     }
@@ -470,21 +500,6 @@ impl<S> EngineImpl<S> {
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
-    }
-
-    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
-    ///
-    /// Returns the config default if the engine is not running yet.
-    /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs while the resource is prepared (off the worker thread)
-    /// instead of lazily on the first `step_track()` call.
-    pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate.get();
-        }
-        self.session
-            .sample_rate()
-            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
     }
 
     pub fn master_volume(&self) -> f32 {

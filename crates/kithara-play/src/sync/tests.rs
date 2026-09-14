@@ -1201,7 +1201,9 @@ fn different_bpm_grids_produce_one_coherent_phase_and_rate_decision() {
     )
     .expect("render context")
     .with_rate(SyncMode::HostSync, RateTarget::default());
-    let plan = segments.region_plan().expect("track tempo plan");
+    let plan = segments
+        .region_plan(NonZeroU32::new(48_000).expect("sample rate"))
+        .expect("track tempo plan");
     let rate = context.rate_for(plan.region_at(prepared.source));
     assert!((rate - 1.25).abs() < 1e-9, "{rate}");
 }

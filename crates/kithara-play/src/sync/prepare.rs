@@ -1,7 +1,7 @@
 use kithara_warp::{
     AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState,
-    LoadGeneration, MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, RateTarget,
-    SessionBeat, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
+    LoadGeneration, MapAxis, MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier,
+    RateTarget, SessionBeat, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
 };
 use num_traits::ToPrimitive;
 
@@ -136,6 +136,7 @@ pub(super) fn align_member(
         .ok_or_else(|| MapRegion::point(source))?;
     let earliest_output = reachable_output(
         owner,
+        member,
         previous,
         frontier,
         playback_rate,
@@ -202,6 +203,7 @@ pub(crate) fn handoff_member(
     let member_beat = *member_beat.value().value();
     let activation = reachable_output(
         owner,
+        member,
         previous,
         source.frontier(),
         source.playback_rate(),
@@ -248,6 +250,7 @@ pub(crate) fn free_activation_at_frontier(
 
 fn reachable_output(
     owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
     previous: Option<BeatAlignment>,
     frontier: PresentationFrontier,
     playback_rate: Option<RateTarget>,
@@ -270,14 +273,20 @@ fn reachable_output(
         };
         return Some(output.max(frontier.output()));
     }
-    output_at_source(frontier, playback_rate, source)
+    output_at_source(frontier, playback_rate, source, member.axis(), owner.axis())
 }
 
-/// Maps a decoded-ahead source frontier onto the live output axis without a seek.
+/// Maps a decoded-ahead source frontier onto the live output axis without a
+/// seek.
+///
+/// `source` and the frontier both count frames of the member's own axis, while
+/// the answer is an output frame, so the span crosses the resampler once.
 pub(super) fn output_at_source(
     frontier: PresentationFrontier,
     playback_rate: Option<RateTarget>,
     source: u64,
+    member_axis: MapAxis,
+    owner_axis: MapAxis,
 ) -> Option<SessionFrame> {
     let Some(playback_rate) = playback_rate else {
         return Some(frontier.output());
@@ -286,7 +295,10 @@ pub(super) fn output_at_source(
     if !rate.is_finite() || rate <= 0.0 {
         return None;
     }
-    let source_frames = source.saturating_sub(frontier.source()).to_f64()?;
+    let member_frames = source.saturating_sub(frontier.source());
+    let source_frames = member_axis
+        .output_frame(member_frames.to_f64()?, owner_axis.sample_rate())
+        .to_f64()?;
     let output_frames = (source_frames / rate).ceil().to_i64()?;
     Some(SessionFrame::new(
         i64::from(frontier.output()).checked_add(output_frames)?,
