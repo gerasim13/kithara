@@ -1,4 +1,7 @@
-use std::{num::NonZeroUsize, ops::Deref};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Deref,
+};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -25,6 +28,9 @@ use crate::{
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
     pub(crate) sync: PlayerSync,
+    /// The output rate the resident region plans were built on, so a host
+    /// route change onto a new rate can be noticed and answered.
+    pub(crate) planned_output_rate: NonZeroU32,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -98,6 +104,7 @@ impl<S> PlayerImpl<S> {
         };
         Self {
             sync,
+            planned_output_rate: config.sample_rate,
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),

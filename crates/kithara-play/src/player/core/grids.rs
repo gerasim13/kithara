@@ -262,6 +262,7 @@ where
     ///
     /// Returns the group's acknowledgement error.
     pub(crate) fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        self.replan_on_output_rate_change();
         self.adopt_free_receipt();
         let sync = &self.sync;
         let Some(prepared) = sync.prepared() else {
@@ -310,6 +311,23 @@ where
             );
         }
         Ok(Some(status))
+    }
+
+    /// Rebuilds the resident plan when the host moves the output rate under a
+    /// running session.
+    ///
+    /// A region plan counts the output frames the decoder emits, so a route
+    /// change onto a new rate leaves every segment on an axis the stream no
+    /// longer carries and the deck loses its beat markers.
+    fn replan_on_output_rate_change(&mut self) {
+        let rate = self.runtime.core.engine.output_sample_rate();
+        if self.planned_output_rate == rate {
+            return;
+        }
+        self.planned_output_rate = rate;
+        if let Some(item) = self.runtime.core.items.current_item_id() {
+            self.replan_track(item);
+        }
     }
 
     fn replan_track(&self, item: TrackId) {

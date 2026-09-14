@@ -152,6 +152,9 @@ pub(super) struct SyncCase {
     updates_hz: u32,
     pub(super) tracks_per_deck: usize,
     pub(super) crossfade_secs: f32,
+    /// The output rate the host runs at before it restarts mid-ride onto
+    /// `sample_rate`, or `None` when the host never changes rate.
+    start_sample_rate: Option<u32>,
 }
 
 impl SyncCase {
@@ -173,6 +176,17 @@ impl SyncCase {
             updates_hz: 60,
             tracks_per_deck: 1,
             crossfade_secs: 0.0,
+            start_sample_rate: None,
+        }
+    }
+
+    /// Starts the host at `start` and restarts it onto `sample_rate` midway
+    /// through the tempo ride, the way a device route change moves the rate
+    /// under a running session.
+    const fn restarting_host(self, start: u32) -> Self {
+        Self {
+            start_sample_rate: Some(start),
+            ..self
         }
     }
 
@@ -279,6 +293,12 @@ const TEMPO_UP_120: SyncCase =
 const TEMPO_DOWN_30: SyncCase =
     SyncCase::running("tempo-down-30hz", 2, 44_100, OperationOrder::PlaySyncSeek)
         .ride(TempoRide::Down, 30);
+/// The host starts at 44.1k and restarts onto 48k mid-ride, so the region
+/// plan and every frontier must follow the axis the decoder now emits.
+const HOST_RATE_CHANGE: SyncCase =
+    SyncCase::running("host-rate-change", 2, 48_000, OperationOrder::PlaySyncSeek)
+        .ride(TempoRide::Up, 120)
+        .restarting_host(44_100);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
 pub(super) const SHARED_DEADLINE: SyncCase = SyncCase::running(
@@ -661,7 +681,8 @@ impl ProductHarness {
             .collect();
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
+        let sample_rate = NonZeroU32::new(case.start_sample_rate.unwrap_or(case.sample_rate))
+            .expect("fixture sample rate");
         let max_block_frames =
             NonZeroU32::new(u32::try_from(block_frames).expect("fixture block size fits u32"))
                 .expect("fixture block size is non-zero");
@@ -1282,13 +1303,15 @@ impl ProductHarness {
         let mut start = case.start_bpm();
         let mut rendered = 0_u64;
         let mut update = 0_u64;
-        for &target in case.ride.points() {
+        let mut host_rate = case.start_sample_rate.unwrap_or(case.sample_rate);
+        let restart_after = case.start_sample_rate.map(|_| case.ride.points().len() / 2);
+        for (leg, &target) in case.ride.points().iter().enumerate() {
             for step in 1..=steps_per_leg {
                 let fraction = f64::from(step) / f64::from(steps_per_leg);
                 let bpm = start + (target - start) * fraction;
                 self.set_tempo(case, bpm, false).await;
                 update += 1;
-                let deadline = update * u64::from(case.sample_rate) / u64::from(case.updates_hz);
+                let deadline = update * u64::from(host_rate) / u64::from(case.updates_hz);
                 let frames = deadline.saturating_sub(rendered);
                 rendered = deadline;
                 if frames > 0 {
@@ -1297,6 +1320,22 @@ impl ProductHarness {
                 }
             }
             start = target;
+            if restart_after == Some(leg) {
+                self.restart_host_rate(case).await;
+                host_rate = case.sample_rate;
+                rendered = 0;
+                update = 0;
+            }
+        }
+        self.settle(case, 4).await;
+    }
+
+    /// Moves the live output rate the way a device route change does, so the
+    /// deck must answer on the axis the decoded stream now carries.
+    async fn restart_host_rate(&mut self, case: SyncCase) {
+        if let Err(error) = self.host.restart_stream(case.sample_rate).await {
+            self.failures
+                .push(format!("{}: restart host output rate: {error}", case.id));
         }
         self.settle(case, 4).await;
     }
@@ -3925,6 +3964,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
 #[case::downtempo_house(DOWNTEMPO_HOUSE_SYNC, source_downtempo_house_provider().await)]
 #[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, source_techno_breakbeat_provider().await)]
 #[case::cross_style_four_deck(CROSS_STYLE_SYNC, source_cross_style_provider().await)]
+#[case::host_rate_change(HOST_RATE_CHANGE, source_synthetic().await)]
 async fn wav_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
     #[case] provider: PreparedSources,
