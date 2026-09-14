@@ -2213,23 +2213,29 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     }
 }
 
-/// The guest carries FFmpeg, and `ffmpeg-sys-next` finds a prebuilt one only
-/// through `FFMPEG_DIR`. Without it the crate falls through to vcpkg and then
-/// to pkg-config, the guest has neither, and the build script panics before a
-/// single test runs — which is what the lane did for as long as it existed.
-/// Where FFmpeg sits is machine state, so it is read the way the pool's labels
-/// are: from a repository variable rather than pinned in the workflow.
+/// The guest carries FFmpeg and libclang, and the build scripts find them only
+/// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
+/// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
+/// loads no library. Either way a build script panics before a single test
+/// runs — which is what the lane did for as long as it existed. Where they sit
+/// is machine state, so both are read the way the pool's labels are: from a
+/// repository variable rather than pinned in the workflow.
 #[test]
-fn the_windows_lane_is_told_where_the_guest_keeps_ffmpeg() {
+fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
     let workflow = github_workflow("windows.yml");
     let job = workflow_job(workflow_jobs(&workflow), "windows");
     let environment = mapping_field(job, "env")
         .as_mapping()
-        .expect("the lane names the environment its build script reads");
+        .expect("the lane names the environment its build scripts read");
 
-    assert_eq!(
-        mapping_field(environment, "FFMPEG_DIR").as_str(),
-        Some("${{ vars.KITHARA_WINDOWS_FFMPEG_DIR }}"),
-        "the lane pins a path instead of reading the machine's own"
-    );
+    for (name, variable) in [
+        ("FFMPEG_DIR", "KITHARA_WINDOWS_FFMPEG_DIR"),
+        ("LIBCLANG_PATH", "KITHARA_WINDOWS_LIBCLANG_PATH"),
+    ] {
+        assert_eq!(
+            mapping_field(environment, name).as_str(),
+            Some(format!("${{{{ vars.{variable} }}}}").as_str()),
+            "`{name}` pins a path instead of reading the machine's own"
+        );
+    }
 }
