@@ -45,6 +45,9 @@ impl PreparedSync {
 
 /// The beat alignment of one grid member onto its owner's grid and the
 /// owner-grid frame on which it becomes audible.
+///
+/// `source` counts output frames, the axis the decoded stream carries and the
+/// axis a Free adoption reports, so one meaning survives either disposition.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MemberAlignment {
     pub(crate) alignment: BeatAlignment,
@@ -175,7 +178,8 @@ pub(super) fn align_member(
         activation,
         activation_beat: SessionBeat::new(f64::from(owner_beat))
             .map_err(|_| MapRegion::point(output))?,
-        source: source_frame,
+        source: output_source(member, owner, source_frame)
+            .ok_or_else(|| MapRegion::point(output))?,
     })
 }
 
@@ -226,7 +230,8 @@ pub(crate) fn handoff_member(
         activation,
         activation_beat: SessionBeat::new(f64::from(owner_beat))
             .map_err(|_| MapRegion::point(MapPosition::Session(activation)))?,
-        source: source_frame,
+        source: output_source(member, owner, source_frame)
+            .ok_or_else(|| MapRegion::point(MapPosition::Session(activation)))?,
     })
 }
 
@@ -246,6 +251,17 @@ pub(crate) fn free_activation_at_frontier(
     let beat = SessionBeat::new(f64::from(owner_beat))
         .map_err(|_| MapRegion::point(MapPosition::Session(output)))?;
     Ok((source, output, beat))
+}
+
+/// Scales a member-native source frame onto the output axis the decoded
+/// stream carries, so a prepared source means the same thing whether it was
+/// aligned here or reported by a Free adoption.
+fn output_source(member: &BeatGridSnapshot, owner: &BeatGridSnapshot, source: u64) -> Option<u64> {
+    Some(
+        member
+            .axis()
+            .output_frame(source.to_f64()?, owner.axis().sample_rate()),
+    )
 }
 
 fn reachable_output(

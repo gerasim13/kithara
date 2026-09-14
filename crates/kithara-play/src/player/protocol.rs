@@ -402,19 +402,11 @@ where
         let reconcile =
             crate::sync::host_seek::prepare(&self.sync, prepared.grid_stamp, source, transport)
                 .map_err(PlayError::from)?;
-        let destination = target::duration_for_source(
-            reconcile.prepared.source,
-            prepared.axis.sample_rate().get(),
-        );
-        // Sync answers on the grid's own axis; the plan and every frontier the
-        // renderer compares it with count the output frames of decoded PCM.
-        let activation_source = prepared.axis.output_frame(
-            reconcile.prepared.source.to_f64().unwrap_or_default(),
-            self.runtime.core.engine.output_sample_rate(),
-        );
+        let output_rate = self.runtime.core.engine.output_sample_rate();
+        let destination = target::duration_for_source(reconcile.prepared.source, output_rate.get());
         let plan = Arc::new(prepared.plan.as_ref().clone().with_activation(
             WarpMap::identity(reconcile.prepared.warp_map).reanchor(
-                activation_source,
+                reconcile.prepared.source,
                 reconcile.prepared.activation,
                 reconcile.prepared.activation_beat,
             ),
@@ -595,7 +587,6 @@ where
             item,
             grid_stamp,
             plan,
-            axis,
             slot,
             source_frame,
         })

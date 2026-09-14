@@ -200,7 +200,6 @@ where
                 activation_source = prepared.source,
                 activation_output = i64::from(prepared.activation)
             );
-            let asset_axis = axis;
             let plan = grid
                 .segments
                 .region_plan(output_rate)
@@ -208,10 +207,7 @@ where
                 .ok()
                 .map(|plan| {
                     let activation = WarpMap::identity(prepared.warp_map).reanchor(
-                        asset_axis.output_frame(
-                            prepared.source.to_f64().unwrap_or_default(),
-                            output_rate,
-                        ),
+                        prepared.source,
                         prepared.activation,
                         prepared.activation_beat,
                     );
@@ -220,7 +216,7 @@ where
             self.runtime.core.items.set_track_plan(item, plan);
 
             if let Some(slot) = self.runtime.slot() {
-                let sample_rate = u64::from(asset_axis.sample_rate().get());
+                let sample_rate = u64::from(output_rate.get());
                 let target =
                     kithara_platform::time::Duration::from_secs(prepared.source / sample_rate)
                         + kithara_platform::time::Duration::from_nanos(
