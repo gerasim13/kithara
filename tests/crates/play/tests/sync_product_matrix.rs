@@ -330,6 +330,13 @@ pub(super) const DOWNTEMPO_HOUSE_SYNC: SyncCase = SyncCase::running(
     OperationOrder::PlaySyncSeek,
 )
 .hold(124.0);
+pub(super) const HOUSE_PAIR_SYNC: SyncCase = SyncCase::running(
+    "house-124-staggered",
+    2,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(124.0);
 pub(super) const TECHNO_BREAKBEAT_SYNC: SyncCase = SyncCase::running(
     "techno-132-to-breakbeat-140",
     2,
@@ -393,6 +400,14 @@ const SCENARIO_1_DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_scenario_1_downtempo_96_left_only",
     "rhythm_wav_scenario_1_house_124_right_only",
 ];
+const SCENARIO_3_HOUSE_PAIR: &[&str] = &[
+    "rhythm_wav_scenario_1_house_124_left_only",
+    "rhythm_wav_scenario_1_house_124_right_only",
+];
+const SCENARIO_4_HOUSE_PAIR_PICKUP: &[&str] = &[
+    "rhythm_wav_scenario_1_house_124_left_only",
+    "rhythm_wav_scenario_2_house_124_right_only_pickup",
+];
 const SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP: &[&str] = &[
     "rhythm_wav_scenario_1_downtempo_96_left_only",
     "rhythm_wav_scenario_2_house_124_right_only_pickup",
@@ -427,6 +442,9 @@ pub(super) enum Provider {
 pub(super) const AMBIENT_TRIP_HOP_PROVIDER: Provider = Provider::Rhythm(AMBIENT_TRIP_HOP);
 pub(super) const DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(DOWNTEMPO_HOUSE);
 const SCENARIO_1_DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(SCENARIO_1_DOWNTEMPO_HOUSE);
+const SCENARIO_3_HOUSE_PAIR_PROVIDER: Provider = Provider::Rhythm(SCENARIO_3_HOUSE_PAIR);
+const SCENARIO_4_HOUSE_PAIR_PICKUP_PROVIDER: Provider =
+    Provider::Rhythm(SCENARIO_4_HOUSE_PAIR_PICKUP);
 const SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP_PROVIDER: Provider =
     Provider::Rhythm(SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP);
 pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_BREAKBEAT);
@@ -3723,6 +3741,165 @@ async fn scenario_2_simultaneous_different_bpm_with_a_pickup(
     );
 }
 
+/// Beats a deck joining later must place on the grid the playing deck set.
+///
+/// A staggered launch gives the joining deck fewer beats, so its markers are
+/// required to fall on the playing deck's Host beats rather than to match them
+/// one for one.
+fn joined_lane_failures(playing: &[u64], joining: &[u64]) -> Vec<String> {
+    let mut failures = Vec::new();
+    if joining.is_empty() {
+        failures.push("the joining deck produced no beat marker".to_owned());
+    }
+    let stray = joining
+        .iter()
+        .copied()
+        .filter(|frame| !playing.contains(frame))
+        .collect::<Vec<_>>();
+    if !stray.is_empty() {
+        failures.push(format!(
+            "joining deck beats {stray:?} are off the playing deck's Host beats {playing:?}"
+        ));
+    }
+    failures
+}
+
+/// A pickup sounds exactly one beat before the downbeat it leads into.
+fn pickup_lead_failures(beats: &[u64], downbeats: &[u64], period: u64) -> Vec<String> {
+    match (beats.first(), downbeats.first()) {
+        (Some(first_beat), Some(first_downbeat))
+            if *first_downbeat == first_beat.saturating_add(period) =>
+        {
+            Vec::new()
+        }
+        (Some(first_beat), Some(first_downbeat)) => vec![format!(
+            "pickup lane opens at Host frame {first_beat} and reaches its downbeat at {first_downbeat}, expected one {period}-frame beat apart"
+        )],
+        (beat, downbeat) => vec![format!(
+            "pickup lane is missing a marker: first beat {beat:?}, first downbeat {downbeat:?}"
+        )],
+    }
+}
+
+async fn staggered_launch_failures(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    pickup: bool,
+) -> Vec<String> {
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+    const CAPTURE_FRAMES: usize = 48_000 * 10;
+
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(
+        prelaunch.iter().all(|sample| *sample == 0.0),
+        "a staggered launch must stay silent before its first deck plays"
+    );
+    harness.mark("staggered-enable");
+    harness.request_sync(case).await;
+    let period = (f64::from(case.sample_rate) * 60.0 / case.start_bpm()).round() as u64;
+    let stagger = usize::try_from(period * 3 / 8).expect("stagger fits usize");
+    let capture_start = harness.rendered_frames;
+    let playing = harness.decks[0].control().clone();
+    harness.host.run(move || playing.play()).await;
+    harness.mark("staggered-playing-deck");
+    let mut capture = harness
+        .capture_frames(case, stagger, harness.block_frames)
+        .await;
+    let joining = harness.decks[1].control().clone();
+    harness.host.run(move || joining.play()).await;
+    harness.mark("staggered-joining-deck");
+    capture.extend(
+        harness
+            .capture_frames(case, CAPTURE_FRAMES, harness.block_frames)
+            .await,
+    );
+
+    let (left_beats, left_downbeats) =
+        lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let (right_beats, right_downbeats) =
+        lane_score_markers(&capture, 1, capture_start, case.sample_rate);
+    let activation = harness
+        .sync_activation
+        .expect("a staggered sync request records its activation frame");
+    // A pickup sounds before the bar it leads into, so it cannot lie on the
+    // playing deck's beats; `pickup_lead_failures` pins that one beat exactly.
+    let graded = if pickup {
+        right_beats.get(1..).unwrap_or_default()
+    } else {
+        &right_beats
+    };
+    let mut failures = joined_lane_failures(&left_beats, graded);
+    failures.extend(shared_bar_phase_failures(
+        &left_downbeats,
+        &right_downbeats,
+        activation,
+        case.sample_rate,
+        harness.block_frames,
+    ));
+    if pickup {
+        failures.extend(pickup_lead_failures(&right_beats, &right_downbeats, period));
+    }
+    failures.extend(harness.underrun_failures());
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            if pickup { "scenario_4" } else { "scenario_3" },
+            serde_json::json!({
+                "verdict": if failures.is_empty() { "pass" } else { "fail" },
+                "mix_layout": "same-session diagnostic mix: playing deck left only, joining deck right only",
+                "stagger_frames": stagger,
+                "sync_activation_frame": activation,
+                "capture_host_start_frame": capture_start,
+                "left": lane_early_measurement(&capture, 0, capture_start, case.sample_rate),
+                "right": lane_early_measurement(&capture, 1, capture_start, case.sample_rate),
+                "failures": failures,
+            }),
+        );
+    }
+    failures
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn scenario_3_staggered_equal_tempo_exact_grids(
+    #[future(awt)] source_scenario_3_house_pair_provider: PreparedSources,
+) {
+    let sources = &source_scenario_3_house_pair_provider;
+    let case = HOUSE_PAIR_SYNC.paused();
+    let mut harness = ProductHarness::new_for_block(case, sources, 0, BLOCK_FRAMES).await;
+    for deck in &harness.decks {
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
+    }
+    prepare_fixture_grids(&mut harness, case, sources).await;
+    let failures = staggered_launch_failures(&mut harness, case, false).await;
+    drop(harness);
+    assert!(
+        failures.is_empty(),
+        "scenario 3 staggered equal-tempo contract failed: {}",
+        failures.join("; ")
+    );
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn scenario_4_staggered_equal_tempo_with_a_pickup(
+    #[future(awt)] source_scenario_4_house_pair_pickup_provider: PreparedSources,
+) {
+    let sources = &source_scenario_4_house_pair_pickup_provider;
+    let case = HOUSE_PAIR_SYNC.paused();
+    let mut harness = ProductHarness::new_track_start(case, sources, 0).await;
+    for deck in &harness.decks {
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
+    }
+    prepare_fixture_grids(&mut harness, case, sources).await;
+    let failures = staggered_launch_failures(&mut harness, case, true).await;
+    drop(harness);
+    assert!(
+        failures.is_empty(),
+        "scenario 4 staggered pickup contract failed: {}",
+        failures.join("; ")
+    );
+}
+
 /// A deck whose track opens on a pickup leads into the shared downbeat.
 ///
 /// The pickup is musical geometry: its beat sounds one beat before the bar it
@@ -4325,6 +4502,16 @@ async fn source_scenario_1_downtempo_house_provider() -> PreparedSources {
 #[kithara::fixture]
 async fn source_scenario_2_downtempo_house_pickup_provider() -> PreparedSources {
     prepared_sources(SCENARIO_2_DOWNTEMPO_HOUSE_PICKUP_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_scenario_3_house_pair_provider() -> PreparedSources {
+    prepared_sources(SCENARIO_3_HOUSE_PAIR_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_scenario_4_house_pair_pickup_provider() -> PreparedSources {
+    prepared_sources(SCENARIO_4_HOUSE_PAIR_PICKUP_PROVIDER).await
 }
 
 #[kithara::fixture]

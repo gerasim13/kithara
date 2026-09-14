@@ -48,6 +48,7 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::downtempo_96_left_only(Style::Downtempo, ChannelLayout::LeftOnly)]
+#[case::house_124_left_only(Style::House, ChannelLayout::LeftOnly)]
 #[case::house_124_right_only(Style::House, ChannelLayout::RightOnly)]
 fn rhythm_wav_scenario_1(style: Style, layout: ChannelLayout) -> Vec<u8> {
     score::wav_with_layout(style, Control::Aligned, layout)
@@ -175,6 +176,7 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
     depends_on = ["rhythm_wav_scenario_1_{case}"]
 )]
 #[case::downtempo_96_left_only(Style::Downtempo)]
+#[case::house_124_left_only(Style::House)]
 #[case::house_124_right_only(Style::House)]
 fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
