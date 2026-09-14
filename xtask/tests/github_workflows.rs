@@ -1911,6 +1911,40 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
     );
 }
 
+/// A step that reads what the lane built must ask where the lane builds.
+///
+/// The timing report was collected from a hard-coded `/cache/target`, and
+/// moving the lane's build directory left that path pointing at nothing. The
+/// upload declares `if-no-files-found: error`, so the lane compiled and tested
+/// for twenty-five minutes and then failed on the artefact.
+#[test]
+fn a_step_that_collects_build_output_reads_the_build_directory() {
+    let workflow = github_workflow("lane.yml");
+    let steps = workflow
+        .get("jobs")
+        .and_then(|jobs| jobs.get("run"))
+        .and_then(|job| job.get("steps"))
+        .and_then(Value::as_sequence)
+        .expect("the executor has steps");
+    let timings = steps
+        .iter()
+        .find(|step| {
+            step.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("timing"))
+        })
+        .expect("the executor uploads a timing report");
+    let path = timings
+        .get("with")
+        .and_then(|with| with.get("path"))
+        .and_then(Value::as_str)
+        .expect("the upload names a path");
+    assert!(
+        path.starts_with("${{ env.CARGO_TARGET_DIR }}"),
+        "the timing report must be read from where the lane built: {path}"
+    );
+}
+
 // The executor's whole job is to run a lane the catalog named. A workflow that
 // can be handed an arbitrary command is a second place for a command to live.
 #[test]
