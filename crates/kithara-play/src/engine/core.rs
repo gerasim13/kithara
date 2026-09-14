@@ -638,9 +638,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.slots
-            .lock()
-            .service_scheduled_seeks(self.config.response_budget_frames.get());
+        self.slots.lock().service_scheduled_seeks();
         self.session.tick()
     }
 

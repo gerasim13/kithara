@@ -64,9 +64,9 @@ impl SlotTable {
         Some(self.slots.remove(idx).1)
     }
 
-    pub(super) fn service_scheduled_seeks(&mut self, preparation_frames: usize) {
+    pub(super) fn service_scheduled_seeks(&mut self) {
         for (_, control) in &mut self.slots {
-            control.service_scheduled_seeks(preparation_frames);
+            control.service_scheduled_seeks();
         }
     }
 

@@ -589,6 +589,65 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
 }
 
 #[kithara::test]
+fn post_seek_pcm_passing_the_activation_source_keeps_its_own_output_frontier() {
+    let controls = StretchControls::new(1.0);
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let mut renderer = warp.renderer(spec(), pools());
+    let output = SessionFrame::new(1_000)..SessionFrame::new(1_128);
+    let context = RenderContext::new(
+        output.clone(),
+        spec().sample_rate,
+        Some(host_beats(output)),
+        SessionEpoch::new(1),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context")
+    .with_rate(SyncMode::HostSync, controls.rate_target());
+    publisher.publish_preparation(&context);
+    let cue = 30_000;
+    let revision =
+        WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
+    warp.region_plan().install(Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("fixture plan")
+            .with_activation(WarpMap::identity(revision).reanchor(
+                cue,
+                SessionFrame::new(92_903),
+                SessionBeat::default(),
+            )),
+    )));
+    renderer.reset();
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+
+    let mut before = chunk(&pools, &[0.0; 256]);
+    before.meta.frame_offset = cue - 128;
+    renderer
+        .prepare_quantum(before.meta, before.frames())
+        .expect("post-seek PCM before the activation source is prepared");
+    renderer
+        .render_quantum(before)
+        .expect("post-seek PCM before the activation source renders");
+
+    let mut crossing = chunk(&pools, &[0.0; 256]);
+    crossing.meta.frame_offset = cue;
+    renderer
+        .prepare_quantum(crossing.meta, crossing.frames())
+        .expect("continuous PCM at the activation source is prepared");
+    let crossing = renderer
+        .render_quantum(crossing)
+        .expect("continuous PCM at the activation source renders");
+
+    assert_eq!(
+        kithara_signal::render_warp_map_revision(crossing.meta.render_revision),
+        0,
+        "only the first quantum after a discontinuity may start at the activation"
+    );
+}
+
+#[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(false);

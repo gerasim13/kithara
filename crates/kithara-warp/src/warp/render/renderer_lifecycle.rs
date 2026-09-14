@@ -458,9 +458,9 @@ where
             Some(prepared),
             carrier_activation,
         )?;
+        self.discontinuity_pending = false;
         if let Some(revision) = revision {
             self.applied_warp_map = Some(revision);
-            self.discontinuity_pending = false;
             output.meta.render_revision =
                 kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
                     .unwrap_or(rate_revision);

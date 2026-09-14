@@ -213,11 +213,7 @@ impl SlotControl {
     }
 
     #[kithara::hang_watchdog]
-    pub(crate) fn service_scheduled_seeks(&mut self, preparation_frames: usize) {
-        let preparation_end = self.latest_render_snapshot().map(|snapshot| {
-            i64::from(snapshot.frontier().output())
-                .saturating_add(i64::try_from(preparation_frames).unwrap_or(i64::MAX))
-        });
+    pub(crate) fn service_scheduled_seeks(&mut self) {
         let mut index = 0;
         while index < self.scheduled_seeks.len() {
             hang_reset!();
@@ -225,13 +221,6 @@ impl SlotControl {
             if request.disposition.is_prepared_launch()
                 && !request.armed
                 && matches!(request.state, ScheduledTrackSeekState::AwaitingStart)
-            {
-                index += 1;
-                continue;
-            }
-            if !request.disposition.is_prepared_launch()
-                && preparation_end
-                    .is_none_or(|end| i64::from(request.disposition.activation()) > end)
             {
                 index += 1;
                 continue;
@@ -624,7 +613,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn scheduled_track_seek_begins_inside_the_preparation_window() {
+    fn scheduled_track_seek_begins_while_old_pcm_still_leads_its_activation() {
         let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
         let item = TrackId::allocate();
         let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
@@ -654,9 +643,12 @@ mod tests {
             },
         );
 
-        control.service_scheduled_seeks(448);
-        assert_eq!(seek.0.load(Ordering::Relaxed), 0);
-        assert!(inputs.cmd_rx.try_pop().is_none());
+        control.service_scheduled_seeks();
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7, .. }) if item_id == item
+        ));
 
         let prepared_item = TrackId::allocate();
         let prepared_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
@@ -669,10 +661,10 @@ mod tests {
                 warp_map: kithara_warp::WarpMapRevision::first(),
             }),
         );
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(prepared_seek.0.load(Ordering::Relaxed), 0);
         assert!(control.set_prepared_launch_armed(prepared_item, true));
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(prepared_seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
@@ -681,20 +673,6 @@ mod tests {
                 disposition: ScheduledSeekDisposition::PreparedLaunch(_),
                 ..
             }) if item_id == prepared_item
-        ));
-
-        publisher.publish(
-            &context,
-            PresentationFrontier::builder()
-                .source(1_600)
-                .output(SessionFrame::new(1_600))
-                .build(),
-        );
-        control.service_scheduled_seeks(448);
-        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
-        assert!(matches!(
-            inputs.cmd_rx.try_pop(),
-            Some(PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7, .. }) if item_id == item
         ));
     }
 
@@ -712,7 +690,7 @@ mod tests {
                 warp_map: kithara_warp::WarpMapRevision::first(),
             }),
         );
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 0);
         assert!(inputs.cmd_rx.try_pop().is_none());
     }
@@ -733,7 +711,7 @@ mod tests {
         );
         assert!(control.set_prepared_launch_armed(item, true));
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
 
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
@@ -777,11 +755,11 @@ mod tests {
             },
         );
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(inputs.cmd_rx.try_pop().is_some());
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop()).any(|command| matches!(
@@ -828,11 +806,11 @@ mod tests {
         );
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(inputs.cmd_rx.try_pop().is_some());
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop()).any(|command| matches!(
@@ -873,14 +851,14 @@ mod tests {
         fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop())
                 .all(|command| matches!(command, PlayerCmd::SetFadeDuration(1.0)))
         );
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
             Some(PlayerCmd::ScheduleSeek {
@@ -924,12 +902,12 @@ mod tests {
         fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(control.set_prepared_launch_armed(item, false));
         while inputs.cmd_rx.try_pop().is_some() {}
 
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
             Some(PlayerCmd::ScheduleSeek {
@@ -978,7 +956,7 @@ mod tests {
         assert!(control.set_prepared_launch_armed(second, true));
 
         control.disarm_prepared_launches();
-        control.service_scheduled_seeks(448);
+        control.service_scheduled_seeks();
 
         assert_eq!(first_seek.0.load(Ordering::Relaxed), 0);
         assert_eq!(second_seek.0.load(Ordering::Relaxed), 0);
