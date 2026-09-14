@@ -2212,3 +2212,24 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         );
     }
 }
+
+/// The guest carries FFmpeg, and `ffmpeg-sys-next` finds a prebuilt one only
+/// through `FFMPEG_DIR`. Without it the crate falls through to vcpkg and then
+/// to pkg-config, the guest has neither, and the build script panics before a
+/// single test runs — which is what the lane did for as long as it existed.
+/// Where FFmpeg sits is machine state, so it is read the way the pool's labels
+/// are: from a repository variable rather than pinned in the workflow.
+#[test]
+fn the_windows_lane_is_told_where_the_guest_keeps_ffmpeg() {
+    let workflow = github_workflow("windows.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "windows");
+    let environment = mapping_field(job, "env")
+        .as_mapping()
+        .expect("the lane names the environment its build script reads");
+
+    assert_eq!(
+        mapping_field(environment, "FFMPEG_DIR").as_str(),
+        Some("${{ vars.KITHARA_WINDOWS_FFMPEG_DIR }}"),
+        "the lane pins a path instead of reading the machine's own"
+    );
+}

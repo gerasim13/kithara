@@ -23,9 +23,22 @@ jobs:
     runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
     timeout-minutes: 180
 
+    # The guest carries FFmpeg, and `ffmpeg-sys-next` reads this to find it.
+    # Where it sits is a property of the machine, so the machine's variable
+    # says it, the way its labels do: unset, the crate falls through to vcpkg
+    # and pkg-config, finds neither, and the workspace never compiles.
+    env:
+      FFMPEG_DIR: ${{ vars.KITHARA_WINDOWS_FFMPEG_DIR }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # FFmpeg is a shared build, so a test that loads the crate needs its
+      # DLLs beside the binary or on the search path.
+      - name: Put the FFmpeg libraries on the search path
+        shell: powershell
+        run: Add-Content $env:GITHUB_PATH "$env:FFMPEG_DIR\bin"
 
       # The guest carries the toolchain, so this installs nothing either.
       - name: Check the workspace
