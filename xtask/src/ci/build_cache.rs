@@ -155,6 +155,21 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
     Ok(())
 }
 
+/// What a listed entry still is, or nothing when it is already gone.
+///
+/// The cache being measured is one a job may be building in, and a compiler
+/// writes a temporary file and removes it again. A name the listing returned
+/// and the build has since deleted is that race, not a broken cache: there is
+/// nothing left to count or to reclaim. Any other failure is a real one, and
+/// stopping the sweep on it is why the budget went unenforced.
+fn still_there(metadata: io::Result<fs::Metadata>) -> io::Result<Option<fs::Metadata>> {
+    match metadata {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
     if !target_dir.is_absolute() || target_dir.parent().is_none() {
         bail!(
@@ -183,8 +198,11 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         let entry = entry
             .with_context(|| format!("reading an entry in build cache {}", target_dir.display()))?;
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)
-            .with_context(|| format!("reading build cache metadata for {}", path.display()))?;
+        let Some(metadata) = still_there(fs::symlink_metadata(&path))
+            .with_context(|| format!("reading build cache metadata for {}", path.display()))?
+        else {
+            continue;
+        };
         if !metadata.file_type().is_dir() {
             if metadata.file_type().is_file()
                 && path.file_name() == Some(OsStr::new(TARGET_HEARTBEAT_FILE))
@@ -867,5 +885,28 @@ mod tests {
             "the live cache is charged against the ceiling, so the idle one is evicted"
         );
         drop((job, lane));
+    }
+
+    /// A sweep runs over a cache a job is building in, so a name the listing
+    /// returned can be gone before it is read. Treating that as a failure
+    /// aborted the whole sweep, and the budget it exists to enforce was never
+    /// applied: the disk kept growing while the timer reported a failed unit.
+    #[test]
+    fn an_entry_a_live_build_removed_mid_sweep_is_skipped() {
+        let gone = still_there(Err(io::Error::from(io::ErrorKind::NotFound)))
+            .expect("a vanished entry is not a failure");
+        assert!(gone.is_none(), "a vanished entry is counted as nothing");
+
+        let refused = still_there(Err(io::Error::from(io::ErrorKind::PermissionDenied)));
+        assert!(
+            refused.is_err(),
+            "a cache this sweep cannot read is a real failure, not a race"
+        );
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let present = still_there(fs::symlink_metadata(directory.path()))
+            .expect("reading an entry that is there")
+            .expect("an entry that is there is measured");
+        assert!(present.file_type().is_dir());
     }
 }
