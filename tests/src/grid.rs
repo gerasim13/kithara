@@ -2,6 +2,8 @@
 //! publishes for a track. Fixture support: the product publishes grids from
 //! its own analysis bridge, not through this module.
 
+use std::{cmp::Reverse, collections::BTreeMap};
+
 use kithara::{
     analysis::BeatArtifact,
     warp::{
@@ -18,10 +20,7 @@ pub enum BeatGridError {
     /// A grid needs at least one beat interval.
     #[error("beat artifact carries fewer than two beats")]
     TooFewBeats,
-    /// A downbeat must sit on one of the artifact beats.
-    #[error("downbeat at frame {frame} is not one of the artifact beats")]
-    DownbeatOffGrid { frame: u64 },
-    /// The bar between the first two downbeats exceeds the meter range.
+    /// The dominant bar length exceeds the meter range.
     #[error("bar of {beats} beats exceeds the meter range")]
     BarTooLong { beats: usize },
     #[error(transparent)]
@@ -33,8 +32,9 @@ pub enum BeatGridError {
 }
 
 /// One observed segment per beat interval of `artifact` on `axis`. The meter
-/// comes from the downbeats: the beat count between the first two is the bar
-/// length, the first one's ordinal the bar phase.
+/// comes from the downbeats that sit on beats: the most frequent beat count
+/// between neighbours is the bar length, the most frequent ordinal residue the
+/// bar phase, so an irregular intro bar or a stray downbeat does not set it.
 pub fn segment_set(artifact: &BeatArtifact, axis: AssetAxis) -> Result<SegmentSet, BeatGridError> {
     if artifact.beats().len() < 2 {
         return Err(BeatGridError::TooFewBeats);
@@ -70,21 +70,39 @@ pub fn segment_set(artifact: &BeatArtifact, axis: AssetAxis) -> Result<SegmentSe
 }
 
 fn meter(artifact: &BeatArtifact) -> Result<Option<Meter>, BeatGridError> {
-    let [first, second, ..] = artifact.downbeats()[..] else {
+    let beats = artifact.beats();
+    let ordinals: Vec<usize> = artifact
+        .downbeats()
+        .iter()
+        .filter_map(|frame| beats.binary_search(frame).ok())
+        .collect();
+    let Some(beats_per_bar) = most_frequent(
+        ordinals
+            .windows(2)
+            .filter_map(|pair| pair[1].checked_sub(pair[0]))
+            .filter(|&gap| gap > 0),
+    ) else {
         return Ok(None);
     };
-    let ordinal = |frame: u64| {
-        artifact
-            .beats()
-            .binary_search(&frame)
-            .map_err(|_| BeatGridError::DownbeatOffGrid { frame })
-    };
-    let first = ordinal(first)?;
-    let beats = ordinal(second)?.saturating_sub(first);
-    let beats_per_bar = u16::try_from(beats).map_err(|_| BeatGridError::BarTooLong { beats })?;
+    let bar = u16::try_from(beats_per_bar).map_err(|_| BeatGridError::BarTooLong {
+        beats: beats_per_bar,
+    })?;
+    let phase = most_frequent(ordinals.iter().map(|ordinal| ordinal % beats_per_bar)).unwrap_or(0);
     Ok(Some(
-        Meter::new(beats_per_bar)?.with_downbeat(BeatOrdinal::new(first.as_())),
+        Meter::new(bar)?.with_downbeat(BeatOrdinal::new(phase.as_())),
     ))
+}
+
+/// The value seen most often, the smallest one on a tie.
+fn most_frequent(values: impl Iterator<Item = usize>) -> Option<usize> {
+    let mut counts = BTreeMap::<usize, usize>::new();
+    for value in values {
+        *counts.entry(value).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|&(value, count)| (count, Reverse(value)))
+        .map(|(value, _)| value)
 }
 
 #[cfg(test)]
@@ -102,7 +120,13 @@ mod tests {
     const BEAT_FRAMES: u64 = 24_000;
 
     fn artifact(downbeats: &[u64]) -> BeatArtifact {
-        let beats = (0..8).map(|beat| (beat * BEAT_FRAMES, Some(1.0))).collect();
+        artifact_of(8, downbeats)
+    }
+
+    fn artifact_of(beat_count: u64, downbeats: &[u64]) -> BeatArtifact {
+        let beats = (0..beat_count)
+            .map(|beat| (beat * BEAT_FRAMES, Some(1.0)))
+            .collect();
         BeatArtifact::new(
             120.0,
             beats,
@@ -148,18 +172,28 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_downbeat_off_the_beats_is_rejected() {
+    fn an_irregular_intro_bar_does_not_set_the_meter() {
+        let beats = 26;
+        let axis = AssetAxis::new(NonZeroU32::new(48_000).expect("rate"), beats * BEAT_FRAMES);
+        let set = segment_set(&artifact_of(beats, &[1, 7, 13, 17, 21, 25]), axis).expect("set");
+        let meter = meter_at(set, 14.0);
+
+        assert_eq!(meter.beats_per_bar(), 4);
+        assert_eq!(i64::from(meter.downbeat()).rem_euclid(4), 1);
+    }
+
+    #[kithara::test]
+    fn a_downbeat_off_the_beats_is_skipped() {
         let base = artifact(&[0, 4]);
         let downbeats = BeatArtifact::new(
             base.bpm(),
             base.beats().iter().map(|&b| (b, None)).collect(),
-            vec![(0, None), (4 * BEAT_FRAMES + 1, None)],
+            vec![(0, None), (BEAT_FRAMES + 1, None), (4 * BEAT_FRAMES, None)],
         );
+        let meter = meter_at(segment_set(&downbeats, axis()).expect("set"), 3.0);
 
-        assert!(matches!(
-            segment_set(&downbeats, axis()),
-            Err(BeatGridError::DownbeatOffGrid { frame }) if frame == 4 * BEAT_FRAMES + 1
-        ));
+        assert_eq!(meter.beats_per_bar(), 4);
+        assert_eq!(meter.downbeat(), BeatOrdinal::new(0));
     }
 
     #[kithara::test]

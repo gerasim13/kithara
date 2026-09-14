@@ -427,6 +427,21 @@ pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowte
 pub(super) const STRAIGHT_LIBRARY: &[&str] = &["library_flac_c343", "library_flac_g242"];
 pub(super) const STRAIGHT_LIBRARY_ALT: &[&str] = &["library_flac_song1", "library_flac_track05"];
 pub(super) const TECHNO_LIBRARY: &[&str] = &["library_flac_newtechno", "library_flac_ryabina"];
+/// Richie Hawtin - The Tunnel, the straight-kick track the application is tried on.
+pub(super) const PLAYLIST_TUNNEL: &[&str] = &["library_mp3_zvuk_27390231"];
+pub(super) const PLAYLIST_151585912: &[&str] = &["library_mp3_zvuk_151585912"];
+pub(super) const PLAYLIST_125475417: &[&str] = &["library_mp3_zvuk_125475417"];
+pub(super) const PLAYLIST_138535169: &[&str] = &["library_mp3_zvuk_138535169"];
+pub(super) const PLAYLIST_130432502: &[&str] = &["library_mp3_zvuk_130432502"];
+pub(super) const PLAYLIST_132017169: &[&str] = &["library_mp3_zvuk_132017169"];
+const PLAYLIST: &[&str] = &[
+    "library_mp3_zvuk_27390231",
+    "library_mp3_zvuk_151585912",
+    "library_mp3_zvuk_125475417",
+    "library_mp3_zvuk_138535169",
+    "library_mp3_zvuk_130432502",
+    "library_mp3_zvuk_132017169",
+];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
@@ -458,6 +473,7 @@ impl Provider {
         Self::HlsSame(HlsProtection::Plain),
         Self::HlsSame(HlsProtection::Drm),
         Self::Library(LIBRARY),
+        Self::Library(PLAYLIST),
         Self::Mp3Same,
         Self::Mp3Distinct,
         Self::HlsMp3(HlsProtection::Plain),
@@ -1568,9 +1584,7 @@ pub(super) async fn sources(
             .take(decks)
             .map(|name| {
                 let asset = by_name(name).unwrap_or_else(|| {
-                    panic!(
-                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build with KITHARA_REMOTE_FIXTURES=1"
-                    )
+                    panic!("BLOCKED_FIXTURE: library fixture `{name}` is not registered")
                 });
                 asset
                     .try_bytes()
@@ -1652,6 +1666,11 @@ fn analysis_name(source: &str) -> Option<String> {
             source
                 .strip_prefix("library_flac_")
                 .map(|case| format!("library_analysis_{case}"))
+        })
+        .or_else(|| {
+            source
+                .strip_prefix("library_mp3_")
+                .map(|case| format!("library_mp3_analysis_{case}"))
         })
 }
 
@@ -3171,6 +3190,7 @@ async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
 #[derive(Clone, Copy)]
 struct ListeningScenario {
     id: &'static str,
+    provider: Provider,
     source: &'static str,
     cue_in: CueIn,
     seek_seconds: Option<f64>,
@@ -3181,6 +3201,7 @@ struct ListeningScenario {
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[case::first_downbeat_96_start_10(ListeningScenario {
     id: "listening-first-downbeat-96-start-10",
+    provider: Provider::Rhythm(LISTENING_ALIGNED_DOWNTEMPO_96),
     source: "rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s",
     cue_in: CueIn::FirstDownbeat,
     seek_seconds: Some(10.0),
@@ -3189,6 +3210,7 @@ struct ListeningScenario {
 })]
 #[case::first_downbeat_pickup_96(ListeningScenario {
     id: "listening-first-downbeat-pickup-96",
+    provider: Provider::Rhythm(LISTENING_PICKUP_DOWNTEMPO_96),
     source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
     cue_in: CueIn::FirstDownbeat,
     seek_seconds: None,
@@ -3197,6 +3219,7 @@ struct ListeningScenario {
 })]
 #[case::track_start_pickup_96(ListeningScenario {
     id: "listening-track-start-pickup-96",
+    provider: Provider::Rhythm(LISTENING_PICKUP_DOWNTEMPO_96),
     source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
     cue_in: CueIn::TrackStart,
     seek_seconds: None,
@@ -3205,11 +3228,66 @@ struct ListeningScenario {
 })]
 #[case::late_grid_track_start_96(ListeningScenario {
     id: "listening-late-grid-track-start-96",
+    provider: Provider::Rhythm(LISTENING_PICKUP_DOWNTEMPO_96),
     source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
     cue_in: CueIn::TrackStart,
     seek_seconds: None,
     publish_grid_after_play: true,
     expected_activation: 69_677,
+})]
+#[case::first_downbeat_tunnel(ListeningScenario {
+    id: "listening-first-downbeat-tunnel",
+    provider: Provider::Library(PLAYLIST_TUNNEL),
+    source: "library_mp3_zvuk_27390231",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_playlist_151585912(ListeningScenario {
+    id: "listening-first-downbeat-playlist-151585912",
+    provider: Provider::Library(PLAYLIST_151585912),
+    source: "library_mp3_zvuk_151585912",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_playlist_125475417(ListeningScenario {
+    id: "listening-first-downbeat-playlist-125475417",
+    provider: Provider::Library(PLAYLIST_125475417),
+    source: "library_mp3_zvuk_125475417",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_playlist_138535169(ListeningScenario {
+    id: "listening-first-downbeat-playlist-138535169",
+    provider: Provider::Library(PLAYLIST_138535169),
+    source: "library_mp3_zvuk_138535169",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_playlist_130432502(ListeningScenario {
+    id: "listening-first-downbeat-playlist-130432502",
+    provider: Provider::Library(PLAYLIST_130432502),
+    source: "library_mp3_zvuk_130432502",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_playlist_132017169(ListeningScenario {
+    id: "listening-first-downbeat-playlist-132017169",
+    provider: Provider::Library(PLAYLIST_132017169),
+    source: "library_mp3_zvuk_132017169",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
 })]
 async fn listening_single_deck_host_metronome_preview(#[case] scenario: ListeningScenario) {
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
@@ -3217,16 +3295,7 @@ async fn listening_single_deck_host_metronome_preview(#[case] scenario: Listenin
     let case = SyncCase::running(scenario.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
         .hold(124.0);
-    let provider = match scenario.source {
-        "rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s" => {
-            Provider::Rhythm(LISTENING_ALIGNED_DOWNTEMPO_96)
-        }
-        "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s" => {
-            Provider::Rhythm(LISTENING_PICKUP_DOWNTEMPO_96)
-        }
-        _ => panic!("{}: unregistered listening source", scenario.id),
-    };
-    let sources = prepared_sources(provider).await;
+    let sources = prepared_sources(scenario.provider).await;
     let mut harness = match scenario.cue_in {
         CueIn::FirstDownbeat => {
             ProductHarness::new_for_block(case, &sources, 0, BLOCK_FRAMES).await
