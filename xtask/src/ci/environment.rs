@@ -28,6 +28,7 @@ impl Consts {
     /// fixtures than the 256 descriptor soft limit a macOS session starts
     /// with. The lane raises its own ceiling so every executor gets the same
     /// budget.
+    #[cfg(unix)]
     const OPEN_FILES: u64 = 65536;
     /// How often the gate re-asks a volume it is waiting on. What it waits for
     /// is a neighbouring job ending, so it re-asks on the scale a job finishes
