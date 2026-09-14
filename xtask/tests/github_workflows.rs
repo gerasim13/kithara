@@ -1897,11 +1897,11 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
         .display()
         .to_string();
     assert!(
-        target.contains(&format!("'{cache_root}/target/lane-{{0}}'")),
+        target.contains(&format!("'{cache_root}/lanes/lane-{{0}}'")),
         "an ordinary lane must build in the directory named after it: {target}"
     );
     assert!(
-        target.contains(&format!("'{cache_root}/target/jobs/")),
+        target.contains(&format!("'{cache_root}/lanes/jobs/")),
         "snapshot lanes need an empty job target: {target}"
     );
     assert_eq!(

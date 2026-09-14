@@ -4,7 +4,7 @@ use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
-const CACHE_ENVIRONMENT: [&str; 6] = [
+const CACHE_ENVIRONMENT: [&str; 7] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -12,11 +12,16 @@ const CACHE_ENVIRONMENT: [&str; 6] = [
     // content-addressed and namespaced by a build fingerprint, so sharing them
     // across runners cannot serve one build's bytes to another.
     "KITHARA_FIXTURE_CACHE=/cache/fixtures",
-    // Every runner mounts the same build root, and a lane claims the directory
-    // named after it: a lane that lands on a different runner than last time
-    // then still finds its own warm build. A runner-owned directory made that
-    // a full rebuild, which is most of what a lane spent its time on.
-    "KITHARA_CI_TARGET_ROOT=/cache/target",
+    // Every runner mounts this one root, and a lane claims the directory named
+    // after it underneath: a lane that lands on a different runner than last
+    // time then still finds its own warm build. A runner-owned directory made
+    // that a full rebuild, which is most of what a lane spent its time on.
+    "KITHARA_CI_TARGET_ROOT=/cache/lanes",
+    // What a job builds into when it claims no lane directory. It stays one
+    // directory per runner, on a path of its own, so a checkout that predates
+    // the lane keying keeps exactly the cache it reused before instead of
+    // meeting every other job in one cargo lock.
+    "CARGO_TARGET_DIR=/cache/target",
     "RUSTC_WRAPPER=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
     // incremental compilation, and cargo leaves incremental on by default.
@@ -90,18 +95,30 @@ impl Container<'_> {
                 "/runner/_work",
             ),
             (
-                Self::target_root(host).to_string_lossy().into_owned(),
+                Self::target_dir(host, runner)
+                    .to_string_lossy()
+                    .into_owned(),
                 "/cache/target",
+            ),
+            (
+                Self::lane_root(host).to_string_lossy().into_owned(),
+                "/cache/lanes",
             ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
     }
 
-    /// Where every runner's build directories live. A lane owns one directory
-    /// under it; the budget is enforced over the root.
-    pub(super) fn target_root(host: &LinuxHost) -> PathBuf {
-        host.cache_root.join("target")
+    /// Where a job that claims no lane directory builds. One per runner, which
+    /// is what such a job reused before the lane keying existed.
+    pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+        host.cache_root.join("target").join(&runner.name)
+    }
+
+    /// The one build root every runner mounts. A lane owns one directory under
+    /// it; the budget is enforced over the root.
+    pub(super) fn lane_root(host: &LinuxHost) -> PathBuf {
+        host.cache_root.join("lanes")
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -137,14 +154,6 @@ impl Container<'_> {
         // The S3 backend is shared, but each runner needs its own daemon
         // endpoint. An explicit socket lets the lane start that daemon before
         // Cargo's parallel compilers can race to start it.
-        // What a job builds into when it does not claim a lane directory — a
-        // command outside a lane, or a branch whose xtask predates the lane
-        // keying. It stays one directory per runner, which is what those jobs
-        // reused before, so nothing that does not opt in gets slower.
-        environment.push(format!(
-            "CARGO_TARGET_DIR=/cache/target/runner-{}",
-            runner.name
-        ));
         environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
         environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
         environment.extend(

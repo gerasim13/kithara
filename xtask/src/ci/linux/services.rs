@@ -584,25 +584,40 @@ mod tests {
 
     /// A build directory holds artefacts valid only for the configuration that
     /// made them, and a lane asks for the same configuration every run. So the
-    /// build root is one for the whole fleet and the lane claims its directory
+    /// lane root is one for the whole fleet and the lane claims its directory
     /// underneath: a lane that lands on another runner still finds its own warm
-    /// build instead of compiling the workspace again.
+    /// build instead of compiling the workspace again. A job that claims no
+    /// lane keeps the runner's own directory, because sharing one cargo
+    /// directory between runners shares its lock as well.
     #[test]
     fn every_runner_mounts_the_same_build_root() {
         let host = host_fixture();
         let first = Container::mounts(&host, host.runner("kithara-ci-octocat").expect("runner"));
         let second = Container::mounts(&host, host.runner("kithara-ci-hubot").expect("runner"));
 
-        let target = |mounts: &[(String, &str)]| {
+        let mount = |mounts: &[(String, &str)], at: &str| {
             mounts
                 .iter()
-                .find(|(_, at)| *at == "/cache/target")
-                .expect("a build directory")
+                .find(|(_, mounted)| *mounted == at)
+                .unwrap_or_else(|| panic!("a mount at {at}"))
                 .0
                 .clone()
         };
-        assert_eq!(target(&first), target(&second));
-        assert_eq!(target(&first), "/var/lib/kithara-ci/target");
+        assert_eq!(
+            mount(&first, "/cache/lanes"),
+            mount(&second, "/cache/lanes"),
+            "a lane must find its build wherever it lands"
+        );
+        assert_eq!(mount(&first, "/cache/lanes"), "/var/lib/kithara-ci/lanes");
+        assert_ne!(
+            mount(&first, "/cache/target"),
+            mount(&second, "/cache/target"),
+            "a job that claims no lane must not meet another runner's cargo lock"
+        );
+        assert_eq!(
+            mount(&first, "/cache/target"),
+            "/var/lib/kithara-ci/target/kithara-ci-octocat"
+        );
 
         let workspace = |mounts: &[(String, &str)]| {
             mounts
