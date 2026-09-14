@@ -12,7 +12,7 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use kithara_warp::{RenderContext, StretchControls};
-use num_traits::cast::AsPrimitive;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use tracing::warn;
@@ -312,6 +312,28 @@ impl RenderPass {
         }
     }
 
+    /// Mean smoothed multiplier across the block.
+    ///
+    /// Source advance over a block is the integral of speed across its
+    /// frames, so the block is stretched by the mean of the smoothed values
+    /// rather than by the last one. While the target moves, every
+    /// `last - value` difference carries the same sign, so taking the final
+    /// value biases each block the same way and the bias accumulates into a
+    /// permanent phase offset instead of cancelling. The mean also makes the
+    /// advance independent of how the callback partitions its frames.
+    fn block_multiplier(rate: &mut SmoothedParam, frames: usize) -> f32 {
+        let mut sum = 0.0_f64;
+        let mut value = rate.target_value();
+        for _ in 0..frames {
+            value = rate.next_smoothed();
+            sum += f64::from(value);
+        }
+        frames
+            .to_f64()
+            .and_then(|frames| (sum / frames).to_f32())
+            .unwrap_or(value)
+    }
+
     fn render_context(
         &mut self,
         context: Option<&RenderContext>,
@@ -319,10 +341,7 @@ impl RenderPass {
     ) -> Option<RenderContext> {
         let target = self.stretch.rate_target();
         self.rate.set_value(target.speed());
-        let mut multiplier = self.rate.target_value();
-        for _ in 0..frames {
-            multiplier = self.rate.next_smoothed();
-        }
+        let multiplier = Self::block_multiplier(&mut self.rate, frames);
         self.rate.settle();
         kithara::probe_event!(
             rate_smoothed,
@@ -431,5 +450,73 @@ pub(super) const fn eviction_priority(state: TrackState) -> u8 {
         TrackState::Preloading => EVICT_PRELOADING,
         TrackState::FadingIn => EVICT_FADING_IN,
         TrackState::Playing => EVICT_PLAYING,
+    }
+}
+
+#[cfg(test)]
+mod block_multiplier_tests {
+    use std::num::NonZeroU32;
+
+    use firewheel::param::smoother::{SmoothedParam, SmootherConfig};
+    use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
+
+    use super::RenderPass;
+
+    struct Consts;
+
+    impl Consts {
+        const RATE: u32 = 44_100;
+        const START: f32 = 1.0;
+        const TARGET: f32 = 1.2;
+    }
+
+    fn smoother() -> SmoothedParam {
+        SmoothedParam::new(
+            Consts::START,
+            SmootherConfig::default(),
+            NonZeroU32::new(Consts::RATE).expect("invariant: the fixture rate is non-zero"),
+        )
+    }
+
+    /// Advance a moving target across `blocks` partitions of `frames` each,
+    /// returning the total source frames the partitioning consumes.
+    fn advance(blocks: usize, frames: usize) -> f64 {
+        let mut rate = smoother();
+        rate.set_value(Consts::TARGET);
+        (0..blocks)
+            .map(|_| {
+                f64::from(RenderPass::block_multiplier(&mut rate, frames))
+                    * frames.to_f64().expect("invariant: a block length fits f64")
+            })
+            .sum()
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_moving_target_advances_the_same_whatever_the_partitioning() {
+        let one_block = advance(1, 2_048);
+        let many_blocks = advance(16, 128);
+
+        // The bound is one thousandth of a source frame. The product carries
+        // the multiplier as `f32`, so partitioning can differ only by that
+        // type's resolution; the accumulating bias this pins is three orders
+        // of magnitude larger: taking the final value instead makes these two
+        // partitionings disagree by 96 source frames.
+        assert!(
+            (one_block - many_blocks).abs() < 1e-3,
+            "the same 2048 frames of a moving target must consume the same source \
+             whether rendered as one block or sixteen: {one_block} vs {many_blocks}",
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_settled_target_keeps_its_exact_multiplier() {
+        let mut rate = smoother();
+
+        assert_eq!(
+            RenderPass::block_multiplier(&mut rate, 512),
+            Consts::START,
+            "a target that never moves must not be perturbed by averaging",
+        );
     }
 }
