@@ -94,6 +94,7 @@ _xtask-cached MODE *ARGS:
         *) printf 'error: invalid xtask transport mode: %s\n' "$mode" >&2; exit 2 ;; \
       esac; \
       unavailable() { \
+        printf 'DIAG unavailable at %s\n' "${1:-?}" >&2; \
         if [ "$mode" = optional ]; then \
           printf 'warning: cached xtask transport is unavailable; run just tooling xtask --help to install it\n' >&2; \
           exit 0; \
@@ -102,27 +103,27 @@ _xtask-cached MODE *ARGS:
         exit 1; \
       }; \
       pointer="$PWD/xtask/.xtask-cache"; \
-      [ -f "$pointer" ] && [ ! -L "$pointer" ] && [ -r "$pointer" ] || unavailable; \
-      size=$(wc -c < "$pointer") || unavailable; \
-      { [ "$size" -ge 1 ] 2>/dev/null && [ "$size" -le 4096 ] 2>/dev/null; } || unavailable; \
+      [ -f "$pointer" ] && [ ! -L "$pointer" ] && [ -r "$pointer" ] || unavailable pointer-shape; \
+      size=$(wc -c < "$pointer") || unavailable size-read; \
+      { [ "$size" -ge 1 ] 2>/dev/null && [ "$size" -le 4096 ] 2>/dev/null; } || unavailable size-range; \
       generation=; extra=; \
       if ! { IFS= read -r generation && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then \
-        unavailable; \
+        unavailable single-line; \
       fi; \
-      system=$(uname -s) || unavailable; \
+      system=$(uname -s) || unavailable uname; \
       case "$system" in \
         MINGW*|MSYS*|CYGWIN*) windows=1; suffix=.exe ;; \
         *) windows=0; suffix= ;; \
       esac; \
       case "$generation" in \
         /*) ;; \
-        [A-Za-z]:[\\/]*) [ "$windows" -eq 1 ] || unavailable ;; \
-        *) unavailable ;; \
+        [A-Za-z]:[\\/]*) [ "$windows" -eq 1 ] || unavailable drive-on-unix ;; \
+        *) unavailable path-shape ;; \
       esac; \
       binary="$generation/xtask$suffix"; \
-      [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable; \
+      [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable binary; \
       if [ "$mode" = optional ]; then \
-        "$binary" self-cache probe --config </dev/null >/dev/null 2>&1 || unavailable; \
+        "$binary" self-cache probe --config </dev/null >/dev/null 2>&1 || unavailable probe; \
       fi; \
       exec "$binary" "$@"
 
