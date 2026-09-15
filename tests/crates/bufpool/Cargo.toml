@@ -21,14 +21,14 @@ no-block = ["kithara/no-block"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "usdt",
     "bufpool",
     "platform",
-    "probe",
     "tokio-net",
 ] }
 
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 serial_test = { workspace = true }
 
 [lints]

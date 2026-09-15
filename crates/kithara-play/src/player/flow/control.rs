@@ -3,7 +3,7 @@ use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, RouteDescription, SessionEvent, SlotId},
+    api::{RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent, SlotId},
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -113,11 +113,7 @@ impl<S> PlayerRuntime<S> {
                 target_rate_bits = target.to_bits(),
                 session_epoch = u64::from(snapshot.context().session_epoch()),
                 transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
-                session_frame = i64::from(snapshot.context().output_frames().end),
-                session_beat_bits = snapshot
-                    .context()
-                    .session_beats()
-                    .map_or(f64::NAN.to_bits(), |beats| f64::from(beats.end).to_bits())
+                session_frame = i64::from(snapshot.context().output_frames().end)
             );
         }
         self.core.worker.wake();
@@ -143,6 +139,8 @@ impl<S> PlayerRuntime<S> {
             /// replaced.
             #[call(set_master_eq_layout)]
             pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
+            /// Lower or restore the whole session output under a competing sound.
+            pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
             /// Pump audio backend/runtime state.
             pub fn tick(&self) -> Result<(), PlayError>;
         }

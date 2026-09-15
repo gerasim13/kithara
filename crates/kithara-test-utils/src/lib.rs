@@ -14,7 +14,11 @@ pub use kithara_platform;
 /// Native serialization runtime used by generated test wrappers.
 #[cfg(not(target_arch = "wasm32"))]
 pub use serial_test;
+/// Re-exported for the platform-independent USDT tracing backend emitted by
+/// `#[kithara::probe]`.
+pub use tracing;
 
+pub mod bufpool;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
 pub mod hang;
@@ -24,18 +28,12 @@ pub mod no_block;
 pub mod off_thread;
 pub mod probe;
 pub mod rtsan;
-#[cfg(any(test, feature = "probe"))]
 pub mod test;
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        Probe, allow_block, asset, fixture, flash, hang_watchdog, measure, measure_block, mock,
-        no_block, probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test,
-    };
-}
-
-pub mod kithara_facade {
-    pub use kithara_test_macros::{
-        facade_allow_block as allow_block, facade_flash as flash, facade_no_block as no_block,
+        Probe, allow_block, asset, fixture, hang_watchdog, measure, measure_block, mock, no_block,
+        probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test,
+        test_utils_flash as flash,
     };
 }

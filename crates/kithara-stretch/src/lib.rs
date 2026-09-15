@@ -21,4 +21,4 @@ pub use elastic::{
     ElasticSpanPlan, ElasticSpanRequest, SignalsmithConfig, SignalsmithConfigPatch,
 };
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;

@@ -2,10 +2,9 @@ use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 
 use delegate::delegate;
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::sync::Arc;
 use kithara_play::{GroupState, PlayError, SessionDispatcher, player::PlayerMember};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{
     BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
@@ -16,7 +15,7 @@ use crate::{
     session::{
         HostCmd, HostDispatcher, HostReply, Reply,
         protocol::{HostDispatchError, SyncCmd},
-        testing::{FixtureSession, fixture_member},
+        tests::graph::{FixtureSession, fixture_member},
     },
 };
 

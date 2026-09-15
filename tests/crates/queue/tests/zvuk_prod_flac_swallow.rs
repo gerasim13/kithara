@@ -20,9 +20,8 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
-    swallow_detector::assert_no_committed_swallow,
+    swallow_detector::assert_no_committed_swallow, usdt_trace,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk
@@ -161,7 +160,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
 
     // Capture `write_playhead` USDT firings: each carries the committed
     // playhead in nanoseconds.
-    let recorder = probe_capture::install();
+    let recorder = usdt_trace::scope();
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(test_pools())
@@ -186,6 +185,9 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         }
     }
 
-    assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
+    assert_no_committed_swallow(
+        &recorder.events(),
+        Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS),
+    );
     player.close().await;
 }

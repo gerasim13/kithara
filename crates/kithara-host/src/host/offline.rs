@@ -76,7 +76,6 @@ impl<S> HostConfig<S> {
 
 pub(super) struct OfflineRuntime<S> {
     client: Arc<OfflineSessionClient<S>>,
-    spec: AudioSpec,
     _dispatcher: kithara_worker::Dispatcher,
     max_block_frames: NonZeroU32,
     _task: kithara_worker::TaskHandle,
@@ -107,7 +106,6 @@ where
         else {
             unreachable!("offline runtime requires offline Host config");
         };
-        let spec = AudioSpec::new(Defaults::CHANNELS, sample_rate);
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
         let (client, task_handle) = crate::session::offline::spawn(
@@ -129,7 +127,6 @@ where
             Self {
                 client,
                 max_block_frames,
-                spec,
                 _worker: worker,
                 _dispatcher: dispatcher,
                 _task: task_handle,
@@ -144,13 +141,14 @@ where
     fn render(
         &mut self,
         request: &OfflineRenderRequest,
+        spec: AudioSpec,
         cancel: &CancelToken,
         sink: &mut dyn RenderSink,
     ) -> Result<OfflineRenderReport, OfflineRenderError> {
         let requested_frames = request.frame_count()?;
-        if request.spec() != self.spec {
+        if request.spec() != spec {
             return Err(OfflineRenderError::SpecMismatch {
-                expected: self.spec,
+                expected: spec,
                 actual: request.spec(),
             });
         }
@@ -232,10 +230,20 @@ where
         cancel: &CancelToken,
         sink: &mut dyn RenderSink,
     ) -> Result<OfflineRenderReport, OfflineRenderError> {
+        let rate = self
+            .sample_rate()
+            .map_err(OfflineRenderError::backend)?
+            .output();
+        let rate = NonZeroU32::new(rate).ok_or_else(|| {
+            OfflineRenderError::backend(PlayError::Internal(
+                "offline session reported a zero output rate".into(),
+            ))
+        })?;
+        let spec = AudioSpec::new(Defaults::CHANNELS, rate);
         self.session
             .offline_runtime_mut()
             .ok_or(OfflineRenderError::SessionModeUnavailable)?
-            .render(request, cancel, sink)
+            .render(request, spec, cancel, sink)
     }
 }
 
@@ -245,10 +253,12 @@ struct TimelineOverflow;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_output::{OfflineRenderRequest, OfflineRenderer, RenderSinkError};
     use kithara_platform::CancelScope;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
 
     use super::*;
     use crate::HostConfig;

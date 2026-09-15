@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use kithara::queue::{RepeatMode, TrackId, Transition};
+use kithara::{
+    play::SessionDuckingMode,
+    queue::{RepeatMode, TrackId, Transition},
+};
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///
@@ -72,6 +75,8 @@ pub(crate) enum WorkerCmd {
         variant_index: Option<u32>,
     },
     SetRepeat(RepeatMode),
+    /// Lower or restore the whole session output through the owning Host.
+    SetDucking(SessionDuckingMode),
     /// Apply per-network peak-bitrate ceilings to the worker's current ABR
     /// handle. Mirrors
     /// [`NativeInner::update_peak_bitrate`](crate::native::inner::NativeInner).

@@ -18,7 +18,7 @@ use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
-    api::{EngineEvent, SlotId},
+    api::{EngineEvent, SessionDuckingMode, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
@@ -39,8 +39,10 @@ pub struct EngineImpl<S> {
     eq_layout: Mutex<Vec<EqBandConfig>>,
     registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
+    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
+    #[field(get, vis = "pub(super)")]
     session: SessionHandle<S>,
 }
 
@@ -192,6 +194,10 @@ impl<S> EngineImpl<S> {
         self.session.invalidate_audio_route(reason)
     }
 
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.session.set_session_ducking(mode)
+    }
+
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }
@@ -297,11 +303,6 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
-        &self.session
-    }
-
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
@@ -352,11 +353,6 @@ impl<S> EngineImpl<S> {
         );
         self.emit(EngineEvent::Started);
         Ok(())
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {

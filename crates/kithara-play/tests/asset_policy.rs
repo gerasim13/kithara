@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use kithara_assets::{AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, StorageBackend};
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_file::File;
 use kithara_hls::Hls;
 use kithara_play::policy::{QueryIdentityLayout, QueryIdentityRule};
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use url::Url;
 
 fn url(value: &str) -> Url {

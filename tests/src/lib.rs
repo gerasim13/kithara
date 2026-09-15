@@ -41,7 +41,7 @@ pub mod audio_artifact;
 #[cfg(feature = "all")]
 pub mod audio_mock;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub use kithara::bufpool::testing as bufpool_ext;
+pub use kithara_test_utils::bufpool as bufpool_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod cochlea;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -98,8 +98,6 @@ pub mod pcm_oracle;
 pub mod reads;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod rfc6381;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod ring;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod rng;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -108,12 +106,16 @@ pub mod server_url;
 pub mod storage_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod swallow_detector;
-#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
+#[cfg(all(
+    any(feature = "all", feature = "audio", feature = "wasm"),
+    not(target_arch = "wasm32")
+))]
 pub mod test_defaults;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod test_server;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod token_store;
+pub mod usdt_trace;
 /// Scenario machinery for the user-simulation suites: the action vocabulary,
 /// the scripted scenarios built from it, and the harness that applies them to a
 /// `Queue`. It lives here rather than beside one suite because two suites drive

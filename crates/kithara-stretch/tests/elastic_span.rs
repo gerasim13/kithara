@@ -1,11 +1,10 @@
-use kithara_bufpool::testing::pools as default_pools;
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
     ElasticSpanConfig, ElasticSpanPlan, build_engine,
 };
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools as default_pools, kithara};
 
 const CONTINUITY_EPSILON: f64 = 1.0e-6;
 const MAX_OUTPUT_FRAMES: usize = 480;

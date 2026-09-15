@@ -41,7 +41,7 @@ fn attach_refcount_and_single_writer_election() {
         "dropping the last lease cancels writer_cancel"
     );
     assert!(
-        !index.has_slot_for_test(&key),
+        !index.inner.slots.contains_key(&key),
         "dropping the last lease removes the slot"
     );
 }
@@ -127,11 +127,11 @@ fn detach_one_of_two_keeps_slot_and_writer() {
         !writer.writer_cancel().is_cancelled(),
         "writer survives while one consumer remains"
     );
-    assert!(index.has_slot_for_test(&key));
+    assert!(index.inner.slots.contains_key(&key));
 
     drop(l2);
     assert!(writer.writer_cancel().is_cancelled());
-    assert!(!index.has_slot_for_test(&key));
+    assert!(!index.inner.slots.contains_key(&key));
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -151,7 +151,7 @@ fn reattach_after_last_detach_wins_writer_election() {
     drop(l1);
     drop(l2);
     assert!(
-        !index.has_slot_for_test(&key),
+        !index.inner.slots.contains_key(&key),
         "slot removed after last detach"
     );
 
@@ -183,7 +183,7 @@ fn dropping_writer_lets_a_survivor_take_over() {
     drop(writer);
     drop(winner_lease);
     assert!(
-        index.has_slot_for_test(&key),
+        index.inner.slots.contains_key(&key),
         "slot survives while one consumer remains"
     );
 

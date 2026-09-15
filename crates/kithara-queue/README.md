@@ -53,9 +53,9 @@ async fn main() -> Result<(), PoolError> {
     ));
     queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.mp3"]);
 
-    // Caller explicitly picks the first track to play. Queue does not
-    // autoplay on its own — the UI (or any other caller) is responsible
-    // for calling `select` / `play` when the user is ready.
+    // Caller explicitly picks the first track to play. Queue autoplays
+    // only when built with `should_autoplay(true)`; otherwise the UI (or
+    // any other caller) calls `select` / `play` when the user is ready.
     if let Some(first) = queue.tracks().first() {
         let _ = queue.select(first.id, Transition::None);
     }

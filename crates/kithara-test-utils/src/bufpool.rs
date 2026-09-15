@@ -8,7 +8,7 @@ impl Consts {
     const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
 }
 
-crate::pool_schema! {
+kithara_bufpool::pool_schema! {
     /// Byte and sample pools available to one isolated test harness.
     pub TestPools {
         bytes: u8,
@@ -22,10 +22,10 @@ impl TestPools {
     /// # Errors
     /// Returns an error when either pool config or eager allocation is invalid.
     pub fn region(
-        overall_budget: crate::OverallBudget,
-        bytes: crate::PoolConfig,
-        samples: crate::PoolConfig,
-    ) -> Result<crate::PoolRegion<Self>, crate::PoolError> {
+        overall_budget: kithara_bufpool::OverallBudget,
+        bytes: kithara_bufpool::PoolConfig,
+        samples: kithara_bufpool::PoolConfig,
+    ) -> Result<kithara_bufpool::PoolRegion<Self>, kithara_bufpool::PoolError> {
         Self::builder(overall_budget)
             .bytes(bytes)
             .samples(samples)
@@ -34,7 +34,7 @@ impl TestPools {
 }
 
 /// Concrete pool facade shared by workspace test harnesses.
-pub type Pools = crate::PoolRegion<TestPools>;
+pub type Pools = kithara_bufpool::PoolRegion<TestPools>;
 
 /// Build one application-shaped test pool facade.
 #[must_use]
@@ -56,11 +56,15 @@ pub fn pools_with_budget(overall_bytes: usize) -> Pools {
 #[must_use]
 pub fn pools_with(
     overall_bytes: usize,
-    bytes: crate::PoolConfig,
-    samples: crate::PoolConfig,
+    bytes: kithara_bufpool::PoolConfig,
+    samples: kithara_bufpool::PoolConfig,
 ) -> Pools {
-    TestPools::region(crate::OverallBudget(overall_bytes), bytes, samples)
-        .unwrap_or_else(|error| panic!("test pool region: {error}"))
+    TestPools::region(
+        kithara_bufpool::OverallBudget(overall_bytes),
+        bytes,
+        samples,
+    )
+    .unwrap_or_else(|error| panic!("test pool region: {error}"))
 }
 
 /// Copy sample values into a buffer from the supplied facade.
@@ -69,7 +73,7 @@ pub fn pools_with(
 ///
 /// Panics when the region budget cannot accommodate `values`.
 #[must_use]
-pub fn sample_buffer(pools: &Pools, values: &[f32]) -> crate::SampleBuffer {
+pub fn sample_buffer(pools: &Pools, values: &[f32]) -> kithara_bufpool::SampleBuffer {
     let mut buffer = pools
         .get_with_len::<f32>(values.len())
         .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
@@ -79,38 +83,36 @@ pub fn sample_buffer(pools: &Pools, values: &[f32]) -> crate::SampleBuffer {
 
 /// Acquire an empty byte buffer from the supplied facade.
 #[must_use]
-pub fn byte_buffer(pools: &Pools) -> crate::ByteBuffer {
+pub fn byte_buffer(pools: &Pools) -> kithara_bufpool::ByteBuffer {
     pools.get::<u8>()
 }
 
-fn byte_config() -> crate::PoolConfig {
-    crate::PoolConfig::builder()
+fn byte_config() -> kithara_bufpool::PoolConfig {
+    kithara_bufpool::PoolConfig::builder()
         .max_buffers(Consts::BYTE_MAX_BUFFERS)
         .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
-        .max_share(crate::Percent::MAX)
+        .max_share(kithara_bufpool::Percent::MAX)
         .build()
 }
 
-fn sample_config() -> crate::PoolConfig {
-    crate::PoolConfig::builder()
+fn sample_config() -> kithara_bufpool::PoolConfig {
+    kithara_bufpool::PoolConfig::builder()
         .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
         .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
-        .max_share(crate::Percent::MAX)
+        .max_share(kithara_bufpool::Percent::MAX)
         .build()
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_core_test_fixtures::trim_ramp;
     use kithara_test_utils::kithara;
 
     use super::{byte_buffer, pools, sample_buffer};
 
     #[kithara::test]
     fn buffers_use_the_supplied_region() {
-        let trim_ramp = trim_ramp();
         let pools = pools();
-        let samples = sample_buffer(&pools, &trim_ramp[1..3]);
+        let samples = sample_buffer(&pools, &[1.0, 2.0]);
         let bytes = byte_buffer(&pools);
 
         assert_eq!(&*samples, &[1.0, 2.0]);

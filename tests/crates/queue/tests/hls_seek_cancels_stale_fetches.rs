@@ -27,10 +27,9 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
+    temp_dir, usdt_trace,
     waits::wait_for_loader_done,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -187,7 +186,7 @@ async fn hls_seek_near_end_skips_prefix(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let probe_recorder = probe_capture::install();
+    let probe_recorder = usdt_trace::scope();
 
     let (_server, url) = prepared_hls;
 
@@ -279,48 +278,40 @@ async fn hls_seek_near_end_skips_prefix(
     let duration = queue.duration_seconds().expect("duration");
     let target_seconds = (duration - 0.5).max(0.0);
 
-    // Partition probe firings into pre- vs post-seek by the process-wide
-    // monotonic `seq` counter, NOT by `Instant` timestamps. Under flash the
-    // probe's `at` is stamped on the HLS scheduler's poll thread while
-    // `seek_at` is read in the (virtual-clock) test body; those two clocks are
-    // not comparable, so `e.at >= seek_at` would drop the legitimately-fired
-    // `seek_epoch_reset`. `seq` is incremented causally at each probe firing,
-    // so a firing after `queue.seek` always has `seq > pre_seek_seq`.
-    let pre_seek_seq = probe_recorder
-        .snapshot()
-        .iter()
-        .filter_map(kithara_test_utils::probe::capture::ProbeEvent::seq)
-        .max()
-        .unwrap_or(0);
+    // Partition probe firings into pre- vs post-seek by their position in the
+    // scope's recorded order, NOT by timestamps: under flash the scheduler's
+    // poll thread and the (virtual-clock) test body read incomparable clocks.
+    // The scope records firings causally, so every firing after `queue.seek`
+    // sits at an index past `pre_seek`.
+    let pre_seek = probe_recorder.events().len();
 
     let seek_at = Instant::now();
     queue.seek(target_seconds).expect("seek");
 
     // Observe post-seek bus events AND wait for the scheduler to record the
-    // epoch reset, concurrently. `wait_for_probe_async` parks on the virtual
-    // clock between probe-snapshot polls, which lets the flash engine advance
-    // virtual time so the (flash-coherent) tick driver cycles the HLS
-    // scheduler — that poll cycle is what fires
-    // `kithara_hls_probe::seek_epoch_reset`. Without this parking the
-    // scheduler never observes the new epoch under flash. The budget is a
-    // virtual hang ceiling, not a pacing wait; the probe-fired assertion
+    // epoch reset, concurrently. Awaiting the scope parks the test body until
+    // a probe is recorded, which lets the flash engine advance virtual time so
+    // the (flash-coherent) tick driver cycles the HLS scheduler — that poll
+    // cycle is what fires `kithara_hls_probe::seek_epoch_reset`. The budget is
+    // a virtual hang ceiling, not a pacing wait; the probe-fired assertion
     // below is unchanged.
     let (observation, _reset_evt) = tokio::join!(
         observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
-        probe_recorder.wait_for_probe_async(
-            |e| {
-                e.seq().is_some_and(|s| s > pre_seek_seq)
-                    && e.target == "kithara_hls_probe"
-                    && e.probe_name() == Some("seek_epoch_reset")
-            },
+        time::timeout(
             Consts::POST_SEEK_OBSERVATION,
+            probe_recorder.wait_for(|events| {
+                events[pre_seek..]
+                    .iter()
+                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
+            }),
         ),
     );
 
     tick_handle.stop().await;
 
-    let probe_events = probe_recorder.snapshot();
-    let total_probes = probe_events.len();
+    let all_probe_events = probe_recorder.events();
+    let total_probes = all_probe_events.len();
+    let probe_events = &all_probe_events[pre_seek..];
     assert!(
         total_probes > 0,
         "[{backend:?}, probe] zero probe events captured — `usdt-probes` \
@@ -329,8 +320,7 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_resets: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("seek_epoch_reset"))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
         .collect();
     assert!(
         !post_seek_resets.is_empty(),
@@ -339,7 +329,7 @@ async fn hls_seek_near_end_skips_prefix(
     );
     let new_epoch = post_seek_resets
         .iter()
-        .filter_map(|e| e.u64("seek_epoch"))
+        .filter_map(|e| e.field("seek_epoch"))
         .max()
         .expect("seek_epoch field present on seek_epoch_reset probe");
 
@@ -375,11 +365,10 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
-        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
         .filter(|e| {
-            e.u64("segment_index").is_some_and(|s| {
+            e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(usize::MAX);
                 seg < target_floor
             })
@@ -395,17 +384,16 @@ async fn hls_seek_near_end_skips_prefix(
         post_seek_prefix_emissions
             .iter()
             .take(5)
-            .filter_map(|e| e.u64("segment_index"))
+            .filter_map(|e| e.field("segment_index"))
             .collect::<Vec<_>>(),
     );
 
     let target_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
-        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
         .filter(|e| {
-            e.u64("segment_index").is_some_and(|s| {
+            e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(0);
                 seg >= target_floor
             })

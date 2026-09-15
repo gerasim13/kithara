@@ -632,6 +632,7 @@ impl SimHarness {
             .queue_owner
             .host()
             .spec()
+            .await
             .frame_at(at_least)
             .expect("render target fits the offline timeline")
             .saturating_mul(RENDER_OVERRUN);

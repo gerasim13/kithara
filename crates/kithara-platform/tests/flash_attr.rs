@@ -21,7 +21,7 @@ use kithara_platform::{
 use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
-#[kithara_test_macros::flash(true)]
+#[kithara::flash(true)]
 async fn does_sleep() {
     time::sleep(Duration::from_secs(3600)).await;
 }
@@ -42,13 +42,13 @@ fn prod_flash_collapses_under_ambient() {
 
 /// One real-I/O op: the guard is injected before the body, lives in the
 /// future's state across the `.await`, and drops when the future completes.
-#[kithara_test_macros::flash(io)]
+#[kithara::flash(io)]
 async fn io_op(entered: Arc<AtomicBool>, rx: futures::channel::oneshot::Receiver<()>) {
     entered.store(true, Ordering::SeqCst);
     let _ = rx.await;
 }
 
-#[kithara_test_macros::flash(true)]
+#[kithara::flash(true)]
 async fn short_virtual_sleep() {
     time::sleep(Duration::from_millis(100)).await;
 }
@@ -91,7 +91,7 @@ fn prod_flash_real_without_ambient() {
     /// No ambient: `enter_dynamic(true)` gates on ambient, so `flash(true)` is a
     /// no-op and the sleep is REAL. A real `time::sleep` is a `tokio` timer, so it
     /// is driven on a tokio runtime; a SHORT real sleep keeps the test fast while
-    #[kithara_test_macros::flash(true)]
+    #[kithara::flash(true)]
     async fn short_real_sleep() {
         time::sleep(Duration::from_millis(40)).await;
     }

@@ -19,16 +19,8 @@ pub(crate) type StartStreamFn<B> =
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
-    ApplyMix {
-        levels: Box<[HostLevel]>,
-    },
-    EnableOutput {
-        outputs: OutputGroup,
-    },
-    #[cfg(any(test, feature = "probe"))]
-    RestartOutput {
-        sample_rate: u32,
-    },
+    ApplyMix { levels: Box<[HostLevel]> },
+    EnableOutput { outputs: OutputGroup },
     Shutdown,
 }
 

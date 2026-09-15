@@ -28,7 +28,7 @@ mod stream;
 #[cfg(test)]
 mod test_pcm;
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod types;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]

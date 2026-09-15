@@ -592,7 +592,7 @@ async fn render_audio_frames(
     target_frames: usize,
     label: &str,
 ) -> Vec<f32> {
-    let channels = usize::from(queue.host().spec().channels);
+    let channels = usize::from(queue.host().spec().await.channels);
     let block_frames = usize::try_from(queue.host().max_block_frames().get())
         .expect("offline render block fits usize");
     let mut pcm = Vec::with_capacity(target_frames * channels);
@@ -711,7 +711,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, None).await;
-    let ten_seconds_frames = usize::try_from(queue.host().spec().sample_rate.get())
+    let ten_seconds_frames = usize::try_from(queue.host().spec().await.sample_rate.get())
         .expect("offline sample rate fits usize")
         .checked_mul(10)
         .expect("ten-second render frame count fits usize");

@@ -7,6 +7,12 @@ license.workspace = true
 publish = false
 autotests = false
 
+[package.metadata.cargo-machete]
+# `kithara-test-utils` is reached only through the `#[kithara::test]` and
+# `#[kithara::rtsan_forbid_blocking]` expansions, which name
+# `::kithara_test_utils`; no source line in this crate spells the crate out.
+ignored = ["kithara-test-utils"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["kithara/client-reqwest"]
@@ -18,11 +24,11 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
+    "usdt",
     "analysis",
     "audio",
     "bufpool",
     "platform",
-    "probe",
     "resample-rubato",
     "resampler",
     "signal",
@@ -30,7 +36,7 @@ kithara = { workspace = true, features = [
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
-kithara-test-utils = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt"] }
 
 [lints]
 workspace = true

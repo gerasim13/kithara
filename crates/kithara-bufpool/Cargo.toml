@@ -11,7 +11,6 @@ categories = ["memory-management", "concurrency"]
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-test-utils = []
 
 [dependencies]
 kithara-derive = { workspace = true }
@@ -33,9 +32,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-bufpool = { path = ".", default-features = false, features = ["test-utils"] }
 kithara-core-test-fixtures = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

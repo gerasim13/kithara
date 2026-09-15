@@ -1,7 +1,5 @@
-use kithara::{
-    self,
-    bufpool::{PoolConfig, testing::pools_with},
-};
+use kithara::bufpool::PoolConfig;
+use kithara_test_utils::bufpool::pools_with;
 
 #[kithara::test(serial)]
 fn returned_growth_is_accounted_once() {

@@ -63,7 +63,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_tag_names_the_detector_that_was_built() {
-        let pools = kithara_bufpool::testing::pools();
+        let pools = kithara_test_utils::bufpool::pools();
         assert!(
             build_detector(SELECTED_DETECTOR, &config(), &pools).is_ok(),
             "the selected detector is the one a build can construct"

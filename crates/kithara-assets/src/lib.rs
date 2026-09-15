@@ -29,7 +29,7 @@ pub use index::pending_resource::{
 };
 pub use index::persistence::{FlushHub, FlushPolicy, FlushPolicyPatch};
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use layout::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, DefaultLayout,
     ResourceKey,

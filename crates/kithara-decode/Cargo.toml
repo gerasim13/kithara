@@ -37,7 +37,7 @@ symphonia = ["dep:symphonia", "dep:symphonia-core", "dep:kithara-mpa"]
 # Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
 # v1/v2). Off by default — opt in per-target if needed.
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock"]
 resample-glide = ["kithara-resampler/resample-glide"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
@@ -97,10 +97,11 @@ jni = { workspace = true }
 ndk-context = { workspace = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
+kithara-decode = { path = ".", default-features = false, features = ["usdt"] }
 kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

@@ -5,7 +5,7 @@
 mod error;
 mod guard;
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 
 pub mod api;
 pub mod bridge;
@@ -39,9 +39,7 @@ pub use bridge::{
     TrackTransition,
 };
 pub use effects::eq::EqBandConfig;
-#[cfg(any(test, feature = "probe"))]
-pub use engine::apply_mix;
-pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl};
+pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;

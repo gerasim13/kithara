@@ -6,55 +6,30 @@
 //! source alone answers with whichever entry holds that URL first,
 //! which is the wrong track as soon as the second copy is the one
 //! playing.
-use std::num::NonZero;
 
 use kithara::{
-    self,
     events::{SlotId, TrackId},
     platform::sync::Arc,
     play::{ItemRole, PlayerEvent, TrackRef},
-    queue::{QueueControl, TrackStatus, Transition, test_utils::QueueProbe},
-    signal::AudioSpec,
+    queue::{QueueControl, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader,
     event::TestEvent,
-    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
+    kithara,
+    offline::{OfflinePlayerHarness, offline_queue_fixture},
 };
-use kithara_test_fixtures::integration_fixtures::constant_loud;
+use kithara_test_fixtures::{asset::Asset, assets};
 
-use crate::bufpool_ext::TestPools;
+use crate::{
+    bufpool_ext::TestPools,
+    loader_fixture::{append_source_loaded, source},
+};
 
 const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-/// ≈ 0.74 s of rendered audio — far short of `TRACK_SECS`.
+/// ≈ 0.74 s of rendered audio — far short of the 30 s track.
 const WARMUP_BLOCKS: usize = 64;
-const TRACK_SECS: f64 = 30.0;
-const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
-
-async fn load(
-    harness: &OfflinePlayerHarness,
-    queue: &QueueControl<TestPools>,
-    id: TrackId,
-    constant_loud: &'static [u8],
-) {
-    let spec = AudioSpec::new(
-        CHANNELS,
-        NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-    );
-    harness
-        .run(queue, move |q| {
-            q.complete_load_for_test(
-                id,
-                resource_from_reader_with_src(
-                    TestPcmReader::from_pcm(spec, TRACK_SECS, constant_loud),
-                    Arc::from(REPEATED_SRC),
-                ),
-            )
-        })
-        .await;
-}
+const EOF_BLOCK_BUDGET: usize = 128;
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
@@ -69,62 +44,59 @@ async fn render_loop(
 
 fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
     queue
-        .tracks()
-        .into_iter()
-        .find(|entry| entry.id == id)
+        .track(id)
         .map(|entry| entry.status)
         .expect("the entry must still be in the queue")
 }
 
-/// The failing track is the *second* entry carrying this URL.
-async fn fixture_playing_the_second_copy(
-    constant_loud: &'static [u8],
-) -> (
-    OfflinePlayerHarness,
-    QueueControl<TestPools>,
-    TrackId,
-    TrackId,
-) {
+/// Two entries appended from one file, with the second one selected.
+struct SecondCopyPlaying {
+    harness: OfflinePlayerHarness,
+    queue: QueueControl<TestPools>,
+    source: String,
+    first: TrackId,
+    playing: TrackId,
+}
+
+async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let first = harness
-        .run(&queue, move |q| q.append(REPEATED_SRC))
-        .await
-        .expect("append first copy");
-    let playing = harness
-        .run(&queue, move |q| q.append(REPEATED_SRC))
-        .await
-        .expect("append second copy");
-    load(&harness, &queue, first, constant_loud).await;
-    load(&harness, &queue, playing, constant_loud).await;
+    let source = source(track);
+    let first = append_source_loaded(&harness, &queue, source.clone()).await;
+    let playing = append_source_loaded(&harness, &queue, source.clone()).await;
 
     harness
         .run(&queue, move |q| q.select(playing, Transition::None))
         .await
         .expect("select the second copy");
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
-    (harness, queue, first, playing)
+    SecondCopyPlaying {
+        harness,
+        queue,
+        source,
+        first,
+        playing,
+    }
 }
 
-fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
+#[kithara::test(tokio, flash(false))]
+#[case::played_entry(true)]
+#[case::same_url_entry(false)]
+async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
+    let SecondCopyPlaying {
+        harness,
+        queue,
+        source,
+        first,
+        playing,
+    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_30s()).await;
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+
     harness
         .player()
         .bus()
         .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
-            item: ItemRole::Leading(TrackRef::new(id, SlotId::new(0), Arc::from(REPEATED_SRC))),
+            item: ItemRole::Leading(TrackRef::new(playing, SlotId::new(0), Arc::from(source))),
         }));
-}
-
-#[kithara::test(tokio)]
-#[case::played_entry(true)]
-#[case::same_url_entry(false)]
-async fn a_failure_only_flags_the_entry_that_played(
-    #[case] played_entry: bool,
-    constant_loud: &'static [u8],
-) {
-    let (harness, queue, first, playing) = fixture_playing_the_second_copy(constant_loud).await;
-
-    publish_leading_failure(&harness, playing);
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     let id = if played_entry { playing } else { first };
@@ -134,6 +106,36 @@ async fn a_failure_only_flags_the_entry_that_played(
         played_entry,
         "only the entry that played may be flagged: {status:?}"
     );
+    drop(queue);
+    harness.close().await;
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn second_entry_with_the_same_source_owns_its_real_eof() {
+    let SecondCopyPlaying {
+        harness,
+        queue,
+        source: _source,
+        first,
+        playing,
+    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_0_5s()).await;
+    render_loop(&queue, &harness, EOF_BLOCK_BUDGET).await;
+
+    assert_eq!(
+        status_of(&queue, playing),
+        TrackStatus::Consumed,
+        "the selected duplicate must own its natural EOF"
+    );
+    assert_eq!(
+        status_of(&queue, first),
+        TrackStatus::Loaded,
+        "the non-playing duplicate must remain loaded"
+    );
+    assert!(
+        queue.current().is_none(),
+        "queue must be inactive after its terminal EOF"
+    );
+
     drop(queue);
     harness.close().await;
 }

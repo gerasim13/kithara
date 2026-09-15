@@ -17,6 +17,7 @@ use kithara_integration_tests::{
     TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
+    usdt_trace::{self, ProbeEvent, Scope},
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
@@ -27,7 +28,6 @@ fn response_source() -> PathBuf {
         .path()
         .expect("generated sine fixture is stored on disk")
 }
-use kithara_test_utils::probe::capture::{self as probe_capture, ProbeEvent, Recorder};
 
 use crate::bufpool_ext::TestPools;
 
@@ -38,7 +38,6 @@ const TONES_HZ: [f64; 4] = [440.0, 880.0, 1_760.0, 3_520.0];
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const MIN_SIGNAL_RMS: f64 = 0.003;
 const WARMUP_BLOCK_BUDGET: usize = 200;
-
 fn response_backends() -> ElasticBackendConfig {
     ElasticBackendConfig::builder()
         .signalsmith(
@@ -173,19 +172,19 @@ async fn capture_frames(
 
 async fn capture_command_boundary(
     harness: &OfflinePlayerHarness,
-    recorder: &Recorder,
+    trace: &Scope,
     target: usize,
     callback_frames: usize,
 ) -> Vec<f32> {
-    let mut publish_seq = latest_probe_seq(&recorder.snapshot(), "publish");
+    let mut publish_count = probe_count(&trace.events(), "publish");
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         let block = capture_frames(harness, callback_frames, callback_frames).await;
         samples.extend_from_slice(&block);
-        let after = recorder.snapshot();
-        let current_publish_seq = latest_probe_seq(&after, "publish");
-        let published = current_publish_seq > publish_seq;
-        publish_seq = current_publish_seq;
+        let after = trace.events();
+        let current_publish_count = probe_count(&after, "publish");
+        let published = current_publish_count > publish_count;
+        publish_count = current_publish_count;
         let frames = samples.len() / usize::from(CHANNELS);
         if published
             && frames >= TARGET_WINDOW_FRAMES
@@ -197,22 +196,22 @@ async fn capture_command_boundary(
             return samples;
         }
     }
-    let events = recorder.snapshot();
+    let events = trace.events();
     let publish = events
         .iter()
-        .filter(|event| event.probe_name() == Some("publish"))
+        .filter(|event| event.probe == "publish")
         .count();
     let rendered = events
         .iter()
-        .filter(|event| event.probe_name() == Some("render_committed"))
+        .filter(|event| event.probe == "render_committed")
         .count();
     let consumed = events
         .iter()
-        .filter(|event| event.probe_name() == Some("pcm_consumed"))
+        .filter(|event| event.probe == "pcm_consumed")
         .count();
     let applied = events
         .iter()
-        .filter(|event| event.probe_name() == Some("rate_applied"))
+        .filter(|event| event.probe == "rate_applied")
         .count();
     panic!(
         "precondition: no callback presented the initial tone at a transport boundary; publish={publish}, rendered={rendered}, rate_applied={applied}, pcm_consumed={consumed}, last_rms={}",
@@ -222,18 +221,17 @@ async fn capture_command_boundary(
 
 async fn capture_until_applied(
     harness: &OfflinePlayerHarness,
-    recorder: &Recorder,
+    trace: &Scope,
     case: ResponseCase,
 ) -> (Vec<f32>, u64, Vec<ProbeEvent>) {
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
-        let events = recorder.snapshot();
+        let events = trace.events();
         let Some(revision) = events
             .iter()
-            .filter(|event| event.probe_name() == Some("rate_requested"))
-            .max_by_key(|event| event.seq().unwrap_or(0))
-            .and_then(|event| event.u64("request_revision"))
+            .rfind(|event| event.probe == "rate_requested")
+            .and_then(|event| event.field("request_revision"))
         else {
             continue;
         };
@@ -241,52 +239,34 @@ async fn capture_until_applied(
             return (samples, revision, events);
         }
     }
-    let events = recorder.snapshot();
+    let events = trace.events();
     let requested: Vec<_> = events
         .iter()
-        .filter(|event| event.probe_name() == Some("rate_requested"))
+        .filter(|event| event.probe == "rate_requested")
         .filter_map(|event| {
             event
-                .u64("request_revision")
-                .zip(event.u64("target_rate_bits"))
+                .field("request_revision")
+                .zip(event.field("target_rate_bits"))
         })
         .collect();
     let applied: Vec<_> = events
         .iter()
-        .filter(|event| event.probe_name() == Some("rate_applied"))
+        .filter(|event| event.probe == "rate_applied")
         .filter_map(|event| {
             event
-                .u64("request_revision")
-                .zip(event.u64("session_frame"))
+                .field("request_revision")
+                .zip(event.field("session_frame"))
         })
         .collect();
-    let published = events
-        .iter()
-        .filter(|event| event.probe_name() == Some("publish"))
-        .count();
-    let consumed = events
-        .iter()
-        .filter(|event| event.probe_name() == Some("pcm_consumed"))
-        .count();
+    let published = probe_count(&events, "publish");
+    let consumed = probe_count(&events, "pcm_consumed");
     panic!(
         "the renderer never applied the requested rate; requested={requested:?}; applied={applied:?}; publish={published}; pcm_consumed={consumed}"
     );
 }
 
-fn latest_probe_seq(events: &[ProbeEvent], name: &str) -> Option<u64> {
-    events
-        .iter()
-        .filter(|event| event.probe_name() == Some(name))
-        .filter_map(ProbeEvent::seq)
-        .max()
-}
-
-fn latest_probe_u64(events: &[ProbeEvent], name: &str, field: &str) -> Option<u64> {
-    events
-        .iter()
-        .filter(|event| event.probe_name() == Some(name))
-        .max_by_key(|event| event.seq().unwrap_or(0))
-        .and_then(|event| event.u64(field))
+fn probe_count(events: &[ProbeEvent], name: &str) -> usize {
+    events.iter().filter(|event| event.probe == name).count()
 }
 
 async fn playing_queue(
@@ -330,12 +310,7 @@ async fn playing_queue(
         SAMPLE_RATE,
     )
     .await;
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .player(harness.take_player())
-            .should_autoplay(false)
-            .build(),
-    );
+    let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
     let queue = harness.insert(queue).await;
     queue.set_default_rate(case.initial_rate);
     let path = response_source;
@@ -390,8 +365,8 @@ fn unrendered_frames(spans: &[(u64, u64)], from: u64, to: u64) -> u64 {
 fn consumed_spans(events: &[ProbeEvent]) -> Vec<(u64, u64)> {
     events
         .iter()
-        .filter(|event| event.probe_name() == Some("pcm_consumed"))
-        .filter_map(|event| Some((event.u64("output_start")?, event.u64("output_end")?)))
+        .filter(|event| event.probe == "pcm_consumed")
+        .filter_map(|event| Some((event.field("output_start")?, event.field("output_end")?)))
         .collect()
 }
 
@@ -403,9 +378,7 @@ fn revision_probe<'a>(
 ) -> Option<&'a ProbeEvent> {
     events
         .iter()
-        .filter(|event| event.probe_name() == Some(name))
-        .filter(|event| event.u64(field) == Some(revision))
-        .min_by_key(|event| event.seq().unwrap_or(u64::MAX))
+        .find(|event| event.probe == name && event.field(field) == Some(revision))
 }
 
 fn assert_response(
@@ -421,21 +394,24 @@ fn assert_response(
     let requested = revision_probe(events, "rate_requested", "request_revision", revision)
         .unwrap_or_else(|| panic!("{backend} lost the request probe for {revision}"));
     assert_eq!(
-        requested.u64("target_rate_bits"),
+        requested.field("target_rate_bits"),
         Some(u64::from(case.target_rate.to_bits())),
         "{backend} correlated the wrong final rate request"
     );
     let applied = revision_probe(events, "rate_applied", "request_revision", revision)
         .unwrap_or_else(|| panic!("{backend} lost the apply probe for {revision}"));
     let new_rate_start = revision_probe(events, "pcm_consumed", "render_revision", revision)
-        .and_then(|event| event.u64("output_start"))
+        .and_then(|event| event.field("output_start"))
         .unwrap_or_else(|| panic!("{backend} presented no PCM for {revision}"));
-    let consumed_at_apply = latest_probe_u64(at_apply, "pcm_consumed", "output_end")
+    let consumed_at_apply = at_apply
+        .iter()
+        .rfind(|event| event.probe == "pcm_consumed")
+        .and_then(|event| event.field("output_end"))
         .unwrap_or_else(|| panic!("{backend} apply boundary has no presented transport"));
     let queued = usize::try_from(new_rate_start.saturating_sub(consumed_at_apply))
         .expect("queued output frames fit usize");
     let applied_rate = applied
-        .u64("applied_rate_bits")
+        .field("applied_rate_bits")
         .and_then(|bits| u32::try_from(bits).ok())
         .map(f32::from_bits)
         .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
@@ -453,7 +429,7 @@ fn assert_response(
     let onset = first_target_onset(samples, command_frame, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
     let primed = revision_probe(events, "prime_activation", "request_revision", revision)
-        .map(|event| (event.u64("source_frames"), event.u64("output_frames")));
+        .map(|event| (event.field("source_frames"), event.field("output_frames")));
     let audible = (onset + command_frame).saturating_sub(apply_frame);
     let responded = audible.saturating_sub(queued);
     println!(
@@ -489,18 +465,23 @@ async fn run_case(
     response_source: PathBuf,
 ) {
     let (harness, queue) = playing_queue(temp_dir, backend, backends, case, response_source).await;
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let mut samples =
-        capture_command_boundary(&harness, &recorder, case.initial_tone, case.callback_frames)
-            .await;
+        capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
     let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
     );
-    let ready = recorder.snapshot();
-    let published_end = latest_probe_u64(&ready, "publish", "output_end");
-    let consumed_end = latest_probe_u64(&ready, "pcm_consumed", "output_end");
+    let ready = trace.events();
+    let published_end = ready
+        .iter()
+        .rfind(|event| event.probe == "publish")
+        .and_then(|event| event.field("output_end"));
+    let consumed_end = ready
+        .iter()
+        .rfind(|event| event.probe == "pcm_consumed")
+        .and_then(|event| event.field("output_end"));
     let published_end = published_end
         .unwrap_or_else(|| panic!("{backend} command boundary has no published transport"));
     let consumed_end = consumed_end
@@ -513,11 +494,12 @@ async fn run_case(
         queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
     }
     queue.set_rate(case.target_rate);
-    let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &recorder, case).await;
+    let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &trace, case).await;
     let apply_frame = command_frame + acknowledged.len() / usize::from(CHANNELS);
     samples.extend(acknowledged);
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
-    let events = recorder.snapshot();
+    let events = trace.events();
+    drop(trace);
 
     let precommand_start = command_frame.saturating_sub(TARGET_WINDOW_FRAMES);
     let precommand =

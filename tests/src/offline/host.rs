@@ -1,8 +1,11 @@
-use std::{num::NonZeroU32, ops::Deref};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    ops::Deref,
+};
 
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
+    host::{Host, HostConfig, HostLevel, HostOwned},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -13,7 +16,7 @@ use kithara::{
         },
         time::Duration,
     },
-    play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
+    play::{MixTapWriter, PlayError, SessionError, TransportRevision, player::PlayerControlSource},
     queue::Queue,
     signal::AudioSpec,
 };
@@ -23,6 +26,7 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+use crate::usdt_trace;
 
 const CHANNELS: u16 = 2;
 /// Cadence a device-free harness renders itself at when the test is not
@@ -53,7 +57,6 @@ struct HostState<S> {
 pub struct OfflineHostHarness<S> {
     off: HostOwner<HostState<S>>,
     position: Arc<AtomicU64>,
-    spec: AudioSpec,
     max_block_frames: NonZeroU32,
 }
 
@@ -161,7 +164,6 @@ where
         config: HostConfig<S>,
         #[cfg(not(target_arch = "wasm32"))] pacing: Option<Duration>,
     ) -> Result<Self, PlayError> {
-        let spec = AudioSpec::new(CHANNELS, config.sample_rate());
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
@@ -182,7 +184,7 @@ where
             None => HostOwner::spawn("offline-host", start).await?,
             Some(interval) => {
                 HostOwner::spawn_paced("offline-host", start, interval, move |state| {
-                    render_forward_on(state, spec, block, block);
+                    render_forward_on(state, block, block);
                 })
                 .await?
             }
@@ -190,7 +192,6 @@ where
         Ok(Self {
             off,
             position,
-            spec,
             max_block_frames,
         })
     }
@@ -239,9 +240,9 @@ where
     /// Render the next finite block through the product offline protocol.
     pub async fn render(&self, frames: usize) -> Vec<f32> {
         let frames = u64::try_from(frames).expect("offline render frame count fits u64");
-        let spec = self.spec;
         self.off
             .call(move |state| {
+                let spec = output_spec(&state.host);
                 let start = state.position.load(Ordering::Relaxed);
                 let end = start
                     .checked_add(frames)
@@ -266,10 +267,9 @@ where
     /// product offline protocol, at the speed the decoder sustains. Returns
     /// the frames the timeline advanced.
     pub async fn render_forward(&self, frames: u64) -> u64 {
-        let spec = self.spec;
         let block = u64::from(self.max_block_frames.get());
         self.off
-            .call(move |state| render_forward_on(state, spec, block, frames))
+            .call(move |state| render_forward_on(state, block, frames))
             .await
     }
 
@@ -279,10 +279,9 @@ where
         self.position.load(Ordering::Relaxed)
     }
 
-    /// Product offline output format.
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
+    /// Product offline output format at the rate the session renders now.
+    pub async fn spec(&self) -> AudioSpec {
+        self.off.call(|state| output_spec(&state.host)).await
     }
 
     /// Configured product render quantum.
@@ -315,12 +314,6 @@ where
             .await
     }
 
-    pub async fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.restart_stream(sample_rate))
-            .await
-    }
-
     pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,
@@ -331,8 +324,21 @@ where
             .await
     }
 
+    /// The canonical transport revision the running session last committed,
+    /// read from the `render_committed` probe the renderer fires on every
+    /// committed render.
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        self.off.call(|state| state.host.transport_revision()).await
+        usdt_trace::last("render_committed")
+            .and_then(|event| event.field("transport_revision"))
+            .and_then(NonZeroU64::new)
+            .map(TransportRevision::from)
+            .ok_or(PlayError::Session(SessionError::TransportNotProcessed))
+    }
+
+    pub async fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.set_sample_rate(sample_rate))
+            .await
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {
@@ -346,10 +352,11 @@ where
 /// Renders `frames` forward from the cursor the owner thread keeps, in `block`
 /// quanta. Every render of this session runs on that thread, so the session's
 /// own cursor and this one never disagree and a request never needs re-anchoring.
-fn render_forward_on<S>(state: &mut HostState<S>, spec: AudioSpec, block: u64, frames: u64) -> u64
+fn render_forward_on<S>(state: &mut HostState<S>, block: u64, frames: u64) -> u64
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    let spec = output_spec(&state.host);
     let cancel = CancelScope::new(None);
     let mut cursor = state.position.load(Ordering::Relaxed);
     let mut rendered = 0;
@@ -442,4 +449,19 @@ pub fn assert_playhead_tracks_renderer(gain: f64, frames: u64, spec: AudioSpec, 
          advanced {rendered:.3}s ({frames} frames), a drift of {drift:.3}s over the \
          {PROGRESS_QUANTUM_SECS}s progress quantum"
     );
+}
+
+/// The output format the session renders at now; a rate change moves it.
+fn output_spec<S>(host: &Host<S>) -> AudioSpec
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let rate = host
+        .sample_rate()
+        .unwrap_or_else(|error| panic!("query product offline Host output rate: {error}"))
+        .output();
+    AudioSpec::new(
+        CHANNELS,
+        NonZeroU32::new(rate).expect("product offline Host renders at a non-zero rate"),
+    )
 }

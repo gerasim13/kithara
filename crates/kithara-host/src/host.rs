@@ -3,8 +3,6 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-#[cfg(any(test, feature = "probe"))]
-use kithara_play::TransportRevision;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
@@ -24,8 +22,6 @@ pub use config::HostConfig;
 use offline::OfflineRuntime;
 use platform::{Platform, PlatformResult};
 
-#[cfg(any(test, feature = "probe"))]
-use crate::api::SessionDuckingMode;
 use crate::{
     api::HostLevel,
     session::{
@@ -180,21 +176,6 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::DisableMixTap)
     }
 
-    /// Reads the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.dispatcher.exec(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for ducking query".into(),
-            )),
-        }
-    }
-
     /// Installs one post-limiter group for simultaneous independent outputs.
     ///
     /// # Errors
@@ -235,6 +216,14 @@ impl<S> Host<S> {
         })
     }
 
+    /// Move the output stream to `sample_rate`, keeping Host-owned graph state.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot restart its output at that rate.
+    pub fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
+    }
+
     fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
     where
         P: PlayerControlSource,
@@ -266,20 +255,6 @@ impl<S> Host<S> {
     #[must_use]
     pub fn requested_sample_rate(&self) -> NonZeroU32 {
         self.root_view.grid().axis().sample_rate()
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::RestartOutput { sample_rate })?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for stream restart".into(),
-            )),
-        }
     }
 
     /// Reads the current output-rate observation without exposing the lower
@@ -314,36 +289,12 @@ impl<S> Host<S> {
         })
     }
 
-    /// Updates the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session rejects the update.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionDucking { mode })
-    }
-
     /// Change the canonical session tempo at the next render boundary.
     ///
     /// # Errors
     /// Returns an error when the Host rejects or cannot dispatch the update.
     pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::SetSessionTempo { tempo })
-    }
-
-    /// Read the canonical session transport revision for probes.
-    ///
-    /// # Errors
-    /// Returns an error when the Host cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
-            Reply::SessionTransport(snapshot) => Ok(snapshot.revision()),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for transport query".into(),
-            )),
-        }
     }
 
     fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
@@ -471,8 +422,7 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::TestPools;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::TestPools, kithara};
 
     use super::*;
 

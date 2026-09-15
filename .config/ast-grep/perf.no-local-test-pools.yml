@@ -1,6 +1,6 @@
 id: perf.no-local-test-pools
 message: |
-  Test harnesses use `kithara_bufpool::testing::TestPools` so composed
+  Test harnesses use `kithara_test_utils::bufpool::TestPools` so composed
   subsystems share one application-shaped pool facade. Do not declare or
   load a crate-local `TestPools` schema or construct its region locally.
 severity: error
@@ -10,6 +10,7 @@ files:
   - tests/src/**/*.rs
 ignores:
   - crates/kithara-bufpool/**
+  - crates/kithara-test-utils/src/bufpool.rs
   - crates/kithara-devtools/**
 rule:
   any:

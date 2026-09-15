@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_play::{PlayError, SeekOutcome};
+use kithara_play::{PlayError, SeekOutcome, SessionDuckingMode};
 
 use super::{
     QueueControl,
@@ -65,6 +65,17 @@ where
     /// the active audio route.
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
         self.with_open_result(|queue| queue.player.invalidate_audio_route(reason))?;
+        Ok(())
+    }
+
+    /// Lower or restore the whole session output under a competing sound,
+    /// such as a call or a navigation prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError`] when the session rejects the change.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), QueueError> {
+        self.with_open_result(|queue| queue.player.set_session_ducking(mode))?;
         Ok(())
     }
 
@@ -275,8 +286,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
         let queue = make_queue();
-        let _a = queue.probe_register();
-        let b = queue.probe_register();
+        let _a = queue
+            .append("https://example.com/a.mp3")
+            .expect("open queue accepts a track");
+        let b = queue
+            .append("https://example.com/b.mp3")
+            .expect("open queue accepts a track");
         queue.lock_navigation_mut().select(1);
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();

@@ -6,11 +6,9 @@ use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
-#[cfg(any(test, feature = "probe"))]
-use crate::bridge::RtMetricsSnapshot;
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig,
+    ResourceConfig, SessionDuckingMode, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -62,6 +60,12 @@ where
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.invalidate_audio_route(reason))
+    }
+
+    /// Lower or restore the whole session output under a competing sound.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_session_ducking(mode))
     }
 
     /// Whether playback is explicitly paused.
@@ -259,8 +263,7 @@ where
             /// Current engine cost snapshot.
             #[must_use]
             pub fn engine_load(&self) -> EngineLoadSnapshot;
-            /// Read the active audio slot's real-time counters for tests and probes.
-            #[cfg(any(test, feature = "probe"))]
+            /// Read the active audio slot's real-time counters.
             #[must_use]
             pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot>;
             /// Number of EQ bands.

@@ -145,12 +145,6 @@ impl PinsIndex {
         hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
     }
 
-    /// Whether `asset_root` is currently pinned.
-    #[cfg(test)]
-    pub(crate) fn contains(&self, asset_root: &str) -> bool {
-        self.inner.pins.contains_key(asset_root)
-    }
-
     /// Construct an ephemeral index (mem backend mode).
     ///
     /// State lives only as long as this `Arc` is reachable; nothing
@@ -309,7 +303,7 @@ mod tests {
         idx.remove("asset_a", PinDurability::Durable).unwrap();
 
         assert!(
-            !disk_index(&path).contains("asset_a"),
+            !disk_index(&path).inner.pins.contains_key("asset_a"),
             "dropping the last durable pin must reach disk at once"
         );
     }
@@ -371,7 +365,7 @@ mod tests {
         idx.remove("asset_a", PinDurability::Durable).unwrap();
 
         assert!(
-            idx.contains("asset_a"),
+            idx.inner.pins.contains_key("asset_a"),
             "the reader still holds the asset even once the writer is done"
         );
     }
@@ -403,10 +397,10 @@ mod tests {
         idx.add("playlist", PinDurability::Durable).unwrap();
 
         assert!(!idx.remove("playlist", PinDurability::Durable).unwrap());
-        assert!(idx.contains("playlist"));
+        assert!(idx.inner.pins.contains_key("playlist"));
 
         assert!(idx.remove("playlist", PinDurability::Durable).unwrap());
-        assert!(!idx.contains("playlist"));
+        assert!(!idx.inner.pins.contains_key("playlist"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -419,7 +413,7 @@ mod tests {
 
         let reopened = disk_index(&path);
 
-        assert!(reopened.contains("persistent_asset"));
+        assert!(reopened.inner.pins.contains_key("persistent_asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -433,7 +427,7 @@ mod tests {
         let reopened = disk_index(&path);
 
         assert!(
-            !reopened.contains("reader_only"),
+            !reopened.inner.pins.contains_key("reader_only"),
             "a process-local pin must not be resurrected as a phantom"
         );
     }
@@ -457,7 +451,7 @@ mod tests {
     fn ephemeral_index_does_not_persist() {
         let idx = PinsIndex::ephemeral();
         assert!(idx.add("asset", PinDurability::Durable).unwrap());
-        assert!(idx.contains("asset"));
+        assert!(idx.inner.pins.contains_key("asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -473,10 +467,10 @@ mod tests {
         let idx2 = idx.clone();
 
         idx.add("from_first", PinDurability::Durable).unwrap();
-        assert!(idx2.contains("from_first"));
+        assert!(idx2.inner.pins.contains_key("from_first"));
 
         idx2.remove("from_first", PinDurability::Durable).unwrap();
-        assert!(!idx.contains("from_first"));
+        assert!(!idx.inner.pins.contains_key("from_first"));
     }
 
     /// Membership as `pins.bin` holds it right now, read straight off the

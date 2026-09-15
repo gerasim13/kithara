@@ -20,9 +20,6 @@ use crate::{
     effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
-pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
-    mode.gain()
-}
 /// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
 /// squares its argument, so it must be converted rather than passed through.
 pub(super) fn master_gain(level: f32) -> Volume {
@@ -467,6 +464,22 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
+    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
+        mode: SessionDuckingMode,
+    ) {
+        state.session_ducking = mode;
+        if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_output_node_id,
+            &mut state.session_output_memo,
+        ) {
+            memo.volume = Volume::Linear(mode.gain());
+            let mut queue = fw_ctx.event_queue(session_id);
+            memo.update_memo(&mut queue);
+        }
+    }
+
     /// Validates the whole request before mutating anything, so an invalid
     /// entry leaves the batch untouched. Omitted players are unchanged.
     pub(in crate::session) fn set_player_master_volumes<B: AudioBackend, S>(
@@ -632,21 +645,6 @@ pub(super) mod controls {
         player.master_eq_memo = Some(Memo::new(master_eq));
         Ok(())
     }
-    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
-        mode: SessionDuckingMode,
-    ) {
-        state.session_ducking = mode;
-        if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
-            &mut state.ctx,
-            state.session_output_node_id,
-            &mut state.session_output_memo,
-        ) {
-            memo.volume = Volume::Linear(ducking_gain(mode));
-            let mut queue = fw_ctx.event_queue(session_id);
-            memo.update_memo(&mut queue);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -656,10 +654,12 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_warp::{
         Beat, BeatGrid, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
         MapAxis, MapPoint, MapPosition, SessionAxis, SessionEpoch, SessionFrame,
@@ -672,7 +672,7 @@ mod tests {
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
-            testing::{attach_player, state as test_state},
+            tests::graph::{attach_player, state as test_state},
         },
     };
 

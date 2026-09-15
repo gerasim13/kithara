@@ -40,6 +40,7 @@ use kithara_integration_tests::{
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
+    usdt_trace,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -339,6 +340,8 @@ pub(super) struct ProductHarness {
     pub(super) failures: Vec<String>,
     block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
+    /// Records the render commits `transport_revision` reads for this harness.
+    _trace: usdt_trace::Scope,
     output_frames: u64,
     paced: bool,
 }
@@ -462,6 +465,7 @@ impl ProductHarness {
             .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
             .build();
+        let trace = usdt_trace::scope();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
@@ -504,6 +508,7 @@ impl ProductHarness {
             host,
             output_frames: 0,
             paced,
+            _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
         for (index, (deck, id)) in harness.decks.iter().zip(ids).enumerate() {

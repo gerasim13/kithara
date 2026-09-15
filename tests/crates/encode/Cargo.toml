@@ -21,13 +21,13 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
+    "usdt",
     "bufpool",
     "decode",
     "encode",
     "fdk-aac",
     "ffmpeg",
     "platform",
-    "probe",
     "resample-rubato",
     "resampler",
     "signal",
@@ -37,7 +37,7 @@ kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 [lints]
 workspace = true

@@ -6,10 +6,7 @@
 //! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
 //! - [`probe`] — `#[kithara::probe]`, `kithara::probe_event!`, and
 //!   `#[derive(kithara::Probe)]`
-//!   (USDT + tracing instrumentation; auto-gated
-//!   `cfg(any(test, feature = "probe"))`, with the emit wrapped in a
-//!   `kithara_test_utils::rtsan::permit` guard so probes stay active but
-//!   `RTSan`-transparent under `--cfg rtsan`).
+//!   (USDT instrumentation gated by `feature = "usdt"`).
 //! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
 //! - [`asset`] — `#[kithara::asset]` (registers one build-time audio asset
 //!   per `#[case::name(...)]`; for `kithara-test-fixtures/src/defs/` only).
@@ -82,11 +79,11 @@ pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
     flash::expand(attr, item)
 }
 
-/// Facade re-export variant of [`flash`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
+/// Test-utils re-export variant of [`flash`]. Its generated paths resolve through
+/// `kithara_test_utils`, so test crates need no direct `kithara-platform`.
 #[proc_macro_attribute]
-pub fn facade_flash(attr: TokenStream, item: TokenStream) -> TokenStream {
-    flash::expand_facade(attr, item)
+pub fn test_utils_flash(attr: TokenStream, item: TokenStream) -> TokenStream {
+    flash::expand_test_utils(attr, item)
 }
 
 /// `#[kithara::no_block]` / `#[kithara::no_block(budget_ms = N)]` — async
@@ -97,13 +94,6 @@ pub fn no_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     no_block::expand(attr, item)
 }
 
-/// Facade re-export variant of [`no_block`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
-#[proc_macro_attribute]
-pub fn facade_no_block(attr: TokenStream, item: TokenStream) -> TokenStream {
-    no_block::expand_facade(attr, item)
-}
-
 /// `#[kithara::allow_block]` — sanctions a genuinely blocking function inside
 /// a no-block context. Sync fns get an RAII permit; async fns get a per-poll
 /// permit combinator so no thread-local guard crosses `.await`.
@@ -112,17 +102,7 @@ pub fn allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     no_block::expand_allow_block(attr, item)
 }
 
-/// Facade re-export variant of [`allow_block`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
-#[proc_macro_attribute]
-pub fn facade_allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
-    no_block::expand_allow_block_facade(attr, item)
-}
-
-/// `#[kithara::probe]` — USDT + tracing-event instrumentation.
-/// Body is gated by `cfg(any(test, feature = "probe"))` → no-op in production;
-/// emit is wrapped in `rtsan::permit`, so under `--cfg rtsan` probes stay active
-/// but `RTSan` does not flag them.
+/// `#[kithara::probe]` — USDT instrumentation gated by `feature = "usdt"`.
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     probe::expand_attr(attr, item)
@@ -162,8 +142,7 @@ pub fn rtsan_allow_blocking(_attr: TokenStream, item: TokenStream) -> TokenStrea
 }
 
 /// `#[derive(kithara::Probe)]` — generates `record_probe()` for value-type probes.
-/// Body is gated by `cfg(any(test, feature = "probe"))`; emit is wrapped in
-/// `rtsan::permit` (active but `RTSan`-transparent under `--cfg rtsan`).
+/// Emission is gated by `feature = "usdt"`.
 #[proc_macro_derive(Probe, attributes(probe))]
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     probe::expand_derive_entry(input)

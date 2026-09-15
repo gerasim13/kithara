@@ -173,15 +173,15 @@ fn follower_attach_clones_reader_before_current_failure() {
     let (first_lease, first_writer) = attach(&index, &store, &key, entry(0, None));
     let first_writer = first_writer.expect("first writer");
     let first_epoch = first_writer.epoch();
-    let attached = Arc::new(Barrier::new(2));
-    let release = Arc::new(Barrier::new(2));
-    let probe_attached = Arc::clone(&attached);
-    let probe_release = Arc::clone(&release);
-    index.set_attach_probe_for_test(move || {
-        probe_attached.wait();
-        probe_release.wait();
-    });
-
+    let slot = Arc::clone(
+        index
+            .inner
+            .slots
+            .get(&key)
+            .expect("first attachment opened a slot")
+            .value(),
+    );
+    let state = slot.state.lock();
     let follower_index = index.clone();
     let follower_store = store.clone();
     let follower_key = key.clone();
@@ -198,11 +198,9 @@ fn follower_attach_clones_reader_before_current_failure() {
         )
     });
 
-    attached.wait();
-    assert!(
-        index.slot_locked_for_test(&key),
-        "current failure must wait for the follower's attach critical section"
-    );
+    while !matches!(index.inner.slots.try_get(&key), TryResult::Locked) {
+        thread::yield_now();
+    }
     let (failed_tx, failed_rx) = mpsc::channel();
     let failure = thread::spawn(move || {
         failed_tx
@@ -211,7 +209,7 @@ fn follower_attach_clones_reader_before_current_failure() {
     });
     assert!(failed_rx.try_recv().is_err());
 
-    release.wait();
+    drop(state);
     let follower = follower.join().expect("follower attach thread");
     assert!(matches!(follower, Ok(AcquisitionResult::Pending(_))));
     failure.join().expect("failure thread");
