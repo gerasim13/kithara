@@ -1,6 +1,9 @@
-use std::sync::{
-    Mutex, MutexGuard, PoisonError,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, ThreadId},
 };
 
 use kithara_platform::sync::{Arc, Notify};
@@ -26,6 +29,12 @@ pub const MAX_EVENTS: usize = 1 << 19;
 pub struct ProbeEvent {
     pub target: &'static str,
     pub probe: &'static str,
+    /// Source file of the product function the probe is attached to.
+    pub file: Option<&'static str>,
+    /// Source line of that function.
+    pub line: Option<u32>,
+    /// Thread the probe fired on.
+    pub thread: ThreadId,
     fields: [(&'static str, u64); MAX_FIELDS],
     len: usize,
 }
@@ -193,9 +202,13 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         let Some(probe) = visitor.probe else {
             return;
         };
+        let metadata = event.metadata();
         let recorded_event = ProbeEvent {
-            target: event.metadata().target(),
+            target: metadata.target(),
             probe,
+            file: metadata.file(),
+            line: metadata.line(),
+            thread: thread::current().id(),
             fields: visitor.fields,
             len: visitor.len,
         };
