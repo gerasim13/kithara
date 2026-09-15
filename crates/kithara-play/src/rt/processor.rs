@@ -105,11 +105,11 @@ pub struct StreamShape {
 impl StreamShape {
     /// Compute decoder buffer depths within the output response budget.
     ///
-    /// The output block sets the minimum preload; the buffers then take the
-    /// largest quantum-aligned share of the budget.
+    /// The output block sets the preload and the ring holds one chunk more:
+    /// every chunk deeper delays a rate or seek change by one quantum.
     ///
     /// # Errors
-    /// Returns an error when the geometry overflows or one block exceeds the budget.
+    /// Returns an error when the geometry overflows or exceeds the budget.
     pub fn playback_buffers(
         self,
         quantum: NonZeroUsize,
@@ -117,9 +117,12 @@ impl StreamShape {
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let required_frames = output_frames
-            .div_ceil(quantum.get())
-            .checked_add(2)
+        let preload = output_frames.div_ceil(quantum.get());
+        let ring = preload
+            .checked_add(1)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let required_frames = ring
+            .checked_add(1)
             .and_then(|chunks| chunks.checked_mul(quantum.get()))
             .and_then(|frames| frames.checked_sub(1))
             .ok_or(SessionError::ResponseGeometryOverflow)?;
@@ -131,7 +134,10 @@ impl StreamShape {
                 budget_frames: budget.get(),
             });
         }
-        Self::budget_buffers(quantum, budget)
+        Ok((
+            NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
+            NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
+        ))
     }
 
     /// Fill the response budget with a preload and a one-chunk-deeper ring.

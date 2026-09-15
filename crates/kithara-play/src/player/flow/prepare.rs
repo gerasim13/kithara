@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::industry_budget(32, 128, 441, 11, 12)]
+    #[case::industry_budget(32, 128, 441, 4, 5)]
     #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
     fn prepare_config_derives_playback_buffering(
         #[case] quantum: usize,
