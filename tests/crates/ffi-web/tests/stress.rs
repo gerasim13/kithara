@@ -240,6 +240,8 @@ async fn read_with_yield_limit(
     budget_ms: u32,
 ) -> Option<usize> {
     let deadline = Date::now() + f64::from(budget_ms);
+    let entered = Date::now();
+    let _diag = DiagRead(entered);
     loop {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
@@ -253,8 +255,50 @@ async fn read_with_yield_limit(
         if Date::now() >= deadline {
             return Some(0);
         }
+        let turn = Date::now();
         yield_macrotask().await;
+        DIAG.with(|d| {
+            let mut d = d.borrow_mut();
+            d.yields += 1;
+            d.yield_ms += Date::now() - turn;
+        });
     }
+}
+
+#[derive(Default)]
+struct Diag {
+    yields: u64,
+    yield_ms: f64,
+    read_ms: f64,
+    seek_ms: f64,
+}
+
+thread_local! {
+    static DIAG: std::cell::RefCell<Diag> = std::cell::RefCell::new(Diag::default());
+}
+
+struct DiagRead(f64);
+
+impl Drop for DiagRead {
+    fn drop(&mut self) {
+        let spent = Date::now() - self.0;
+        DIAG.with(|d| d.borrow_mut().read_ms += spent);
+    }
+}
+
+fn diag_line(label: &str, elapsed_ms: f64) {
+    DIAG.with(|d| {
+        let d = std::mem::take(&mut *d.borrow_mut());
+        warn!(
+            label,
+            elapsed_ms,
+            yields = d.yields,
+            yield_ms = d.yield_ms,
+            read_ms = d.read_ms,
+            seek_ms = d.seek_ms,
+            "DIAG"
+        );
+    });
 }
 
 /// One macrotask turn, so fetch and worker messages make progress.
@@ -553,6 +597,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     info!(duration_secs, max_seek, "Duration known");
 
     const SEEK_COUNT: usize = 1000;
+    diag_line("rapid-warmup", 0.0);
     let started_ms = Date::now();
     let sample_rate = audio.spec().sample_rate.get();
     let channels = audio.spec().channels as usize;
@@ -574,7 +619,10 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         };
 
         let position = Duration::from_secs_f64(pos_secs);
-        if let Err(e) = audio.seek(position) {
+        let seek_started = Date::now();
+        let seeked = audio.seek(position);
+        DIAG.with(|d| d.borrow_mut().seek_ms += Date::now() - seek_started);
+        if let Err(e) = seeked {
             seek_errors += 1;
             if seek_errors <= 3 {
                 warn!(iteration = i, pos_secs, ?e, "seek error");
@@ -619,7 +667,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         total_samples += n as u64;
 
         if (i + 1) % 100 == 0 {
-            warn!(elapsed_ms = Date::now() - started_ms, "DIAG rapid");
+            diag_line("rapid", Date::now() - started_ms);
         }
         if (i + 1) % 200 == 0 {
             info!(
@@ -696,6 +744,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     let max_seek = duration_secs - 0.5;
     info!(warmup, duration_secs, "Warmup done");
 
+    diag_line("zero-warmup", 0.0);
     let zero_started_ms = Date::now();
     let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
     for i in 0..500 {
@@ -706,7 +755,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
             .unwrap_or(0);
 
         if i % 100 == 99 {
-            warn!(elapsed_ms = Date::now() - zero_started_ms, "DIAG zero");
+            diag_line("zero", Date::now() - zero_started_ms);
             yield_ms(1).await;
         }
     }
