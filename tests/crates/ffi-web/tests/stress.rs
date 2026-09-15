@@ -3,7 +3,7 @@ use js_sys::{Date, Promise};
 use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ConsumerWakeMode, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::EventBus,
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
@@ -105,7 +105,6 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker.open(config).await.unwrap();
