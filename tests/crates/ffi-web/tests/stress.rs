@@ -237,6 +237,42 @@ thread_local! {
     static PENDING: RefCell<[u64; 3]> = const { RefCell::new([0; 3]) };
 }
 
+thread_local! {
+    static STAGES: RefCell<[u64; 4]> = const { RefCell::new([0; 4]) };
+}
+
+/// Drain the bus into per-stage counters, so a stalled seek says how far it
+/// got: a request that never reaches `SeekApplied` is stuck before the
+/// decoder, one that never reaches `OutputCommitted` is stuck after it.
+fn drain_stages(rx: &mut kithara::events::EventReceiver<TestEvent>) {
+    while let Ok(envelope) = rx.try_recv() {
+        if let TestEvent::Audio(AudioEvent::SeekLifecycle { stage, .. }) = envelope.event {
+            let slot = match stage {
+                SeekLifecycleStage::SeekRequest => 0,
+                SeekLifecycleStage::SeekApplied => 1,
+                SeekLifecycleStage::DecodeStarted => 2,
+                SeekLifecycleStage::OutputCommitted => 3,
+            };
+            STAGES.with(|s| s.borrow_mut()[slot] += 1);
+        }
+    }
+}
+
+fn stage_line(label: &str) {
+    STAGES.with(|s| {
+        let mut s = s.borrow_mut();
+        warn!(
+            label,
+            seek_request = s[0],
+            seek_applied = s[1],
+            decode_started = s[2],
+            output_committed = s[3],
+            "STAGES"
+        );
+        *s = [0; 4];
+    });
+}
+
 fn pending_line(label: &str) {
     PENDING.with(|p| {
         let mut p = p.borrow_mut();
@@ -561,6 +597,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     info!("Starting stress_rapid_seeks_must_not_stall");
 
     let mut audio = create_pipeline_with_url(url).await;
+    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     info!(
         channels = spec.channels,
@@ -616,8 +653,10 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         }
 
         let read = read_with_yield_limit(&mut audio, &mut buf, 200).await;
+        drain_stages(&mut events_rx);
         if i % 100 == 99 {
             pending_line("rapid");
+            stage_line("rapid");
         }
         let n = read.unwrap_or(0);
         if n == 0 && read.is_some() {
