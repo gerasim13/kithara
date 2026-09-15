@@ -220,6 +220,7 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
+        Cmd::SetSampleRate { sample_rate } => set_sample_rate(state, sample_rate),
         Cmd::QuerySampleRate => {
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate(state))
@@ -416,6 +417,15 @@ pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
             r#source: err.to_string(),
         }),
     }
+}
+
+/// Moves the output to `sample_rate` through the same restart a route change takes.
+fn set_sample_rate<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    sample_rate: NonZeroU32,
+) -> Reply {
+    state.sample_rate_hint = sample_rate.get();
+    invalidate_audio_route(state, "sample rate change")
 }
 
 pub(super) fn restart_stream<B: AudioBackend, S>(

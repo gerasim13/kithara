@@ -1,5 +1,5 @@
 mod wire {
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU32, NonZeroUsize};
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
@@ -142,6 +142,9 @@ mod wire {
         QuerySessionTransport,
         InvalidateAudioRoute {
             reason: String,
+        },
+        SetSampleRate {
+            sample_rate: NonZeroU32,
         },
         QuerySampleRate,
         QueryStreamShape,
