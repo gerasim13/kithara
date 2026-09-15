@@ -1,1 +1,1 @@
-pub use kithara_test_utils::test::usdt::{ProbeEvent, Scope, events, scope};
+pub use kithara_test_utils::test::usdt::{ProbeEvent, Scope, events, last, scope};

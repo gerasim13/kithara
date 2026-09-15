@@ -30,6 +30,7 @@ mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
 mod flac_swallow_fixture;
 mod full_playthrough_census;
+mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
 mod loader_lanes;
 mod loader_starvation;

@@ -705,6 +705,8 @@ mod native {
 
     #[kithara::test(native, flash(false))]
     fn shutdown_cancels_and_recycles_a_queued_never_run_task_once() {
+        #[cfg(feature = "usdt")]
+        let trace = kithara_test_utils::test::usdt::scope();
         let worker = crate::Worker::new(crate::WorkerConfig::new());
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
@@ -735,6 +737,16 @@ mod native {
                 .recv_timeout(Instant::now() + default_timeout())
                 .expect("queued task cancellation"),
             "cancel"
+        );
+        // The probe fires on entry to the cancellation, before the task's
+        // own cancel callback sent the event just received.
+        #[cfg(feature = "usdt")]
+        assert!(
+            trace.events().iter().any(|event| {
+                event.field("task_id") == Some(queued.id().get())
+                    && event.field("already_terminal") == Some(0)
+            }),
+            "queued task cancellation probe"
         );
         assert_eq!(
             received

@@ -84,7 +84,7 @@ kithara-bufpool = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["usdt"] }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }

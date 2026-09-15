@@ -18,6 +18,7 @@ no-block = ["kithara/no-block"]
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "usdt",
     "events",
     "platform",
     "storage",
@@ -25,7 +26,7 @@ kithara = { workspace = true, default-features = false, features = [
     "tokio-net",
 ] }
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 futures = { workspace = true }
 thiserror = { workspace = true }

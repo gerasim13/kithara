@@ -49,7 +49,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false, features = ["usdt"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

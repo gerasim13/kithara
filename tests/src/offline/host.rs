@@ -333,11 +333,8 @@ where
     /// read from the `render_committed` probe the renderer fires on every
     /// committed render.
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        usdt_trace::events()
-            .iter()
-            .rev()
-            .filter(|event| event.probe == "render_committed")
-            .find_map(|event| event.field("transport_revision"))
+        usdt_trace::last("render_committed")
+            .and_then(|event| event.field("transport_revision"))
             .and_then(NonZeroU64::new)
             .map(TransportRevision::from)
             .ok_or(PlayError::Session(SessionError::TransportNotProcessed))

@@ -1,9 +1,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Repeated source URLs remain distinct queue entries through a real EOF.
+//! Two queue entries may name the same URL: a playlist that repeats a
+//! track, or one asset reachable under a single address. A player event
+//! must resolve to the entry that actually played. Resolving it by
+//! source alone answers with whichever entry holds that URL first,
+//! which is the wrong track as soon as the second copy is the one
+//! playing.
 
-use kithara::queue::{QueueControl, TrackStatus, Transition};
+use kithara::{
+    events::{SlotId, TrackId},
+    platform::sync::Arc,
+    play::{ItemRole, PlayerEvent, TrackRef},
+    queue::{QueueControl, TrackStatus, Transition},
+};
 use kithara_integration_tests::{
+    event::TestEvent,
     kithara,
     offline::{OfflinePlayerHarness, offline_queue_fixture},
 };
@@ -16,44 +27,127 @@ use crate::{
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const TRACK_SECS: f64 = 0.5;
 const BLOCK_FRAMES: usize = 512;
+/// ≈ 0.74 s of rendered audio — far short of `LONG_TRACK_SECS`.
+const WARMUP_BLOCKS: usize = 64;
+const LONG_TRACK_SECS: f64 = 30.0;
+const SHORT_TRACK_SECS: f64 = 0.5;
 const EOF_BLOCK_BUDGET: usize = 128;
 
-async fn render_to_eof(queue: &QueueControl<TestPools>, harness: &OfflinePlayerHarness) {
-    for _ in 0..EOF_BLOCK_BUDGET {
-        let _ = harness.run(queue, |queue| queue.tick()).await;
+async fn render_loop(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayerHarness,
+    block_budget: usize,
+) {
+    for _ in 0..block_budget {
+        let _ = harness.run(queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
 }
 
-#[kithara::test(tokio, flash(false))]
-async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'static [u8]) {
+fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
+    queue
+        .track(id)
+        .map(|entry| entry.status)
+        .expect("the entry must still be in the queue")
+}
+
+/// Two entries appended from one file, with the second one selected.
+struct SecondCopyPlaying {
+    harness: OfflinePlayerHarness,
+    queue: QueueControl<TestPools>,
+    source: LocalWav,
+    first: TrackId,
+    playing: TrackId,
+}
+
+async fn fixture_playing_the_second_copy(
+    constant_loud: &'static [u8],
+    track_secs: f64,
+) -> SecondCopyPlaying {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = LocalWav::constant(
         "duplicate-source",
         SAMPLE_RATE,
         CHANNELS,
-        TRACK_SECS,
+        track_secs,
         constant_loud,
     );
     let first = append_source_loaded(&harness, &queue, source.source()).await;
-    let second = append_source_loaded(&harness, &queue, source.source()).await;
+    let playing = append_source_loaded(&harness, &queue, source.source()).await;
 
     harness
-        .run(&queue, move |queue| queue.select(second, Transition::None))
+        .run(&queue, move |q| q.select(playing, Transition::None))
         .await
-        .expect("select the second entry");
-    render_to_eof(&queue, &harness).await;
+        .expect("select the second copy");
+
+    SecondCopyPlaying {
+        harness,
+        queue,
+        source,
+        first,
+        playing,
+    }
+}
+
+#[kithara::test(tokio, flash(false))]
+#[case::played_entry(true)]
+#[case::same_url_entry(false)]
+async fn a_failure_only_flags_the_entry_that_played(
+    #[case] played_entry: bool,
+    constant_loud: &'static [u8],
+) {
+    let SecondCopyPlaying {
+        harness,
+        queue,
+        source,
+        first,
+        playing,
+    } = fixture_playing_the_second_copy(constant_loud, LONG_TRACK_SECS).await;
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+
+    harness
+        .player()
+        .bus()
+        .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
+            item: ItemRole::Leading(TrackRef::new(
+                playing,
+                SlotId::new(0),
+                Arc::from(source.source()),
+            )),
+        }));
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+
+    let id = if played_entry { playing } else { first };
+    let status = status_of(&queue, id);
+    assert_eq!(
+        matches!(status, TrackStatus::Failed(_)),
+        played_entry,
+        "only the entry that played may be flagged: {status:?}"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'static [u8]) {
+    let SecondCopyPlaying {
+        harness,
+        queue,
+        source: _source,
+        first,
+        playing,
+    } = fixture_playing_the_second_copy(constant_loud, SHORT_TRACK_SECS).await;
+    render_loop(&queue, &harness, EOF_BLOCK_BUDGET).await;
 
     assert_eq!(
-        queue.track(second).map(|entry| entry.status),
-        Some(TrackStatus::Consumed),
+        status_of(&queue, playing),
+        TrackStatus::Consumed,
         "the selected duplicate must own its natural EOF"
     );
     assert_eq!(
-        queue.track(first).map(|entry| entry.status),
-        Some(TrackStatus::Loaded),
+        status_of(&queue, first),
+        TrackStatus::Loaded,
         "the non-playing duplicate must remain loaded"
     );
     assert!(

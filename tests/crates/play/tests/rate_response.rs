@@ -38,7 +38,6 @@ const TONES_HZ: [f64; 4] = [440.0, 880.0, 1_760.0, 3_520.0];
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const MIN_SIGNAL_RMS: f64 = 0.003;
 const WARMUP_BLOCK_BUDGET: usize = 200;
-
 fn response_backends() -> ElasticBackendConfig {
     ElasticBackendConfig::builder()
         .signalsmith(

@@ -17,7 +17,7 @@ no-block = ["kithara/no-block"]
 [dependencies]
 kithara = { workspace = true, default-features = false, features = ["platform"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 [lints]
 workspace = true

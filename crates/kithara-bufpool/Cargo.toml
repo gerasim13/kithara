@@ -33,7 +33,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-core-test-fixtures = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
