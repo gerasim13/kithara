@@ -269,6 +269,7 @@ async fn read_with_yield_limit(
                     PendingReason::Buffering => 0,
                     PendingReason::SeekInProgress => 1,
                     PendingReason::StreamBackpressure => 2,
+                    _ => 2,
                 };
                 p.borrow_mut()[slot] += 1;
             }),
