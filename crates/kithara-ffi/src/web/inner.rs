@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
+#[cfg(feature = "analysis")]
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
@@ -111,6 +112,7 @@ impl WasmInner {
     }
 
     /// Start (or restart) the analysis pass for a queued track.
+    #[cfg(feature = "analysis")]
     pub(crate) fn analyze(&self, id: TrackId) -> Result<(), FfiError> {
         let request_id = Self::next_request_id();
         self.try_send(WorkerCmd::Analyze { id, request_id })
@@ -460,6 +462,7 @@ impl WasmInner {
 
     delegate::delegate! {
         to self.routes {
+            #[cfg(feature = "analysis")]
             #[call(set_analysis)]
             pub(crate) fn set_analysis_observer(&self, func: Function);
             #[call(set_player)]

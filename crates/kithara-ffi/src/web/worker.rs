@@ -1,8 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
+#[cfg(feature = "analysis")]
+use kithara::analysis::AnalysisToken;
 use kithara::{
     abr::AbrMode,
-    analysis::AnalysisToken,
     assets::StorageBackend,
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
@@ -209,6 +210,7 @@ fn dispatch_cmd(
                 .map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
+        #[cfg(feature = "analysis")]
         WorkerCmd::Analyze { id, request_id } => {
             let state = build_state.borrow();
             if let Err(error) = start_analysis(queue, &state, analysis, id, request_id) {
@@ -433,6 +435,7 @@ fn replace_track(
     Ok(old_id)
 }
 
+#[cfg(feature = "analysis")]
 fn start_analysis(
     queue: &FfiQueueControl,
     state: &BuildState,

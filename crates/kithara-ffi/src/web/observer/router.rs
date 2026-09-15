@@ -1,20 +1,25 @@
 use std::mem;
 
-use js_sys::{Function, Object, Reflect};
+use js_sys::Reflect;
+#[cfg(feature = "analysis")]
+use js_sys::{Function, Object};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
 };
+#[cfg(feature = "analysis")]
 use send_wrapper::SendWrapper;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use web_sys::{BroadcastChannel, MessageEvent, console};
 
 use super::{decode::decode, decode_item::decode_item_event, marshal::get_id_req};
+#[cfg(feature = "analysis")]
+use crate::web::analysis::encode::ANALYSIS_SCOPE;
 use crate::{
     item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
-    web::{analysis::encode::ANALYSIS_SCOPE, observer::source::EVENT_CHANNEL},
+    web::observer::source::EVENT_CHANNEL,
 };
 
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
@@ -30,6 +35,7 @@ pub(crate) struct Routes {
 #[derive(Default)]
 struct Sinks {
     player: Option<Arc<dyn PlayerObserver>>,
+    #[cfg(feature = "analysis")]
     analysis: Option<SendWrapper<Function>>,
     installed: bool,
 }
@@ -42,6 +48,7 @@ impl Routes {
         }
     }
 
+    #[cfg(feature = "analysis")]
     pub(crate) fn set_analysis(&self, func: Function) {
         self.sinks.lock().analysis = Some(SendWrapper::new(func));
         self.arm();
@@ -81,11 +88,13 @@ impl Routes {
     fn dispatch(&self, data: &JsValue) {
         match scope(data).as_deref() {
             Some("item") => self.route_item_message(data),
+            #[cfg(feature = "analysis")]
             Some(ANALYSIS_SCOPE) => self.route_analysis(data),
             _ => self.route_player(data),
         }
     }
 
+    #[cfg(feature = "analysis")]
     fn route_analysis(&self, data: &JsValue) {
         let func = self
             .sinks

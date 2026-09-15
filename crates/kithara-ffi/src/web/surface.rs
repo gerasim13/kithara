@@ -40,6 +40,7 @@ impl AudioPlayer {
     ///
     /// # Errors
     /// Returns a JS error if the id is not in the queue.
+    #[cfg(feature = "analysis")]
     #[wasm_bindgen(js_name = analyze)]
     pub fn analyze_js(&self, track_id: f64) -> Result<(), JsValue> {
         let item = self
@@ -259,6 +260,7 @@ impl AudioPlayer {
     ///
     /// # Errors
     /// Returns a JS error if `obj` is not a callable function.
+    #[cfg(feature = "analysis")]
     #[wasm_bindgen(js_name = setAnalysisObserver)]
     pub fn set_analysis_observer_js(&self, obj: JsValue) -> Result<(), JsValue> {
         let func: Function = obj

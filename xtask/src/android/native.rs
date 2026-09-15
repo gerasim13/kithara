@@ -24,7 +24,7 @@ fn art_nextest_list_extra(target: &str, packages: &BTreeSet<String>) -> Vec<Stri
         vec![
             "--no-default-features".into(),
             "--features".into(),
-            super::device_features(crate::BuildProfile::Debug).into(),
+            super::device_features(crate::BuildProfile::Debug),
             "--tests".into(),
             "--target".into(),
             target.into(),
@@ -54,7 +54,7 @@ fn android_product_packages(root: &Path, target: &str, product: &str) -> Result<
             target,
             "--no-default-features",
             "--features",
-            super::device_features(crate::BuildProfile::Release),
+            &super::device_features(crate::BuildProfile::Release),
             "--edges",
             "normal",
             "--prefix",
