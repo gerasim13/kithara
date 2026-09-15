@@ -1,9 +1,11 @@
+use std::cell::RefCell;
+
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Date, Promise};
 use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome},
     events::EventBus,
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
@@ -231,6 +233,24 @@ async fn read_with_yield(
     read_with_yield_limit(audio, buf, 500).await
 }
 
+thread_local! {
+    static PENDING: RefCell<[u64; 3]> = const { RefCell::new([0; 3]) };
+}
+
+fn pending_line(label: &str) {
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        warn!(
+            label,
+            buffering = p[0],
+            seek_in_progress = p[1],
+            stream_backpressure = p[2],
+            "PENDING"
+        );
+        *p = [0; 3];
+    });
+}
+
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
@@ -244,7 +264,14 @@ async fn read_with_yield_limit(
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
             Ok(ReadOutcome::Eof { .. }) => return None,
-            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Pending { reason, .. }) => PENDING.with(|p| {
+                let slot = match reason {
+                    PendingReason::Buffering => 0,
+                    PendingReason::SeekInProgress => 1,
+                    PendingReason::StreamBackpressure => 2,
+                };
+                p.borrow_mut()[slot] += 1;
+            }),
             Err(error) => {
                 warn!(%error, "read failed");
                 return None;
@@ -588,6 +615,9 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         }
 
         let read = read_with_yield_limit(&mut audio, &mut buf, 200).await;
+        if i % 100 == 99 {
+            pending_line("rapid");
+        }
         let n = read.unwrap_or(0);
         if n == 0 && read.is_some() {
             dead_seeks += 1;
