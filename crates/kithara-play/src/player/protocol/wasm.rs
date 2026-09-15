@@ -57,6 +57,21 @@ impl PlayerSync {
         }
     }
 
+    pub(crate) fn reanchored_prepared(
+        &self,
+        anchor: SessionAnchor,
+    ) -> Result<Option<PreparedSync>, SyncError> {
+        self.owned
+            .as_ref()
+            .map_or(Ok(None), |owned| owned.reanchored_prepared(anchor))
+    }
+
+    pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
+        if let Some(owned) = self.owned.as_mut() {
+            owned.adopt_reanchored(successor);
+        }
+    }
+
     pub(crate) fn transact_at(
         &mut self,
         operation: SyncOperation<PlayerMember>,

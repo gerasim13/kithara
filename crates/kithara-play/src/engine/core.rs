@@ -22,7 +22,9 @@ use tracing::{debug, info};
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
+    bridge::{
+        PlaybackShared, PlayerCmd, PlayerNotification, SlotControl, channels::ScheduledSeekReanchor,
+    },
     effects::eq::EqBandConfig,
     error::PlayError,
     rt::StreamShape,
@@ -404,6 +406,25 @@ impl<S> EngineImpl<S> {
         if let Some(control) = self.slots.lock().get_mut(slot) {
             control.disarm_prepared_launches();
         }
+    }
+
+    /// Moves a pending synchronized seek and, once it moved, runs `install`
+    /// before the slots lock is released, so no tick begins the moved seek
+    /// against the previous region plan.
+    pub(crate) fn reanchor_scheduled_seek(
+        &self,
+        slot: SlotId,
+        reanchor: ScheduledSeekReanchor,
+        install: impl FnOnce(),
+    ) -> bool {
+        self.slots.lock().get_mut(slot).is_some_and(|control| {
+            let moved =
+                control.reanchor_scheduled_seek(reanchor, self.config.response_budget_frames);
+            if moved {
+                install();
+            }
+            moved
+        })
     }
 
     pub(crate) fn cancel_prepared_launches(

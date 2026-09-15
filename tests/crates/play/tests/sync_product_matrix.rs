@@ -949,6 +949,9 @@ impl ProductHarness {
         assert_eq!(self.host.position(), end);
         self.tick_all(case).await;
         self.rendered_frames = end;
+        if self.host_grid.is_some() {
+            let _ = self.transport_revision(case).await;
+        }
         self.record_host_grid(start, end);
         self.tap.timeline().span(
             "host-output",

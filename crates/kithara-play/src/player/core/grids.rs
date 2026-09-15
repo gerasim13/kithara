@@ -14,7 +14,7 @@ use tracing::warn;
 use super::PlayerImpl;
 use crate::{
     api::TrackId,
-    bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition},
+    bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition, channels::ScheduledSeekReanchor},
     player::{protocol::PlayerMember, state::TrackGrid},
 };
 
@@ -189,32 +189,13 @@ where
                 activation_source = prepared.source,
                 activation_output = i64::from(prepared.activation)
             );
-            let plan = grid
-                .segments
-                .region_plan()
-                .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-                .ok()
-                .map(|plan| {
-                    let activation = WarpMap::identity(prepared.warp_map).reanchor(
-                        prepared.source,
-                        prepared.activation,
-                        prepared.activation_beat,
-                    );
-                    Arc::new(plan.with_activation(activation))
-                });
-            self.runtime.core.items.set_track_plan(item, plan);
+            self.install_prepared_plan(item, &grid, prepared);
 
             if let Some(slot) = self.runtime.slot() {
-                let sample_rate = u64::from(output_rate.get());
-                let target =
-                    kithara_platform::time::Duration::from_secs(prepared.source / sample_rate)
-                        + kithara_platform::time::Duration::from_nanos(
-                            prepared.source % sample_rate * 1_000_000_000 / sample_rate,
-                        );
                 let _ = self.runtime.core.engine.schedule_track_seek(
                     slot,
                     item,
-                    target,
+                    source_duration(prepared.source, output_rate),
                     if prepared_launch {
                         ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
                             activation: prepared.activation,
@@ -232,6 +213,29 @@ where
             }
         }
         Ok(Some(admission))
+    }
+
+    /// Installs the track's region plan activated by `prepared`.
+    fn install_prepared_plan(
+        &self,
+        item: TrackId,
+        grid: &TrackGrid,
+        prepared: crate::sync::prepare::PreparedSync,
+    ) {
+        let plan = grid
+            .segments
+            .region_plan()
+            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
+            .ok()
+            .map(|plan| {
+                let activation = WarpMap::identity(prepared.warp_map).reanchor(
+                    prepared.source,
+                    prepared.activation,
+                    prepared.activation_beat,
+                );
+                Arc::new(plan.with_activation(activation))
+            });
+        self.runtime.core.items.set_track_plan(item, plan);
     }
 
     /// Arms a scheduled prepared launch while the player is playing.
@@ -410,6 +414,15 @@ fn native_frame(output_frame: u64, axis: MapAxis, output_rate: NonZeroU32) -> u6
         .unwrap_or_default()
 }
 
+/// The media position of output-rate `source` frames.
+fn source_duration(source: u64, output_rate: NonZeroU32) -> kithara_platform::time::Duration {
+    let sample_rate = u64::from(output_rate.get());
+    kithara_platform::time::Duration::from_secs(source / sample_rate)
+        + kithara_platform::time::Duration::from_nanos(
+            source % sample_rate * 1_000_000_000 / sample_rate,
+        )
+}
+
 fn prepared_is_presented(
     frontier: PresentationFrontier,
     activation: kithara_warp::SessionFrame,
@@ -475,6 +488,7 @@ where
             return Err(SyncError::SlotChannelFull);
         }
         let withdraws_preparing = withdraws && self.sync.preparing().is_some();
+        let expected = self.sync.prepared().map(|prepared| prepared.activation);
         self.sync.publish_session_anchor(anchor)?;
         let Some(item) = item else {
             return Ok(());
@@ -484,6 +498,37 @@ where
         }
         if withdraws_prepared {
             self.replan_track(item);
+        }
+        if let (Some(expected), Some(successor), Some(slot)) = (
+            expected,
+            self.sync.reanchored_prepared(anchor)?,
+            self.runtime.slot(),
+        ) {
+            let grid = self.runtime.core.items.track_grid(item);
+            let reanchor = ScheduledSeekReanchor {
+                item_id: item,
+                position: source_duration(
+                    successor.source,
+                    self.runtime.core.engine.output_sample_rate(),
+                ),
+                expected,
+                successor: PreparedLaunchIdentity {
+                    activation: successor.activation,
+                    warp_map: successor.warp_map,
+                },
+            };
+            if self
+                .runtime
+                .core
+                .engine
+                .reanchor_scheduled_seek(slot, reanchor, || {
+                    if let Some(grid) = &grid {
+                        self.install_prepared_plan(item, grid, successor);
+                    }
+                })
+            {
+                self.sync.adopt_reanchored(successor);
+            }
         }
         if self.sync.mode() != kithara_warp::SyncMode::HostSync
             || !matches!(before, BeatGridState::Unavailable(_))

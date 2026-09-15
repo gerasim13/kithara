@@ -14,7 +14,8 @@ use kithara_platform::{
 use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls, WarpMapRevision,
+    DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, SessionFrame, StretchControls,
+    WarpMapRevision,
 };
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -25,10 +26,22 @@ use triple_buffer::{Input, Output, triple_buffer};
 
 use super::PlaybackShared;
 use crate::{
-    bridge::{PlayerCmd, PlayerNotification, ScheduledSeekDisposition, SharedEq},
+    bridge::{
+        PlayerCmd, PlayerNotification, PreparedLaunchIdentity, ScheduledSeekDisposition, SharedEq,
+    },
     rt::{PlayerNodeProcessor, track::PlayerTrack},
     sync::DeckGrid,
 };
+
+/// A move of a track's pending synchronized seek onto a successor activation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ScheduledSeekReanchor {
+    pub(crate) item_id: TrackId,
+    pub(crate) position: Duration,
+    /// The activation the pending seek must still carry to be moved.
+    pub(crate) expected: SessionFrame,
+    pub(crate) successor: PreparedLaunchIdentity,
+}
 
 /// RT-owned channel halves and playback atomics for one player node.
 #[non_exhaustive]
@@ -109,7 +122,16 @@ pub struct SlotControl {
     render: RenderBindings,
     seek: SeekBindings,
     scheduled_seeks: SmallVec<[ScheduledTrackSeek; SLOT_TRACKS]>,
-    prepared_launch_epochs: SmallVec<[(TrackId, u64); SLOT_TRACKS]>,
+    prepared_launch_epochs: SmallVec<[PreparedLaunchHandoff; SLOT_TRACKS]>,
+}
+
+/// A prepared launch handed to the callback, with the arm state control last
+/// requested for it.
+#[derive(Clone, Copy)]
+struct PreparedLaunchHandoff {
+    item_id: TrackId,
+    seek_epoch: u64,
+    armed: bool,
 }
 
 #[derive(Default)]
@@ -124,7 +146,7 @@ struct ScheduledTrackSeek {
     disposition: ScheduledSeekDisposition,
     armed: bool,
     state: ScheduledTrackSeekState,
-    observed_output: Option<kithara_warp::SessionFrame>,
+    observed_output: Option<SessionFrame>,
 }
 
 #[derive(Clone, Copy)]
@@ -147,6 +169,8 @@ fn render_snapshot_key(snapshot: &RenderSnapshot) -> (u64, i64) {
 }
 
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
+
+mod launch;
 
 impl SlotControl {
     pub(crate) fn has_seek_binding(&self, item_id: TrackId) -> bool {
@@ -284,10 +308,13 @@ impl SlotControl {
                 .is_ok()
             {
                 self.prepared_launch_epochs
-                    .retain(|(item_id, _)| *item_id != request.item_id);
+                    .retain(|handoff| handoff.item_id != request.item_id);
                 if request.disposition.is_prepared_launch() {
-                    self.prepared_launch_epochs
-                        .push((request.item_id, seek_epoch));
+                    self.prepared_launch_epochs.push(PreparedLaunchHandoff {
+                        item_id: request.item_id,
+                        seek_epoch,
+                        armed: request.armed,
+                    });
                 }
                 self.scheduled_seeks.remove(index);
             } else {
@@ -306,34 +333,11 @@ impl SlotControl {
         );
     }
 
-    pub(crate) fn set_prepared_launch_armed(&mut self, item_id: TrackId, armed: bool) -> bool {
-        let Some(seek) = self
-            .scheduled_seeks
-            .iter_mut()
-            .find(|seek| seek.item_id == item_id)
-        else {
-            return false;
-        };
-        if !seek.disposition.is_prepared_launch() {
-            return false;
-        }
-        seek.armed = armed;
-        true
-    }
-
-    pub(crate) fn disarm_prepared_launches(&mut self) {
-        for seek in &mut self.scheduled_seeks {
-            if seek.disposition.is_prepared_launch() {
-                seek.armed = false;
-            }
-        }
-    }
-
     pub(crate) fn cancel_prepared_launches(&mut self, item_id: TrackId, resume: bool) -> bool {
-        let Some((_, seek_epoch)) = self
+        let Some(PreparedLaunchHandoff { seek_epoch, .. }) = self
             .prepared_launch_epochs
             .iter()
-            .find(|(bound_id, _)| *bound_id == item_id)
+            .find(|handoff| handoff.item_id == item_id)
             .copied()
         else {
             self.scheduled_seeks
@@ -373,7 +377,7 @@ impl SlotControl {
             );
         }
         self.prepared_launch_epochs
-            .retain(|(bound_id, epoch)| *bound_id != item_id || *epoch != seek_epoch);
+            .retain(|handoff| handoff.item_id != item_id || handoff.seek_epoch != seek_epoch);
         self.scheduled_seeks
             .retain(|seek| seek.item_id != item_id || !seek.disposition.is_prepared_launch());
         true
@@ -483,7 +487,7 @@ impl SlotControl {
         });
         self.scheduled_seeks.retain(|seek| seek.item_id != item_id);
         self.prepared_launch_epochs
-            .retain(|(bound_id, _)| *bound_id != item_id);
+            .retain(|handoff| handoff.item_id != item_id);
     }
 }
 
@@ -783,6 +787,102 @@ mod tests {
         control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 0);
         assert!(inputs.cmd_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn a_pending_launch_moves_until_its_successor_falls_within_the_response_lead() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(item, seek.clone());
+        let first = PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        };
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::PreparedLaunch(first),
+        );
+        let successor =
+            |previous: PreparedLaunchIdentity, activation: i64| PreparedLaunchIdentity {
+                activation: SessionFrame::new(activation),
+                warp_map: previous.warp_map.checked_next().expect("revision"),
+            };
+        let reanchor = |expected: PreparedLaunchIdentity, successor| ScheduledSeekReanchor {
+            item_id: item,
+            position: Duration::from_secs(3),
+            expected: expected.activation,
+            successor,
+        };
+        let moved = successor(first, 1_900);
+
+        assert!(!control.reanchor_scheduled_seek(reanchor(moved, successor(moved, 1_800)), LEAD));
+        assert!(control.reanchor_scheduled_seek(reanchor(first, moved), LEAD));
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(LEAD);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                armed: true,
+                disposition: ScheduledSeekDisposition::PreparedLaunch(identity),
+                ..
+            }) if item_id == item && identity == moved
+        ));
+
+        let publisher = RenderPublisher::default();
+        control.bind_render(item, publisher.reader());
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_000)
+                .output(SessionFrame::new(1_000))
+                .build(),
+        );
+        assert!(!control.reanchor_scheduled_seek(reanchor(moved, successor(moved, 1_400)), LEAD));
+        let restarted = successor(moved, 1_500);
+        assert!(control.reanchor_scheduled_seek(reanchor(moved, restarted), LEAD));
+        control.service_scheduled_seeks(LEAD);
+
+        assert_eq!(seek.0.load(Ordering::Relaxed), 2);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                armed: true,
+                disposition: ScheduledSeekDisposition::PreparedLaunch(identity),
+                ..
+            }) if item_id == item && identity == restarted
+        ));
+
+        control.disarm_prepared_launches();
+        let paused = successor(restarted, 1_600);
+        assert!(control.reanchor_scheduled_seek(reanchor(restarted, paused), LEAD));
+        control.service_scheduled_seeks(LEAD);
+
+        assert_eq!(seek.0.load(Ordering::Relaxed), 2);
+        assert!(inputs.cmd_rx.try_pop().is_none());
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(LEAD);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek {
+                item_id,
+                armed: true,
+                disposition: ScheduledSeekDisposition::PreparedLaunch(identity),
+                ..
+            }) if item_id == item && identity == paused
+        ));
     }
 
     #[kithara::test]

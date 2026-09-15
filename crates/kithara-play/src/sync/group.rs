@@ -448,6 +448,50 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(())
     }
 
+    /// The locked activation the same-axis `anchor` has not reached, moved
+    /// onto the anchor's frame for its beat under the next warp map revision.
+    ///
+    /// A tempo commit must not move the music off its beat, but the deck's
+    /// pending seek decides whether the activation can still move, so nothing
+    /// changes until the successor is adopted.
+    pub(crate) fn reanchored_prepared(
+        &self,
+        anchor: SessionAnchor,
+    ) -> Result<Option<PreparedSync>, SyncError> {
+        let Some(prepared) = self.prepared.filter(|prepared| {
+            prepared.disposition == PreparedDisposition::Lock
+                && prepared.activation_beat >= anchor.beat()
+                && !self.crosses_axis_boundary(anchor)
+        }) else {
+            return Ok(None);
+        };
+        let activation = anchor.frame_at(prepared.activation_beat).map_err(|_| {
+            SyncError::InvalidGroupGridState {
+                state: self.grid.state(),
+            }
+        })?;
+        if activation == prepared.activation {
+            return Ok(None);
+        }
+        let warp_map =
+            self.warp_map
+                .checked_next()
+                .ok_or_else(|| SyncError::WarpMapRevisionExhausted {
+                    group_id: self.grid.id(),
+                })?;
+        Ok(Some(PreparedSync {
+            warp_map,
+            activation,
+            ..prepared
+        }))
+    }
+
+    /// Adopts a successor produced by [`Self::reanchored_prepared`].
+    pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
+        self.warp_map = successor.warp_map;
+        self.prepared = Some(successor);
+    }
+
     /// Whether committing `anchor` steps this deck's live grid onto the
     /// successor axis, withdrawing whatever was prepared on the current one.
     pub(crate) fn crosses_axis_boundary(&self, anchor: SessionAnchor) -> bool {

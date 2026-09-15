@@ -1537,3 +1537,70 @@ fn a_deck_inheriting_its_tempo_reads_it_from_the_live_session_grid() {
 fn a_deck_without_a_grid_has_no_tempo() {
     assert_eq!(fixture_group().deck_tempo(), None);
 }
+
+#[kithara::test]
+fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
+    let axis = SessionAxis::new(
+        NonZeroU32::new(48_000).expect("sample rate"),
+        SessionEpoch::new(0),
+    );
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        axis.sample_rate(),
+        axis.epoch(),
+        SyncMemberKind::Grid,
+        SyncMode::HostSync,
+    );
+    let initial = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::new(0.0).expect("beat"),
+        2.0,
+        axis,
+    )
+    .expect("initial anchor");
+    group
+        .publish_session_anchor(initial)
+        .expect("the first anchor makes the deck grid live");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let frontier = PresentationFrontier::builder()
+        .source(30_000)
+        .output(SessionFrame::new(30_000))
+        .build();
+    let admission = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+    let planned = group.prepared().expect("prepared relation");
+    assert_eq!(
+        planned.activation,
+        initial.frame_at(planned.activation_beat).expect("frame")
+    );
+
+    let faster = SessionAnchor::new(
+        SessionFrame::new(36_000),
+        initial.beat_at(SessionFrame::new(36_000)).expect("beat"),
+        2.5,
+        axis,
+    )
+    .expect("tempo anchor");
+    group
+        .publish_session_anchor(faster)
+        .expect("a tempo commit keeps the session axis");
+    let successor = group
+        .reanchored_prepared(faster)
+        .expect("the activation beat maps onto the live tempo")
+        .expect("the unreached activation moves");
+    assert_eq!(group.prepared(), Some(planned));
+    group.adopt_reanchored(successor);
+
+    let prepared = group
+        .prepared()
+        .expect("the activation survives a tempo commit");
+    assert_eq!(prepared.operation, planned.operation);
+    assert_eq!(prepared.source, planned.source);
+    assert_eq!(prepared.activation_beat, planned.activation_beat);
+    assert!(prepared.warp_map > planned.warp_map);
+    assert_eq!(
+        prepared.activation,
+        faster.frame_at(planned.activation_beat).expect("frame")
+    );
+}
