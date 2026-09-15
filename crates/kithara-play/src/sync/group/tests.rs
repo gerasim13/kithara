@@ -3,9 +3,9 @@ use std::num::NonZeroU32;
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AlignmentSource, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
-    BeatGridState, BeatsPerMinute, MapPoint, MapPosition, PresentationFrontier, SessionAnchor,
-    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncError, SyncGroup,
-    SyncIntent, SyncMemberKind, SyncMode, SyncOperation,
+    BeatGridState, BeatsPerMinute, DEFAULT_TEMPO_SMOOTHING_SECONDS, MapPoint, MapPosition,
+    PresentationFrontier, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+    SyncAdmission, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode, SyncOperation,
 };
 
 use super::GroupState;
@@ -209,7 +209,12 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
     };
     assert_eq!(group.mode, SyncMode::LocalSync);
     assert_eq!(beat(48_000), 2.0);
-    assert_eq!(beat(96_000), 3.5);
+    let approach_surplus = (2.0 - 1.5) * DEFAULT_TEMPO_SMOOTHING_SECONDS;
+    assert!(
+        (beat(96_000) - (3.5 + approach_surplus)).abs() < 1e-9,
+        "a second after the commit the group has played its target tempo plus          the beats the approach carried over, got {}",
+        beat(96_000)
+    );
 }
 
 #[kithara::test]

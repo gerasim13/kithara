@@ -181,6 +181,42 @@ pub fn marked_rhythm_markers(
     rhythm_markers(samples, usize::from(channels), sample_rate)
 }
 
+/// Every exact fixture beat marker in `track` that starts off its nearest Host beat.
+///
+/// `host_beats` are frames of the authoritative Host grid inside the same capture,
+/// so a deck that keeps its phase with other decks but trails the Host still fails.
+#[must_use]
+pub fn host_beat_alignment_failures(
+    label: &str,
+    track: &[f32],
+    channels: u16,
+    sample_rate: u32,
+    host_beats: &[usize],
+) -> Vec<String> {
+    if host_beats.is_empty() {
+        return vec![format!("{label}: capture holds no Host beats")];
+    }
+    let (markers, _) = marked_rhythm_markers(track, channels, sample_rate);
+    if markers.is_empty() {
+        return vec![format!("{label}: capture holds no exact beat markers")];
+    }
+    markers
+        .into_iter()
+        .filter_map(|marker| {
+            let beat = *host_beats
+                .iter()
+                .min_by_key(|beat| beat.abs_diff(marker))
+                .expect("Host beats are not empty");
+            (marker != beat).then(|| {
+                let offset = marker as i64 - beat as i64;
+                format!(
+                    "{label}: beat marker at frame {marker} is {offset:+} frames from Host beat at frame {beat}"
+                )
+            })
+        })
+        .collect()
+}
+
 fn synchronization_failures_with(
     label: &str,
     tracks: &[&[f32]],

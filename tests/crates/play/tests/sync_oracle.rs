@@ -1,5 +1,8 @@
 use kithara_integration_tests::{
-    cochlea::{marked_rhythm_markers, marked_synchronization_failures, synchronization_failures},
+    cochlea::{
+        host_beat_alignment_failures, marked_rhythm_markers, marked_synchronization_failures,
+        synchronization_failures,
+    },
     kithara,
 };
 use kithara_test_fixtures::{
@@ -350,4 +353,34 @@ fn rhythm_techno_132() -> [Vec<f32>; 4] {
 #[kithara::fixture]
 fn rhythm_breakbeat_140() -> [Vec<f32>; 4] {
     rhythm_controls("breakbeat_140")
+}
+
+#[kithara::test(native)]
+fn host_beat_oracle_rejects_a_deck_one_frame_behind_the_host() {
+    let host_beats = [BEAT_FRAMES, BEAT_FRAMES * 2, BEAT_FRAMES * 3];
+
+    assert!(
+        host_beat_alignment_failures(
+            "on beat",
+            &clicks_from(BEAT_FRAMES),
+            CHANNELS,
+            SAMPLE_RATE,
+            &host_beats,
+        )
+        .is_empty(),
+        "clicks on the Host beats must pass",
+    );
+    assert_eq!(
+        host_beat_alignment_failures(
+            "late",
+            &clicks_from(BEAT_FRAMES + 1),
+            CHANNELS,
+            SAMPLE_RATE,
+            &host_beats,
+        ),
+        host_beats.map(|beat| format!(
+            "late: beat marker at frame {} is +1 frames from Host beat at frame {beat}",
+            beat + 1,
+        )),
+    );
 }

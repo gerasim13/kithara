@@ -34,6 +34,12 @@ impl Defaults {
 /// Smoothing of the player's plain playback-rate multiplier.
 pub const DEFAULT_RATE_SMOOTHING: SmootherConfig = Defaults::RATE_SMOOTHING;
 
+/// Time constant a group's tempo approaches a new target over, in seconds.
+///
+/// A knob turned quickly lands every value it passes through; this is how fast
+/// the group's beat line follows them.
+pub const DEFAULT_TEMPO_SMOOTHING_SECONDS: f64 = 0.005;
+
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
 /// [`WarpConfigPatch`] is what a configuration document may say about it.
@@ -77,6 +83,10 @@ pub struct WarpConfig {
     #[builder(default = DEFAULT_RATE_SMOOTHING)]
     #[field(get, copy)]
     rate_smoothing: SmootherConfig,
+    /// Seconds a sync group's tempo approaches a new target over.
+    #[builder(default = DEFAULT_TEMPO_SMOOTHING_SECONDS)]
+    #[field(get, copy)]
+    tempo_smoothing_seconds: f64,
     /// Output-frame cap between samples of live temporal controls.
     /// Without a cap, standalone Warp consumes the complete source span.
     #[field(get, copy)]

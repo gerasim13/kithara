@@ -47,8 +47,8 @@ pub use temporal::{
     RenderContext, RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
 pub use warp::{
-    DEFAULT_RATE_SMOOTHING, Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap,
-    supports_playback_rate,
+    DEFAULT_RATE_SMOOTHING, DEFAULT_TEMPO_SMOOTHING_SECONDS, Warp, WarpConfig, WarpConfigPatch,
+    WarpCursor, WarpMap, supports_playback_rate,
 };
 #[cfg(feature = "render")]
 pub use warp::{ScheduledActivationProgress, WarpRenderer};

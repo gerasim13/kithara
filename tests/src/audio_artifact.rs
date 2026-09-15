@@ -196,6 +196,14 @@ impl AudioArtifactTap {
         self.host_beats.insert(frame, downbeat);
     }
 
+    /// Output frames of the Host beats marked inside `frames`.
+    pub fn host_beats_in(&self, frames: std::ops::Range<u64>) -> Vec<u64> {
+        self.host_beats
+            .range(frames)
+            .map(|(frame, _)| *frame)
+            .collect()
+    }
+
     /// The captured output with the Host metronome laid over it, and how many samples clipped.
     pub fn metronome_mix(&self) -> (Vec<f32>, usize) {
         self.mix_with(&self.clicks())

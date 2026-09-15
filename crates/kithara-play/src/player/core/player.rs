@@ -51,7 +51,8 @@ impl<S> PlayerImpl<S> {
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
             SyncMode::Off,
-        );
+        )
+        .with_tempo_smoothing_seconds(config.warp.tempo_smoothing_seconds());
 
         let bus = config.bus.clone().unwrap_or_default();
 

@@ -1170,6 +1170,82 @@ mod tests {
         });
     }
 
+    /// A tempo knob turned faster than the render graph commits must land on
+    /// the latest requested tempo instead of refusing the turn.
+    #[kithara::test]
+    fn tempo_requested_while_a_commit_is_pending_lands_as_the_latest_intent() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let _ = set_tempo_and_read_session_grid(&mut state);
+        for bpm in [121.0, 122.0] {
+            assert!(
+                matches!(
+                    run_cmd(
+                        &mut state,
+                        Cmd::SetSessionTempo {
+                            tempo: Tempo::new(bpm).expect("invariant: fixture tempo is valid"),
+                        },
+                    ),
+                    Reply::Ok
+                ),
+                "tempo {bpm} must be accepted while an earlier tempo is pending"
+            );
+        }
+        let latest = Tempo::new(122.0).expect("invariant: fixture tempo is valid");
+        let mut landed = None;
+        for _ in 0..16 {
+            assert!(deliver_one_block(), "transport commit must be rendered");
+            if let Reply::SessionTransport(snapshot) =
+                run_cmd(&mut state, Cmd::QuerySessionTransport)
+            {
+                landed = Some(snapshot.tempo());
+            }
+            if landed == Some(latest) {
+                break;
+            }
+        }
+        assert_eq!(landed, Some(latest));
+    }
+
+    #[kithara::test]
+    fn tempo_requested_while_a_seek_is_pending_keeps_the_seek() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let _ = set_tempo_and_read_session_grid(&mut state);
+        let target =
+            kithara_warp::SessionBeat::new(64.0).expect("invariant: fixture beat is valid");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SeekSession { target }),
+            Reply::Ok
+        ));
+        let latest = Tempo::new(124.0).expect("invariant: fixture tempo is valid");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SetSessionTempo { tempo: latest }),
+            Reply::Ok
+        ));
+        let mut landed = None;
+        for _ in 0..16 {
+            assert!(deliver_one_block(), "transport commit must be rendered");
+            if let Reply::SessionTransport(snapshot) =
+                run_cmd(&mut state, Cmd::QuerySessionTransport)
+                && snapshot.tempo() == latest
+            {
+                landed = Some(snapshot);
+                break;
+            }
+        }
+        let landed = landed.expect("the latest tempo lands");
+        assert!(
+            f64::from(landed.position()) >= f64::from(target),
+            "the pending seek to {target:?} survives the tempo intent, position {:?}",
+            landed.position()
+        );
+    }
+
     #[kithara::test]
     fn deferred_route_restart_converges_before_unrendered_idle_shutdown() {
         device(|dev| {

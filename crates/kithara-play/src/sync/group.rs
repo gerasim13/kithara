@@ -7,12 +7,12 @@ use std::num::NonZeroU32;
 
 use kithara_warp::{
     AssetFrame, BeatEstimate, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
-    BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, LoadGeneration, MapAxis,
-    MapPoint, MapPosition, MapRegion, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
-    SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
-    TransportRevision, WarpMapRevision,
+    BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute,
+    DEFAULT_TEMPO_SMOOTHING_SECONDS, LoadGeneration, MapAxis, MapPoint, MapPosition, MapRegion,
+    SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission,
+    SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyRevision, TopologyStamp, TransportRevision, WarpMapRevision,
 };
 
 use super::{
@@ -21,6 +21,9 @@ use super::{
     topology::materialize_topology,
     transaction,
 };
+
+/// Minutes are how a tempo is spoken; beats per second is how it is counted.
+const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// Canonical mutable state for one recursive synchronization group.
 ///
@@ -47,6 +50,9 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     locked: Option<SyncApplied>,
     topology_revision: TopologyRevision,
     members: Vec<SyncMember<G>>,
+    /// Seconds this group's tempo approaches a new target over.
+    #[field(with)]
+    tempo_smoothing_seconds: f64,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -78,28 +84,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         });
         true
     }
-    /// Creates an empty group around an already-published grid.
-    #[must_use]
-    pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind, mode: SyncMode) -> Self {
-        Self {
-            grid,
-            mode,
-            member_kind,
-            members: Vec::new(),
-            next_operation: Some(SyncOperationId::first()),
-            tempo: TempoSource::Inherited,
-            generations: (LoadGeneration::first(), TransportRevision::first()),
-            parent_anchor: None,
-            warp_map: WarpMapRevision::first(),
-            prepared: None,
-            preparing: None,
-            locked: None,
-            topology_revision: TopologyRevision::first(),
-            unavailable: None,
-            waiting: None,
-        }
-    }
-
     /// Returns the load generation and transport revision of the last
     /// accepted transport operation.
     #[must_use]
@@ -226,11 +210,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     SessionBeat::new(beat).map_err(|_| SyncError::InvalidGroupGridState {
                         state: self.grid.state(),
                     })?;
-                let anchor =
-                    SessionAnchor::new(now, beat, f64::from(tempo) / 60.0, self.session_axis()?)
-                        .map_err(|_| SyncError::InvalidGroupGridState {
-                            state: self.grid.state(),
-                        })?;
+                let anchor = self.approached_anchor(now, beat, tempo).map_err(|_| {
+                    SyncError::InvalidGroupGridState {
+                        state: self.grid.state(),
+                    }
+                })?;
                 self.session_candidate(anchor)
                     .map(|grid| (grid, DeckGrid::Local(anchor)))
             }
@@ -243,6 +227,37 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 .unavailable_session_candidate()
                 .map(|grid| (grid, DeckGrid::Off)),
         }
+    }
+
+    /// The group's beat line approaching `tempo` from the tempo it plays now.
+    ///
+    /// A member follows this line, so the approach belongs to the group and not
+    /// to any member's own smoother: every member reads one curve and none of
+    /// them can drift by a smoother history of its own.
+    fn approached_anchor(
+        &self,
+        now: SessionFrame,
+        beat: SessionBeat,
+        tempo: BeatsPerMinute,
+    ) -> Result<SessionAnchor, SyncError> {
+        let axis = self.session_axis()?;
+        let target = f64::from(tempo) / SECONDS_PER_MINUTE;
+        let playing = match self
+            .grid
+            .tempo_at(MapPoint::new(self.grid.stamp(), MapPosition::Session(now)))
+        {
+            BeatGridQuery::Resolved(estimate) => f64::from(*estimate.value()) / SECONDS_PER_MINUTE,
+            _ => {
+                return Err(SyncError::InvalidGroupGridState {
+                    state: self.grid.state(),
+                });
+            }
+        };
+        SessionAnchor::new(now, beat, playing, axis)
+            .and_then(|anchor| anchor.retarget(now, target, self.tempo_smoothing_seconds))
+            .map_err(|_| SyncError::InvalidGroupGridState {
+                state: self.grid.state(),
+            })
     }
 
     fn session_axis(&self) -> Result<SessionAxis, SyncError> {
@@ -539,6 +554,29 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
             .and_then(resolved_tempo)
     }
+    /// Creates an empty group around an already-published grid.
+    #[must_use]
+    pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind, mode: SyncMode) -> Self {
+        Self {
+            grid,
+            mode,
+            member_kind,
+            members: Vec::new(),
+            next_operation: Some(SyncOperationId::first()),
+            tempo: TempoSource::Inherited,
+            generations: (LoadGeneration::first(), TransportRevision::first()),
+            parent_anchor: None,
+            warp_map: WarpMapRevision::first(),
+            prepared: None,
+            preparing: None,
+            locked: None,
+            topology_revision: TopologyRevision::first(),
+            unavailable: None,
+            waiting: None,
+            tempo_smoothing_seconds: DEFAULT_TEMPO_SMOOTHING_SECONDS,
+        }
+    }
+
     /// Creates an empty group whose session-axis grid is not available yet.
     #[must_use]
     pub fn unavailable(

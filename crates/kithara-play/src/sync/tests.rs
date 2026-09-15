@@ -1533,6 +1533,77 @@ fn a_deck_inheriting_its_tempo_reads_it_from_the_live_session_grid() {
     );
 }
 
+fn grid_tempo_at(group: &GroupState<PlayerMember>, frame: i64) -> f64 {
+    let grid = group.snapshot();
+    let BeatGridQuery::Resolved(estimate) = grid.tempo_at(MapPoint::new(
+        grid.stamp(),
+        MapPosition::Session(SessionFrame::new(frame)),
+    )) else {
+        panic!("a live local grid resolves its tempo");
+    };
+    f64::from(*estimate.value())
+}
+
+fn grid_beat_at(group: &GroupState<PlayerMember>, frame: i64) -> f64 {
+    let grid = group.snapshot();
+    let BeatGridQuery::Resolved(estimate) = grid.beat_at(MapPoint::new(
+        grid.stamp(),
+        MapPosition::Session(SessionFrame::new(frame)),
+    )) else {
+        panic!("a live local grid resolves its beat");
+    };
+    f64::from(*estimate.value().value())
+}
+
+#[kithara::test]
+fn a_local_tempo_is_approached_from_the_tempo_already_playing() {
+    let mut deck = synced_deck();
+    let now = SessionFrame::new(48_000);
+    let before = grid_beat_at(&deck, 48_000);
+
+    let _ = deck
+        .transact_at(tempo(deck.id(), 180.0), now)
+        .expect("a local deck accepts a new tempo");
+
+    assert!(
+        (grid_beat_at(&deck, 48_000) - before).abs() < 1e-9,
+        "the beat at the command frame does not step"
+    );
+    assert!(
+        (grid_tempo_at(&deck, 48_000) - 120.0).abs() < 1e-9,
+        "the approach starts at the tempo already playing, got {}",
+        grid_tempo_at(&deck, 48_000)
+    );
+    assert!(
+        (grid_tempo_at(&deck, 96_000) - 180.0).abs() < 1e-9,
+        "a second later the approach has reached its target, got {}",
+        grid_tempo_at(&deck, 96_000)
+    );
+}
+
+#[kithara::test]
+fn a_knob_turned_every_block_lands_every_tempo_it_passes() {
+    let mut deck = synced_deck();
+
+    for step in 0..16_i64 {
+        let target = if step % 2 == 0 { 124.0 } else { 116.0 };
+        let admission = deck
+            .transact_at(tempo(deck.id(), target), SessionFrame::new(step * 128))
+            .expect("every knob position is admitted");
+        assert!(
+            matches!(admission.0, SyncAdmission::StateChanged { .. }),
+            "step {step}: {admission:?}"
+        );
+        let played = grid_tempo_at(&deck, step * 128);
+        // The bounds carry one ulp of slack: the knob range is exact, the
+        // tempo reaching it is a float.
+        assert!(
+            (115.999..=124.001).contains(&played),
+            "step {step}: tempo {played} left the knob range"
+        );
+    }
+}
+
 #[kithara::test]
 fn a_deck_without_a_grid_has_no_tempo() {
     assert_eq!(fixture_group().deck_tempo(), None);

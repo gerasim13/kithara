@@ -49,6 +49,7 @@ enum TransportPhase {
     Applying {
         next: SessionTransportCommit,
         previous: Option<SessionTransportCommit>,
+        target_frame: SessionFrame,
     },
     Aborting {
         delivery: AbortDelivery,
@@ -96,14 +97,18 @@ pub(crate) fn set_tempo<B: AudioBackend, S>(
     if accepted.is_some_and(|commit| commit.tempo() == tempo) {
         return Ok(());
     }
-    ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(
-        tempo,
-        accepted.is_none_or(|commit| commit.is_playing()),
-        revision,
-    );
+    let (target_frame, sample_rate) = superseding_boundary(state)?;
+    let playing = accepted.is_none_or(|commit| commit.is_playing());
+    let next = match (
+        state.transport.pending_revision(),
+        accepted.map(|commit| commit.boundary()),
+    ) {
+        (Some(_), Some(TransportBoundary::Relocate(target))) => {
+            SessionTransportCommit::relocate(tempo, playing, revision, target)
+        }
+        _ => SessionTransportCommit::new(tempo, playing, revision),
+    };
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
     schedule_commit(state, next, stamp)
@@ -326,8 +331,26 @@ fn schedule_commit<B: AudioBackend, S>(
         return Err(error);
     }
     let previous = state.transport.observed();
-    state.transport.phase = TransportPhase::Applying { next, previous };
+    state.transport.phase = TransportPhase::Applying {
+        next,
+        previous,
+        target_frame: stamp.target_frame(),
+    };
     Ok(())
+}
+
+/// The boundary a tempo intent lands on: the frame a pending commit already
+/// reserved, so a stream of intents cannot push it away, while that frame is
+/// still at least one block ahead of the clock the render thread may reach.
+fn superseding_boundary<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
+) -> Result<(SessionFrame, NonZeroU32), SessionError> {
+    let (boundary, sample_rate) = commit_boundary(state)?;
+    let reserved = match state.transport.phase {
+        TransportPhase::Applying { target_frame, .. } if target_frame >= boundary => target_frame,
+        _ => boundary,
+    };
+    Ok((reserved, sample_rate))
 }
 
 fn commit_boundary<B: AudioBackend, S>(

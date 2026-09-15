@@ -44,8 +44,8 @@ use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{
-        CochleaReport, marked_rhythm_markers, marked_synchronization_failures,
-        synchronization_failures,
+        CochleaReport, host_beat_alignment_failures, marked_rhythm_markers,
+        marked_synchronization_failures, synchronization_failures,
     },
     fixture_protocol::EncryptionRequest,
     grid::segment_set,
@@ -111,6 +111,7 @@ enum TempoRide {
     Hold(f64),
     Triangle,
     Up,
+    Wobble,
 }
 
 impl TempoRide {
@@ -120,13 +121,14 @@ impl TempoRide {
             Self::Hold(_) => &[],
             Self::Triangle => &[116.0, 112.0, 116.0, 120.0],
             Self::Up => &[122.0, 125.0, 127.0],
+            Self::Wobble => &[124.0, 116.0, 124.0, 116.0, 124.0, 116.0, 120.0],
         }
     }
 
     const fn start_bpm(self) -> f64 {
         match self {
             Self::Hold(bpm) => bpm,
-            Self::Down | Self::Triangle | Self::Up => START_BPM,
+            Self::Down | Self::Triangle | Self::Up | Self::Wobble => START_BPM,
         }
     }
 
@@ -134,7 +136,7 @@ impl TempoRide {
         match self {
             Self::Down => 108.0,
             Self::Hold(bpm) => bpm,
-            Self::Triangle => 120.0,
+            Self::Triangle | Self::Wobble => 120.0,
             Self::Up => 127.0,
         }
     }
@@ -294,6 +296,14 @@ const TEMPO_UP_120: SyncCase =
 const TEMPO_DOWN_30: SyncCase =
     SyncCase::running("tempo-down-30hz", 2, 44_100, OperationOrder::PlaySyncSeek)
         .ride(TempoRide::Down, 30);
+/// A tempo knob turned back and forth: the Host tempo moves every output block.
+const TEMPO_WOBBLE_EVERY_BLOCK: SyncCase = SyncCase::running(
+    "tempo-wobble-every-block",
+    2,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.ride(TempoRide::Wobble, 375);
 /// The host starts at 44.1k and restarts onto 48k mid-ride, so the region
 /// plan and every frontier must follow the axis the decoder now emits.
 const HOST_RATE_CHANGE: SyncCase =
@@ -540,6 +550,9 @@ pub(super) struct ProductHarness {
     pub(super) block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
     pub(super) rendered_frames: u64,
+    /// Host session frame minus captured frame; moves when a stream restart
+    /// rescales the Host clock to the new rate.
+    session_offset: i64,
     host_grid: Option<BeatGridSnapshot>,
     sync_requested: bool,
     sync_activation: Option<u64>,
@@ -840,6 +853,7 @@ impl ProductHarness {
             block_frames,
             host,
             rendered_frames: 0,
+            session_offset: 0,
             host_grid: None,
             sync_requested: false,
             sync_activation: None,
@@ -972,6 +986,13 @@ impl ProductHarness {
         samples
     }
 
+    /// Host session frame at a captured frame.
+    fn session_frame(&self, capture: u64) -> i64 {
+        i64::try_from(capture)
+            .unwrap_or(i64::MAX)
+            .saturating_add(self.session_offset)
+    }
+
     fn record_host_grid(&mut self, start: u64, end: u64) {
         let Some(grid) = self.host_grid.as_ref() else {
             return;
@@ -982,10 +1003,9 @@ impl ProductHarness {
                 MapPosition::Session(SessionFrame::new(frame)),
             ))
         };
-        let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) = (
-            at(i64::try_from(start).unwrap_or(i64::MAX)),
-            at(i64::try_from(end).unwrap_or(i64::MAX)),
-        ) else {
+        let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
+            (at(self.session_frame(start)), at(self.session_frame(end)))
+        else {
             return;
         };
         let Some(first) = f64::from(*first.value().value()).ceil().to_i64() else {
@@ -1006,7 +1026,7 @@ impl ProductHarness {
             let MapPosition::Session(frame) = *position.value().value() else {
                 continue;
             };
-            let Ok(frame) = u64::try_from(i64::from(frame)) else {
+            let Ok(frame) = u64::try_from(i64::from(frame) - self.session_offset) else {
                 continue;
             };
             let kind = match grid.meter_at(MapPoint::new(grid.stamp(), beat)) {
@@ -1048,7 +1068,9 @@ impl ProductHarness {
     /// Render callback blocks until the harness timeline passes `activation`.
     #[kithara_test_utils::kithara::hang_watchdog]
     pub(super) async fn render_through(&mut self, case: SyncCase, activation: u64) {
-        while self.rendered_frames <= activation {
+        while self.session_frame(self.rendered_frames)
+            <= i64::try_from(activation).unwrap_or(i64::MAX)
+        {
             let _ = self.render(case, self.block_frames).await;
             hang_reset!();
         }
@@ -1260,9 +1282,7 @@ impl ProductHarness {
                     AlignmentSource::Audible {
                         presentation: PresentationFrontier::builder()
                             .source(presentation_source)
-                            .output(SessionFrame::new(
-                                i64::try_from(self.rendered_frames).unwrap_or(i64::MAX),
-                            ))
+                            .output(SessionFrame::new(self.session_frame(self.rendered_frames)))
                             .build(),
                         preparation_source,
                         playback_rate: kithara::warp::RateTarget::default().with_speed(
@@ -1275,15 +1295,12 @@ impl ProductHarness {
                     AlignmentSource::Prepared(
                         PresentationFrontier::builder()
                             .source(presentation_source)
-                            .output(SessionFrame::new(
-                                i64::try_from(self.rendered_frames).unwrap_or(i64::MAX),
-                            ))
+                            .output(SessionFrame::new(self.session_frame(self.rendered_frames)))
                             .build(),
                     )
                 };
                 let target = deck.id();
-                let activation =
-                    SessionFrame::new(i64::try_from(self.rendered_frames).unwrap_or(i64::MAX));
+                let activation = SessionFrame::new(self.session_frame(self.rendered_frames));
                 let admission = self
                     .host
                     .with(move |host| {
@@ -1403,6 +1420,20 @@ impl ProductHarness {
     /// Moves the live output rate the way a device route change does, so the
     /// deck must answer on the axis the decoded stream now carries.
     async fn restart_host_rate(&mut self, case: SyncCase) {
+        let old_rate = f64::from(case.start_sample_rate.unwrap_or(case.sample_rate));
+        let seconds = self.session_frame(self.rendered_frames) as f64 / old_rate;
+        let new_rate = f64::from(case.sample_rate);
+        let session = (seconds.floor() * new_rate + (seconds.fract() * new_rate).round()) as i64;
+        self.session_offset = session - i64::try_from(self.rendered_frames).unwrap_or(i64::MAX);
+        self.tap.timeline().point(
+            "host",
+            self.rendered_frames,
+            "command",
+            &format!(
+                "restart output rate, session offset {}",
+                self.session_offset
+            ),
+        );
         if let Err(error) = self.host.restart_stream(case.sample_rate).await {
             self.failures
                 .push(format!("{}: restart host output rate: {error}", case.id));
@@ -4256,6 +4287,7 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
     let expected_samples = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round() as usize
         * usize::from(CHANNELS);
+    let label = format!("{} {provider:?}", case.id);
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
@@ -4271,13 +4303,31 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
             "{} {provider:?}: deck {audible_deck} capture must contain six complete beats",
             case.id,
         );
+        if provider.has_score_markers() {
+            let capture_end = harness.rendered_frames;
+            let capture_start = capture_end - (pcm.len() / usize::from(CHANNELS)) as u64;
+            let host_beats = harness
+                .tap
+                .host_beats_in(capture_start..capture_end)
+                .into_iter()
+                .map(|frame| {
+                    usize::try_from(frame - capture_start).expect("capture frame fits usize")
+                })
+                .collect::<Vec<_>>();
+            request_failures.extend(host_beat_alignment_failures(
+                &format!("{label} deck {audible_deck}"),
+                &pcm,
+                CHANNELS,
+                case.sample_rate,
+                &host_beats,
+            ));
+        }
         tracks.push(pcm);
         let underruns = harness.underrun_failures();
         harness.failures.extend(underruns);
         request_failures.extend(harness.failures);
     }
     let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let label = format!("{} {provider:?}", case.id);
     let mut failures = if provider.has_score_markers() {
         marked_synchronization_failures(
             &label,
@@ -4343,6 +4393,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
 #[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, source_techno_breakbeat_provider().await)]
 #[case::cross_style_four_deck(CROSS_STYLE_SYNC, source_cross_style_provider().await)]
 #[case::host_rate_change(HOST_RATE_CHANGE, source_synthetic().await)]
+#[case::tempo_wobble_every_block(TEMPO_WOBBLE_EVERY_BLOCK, source_synthetic().await)]
 async fn wav_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
     #[case] provider: PreparedSources,

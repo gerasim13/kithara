@@ -23,6 +23,13 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
+    pub(crate) fn with_tempo_smoothing_seconds(mut self, seconds: f64) -> Self {
+        self.owned = self
+            .owned
+            .map(|owned| owned.with_tempo_smoothing_seconds(seconds));
+        self
+    }
+
     pub(crate) fn mode(&self) -> SyncMode {
         self.owned.as_ref().map_or(SyncMode::Off, GroupState::mode)
     }
