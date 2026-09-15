@@ -16,6 +16,9 @@ use super::sync_product_matrix::{
 
 const TWENTY_MS_FRAMES: usize = 960;
 
+/// Control-to-audible ceiling at a 128-frame output block.
+const RESPONSE_CEILING_FRAMES: usize = 448;
+
 struct CommandRun {
     activation_index: Option<usize>,
     command_index: usize,
@@ -283,7 +286,9 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
                     "retarget activation waited {quantization_wait} frames; budget is {block_frames}"
                 ));
             }
-            let latency_budget = TWENTY_MS_FRAMES.min(block_frames * 2);
+            let latency_budget = TWENTY_MS_FRAMES
+                .min(block_frames * 2)
+                .min(RESPONSE_CEILING_FRAMES + block_frames - 128);
             match transition.map(|frame| frame - activation_index) {
                 Some(frames) if frames <= latency_budget => {}
                 Some(frames) => failures.push(format!(

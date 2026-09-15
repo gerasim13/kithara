@@ -264,8 +264,8 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionError,
-        StreamShape, mock, player::PlayerControlSource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
+        player::PlayerControlSource,
     };
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
@@ -582,7 +582,6 @@ mod tests {
                         )
                         .build(),
                 )
-                .response_budget_frames(NonZeroUsize::new(254).expect("fixture budget is non-zero"))
                 .build(),
         );
         let bus = player.bus().clone();
@@ -594,7 +593,7 @@ mod tests {
             Arc::clone(&tracks),
             CancelToken::root(),
         ));
-        let source = TrackSource::Uri("https://example.com/over-budget.mp3".into());
+        let source = TrackSource::Uri("not a url".into());
         let spawn_id = TrackId(42);
         let promote_id = TrackId(43);
         tracks.lock().extend([
@@ -602,17 +601,9 @@ mod tests {
             TrackRecord::new(promote_id, String::new(), source.clone()),
         ]);
         let Err(expected) = loader.build_config(spawn_id, source.clone()) else {
-            panic!("fixture geometry must exceed the response budget");
+            panic!("fixture source must be rejected");
         };
-        assert!(matches!(
-            expected,
-            QueueError::Play(PlayError::Session(SessionError::ResponseBudgetExceeded {
-                max_block_frames: 128,
-                render_quantum_frames: 64,
-                required_frames: 255,
-                budget_frames: 254,
-            }))
-        ));
+        assert!(matches!(expected, QueueError::InvalidUrl(_)));
         let reason = expected.to_string();
         let mut rx = bus.subscribe::<QueueEvent>();
 

@@ -65,15 +65,6 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
-        #[error(
-            "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
-        )]
-        ResponseBudgetExceeded {
-            max_block_frames: u32,
-            render_quantum_frames: usize,
-            required_frames: usize,
-            budget_frames: usize,
-        },
         #[error("session output response geometry overflowed")]
         ResponseGeometryOverflow,
         #[error(transparent)]
@@ -100,7 +91,6 @@ mod wire {
             master_volume: f32,
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
             sample_rate: u32,
         },
         StopPlayer {
@@ -513,14 +503,12 @@ mod handle {
             player_id: PlayerId,
             master_volume: f32,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
         ) -> Result<(), PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
                 render_quantum_frames,
-                response_budget_frames,
                 sample_rate,
             })
             .map(|_| ())
@@ -575,7 +563,7 @@ pub use wire::{
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZeroU32, NonZeroUsize},
+        num::NonZeroU32,
         sync::atomic::{AtomicU32, Ordering},
     };
 
@@ -700,12 +688,7 @@ mod tests {
 
         capture.applied.store(0, Ordering::Relaxed);
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None)
             .expect("start player");
         assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
     }
@@ -732,12 +715,7 @@ mod tests {
             .expect("register player")
             .id;
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None)
             .expect("start player");
 
         assert_eq!(capture.queries.load(Ordering::Relaxed), 0);

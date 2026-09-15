@@ -235,6 +235,9 @@ pub enum ReconcileCause {
     GridRefined,
     /// The authoritative session transport changed.
     TransportChanged,
+    /// The session tempo changed on the live axis; the audible mapping
+    /// continues through its current source frame.
+    TempoRetargeted,
     /// The recursive ownership tree changed.
     TopologyChanged,
 }

@@ -195,12 +195,17 @@ where
         self.port.flush_wake();
     }
 
+    /// Produces one decoded chunk. A preloaded epoch stops at the settled ring
+    /// depth; an epoch still staging its preload is a replacement and may use
+    /// the reserved capacity.
     #[kithara::measure(label = "play.decoder.tick")]
     #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
         let seek_epoch_observed = self.sync_seek_epoch();
 
-        if !self.port.can_push_direct() {
+        if !self.port.can_push_direct()
+            || (self.runtime.preloaded && self.port.holds_settled_depth())
+        {
             if let Some((previous_epoch, current_epoch)) = seek_epoch_observed {
                 kithara::probe_event!(
                     decoder_seek_epoch_backpressured,

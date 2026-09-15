@@ -133,6 +133,11 @@ impl PlayerResource {
         self.read_with_context(None, None, output, range, metrics).0
     }
 
+    /// Reads `range` for the Host callback described by `context`.
+    ///
+    /// An activation inside the callback splits it: the prefix plays current
+    /// PCM, and a replacement that is not ready yet leaves the suffix on
+    /// current PCM instead of rereading the consumed prefix.
     pub(crate) fn read_with_context(
         &mut self,
         context: Option<&RenderContext>,
@@ -226,10 +231,8 @@ impl PlayerResource {
         let suffix_frames = frames_to_read - prefix_frames;
         let tail = self.prepare_activation_tail(metrics);
         let required = NonZeroUsize::new(suffix_frames).expect("activation suffix is non-zero");
-        match self.sync_render_revision(activation, required) {
-            RevisionFloorStatus::WaitingForReplacement => {
-                return self.read_current(Some(context), track_id, output, range, metrics);
-            }
+        let replaced = match self.sync_render_revision(activation, required) {
+            RevisionFloorStatus::WaitingForReplacement => false,
             RevisionFloorStatus::ReadyForSeekPresentation => {
                 if matches!(
                     self.scheduled_seek,
@@ -241,15 +244,14 @@ impl PlayerResource {
                 ) {
                     let _ = self.present_scheduled_seek();
                 }
-                if self.sync_render_revision(activation, required)
-                    == RevisionFloorStatus::WaitingForReplacement
-                {
-                    return self.read_current(Some(context), track_id, output, range, metrics);
-                }
+                self.sync_render_revision(activation, required)
+                    != RevisionFloorStatus::WaitingForReplacement
             }
-            RevisionFloorStatus::Current | RevisionFloorStatus::Switched => {}
+            RevisionFloorStatus::Current | RevisionFloorStatus::Switched => true,
+        };
+        if replaced {
+            self.arm_activation_blend(tail);
         }
-        self.arm_activation_blend(tail);
         let Some(suffix_context) = context.for_output_range(prefix_frames..frames_to_read) else {
             return (ReadOutcome::Failed, prefix_source_frames);
         };

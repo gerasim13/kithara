@@ -16,18 +16,31 @@ pub struct ProducerPort {
     trash_inlet: Inlet<AudioChunk>,
     outlet: Outlet<Fetch<AudioChunk>>,
     scheduled_seek: Option<ScheduledSeekActivator>,
+    settled_chunks: usize,
 }
 
 impl ProducerPort {
     pub(crate) const fn new(
         outlet: Outlet<Fetch<AudioChunk>>,
         trash_inlet: Inlet<AudioChunk>,
+        settled_chunks: usize,
     ) -> Self {
         Self {
             trash_inlet,
             outlet,
             scheduled_seek: None,
+            settled_chunks,
         }
+    }
+
+    /// Report whether the ring already holds its settled playback depth.
+    ///
+    /// Capacity past that depth belongs to a replacement epoch that has not
+    /// staged its preload, so replacement PCM never waits behind queued PCM.
+    #[must_use]
+    pub fn holds_settled_depth(&self) -> bool {
+        let queued = self.outlet.queued_len();
+        queued >= self.settled_chunks
     }
 
     pub(crate) fn install_scheduled_seek(&mut self, scheduled_seek: ScheduledSeekActivator) {
@@ -49,7 +62,9 @@ impl ProducerPort {
     ) {
         let (outlet, mut inlet) = crate::runtime::connect(capacity, None);
         let (_trash_outlet, trash_inlet) = crate::runtime::connect(capacity + 2, None);
-        (Self::new(outlet, trash_inlet), move || inlet.try_pop())
+        (Self::new(outlet, trash_inlet, capacity), move || {
+            inlet.try_pop()
+        })
     }
 
     /// Reclaim spent chunks outside the checked producer core.

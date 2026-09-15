@@ -179,35 +179,7 @@ impl TransportCommitState {
             self.reject_revision(revision);
             return Ok(());
         }
-        let boundary = if stamp.previous() != self.active
-            && self.active.map(|commit| commit.boundary()) == Some(stamp.next().boundary())
-        {
-            TransportBoundary::Continuous
-        } else {
-            stamp.next().boundary()
-        };
-        let beat = match (boundary, self.active) {
-            (TransportBoundary::Relocate(target), _) => target,
-            (TransportBoundary::Continuous, Some(previous)) => {
-                let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
-                if previous.is_playing() {
-                    anchor
-                        .beat_at(stamp.target_frame())
-                        .map_err(|_| TransportProcessError::InvalidBeatRange)?
-                } else {
-                    anchor.beat()
-                }
-            }
-            (TransportBoundary::Continuous, None) => {
-                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
-            }
-        };
-        let anchor = build_anchor(
-            stamp.target_frame(),
-            beat,
-            stamp.next().tempo(),
-            SessionAxis::new(stamp.sample_rate(), self.session_grid.epoch()),
-        )?;
+        let anchor = commit_anchor(stamp, self.active, self.anchor, self.session_grid.epoch())?;
         let session_grid_revision = self.session_grid.next_revision()?;
         self.active_previous = self.active;
         self.active = Some(stamp.next());
@@ -506,6 +478,48 @@ impl TransportCommitState {
         }
         Ok(())
     }
+}
+
+/// The anchor `stamp` establishes when it renders over the `active` commit and
+/// its `anchor`.
+///
+/// The control schedules against the same answer, so a deck plans a change on
+/// the commit frame before the graph renders it.
+pub(crate) fn commit_anchor(
+    stamp: TransportCommitStamp,
+    active: Option<SessionTransportCommit>,
+    anchor: Option<SessionAnchor>,
+    epoch: SessionEpoch,
+) -> Result<SessionAnchor, TransportProcessError> {
+    let boundary = if stamp.previous() != active
+        && active.map(|commit| commit.boundary()) == Some(stamp.next().boundary())
+    {
+        TransportBoundary::Continuous
+    } else {
+        stamp.next().boundary()
+    };
+    let beat = match (boundary, active) {
+        (TransportBoundary::Relocate(target), _) => target,
+        (TransportBoundary::Continuous, Some(previous)) => {
+            let anchor = anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
+            if previous.is_playing() {
+                anchor
+                    .beat_at(stamp.target_frame())
+                    .map_err(|_| TransportProcessError::InvalidBeatRange)?
+            } else {
+                anchor.beat()
+            }
+        }
+        (TransportBoundary::Continuous, None) => {
+            SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
+        }
+    };
+    build_anchor(
+        stamp.target_frame(),
+        beat,
+        stamp.next().tempo(),
+        SessionAxis::new(stamp.sample_rate(), epoch),
+    )
 }
 
 fn build_anchor(

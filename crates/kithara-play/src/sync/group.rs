@@ -498,6 +498,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }))
     }
 
+    /// Whether committing the same-axis `anchor` moves a settled deck's
+    /// target tempo, so its audible mapping must be replaced.
+    pub(crate) fn retargets_tempo(&self, anchor: SessionAnchor) -> bool {
+        self.mode == SyncMode::HostSync
+            && self.grid.state() == BeatGridState::Live
+            && self.prepared.is_none()
+            && self.preparing.is_none()
+            && !self.crosses_axis_boundary(anchor)
+            && self.parent_anchor.is_some_and(|previous| {
+                previous.target_beats_per_second() != anchor.target_beats_per_second()
+            })
+    }
+
     /// Adopts a successor produced by [`Self::reanchored_prepared`].
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
         self.warp_map = successor.warp_map;

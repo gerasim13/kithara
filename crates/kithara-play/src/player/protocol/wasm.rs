@@ -79,6 +79,12 @@ impl PlayerSync {
             .is_some_and(|owned| owned.crosses_axis_boundary(anchor))
     }
 
+    pub(crate) fn retargets_tempo(&self, anchor: SessionAnchor) -> bool {
+        self.owned
+            .as_ref()
+            .is_some_and(|owned| owned.retargets_tempo(anchor))
+    }
+
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
         if let Some(owned) = self.owned.as_mut() {
             owned.adopt_reanchored(successor);

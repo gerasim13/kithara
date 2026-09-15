@@ -282,19 +282,24 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
     };
     let (alignment_slot, member_grid) = member;
     let previous_alignment = *alignment_slot;
-    let aligned = match align_member(
-        grid,
-        &member_grid,
-        previous_alignment,
-        source.frontier(),
-        source.preparation_source(),
-        AlignmentPolicy {
-            playback_rate: source.playback_rate(),
-            align_downbeat: *cause != kithara_warp::ReconcileCause::AlignmentRequested,
-            require_future_source: source.requires_future_cue(),
-            source_cue: *source_cue,
-        },
-    ) {
+    let aligned = if *cause == kithara_warp::ReconcileCause::TempoRetargeted {
+        handoff_member(grid, &member_grid, previous_alignment, *source)
+    } else {
+        align_member(
+            grid,
+            &member_grid,
+            previous_alignment,
+            source.frontier(),
+            source.preparation_source(),
+            AlignmentPolicy {
+                playback_rate: source.playback_rate(),
+                align_downbeat: *cause != kithara_warp::ReconcileCause::AlignmentRequested,
+                require_future_source: source.requires_future_cue(),
+                source_cue: *source_cue,
+            },
+        )
+    };
+    let aligned = match aligned {
         Ok(aligned) => aligned,
         Err(required) => return deferred(grid, &mut slots, operation, required),
     };

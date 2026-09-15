@@ -366,6 +366,40 @@ fn scheduled_revision_resource(
 }
 
 #[kithara::test]
+fn a_split_callback_waiting_for_its_replacement_does_not_reread_the_prefix() {
+    let mut resource = scheduled_revision_resource(105, 4);
+    let context = RenderContext::new(
+        SessionFrame::new(100)..SessionFrame::new(110),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut left = [0.0; 10];
+    let mut right = [0.0; 10];
+    let mut output = [&mut left[..], &mut right[..]];
+
+    let (outcome, source_frames) = resource.read_with_context(
+        Some(&context),
+        None,
+        &mut output,
+        0..10,
+        &RtMetrics::default(),
+    );
+
+    assert_eq!(outcome, crate::rt::track::ReadOutcome::Full { frames: 10 });
+    assert_eq!(source_frames, 10);
+    assert_eq!(
+        resource
+            .presentation_source_end(context.sample_rate())
+            .map(|(end, revision)| (end.frame(), revision)),
+        Some((10, 0)),
+        "the callback presents ten current frames, not the prefix twice"
+    );
+}
+
+#[kithara::test]
 fn free_activation_replaces_a_128_frame_refill_before_its_target_is_presented() {
     const B: usize = 128;
     let controls = StretchControls::new(1.0);

@@ -103,41 +103,48 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
-    /// Compute decoder buffer depths within the output response budget.
+    /// Compute decoder buffer depths from the output block.
     ///
-    /// The output block sets the preload and the ring holds one chunk more:
-    /// every chunk deeper delays a rate or seek change by one quantum.
+    /// The preload spans two output blocks and the ring holds one chunk more,
+    /// so a replacement can cover the rest of one callback and the next one.
+    /// Depth does not delay a control change: rate and tempo changes replace
+    /// queued PCM instead of draining it.
     ///
     /// # Errors
-    /// Returns an error when the geometry overflows or exceeds the budget.
+    /// Returns an error when the geometry overflows.
     pub fn playback_buffers(
         self,
         quantum: NonZeroUsize,
-        budget: NonZeroUsize,
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let preload = output_frames.div_ceil(quantum.get());
+        let preload = output_frames
+            .div_ceil(quantum.get())
+            .checked_mul(2)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
         let ring = preload
             .checked_add(1)
             .ok_or(SessionError::ResponseGeometryOverflow)?;
-        let required_frames = ring
-            .checked_add(1)
-            .and_then(|chunks| chunks.checked_mul(quantum.get()))
-            .and_then(|frames| frames.checked_sub(1))
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
-        if required_frames > budget.get() {
-            return Err(SessionError::ResponseBudgetExceeded {
-                required_frames,
-                max_block_frames: self.max_block_frames.get(),
-                render_quantum_frames: quantum.get(),
-                budget_frames: budget.get(),
-            });
-        }
         Ok((
             NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
             NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
         ))
+    }
+
+    /// Output frames between a control change and its first replaced PCM:
+    /// the output block, the ring's extra chunk and one quantum being rendered.
+    ///
+    /// # Errors
+    /// Returns an error when the geometry overflows.
+    pub fn response_frames(self, quantum: NonZeroUsize) -> Result<NonZeroUsize, SessionError> {
+        usize::try_from(self.max_block_frames.get())
+            .ok()
+            .map(|frames| frames.div_ceil(quantum.get()))
+            .and_then(|chunks| chunks.checked_add(2))
+            .and_then(|chunks| chunks.checked_mul(quantum.get()))
+            .and_then(|frames| frames.checked_sub(1))
+            .and_then(NonZeroUsize::new)
+            .ok_or(SessionError::ResponseGeometryOverflow)
     }
 
     /// Fill the response budget with a preload and a one-chunk-deeper ring.

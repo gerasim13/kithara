@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridState, MapAxis, SessionFrame};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridState, MapAxis, SessionAnchor, SessionFrame};
 
 use super::{
     commit::{
@@ -9,7 +9,7 @@ use super::{
         TransportCommitStamp, TransportObservation,
     },
     event::TransportEvent,
-    process::converge_transport_restart,
+    process::{commit_anchor, converge_transport_restart},
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
@@ -336,6 +336,7 @@ fn schedule_commit<B: AudioBackend, S>(
         previous,
         target_frame: stamp.target_frame(),
     };
+    announce_scheduled_anchor(state, stamp);
     Ok(())
 }
 
@@ -462,17 +463,12 @@ fn refresh_observation<B: AudioBackend, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    if let Some(snapshot) = observation.snapshot()
-        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
-    {
-        state.root.publish_grid(snapshot.session_grid())?;
-        state.publish_root();
-        let anchor = snapshot.anchor();
-        for deck in state.root.nested_groups_mut() {
-            if let Err(error) = deck.commit_session_anchor(anchor) {
-                tracing::warn!(%error, deck = %deck.id(), "deck did not take the session anchor");
-            }
+    if let Some(snapshot) = observation.snapshot() {
+        if state.root.snapshot().stamp() != snapshot.session_grid_stamp() {
+            state.root.publish_grid(snapshot.session_grid())?;
+            state.publish_root();
         }
+        deliver_session_anchor(state, snapshot.anchor());
     }
     acknowledge_prepared_decks(state);
     if let Some(completion) = observation.completion() {
@@ -491,6 +487,55 @@ fn refresh_observation<B: AudioBackend, S>(
         return Err(SessionError::TransportCommitRejected);
     }
     Ok(observation)
+}
+
+/// Hands the decks the anchor a scheduled `stamp` lands on, so a deck plans the
+/// change against the commit frame instead of a block after the graph rendered
+/// it. An observation that does not show the commit the stamp builds on leaves
+/// delivery to the rendered observation.
+fn announce_scheduled_anchor<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    stamp: TransportCommitStamp,
+) {
+    let Some(control) = state.transport_control.as_mut() else {
+        return;
+    };
+    let observation = control.observation();
+    let snapshot = observation.snapshot();
+    if snapshot.map(|snapshot| snapshot.revision())
+        != stamp.previous().map(|commit| commit.revision())
+    {
+        return;
+    }
+    match commit_anchor(
+        stamp,
+        stamp.previous(),
+        snapshot.map(SessionTransportSnapshot::anchor),
+        observation.session_grid().epoch(),
+    ) {
+        Ok(anchor) => deliver_session_anchor(state, anchor),
+        Err(error) => {
+            tracing::warn!(
+                error = error.message(),
+                "scheduled transport commit has no anchor"
+            );
+        }
+    }
+}
+
+fn deliver_session_anchor<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    anchor: SessionAnchor,
+) {
+    if state.delivered_anchor == Some(anchor) {
+        return;
+    }
+    for deck in state.root.nested_groups_mut() {
+        if let Err(error) = deck.commit_session_anchor(anchor) {
+            tracing::warn!(%error, deck = %deck.id(), "deck did not take the session anchor");
+        }
+    }
+    state.delivered_anchor = Some(anchor);
 }
 
 pub(crate) fn acknowledge_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {

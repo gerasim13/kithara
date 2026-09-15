@@ -1,7 +1,7 @@
 mod registration;
 
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -252,6 +252,21 @@ impl<S> EngineImpl<S> {
     /// and stands in until the session reports its own.
     pub(crate) fn output_sample_rate(&self) -> NonZeroU32 {
         NonZeroU32::new(self.master_sample_rate()).unwrap_or(self.config.sample_rate)
+    }
+
+    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+        self.session.stream_shape()
+    }
+
+    /// Output frames a control change needs to replace audible PCM; `None`
+    /// before a render quantum and a session output are known.
+    pub(crate) fn response_frames(&self) -> Result<Option<NonZeroUsize>, PlayError> {
+        let Some(quantum) = self.config.render_quantum_frames else {
+            return Ok(None);
+        };
+        self.stream_shape()?
+            .map(|shape| shape.response_frames(quantum).map_err(PlayError::from))
+            .transpose()
     }
 }
 
@@ -624,12 +639,8 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session.start_player(
-            player_id,
-            master_volume,
-            self.config.render_quantum_frames,
-            self.config.response_budget_frames,
-        )?;
+        self.session
+            .start_player(player_id, master_volume, self.config.render_quantum_frames)?;
 
         self.running.store(true, Ordering::Release);
 
@@ -663,10 +674,6 @@ impl<S> EngineImpl<S> {
         info!(player_id, "engine stopped");
         self.emit(EngineEvent::Stopped);
         Ok(())
-    }
-
-    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
-        self.session.stream_shape()
     }
 
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {

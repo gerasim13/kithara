@@ -1610,6 +1610,87 @@ fn a_deck_without_a_grid_has_no_tempo() {
 }
 
 #[kithara::test]
+fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
+    let axis = SessionAxis::new(
+        NonZeroU32::new(48_000).expect("sample rate"),
+        SessionEpoch::new(0),
+    );
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        axis.sample_rate(),
+        axis.epoch(),
+        SyncMemberKind::Grid,
+        SyncMode::HostSync,
+    );
+    let initial = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::new(0.0).expect("beat"),
+        2.0,
+        axis,
+    )
+    .expect("initial anchor");
+    group
+        .publish_session_anchor(initial)
+        .expect("the first anchor makes the deck grid live");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::GridAvailable,
+        PresentationFrontier::builder()
+            .source(30_000)
+            .output(SessionFrame::new(30_000))
+            .build(),
+    );
+    let planned = group.prepared().expect("prepared relation");
+    let faster = SessionAnchor::new(
+        SessionFrame::new(60_000),
+        initial.beat_at(SessionFrame::new(60_000)).expect("beat"),
+        2.5,
+        axis,
+    )
+    .expect("tempo anchor");
+    group
+        .publish_session_anchor(faster)
+        .expect("a tempo commit keeps the session axis");
+    let presentation = PresentationFrontier::builder()
+        .source(60_000)
+        .output(SessionFrame::new(60_000))
+        .warp_map(planned.warp_map)
+        .build();
+    let (load, transport) = group.generations();
+
+    let admission = group
+        .transact(SyncOperation::Reconcile {
+            target: track,
+            load,
+            transport,
+            cause: ReconcileCause::TempoRetargeted,
+            source: AlignmentSource::Audible {
+                presentation,
+                preparation_source: 60_448,
+                playback_rate: RateTarget::default(),
+            },
+            source_cue: None,
+        })
+        .expect("a tempo retarget is admitted");
+    let retarget = group.prepared().expect("retarget relation");
+
+    assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+    assert!(retarget.warp_map > planned.warp_map);
+    assert_eq!(
+        retarget.source, 60_448,
+        "the decoder continues through its source"
+    );
+    assert!(
+        (60_000..=60_448).contains(&i64::from(retarget.activation)),
+        "activation {:?} waited for a later beat",
+        retarget.activation
+    );
+}
+
+#[kithara::test]
 fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     let axis = SessionAxis::new(
         NonZeroU32::new(48_000).expect("sample rate"),

@@ -220,7 +220,6 @@ where
             master_volume,
             player_id,
             render_quantum_frames,
-            response_budget_frames,
             sample_rate,
         } => match lifecycle::start_player(
             state,
@@ -228,7 +227,6 @@ where
             sample_rate,
             master_volume,
             render_quantum_frames,
-            response_budget_frames,
         ) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -576,10 +574,7 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroUsize},
-        sync::atomic::AtomicBool,
-    };
+    use std::{num::NonZeroU32, sync::atomic::AtomicBool};
 
     use firewheel::{
         FirewheelCtx, StreamInfo, param::smoother::SmootherConfig, processor::FirewheelProcessor,
@@ -749,8 +744,6 @@ mod tests {
             sample_rate,
             master_volume: 1.0,
             render_quantum_frames: None,
-            response_budget_frames: NonZeroUsize::new(448)
-                .expect("fixture response budget is non-zero"),
         }
     }
 
@@ -1103,29 +1096,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn measured_output_block_rejects_player_before_graph_start() {
+    fn failed_stream_restart_rejects_player_before_graph_start() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        state.requested_max_block_frames = NonZeroU32::new(128);
         let player_id = register_player(&mut state);
-        let command = Cmd::StartPlayer {
-            player_id,
-            master_volume: 1.0,
-            render_quantum_frames: NonZeroUsize::new(64),
-            response_budget_frames: NonZeroUsize::new(441)
-                .expect("fixture response budget is non-zero"),
-            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-        };
+        state.stream_needs_restart = true;
+        route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
 
         assert!(matches!(
-            run_cmd(&mut state, command),
-            Reply::Err(SessionError::ResponseBudgetExceeded {
-                max_block_frames: 512,
-                render_quantum_frames: 64,
-                required_frames: 639,
-                budget_frames: 441,
-            })
+            run_cmd(
+                &mut state,
+                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE)
+            ),
+            Reply::Err(SessionError::StreamStart(_))
         ));
         assert!(!deck_by_player_id(&state, player_id).started);
     }

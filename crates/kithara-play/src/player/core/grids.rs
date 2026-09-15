@@ -487,6 +487,8 @@ where
         {
             return Err(SyncError::SlotChannelFull);
         }
+        let retargets = self.sync.retargets_tempo(anchor)
+            && self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing;
         let withdraws_preparing = withdraws && self.sync.preparing().is_some();
         let expected = self.sync.prepared().map(|prepared| prepared.activation);
         self.sync.publish_session_anchor(anchor)?;
@@ -530,6 +532,9 @@ where
                 self.sync.adopt_reanchored(successor);
             }
         }
+        if retargets {
+            return self.retarget_audible(item, anchor.frame());
+        }
         if self.sync.mode() != kithara_warp::SyncMode::HostSync
             || !matches!(before, BeatGridState::Unavailable(_))
             || self.sync.snapshot().state() != BeatGridState::Live
@@ -551,6 +556,61 @@ where
             let (error, _) = rejected.into();
             error
         })
+    }
+
+    /// Replaces the audible mapping after a same-axis tempo commit.
+    ///
+    /// The decoder continues through the source it presents one response
+    /// span from now, so the queued PCM rendered at the previous tempo is
+    /// replaced instead of drained.
+    /// The replacement never starts before `commit`, the frame the new tempo
+    /// takes over the session.
+    fn retarget_audible(
+        &mut self,
+        item: TrackId,
+        commit: kithara_warp::SessionFrame,
+    ) -> Result<(), SyncError> {
+        let lead = match self.runtime.core.engine.response_frames() {
+            Ok(Some(lead)) => lead,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                warn!(%error, %item, "tempo retarget has no response geometry");
+                return Err(SyncError::OwnerUnavailable);
+            }
+        };
+        let (Some(grid), Some(snapshot)) = (
+            self.runtime.core.items.track_grid(item),
+            self.runtime.playback_snapshot(),
+        ) else {
+            return Ok(());
+        };
+        let output_rate = self.runtime.core.engine.output_sample_rate();
+        let axis = grid.snapshot.axis();
+        let observed = self.runtime.presentation_frontier();
+        let until_commit = i64::from(commit)
+            .saturating_sub(i64::from(observed.output()))
+            .to_usize()
+            .unwrap_or(0);
+        let advance = (lead.get().max(until_commit).to_f64().unwrap_or(f64::MAX)
+            * f64::from(snapshot.rate.max(0.0)))
+        .ceil()
+        .to_u64()
+        .unwrap_or(u64::MAX);
+        let source = AlignmentSource::Audible {
+            presentation: observed.on_axis(axis, output_rate),
+            preparation_source: native_frame(
+                observed.source().saturating_add(advance),
+                axis,
+                output_rate,
+            ),
+            playback_rate: kithara_warp::RateTarget::default().with_speed(snapshot.rate),
+        };
+        self.reconcile_item_grid(item, ReconcileCause::TempoRetargeted, Some(source), false)
+            .map(|_| ())
+            .map_err(|rejected| {
+                let (error, _) = rejected.into();
+                error
+            })
     }
 
     /// Whether the track's selected cue resolves on `grid` and so keeps
