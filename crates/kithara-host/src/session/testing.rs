@@ -11,7 +11,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    SessionDuckingMode, player::PlayerMember,
+    SessionDuckingMode, effects::LimiterConfig, player::PlayerMember,
 };
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
@@ -169,7 +169,14 @@ where
         SyncMode::LocalSync,
     );
     let root_view = RootView::new(&root, sample_rate);
-    SessionState::new(root, root_view, sample_rate, None, start_stream_fn)
+    SessionState::new(
+        root,
+        root_view,
+        sample_rate,
+        None,
+        LimiterConfig::default(),
+        start_stream_fn,
+    )
 }
 
 #[cfg(test)]

@@ -542,7 +542,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
-        true,
     )
     .await;
 
@@ -585,7 +584,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         &temp_dir,
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
         true,
     )
     .await;
@@ -782,17 +780,15 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
     #[case] flavor: CrossfadeFlavor,
 ) {
     let (_server, sources) = crossfade_tracks;
-    let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
+    let (sample_rate, collapse_runs) = if resampled {
         (
             RESAMPLED_RENDER_RATE,
             collapse_resampled_noise_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
-            true,
         )
     } else {
         (
             SAMPLE_RATE,
             collapse_short_unknown_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
-            false,
         )
     };
     run_crossfade_flac_case(
@@ -801,7 +797,6 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
         sample_rate,
         collapse_runs,
         label,
-        provenance_headroom,
         || flavor.player_config(),
     )
     .await;
@@ -820,7 +815,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(
         SAMPLE_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
-        false,
     )
     .await;
 
@@ -1102,7 +1096,6 @@ async fn run_crossfade_flac_case(
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
     label: &str,
-    provenance_headroom: bool,
     build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
@@ -1110,16 +1103,13 @@ async fn run_crossfade_flac_case(
         temp_dir,
         render_sample_rate,
         build_player_config(),
-        provenance_headroom,
     )
     .await;
 
     let (rendered, expected_a_end_frame) =
         render_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, render_sample_rate)
             .await;
-    if provenance_headroom {
-        assert_provenance_headroom(&rendered, label);
-    }
+    assert_provenance_headroom(&rendered, label);
 
     assert_crossfade_contract(
         &rendered,
@@ -1227,7 +1217,6 @@ async fn setup_flac_queue_with_player_config(
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     player_config: OfflinePlayerOptions,
-    provenance_headroom: bool,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay(
         sources,
@@ -1235,7 +1224,6 @@ async fn setup_flac_queue_with_player_config(
         render_sample_rate,
         player_config,
         false,
-        provenance_headroom,
     )
     .await
 }
@@ -1246,14 +1234,10 @@ async fn setup_flac_queue_with_player_config_autoplay(
     render_sample_rate: u32,
     player_config: OfflinePlayerOptions,
     should_autoplay: bool,
-    provenance_headroom: bool,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
-    let harness = if provenance_headroom {
-        with_provenance_headroom(harness)
-    } else {
-        harness
-    };
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await,
+    );
     let queue = harness
         .insert_control(Queue::new(with_autoplay(
             QueueConfig::builder().player(harness.take_player()).build(),

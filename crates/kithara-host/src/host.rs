@@ -449,6 +449,7 @@ where
             HostConfig::Realtime {
                 sample_rate_hint,
                 output_block_frames,
+                limiter,
                 ..
             } => {
                 let root = Self::session_root(sample_rate_hint)?;
@@ -457,6 +458,7 @@ where
                     root.view.clone(),
                     root.sample_rate,
                     output_block_frames,
+                    limiter,
                 )
                 .resolve()?;
                 Ok(Self::owner(
