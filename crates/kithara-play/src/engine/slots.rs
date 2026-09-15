@@ -64,9 +64,9 @@ impl SlotTable {
         Some(self.slots.remove(idx).1)
     }
 
-    pub(super) fn service_scheduled_seeks(&mut self) {
+    pub(super) fn service_scheduled_seeks(&mut self, lead: std::num::NonZeroUsize) {
         for (_, control) in &mut self.slots {
-            control.service_scheduled_seeks();
+            control.service_scheduled_seeks(lead);
         }
     }
 

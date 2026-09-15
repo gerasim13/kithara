@@ -1094,7 +1094,7 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
 }
 
 #[kithara::test]
-fn audible_alignment_waits_for_a_host_downbeat_reachable_by_the_live_mapping() {
+fn audible_alignment_seeks_ahead_of_the_live_source_at_the_next_host_downbeat() {
     let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
@@ -1130,8 +1130,12 @@ fn audible_alignment_waits_for_a_host_downbeat_reachable_by_the_live_mapping() {
         .expect("audible alignment is admitted");
     let prepared = group.prepared().expect("prepared relation");
 
+    // Preparation reaches output 61_216 (beat 2.55), so the next Host downbeat
+    // is beat 4 at 96_000. The live mapping stands at source 419_104 there
+    // (beat 17.46); the next source downbeat is beat 20 at 480_000, which the
+    // old stream has not reached when the seek activates.
+    assert_eq!(prepared.activation, SessionFrame::new(96_000));
     assert_eq!(prepared.source, 480_000);
-    assert_eq!(prepared.activation, SessionFrame::new(192_000));
 }
 
 #[kithara::test]

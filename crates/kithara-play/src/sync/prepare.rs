@@ -104,6 +104,20 @@ pub(super) fn align_member(
     if member.state() != BeatGridState::Complete {
         return Err(MapRegion::point(source));
     }
+    if source_cue.is_none()
+        && let Some(playback_rate) = playback_rate
+        && (frontier.warp_map().is_none() || previous.is_none())
+    {
+        return seek_audible_member(
+            owner,
+            member,
+            frontier,
+            preparation_source,
+            playback_rate,
+            align_downbeat,
+            require_future_source,
+        );
+    }
     let member_origin = MapPoint::new(member.stamp(), source);
     let BeatGridQuery::Resolved(member_beat) = member.beat_at_or_next(member_origin) else {
         return Err(MapRegion::point(source));
@@ -173,6 +187,134 @@ pub(super) fn align_member(
     let MapPosition::Session(activation) = *position.value().value() else {
         return Err(MapRegion::point(output));
     };
+    Ok(MemberAlignment {
+        alignment: BeatAlignment::new(MapPoint::new(member.stamp(), member_beat), target),
+        activation,
+        activation_beat: SessionBeat::new(f64::from(owner_beat))
+            .map_err(|_| MapRegion::point(output))?,
+        source: output_source(member, owner, source_frame)
+            .ok_or_else(|| MapRegion::point(output))?,
+    })
+}
+
+/// Acquires phase for an audible, unmapped member by a forward seek.
+///
+/// The activation is the first owner beat preparation can reach; the cue is
+/// the first member beat, in the owner beat's bar phase, at or after the source
+/// the live stream presents at that activation. The old stream therefore never
+/// reaches the cue before the seek takes effect.
+fn seek_audible_member(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    frontier: PresentationFrontier,
+    preparation_source: u64,
+    playback_rate: RateTarget,
+    align_downbeat: bool,
+    require_future_source: bool,
+) -> Result<MemberAlignment, MapRegion> {
+    let frontier_output = MapPosition::Session(frontier.output());
+    let earliest = output_at_source(
+        frontier,
+        Some(playback_rate),
+        preparation_source,
+        member.axis(),
+        owner.axis(),
+    )
+    .ok_or_else(|| MapRegion::point(frontier_output))?;
+    let output = MapPosition::Session(earliest);
+    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(MapPoint::new(owner.stamp(), output))
+    else {
+        return Err(MapRegion::point(output));
+    };
+    let mut owner_beat = whole_beat(*owner_beat.value().value(), require_future_source)
+        .ok_or_else(|| MapRegion::point(output))?;
+    let member_meter = if align_downbeat {
+        let preparation = MapPosition::Asset(
+            preparation_source
+                .to_f64()
+                .and_then(|frame| AssetFrame::new(frame).ok())
+                .unwrap_or_default(),
+        );
+        match member.beat_at_or_next(MapPoint::new(member.stamp(), preparation)) {
+            BeatGridQuery::Resolved(beat) => {
+                match member.meter_at(MapPoint::new(member.stamp(), *beat.value().value())) {
+                    BeatGridQuery::Resolved(meter) => Some(*meter.value()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let owner_meter = match member_meter {
+        Some(member_meter) => Some(
+            match owner.meter_at(MapPoint::new(owner.stamp(), owner_beat)) {
+                BeatGridQuery::Resolved(meter) => *meter.value(),
+                _ => Meter::new(member_meter.beats_per_bar())
+                    .map_err(|_| MapRegion::point(output))?,
+            },
+        ),
+        None => None,
+    };
+    if let Some(meter) = owner_meter {
+        owner_beat =
+            next_downbeat(owner_beat, meter, false).ok_or_else(|| MapRegion::point(output))?;
+    }
+    let target = MapPoint::new(owner.stamp(), owner_beat);
+    let BeatGridQuery::Resolved(position) = owner.position_at(target) else {
+        return Err(MapRegion::point(output));
+    };
+    let MapPosition::Session(activation) = *position.value().value() else {
+        return Err(MapRegion::point(output));
+    };
+    let elapsed = (i64::from(activation) - i64::from(frontier.output()))
+        .max(0)
+        .to_f64()
+        .ok_or_else(|| MapRegion::point(output))?
+        * f64::from(playback_rate.speed());
+    let live_source = frontier
+        .source()
+        .to_f64()
+        .ok_or_else(|| MapRegion::point(output))?
+        + member.axis().native_frame(
+            elapsed
+                .ceil()
+                .to_u64()
+                .ok_or_else(|| MapRegion::point(output))?,
+            owner.axis().sample_rate(),
+        );
+    let live =
+        MapPosition::Asset(AssetFrame::new(live_source).map_err(|_| MapRegion::point(output))?);
+    let BeatGridQuery::Resolved(member_beat) =
+        member.beat_at_or_next(MapPoint::new(member.stamp(), live))
+    else {
+        return Err(MapRegion::point(live));
+    };
+    let mut member_beat =
+        whole_beat(*member_beat.value().value(), false).ok_or_else(|| MapRegion::point(live))?;
+    let member_meter = member_meter.and_then(|_| {
+        match member.meter_at(MapPoint::new(member.stamp(), member_beat)) {
+            BeatGridQuery::Resolved(meter) => Some(*meter.value()),
+            _ => None,
+        }
+    });
+    if let (Some(owner_meter), Some(member_meter)) = (owner_meter, member_meter) {
+        member_beat = matching_phase(member_beat, member_meter, owner_beat, owner_meter)
+            .ok_or_else(|| MapRegion::point(live))?;
+    }
+    let BeatGridQuery::Resolved(position) =
+        member.position_at(MapPoint::new(member.stamp(), member_beat))
+    else {
+        return Err(MapRegion::point(live));
+    };
+    let MapPosition::Asset(source_frame) = *position.value().value() else {
+        return Err(MapRegion::point(live));
+    };
+    let source_frame = f64::from(source_frame)
+        .round()
+        .to_u64()
+        .ok_or_else(|| MapRegion::point(live))?;
     Ok(MemberAlignment {
         alignment: BeatAlignment::new(MapPoint::new(member.stamp(), member_beat), target),
         activation,

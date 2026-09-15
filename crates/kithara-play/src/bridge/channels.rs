@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use firewheel::param::smoother::SmootherConfig;
 use kithara_audio::{ScheduledSeek, SeekBegin};
 use kithara_events::TrackId;
@@ -122,6 +124,7 @@ struct ScheduledTrackSeek {
     disposition: ScheduledSeekDisposition,
     armed: bool,
     state: ScheduledTrackSeekState,
+    observed_output: Option<kithara_warp::SessionFrame>,
 }
 
 #[derive(Clone, Copy)]
@@ -209,15 +212,41 @@ impl SlotControl {
             disposition,
             armed: false,
             state: ScheduledTrackSeekState::AwaitingStart,
+            observed_output: None,
         });
     }
 
     #[kithara::hang_watchdog]
-    pub(crate) fn service_scheduled_seeks(&mut self) {
+    /// Begins and transfers scheduled track seeks.
+    ///
+    /// A seek on an audible track waits until its activation is within `lead`
+    /// output frames of presentation: beginning it discards the decoder's old
+    /// position, so the old stream must keep playing until the new epoch only
+    /// has the response budget left to prepare. The presentation advance seen
+    /// since the previous call is spent ahead of time, so a call cadence
+    /// coarser than `lead` still begins the seek before the window closes. A
+    /// track with no presented render snapshot is not audible and begins at
+    /// once.
+    pub(crate) fn service_scheduled_seeks(&mut self, lead: NonZeroUsize) {
+        let lead = i64::try_from(lead.get()).unwrap_or(i64::MAX);
         let mut index = 0;
         while index < self.scheduled_seeks.len() {
             hang_reset!();
             let request = self.scheduled_seeks[index];
+            if let ScheduledSeekDisposition::SeekOnly { activation } = request.disposition
+                && matches!(request.state, ScheduledTrackSeekState::AwaitingStart)
+                && let Some(snapshot) = self.render_snapshot_for(request.item_id, None)
+            {
+                let presented = snapshot.frontier().output();
+                let advance = request.observed_output.map_or(0, |observed| {
+                    (i64::from(presented) - i64::from(observed)).max(0)
+                });
+                self.scheduled_seeks[index].observed_output = Some(presented);
+                if i64::from(activation) - i64::from(presented) - advance > lead {
+                    index += 1;
+                    continue;
+                }
+            }
             if request.disposition.is_prepared_launch()
                 && !request.armed
                 && matches!(request.state, ScheduledTrackSeekState::AwaitingStart)
@@ -475,6 +504,8 @@ mod tests {
     use super::*;
     use crate::bridge::PreparedLaunchIdentity;
 
+    const LEAD: NonZeroUsize = NonZeroUsize::new(448).expect("lead is non-zero");
+
     struct CountSeek(AtomicUsize);
 
     fn publish_render(publisher: &RenderPublisher, warp_map: WarpMapRevision, output_end: i64) {
@@ -613,7 +644,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn scheduled_track_seek_begins_while_old_pcm_still_leads_its_activation() {
+    fn scheduled_track_seek_begins_only_within_the_response_lead_of_its_activation() {
         let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
         let item = TrackId::allocate();
         let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
@@ -643,7 +674,18 @@ mod tests {
             },
         );
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 0);
+        assert!(inputs.cmd_rx.try_pop().is_none());
+
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1_552)
+                .output(SessionFrame::new(1_552))
+                .build(),
+        );
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
@@ -661,10 +703,10 @@ mod tests {
                 warp_map: kithara_warp::WarpMapRevision::first(),
             }),
         );
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(prepared_seek.0.load(Ordering::Relaxed), 0);
         assert!(control.set_prepared_launch_armed(prepared_item, true));
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(prepared_seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
@@ -673,6 +715,54 @@ mod tests {
                 disposition: ScheduledSeekDisposition::PreparedLaunch(_),
                 ..
             }) if item_id == prepared_item
+        ));
+    }
+
+    #[kithara::test]
+    fn scheduled_track_seek_spends_the_observed_presentation_advance_ahead_of_its_window() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        let seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(item, seek.clone());
+        let publisher = RenderPublisher::default();
+        control.bind_render(item, publisher.reader());
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture render context");
+        let present = |output: i64| {
+            publisher.publish(
+                &context,
+                PresentationFrontier::builder()
+                    .source(u64::try_from(output).expect("fixture output is positive"))
+                    .output(SessionFrame::new(output))
+                    .build(),
+            );
+        };
+        control.schedule_track_seek(
+            item,
+            Duration::from_secs(3),
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(3_000),
+            },
+        );
+
+        present(1_000);
+        control.service_scheduled_seeks(LEAD);
+        present(1_400);
+        control.service_scheduled_seeks(LEAD);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 0);
+
+        present(2_200);
+        control.service_scheduled_seeks(LEAD);
+        assert_eq!(seek.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ScheduleSeek { item_id, seek_epoch: 7, .. }) if item_id == item
         ));
     }
 
@@ -690,7 +780,7 @@ mod tests {
                 warp_map: kithara_warp::WarpMapRevision::first(),
             }),
         );
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 0);
         assert!(inputs.cmd_rx.try_pop().is_none());
     }
@@ -711,7 +801,7 @@ mod tests {
         );
         assert!(control.set_prepared_launch_armed(item, true));
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
 
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(matches!(
@@ -755,11 +845,11 @@ mod tests {
             },
         );
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(inputs.cmd_rx.try_pop().is_some());
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop()).any(|command| matches!(
@@ -806,11 +896,11 @@ mod tests {
         );
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(inputs.cmd_rx.try_pop().is_some());
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop()).any(|command| matches!(
@@ -851,14 +941,14 @@ mod tests {
         fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(
             std::iter::from_fn(|| inputs.cmd_rx.try_pop())
                 .all(|command| matches!(command, PlayerCmd::SetFadeDuration(1.0)))
         );
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
             Some(PlayerCmd::ScheduleSeek {
@@ -902,12 +992,12 @@ mod tests {
         fill_command_ring(&mut control, || PlayerCmd::SetFadeDuration(1.0));
 
         assert!(control.set_prepared_launch_armed(item, true));
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert_eq!(seek.0.load(Ordering::Relaxed), 1);
         assert!(control.set_prepared_launch_armed(item, false));
         while inputs.cmd_rx.try_pop().is_some() {}
 
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
         assert!(matches!(
             inputs.cmd_rx.try_pop(),
             Some(PlayerCmd::ScheduleSeek {
@@ -956,7 +1046,7 @@ mod tests {
         assert!(control.set_prepared_launch_armed(second, true));
 
         control.disarm_prepared_launches();
-        control.service_scheduled_seeks();
+        control.service_scheduled_seeks(LEAD);
 
         assert_eq!(first_seek.0.load(Ordering::Relaxed), 0);
         assert_eq!(second_seek.0.load(Ordering::Relaxed), 0);
