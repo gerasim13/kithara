@@ -13,7 +13,7 @@ cargo +nightly fuzz run <target>
 For example:
 
 ```sh
-cargo +nightly fuzz run hls_parsing
+cargo +nightly fuzz run hls_internal_parsing
 cargo +nightly fuzz run stream_read_seek
 ```
 

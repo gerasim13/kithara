@@ -5323,7 +5323,6 @@ name = "kithara-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "hls_m3u8",
  "kithara",
  "kithara-workspace-hack",
  "libfuzzer-sys",
