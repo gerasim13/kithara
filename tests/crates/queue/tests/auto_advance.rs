@@ -3,26 +3,29 @@
 use kithara::{
     self,
     events::EventReceiver,
-    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode, Transition},
+    platform::sync::Arc,
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode, TrackStatus,
+        Transition,
+    },
 };
 use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
 };
-use kithara_test_fixtures::integration_fixtures::{
-    constant_four, constant_loud, constant_quiet, constant_three, constant_two,
-};
+use kithara_test_fixtures::assets;
 
-use crate::{LocalWav, append_loaded, bufpool_ext::TestPools, loader_fixture::wait_loaded};
+use crate::{
+    append_loaded,
+    bufpool_ext::TestPools,
+    loader_fixture::{source, wait_loaded},
+};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
-
-fn local_wav(label: &str, secs: f64, samples: &'static [u8]) -> LocalWav {
-    LocalWav::constant(label, SAMPLE_RATE, CHANNELS, secs, samples)
-}
 
 /// Average absolute amplitude over a window of `frames` frames starting at
 /// `frame_offset`. Returns `None` if the window does not fit.
@@ -64,7 +67,7 @@ async fn render_loop(
 }
 
 #[kithara::test(tokio)]
-async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static [u8]) {
+async fn crossfade_started_requires_a_live_predecessor() {
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -79,7 +82,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
             QueueConfig::builder().player(harness.take_player()).build(),
         ))
         .await;
-    let initial = local_wav("initial", 0.2, constant_three);
+    let initial = assets::constant_wav_three_0_2s();
     let id = append_loaded(&harness, &queue, &initial).await;
     let mut receiver = queue.subscribe();
 
@@ -118,7 +121,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
         .await
         .expect("process predecessor EOF");
 
-    let successor_wav = local_wav("successor", 1.0, constant_three);
+    let successor_wav = assets::constant_wav_three_1s();
     let successor = append_loaded(&harness, &queue, &successor_wav).await;
     let mut receiver = queue.subscribe();
     harness
@@ -140,7 +143,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
 }
 
 #[kithara::test(tokio)]
-async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static [u8]) {
+async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -153,7 +156,7 @@ async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static
             QueueConfig::builder().player(harness.take_player()).build(),
         ))
         .await;
-    let one = local_wav("one", 1.0, constant_three);
+    let one = assets::constant_wav_three_1s();
     let id = append_loaded(&harness, &queue, &one).await;
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
@@ -184,10 +187,7 @@ async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static
 }
 
 #[kithara::test(tokio)]
-async fn repeat_all_natural_advance_wraps_last_track_to_first(
-    constant_loud: &'static [u8],
-    constant_two: &'static [u8],
-) {
+async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -200,9 +200,9 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first(
             QueueConfig::builder().player(harness.take_player()).build(),
         ))
         .await;
-    let first_wav = local_wav("first", 1.0, constant_two);
+    let first_wav = assets::constant_wav_two_1s();
     let first = append_loaded(&harness, &queue, &first_wav).await;
-    let last_wav = local_wav("last", 1.0, constant_loud);
+    let last_wav = assets::constant_wav_loud_1s();
     let last = append_loaded(&harness, &queue, &last_wav).await;
     harness
         .run(&queue, move |q| q.select(last, Transition::None))
@@ -236,10 +236,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first(
 /// arena handover at EOF promotes the armed next track, and the second
 /// track's PCM signal must replace the first one's.
 #[kithara::test(tokio)]
-async fn cf_zero_queue_tick_advances_to_second_track_audio(
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
@@ -257,9 +254,9 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio(
         ))
         .await;
 
-    let a = local_wav("a", TRACK_SECS, constant_quiet);
+    let a = assets::constant_wav_quiet_0_4s();
     let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = local_wav("b", TRACK_SECS, constant_loud);
+    let b = assets::constant_wav_loud_0_4s();
     let _ = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
@@ -312,10 +309,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio(
 /// the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.
 #[kithara::test(tokio)]
-async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio(
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
     const TRACK_A_VALUE: f32 = 0.10;
@@ -334,9 +328,9 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio(
         ))
         .await;
 
-    let a = local_wav("a", TRACK_SECS, constant_quiet);
+    let a = assets::constant_wav_quiet_1_5s();
     let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = local_wav("b", TRACK_SECS, constant_loud);
+    let b = assets::constant_wav_loud_1_5s();
     let _ = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
@@ -394,10 +388,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio(
 /// reach the bus during a cf>0 cycle — purely event-level, but pinned to
 /// the real `Queue::tick` path.
 #[kithara::test(tokio)]
-async fn queue_tick_pumps_audio_thread_notifications_to_bus(
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
 
     const TRACK_SECS: f64 = 1.0;
@@ -417,9 +408,9 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
         .await;
     let mut rx = queue.subscribe();
 
-    let a = local_wav("a", TRACK_SECS, constant_quiet);
+    let a = assets::constant_wav_quiet_1s();
     let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = local_wav("b", TRACK_SECS, constant_loud);
+    let b = assets::constant_wav_loud_1s();
     let _ = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
@@ -481,10 +472,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
 /// `Resource`s to the loader so spawn completes synthetically, mirroring
 /// what a real network loader would deliver on a replay.
 #[kithara::test(tokio, flash(false))]
-async fn cf_zero_replay_after_full_playthrough_still_advances(
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -500,9 +488,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
         ))
         .await;
 
-    let a = local_wav("a", TRACK_SECS, constant_quiet);
+    let a = assets::constant_wav_quiet_0_4s();
     let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = local_wav("b", TRACK_SECS, constant_loud);
+    let b = assets::constant_wav_loud_0_4s();
     append_loaded(&harness, &queue, &b).await;
 
     harness
@@ -554,7 +542,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
 /// When the last track finishes, the live playback snapshot must become inactive
 /// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
-async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static [u8]) {
+async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
     const TRACK_SECS: f64 = 0.4;
@@ -573,7 +561,7 @@ async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static
         .await;
     let mut rx = queue.subscribe();
 
-    let a = local_wav("a", TRACK_SECS, constant_three);
+    let a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &a).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
@@ -623,11 +611,7 @@ async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static
 /// it. Two tracks cannot show this — there is no successor left to jump to, so
 /// the sibling crossfade test above stays green while a playlist skips.
 #[kithara::test(tokio)]
-async fn a_middle_track_is_heard_in_the_middle_of_its_own_span(
-    constant_quiet: &'static [u8],
-    constant_loud: &'static [u8],
-    constant_four: &'static [u8],
-) {
+async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
     const LEVEL_A: f32 = 0.10;
@@ -647,11 +631,11 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span(
         ))
         .await;
 
-    let a = local_wav("a", TRACK_SECS, constant_quiet);
+    let a = assets::constant_wav_quiet_1_5s();
     let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = local_wav("b", TRACK_SECS, constant_loud);
+    let b = assets::constant_wav_loud_1_5s();
     let _ = append_loaded(&harness, &queue, &b).await;
-    let c = local_wav("c", TRACK_SECS, constant_four);
+    let c = assets::constant_wav_four_1_5s();
     let _ = append_loaded(&harness, &queue, &c).await;
     // The app starts a catalog row exactly this way, with no fade into the
     // first track, and it is the arrangement that leaves the engine's own
@@ -721,13 +705,13 @@ async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPool
         .await
 }
 
-/// Autoplay starts the first appended track whichever load finishes first,
+/// Autoplay starts the first appended track even when its load finishes last,
 /// then advances to the next one.
+///
+/// Track A is quiet and served whole after a delay, track B is loud and local,
+/// so B is loaded first; if B preempted A the early window would carry B's level.
 #[kithara::test(tokio)]
-async fn autoplay_starts_the_first_appended_track_whichever_loads_first(
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -740,10 +724,23 @@ async fn autoplay_starts_the_first_appended_track_whichever_loads_first(
     let queue = autoplay_queue(&harness).await;
     let mut events: EventReceiver<TestEvent> = queue.subscribe();
 
-    let a = local_wav("autoplay-a", TRACK_SECS, constant_quiet);
-    let b = local_wav("autoplay-b", TRACK_SECS, constant_loud);
-    let (source_a, source_b) = (a.source(), b.source());
-    let (id_a, _id_b) = harness
+    let server = TestServerHelper::new().await;
+    let bytes_a = assets::constant_wav_quiet_0_4s().bytes().to_vec();
+    let source_a = server
+        .register_behavior(FixtureBehavior {
+            delivery: Delivery::Throttle {
+                chunk: bytes_a.len(),
+                delay_ms: 300,
+            },
+            content: Content::StaticBytes {
+                bytes: Arc::new(bytes_a),
+                content_type: Some("audio/wav"),
+            },
+        })
+        .child_url("throttled-a.wav")
+        .to_string();
+    let source_b = source(&assets::constant_wav_loud_0_4s());
+    let (id_a, id_b) = harness
         .run(&queue, move |q| {
             (
                 q.append(source_a).expect("append A"),
@@ -751,6 +748,12 @@ async fn autoplay_starts_the_first_appended_track_whichever_loads_first(
             )
         })
         .await;
+    wait_loaded(&mut events, id_b).await;
+    assert_ne!(
+        queue.track(id_a).map(|entry| entry.status),
+        Some(TrackStatus::Loaded),
+        "the throttled first track must still be loading when the second loads"
+    );
     wait_loaded(&mut events, id_a).await;
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
@@ -782,9 +785,7 @@ async fn autoplay_starts_the_first_appended_track_whichever_loads_first(
 /// `PrefetchRequested` can arrive before the autoplayed track is current; it
 /// must not arm slot 0 against the decoder already playing it.
 #[kithara::test(tokio)]
-async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder(
-    constant_three: &'static [u8],
-) {
+async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -795,7 +796,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder(
     )
     .await;
     let queue = autoplay_queue(&harness).await;
-    let solo = local_wav("autoplay-solo", TRACK_SECS, constant_three);
+    let solo = assets::constant_wav_three_0_4s();
     let _ = append_loaded(&harness, &queue, &solo).await;
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;

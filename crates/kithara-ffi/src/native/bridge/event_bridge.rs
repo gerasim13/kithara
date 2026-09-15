@@ -378,10 +378,7 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::Write,
-        sync::{Condvar, Mutex as StdMutex, PoisonError},
-    };
+    use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
     use kithara::{
         events::{EventBus, SlotId, TrackId},
@@ -394,7 +391,7 @@ mod tests {
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
-    use kithara_test_fixtures::fixtures::short_decoder_wav;
+    use kithara_test_fixtures::assets;
 
     use super::*;
     use crate::{
@@ -928,22 +925,13 @@ mod tests {
             .unwrap_or(false)
     }
 
-    fn wav_file(bytes: &[u8]) -> tempfile::NamedTempFile {
-        let mut file = tempfile::Builder::new()
-            .suffix(".wav")
-            .tempfile()
-            .expect("temporary WAV fixture");
-        file.write_all(bytes).expect("write temporary WAV fixture");
-        file
-    }
-
     /// The polling thread drives `Queue::tick`, and a natural EOF on a
     /// repeat-one track makes that tick respawn the consumed track's load
     /// — async work that panics without an ambient runtime. The thread is
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
     #[kithara::test(tokio)]
-    async fn polling_thread_reloads_a_consumed_track_after_eof(short_decoder_wav: &'static [u8]) {
+    async fn polling_thread_reloads_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
@@ -964,9 +952,11 @@ mod tests {
         queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
         let mut events = queue.subscribe();
-        let wav = wav_file(short_decoder_wav);
+        let track = assets::sine_wav_a440_10_frames()
+            .path()
+            .expect("the short decoder WAV lives on disk");
         let id = queue
-            .append(wav.path().to_string_lossy().into_owned())
+            .append(track.to_string_lossy().into_owned())
             .expect("open queue accepts a local track");
         assert!(
             wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,

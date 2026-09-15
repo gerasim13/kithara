@@ -2,7 +2,7 @@
 
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::audio_artifact::write_audio_artifact;
-use std::{io::Write, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
@@ -390,19 +390,6 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
     .expect("audio preload gate must open");
 }
 
-fn local_wav(source: &[u8]) -> tempfile::NamedTempFile {
-    assert!(
-        source.starts_with(b"RIFF") && source.get(8..12) == Some(b"WAVE"),
-        "queue fixture must be a complete RIFF/WAV container"
-    );
-    let mut file = tempfile::Builder::new()
-        .suffix(".wav")
-        .tempfile()
-        .expect("temporary WAV fixture");
-    file.write_all(source).expect("write temporary WAV fixture");
-    file
-}
-
 /// Render the source at the real device cadence and capture the result.
 ///
 /// The guard puts the pacing sleep on the same clock as the decode worker's
@@ -525,12 +512,13 @@ async fn render_passthrough(
     capture
 }
 
-/// Render the same source through a `Queue` control at the same cadence.
+/// Render the same `sine_wav_a440_6s` source through a `Queue` control at the
+/// same cadence.
 ///
 /// Carries the clock guard of [`render_passthrough`] for the same reason: the
 /// tick-and-render pair must not outrun the decode worker.
 #[kithara::flash(true)]
-async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
+async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -548,8 +536,11 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
         ))
         .await;
     let mut events = queue.subscribe::<QueueEvent>();
-    let wav = local_wav(source);
-    let source = wav.path().to_string_lossy().into_owned();
+    let source = sine_wav_a440_6s()
+        .path()
+        .expect("the queue fixture lives on disk")
+        .to_string_lossy()
+        .into_owned();
     let id = harness
         .run(&queue, move |q| q.append(source))
         .await
@@ -925,8 +916,8 @@ async fn run_no_sync_passthrough(
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
     let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
-    let queue_baseline = render_queue_passthrough(source, None).await;
-    let queue_unity = render_queue_passthrough(source, Some((backend, 1.0))).await;
+    let queue_baseline = render_queue_passthrough(None).await;
+    let queue_unity = render_queue_passthrough(Some((backend, 1.0))).await;
     let mut failures = Vec::new();
     for (label, pcm) in [
         ("queue effect-free", queue_baseline.as_slice()),

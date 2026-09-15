@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{io::Write, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
@@ -380,19 +380,6 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
     .expect("audio preload gate must open");
 }
 
-fn local_wav(source: &[u8]) -> tempfile::NamedTempFile {
-    assert!(
-        source.starts_with(b"RIFF") && source.get(8..12) == Some(b"WAVE"),
-        "queue fixture must be a complete RIFF/WAV container"
-    );
-    let mut file = tempfile::Builder::new()
-        .suffix(".wav")
-        .tempfile()
-        .expect("temporary WAV fixture");
-    file.write_all(source).expect("write temporary WAV fixture");
-    file
-}
-
 async fn render_passthrough(
     source: &[u8],
     stretch: Option<(StretchKind, f32)>,
@@ -504,7 +491,7 @@ async fn render_passthrough(
     capture
 }
 
-async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
+async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -520,8 +507,11 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
         ))
         .await;
     let mut events = queue.subscribe::<QueueEvent>();
-    let wav = local_wav(source);
-    let source = wav.path().to_string_lossy().into_owned();
+    let source = sine_wav_a440_6s()
+        .path()
+        .expect("the queue fixture lives on disk")
+        .to_string_lossy()
+        .into_owned();
     let id = harness
         .run(&queue, move |q| q.append(source))
         .await
@@ -921,8 +911,8 @@ async fn run_no_sync_passthrough(
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
     let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
-    let queue_baseline = render_queue_passthrough(source, None).await;
-    let queue_unity = render_queue_passthrough(source, Some((backend, 1.0))).await;
+    let queue_baseline = render_queue_passthrough(None).await;
+    let queue_unity = render_queue_passthrough(Some((backend, 1.0))).await;
     let mut failures = Vec::new();
     for (label, pcm) in [
         ("queue effect-free", queue_baseline.as_slice()),

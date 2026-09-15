@@ -9,14 +9,11 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
 };
-use kithara_test_fixtures::{
-    assets,
-    integration_fixtures::{constant_loud, constant_quiet, constant_three},
-};
+use kithara_test_fixtures::assets;
 
 use crate::{
     bufpool_ext::TestPools,
-    loader_fixture::{LocalWav, append_loaded, wait_loaded},
+    loader_fixture::{append_loaded, wait_loaded},
 };
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -28,10 +25,6 @@ const BLOCK_BUDGET: usize = 256;
 enum InitialStart {
     Play,
     Select,
-}
-
-fn local_wav(label: &str, secs: f64, samples: &'static [u8]) -> LocalWav {
-    LocalWav::constant(label, SAMPLE_RATE, CHANNELS, secs, samples)
 }
 
 fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
@@ -67,9 +60,9 @@ fn stalled_successor(server: &TestServerHelper, label: &str) -> String {
 }
 
 #[kithara::test(tokio)]
-async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u8]) {
+async fn seek_updates_cached_position_optimistically() {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source = local_wav("seek", 120.0, constant_quiet);
+    let source = assets::constant_wav_quiet_120s();
     let id = append_loaded(&harness, &queue, &source).await;
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
@@ -86,13 +79,11 @@ async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u
 /// Track A reaches real EOF while B is a real HTTP load that stalls. Selecting
 /// A again must reload the retained product source and restart playback.
 #[kithara::test(tokio, flash(false))]
-async fn reselect_finished_track_restarts_when_next_track_never_loads(
-    constant_three: &'static [u8],
-) {
+async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     const TRACK_SECS: f64 = 0.4;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source_a = local_wav("reselect-eof", TRACK_SECS, constant_three);
+    let source_a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let server = TestServerHelper::new().await;
     let _id_b = harness
@@ -134,17 +125,13 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
 #[kithara::test(tokio, flash(false))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
-async fn switch_back_to_consumed_track_switches_audio(
-    #[case] initial_start: InitialStart,
-    constant_loud: &'static [u8],
-    constant_quiet: &'static [u8],
-) {
+async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
     const TRACK_SECS: f64 = 8.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source_a = local_wav("switch-back-a", TRACK_SECS, constant_quiet);
-    let source_b = local_wav("switch-back-b", TRACK_SECS, constant_loud);
+    let source_a = assets::constant_wav_quiet_8s();
+    let source_b = assets::constant_wav_loud_8s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let id_b = append_loaded(&harness, &queue, &source_b).await;
 
@@ -192,10 +179,10 @@ async fn switch_back_to_consumed_track_switches_audio(
 }
 
 #[kithara::test(tokio)]
-async fn play_button_marks_current_loaded_track_consumed(constant_three: &'static [u8]) {
+async fn play_button_marks_current_loaded_track_consumed() {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source_a = local_wav("play-button-a", 8.0, constant_three);
-    let source_b = local_wav("play-button-b", 8.0, constant_three);
+    let source_a = assets::constant_wav_three_8s();
+    let source_b = assets::constant_wav_three_8s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let _id_b = append_loaded(&harness, &queue, &source_b).await;
 
@@ -214,12 +201,12 @@ async fn play_button_marks_current_loaded_track_consumed(constant_three: &'stati
 /// Re-selecting A must cancel a pending switch to a real load that remains
 /// unavailable, so its eventual completion cannot barge into playback.
 #[kithara::test(tokio)]
-async fn reselect_playing_track_cancels_pending_switch(constant_three: &'static [u8]) {
+async fn reselect_playing_track_cancels_pending_switch() {
     const TRACK_SECS: f64 = 5.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source_a = local_wav("cancel-pending", TRACK_SECS, constant_three);
+    let source_a = assets::constant_wav_three_5s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let server = TestServerHelper::new().await;
     let id_b = harness

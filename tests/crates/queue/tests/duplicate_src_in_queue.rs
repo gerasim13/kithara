@@ -18,20 +18,17 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflinePlayerHarness, offline_queue_fixture},
 };
-use kithara_test_fixtures::integration_fixtures::constant_loud;
+use kithara_test_fixtures::{asset::Asset, assets};
 
 use crate::{
     bufpool_ext::TestPools,
-    loader_fixture::{LocalWav, append_source_loaded},
+    loader_fixture::{append_source_loaded, source},
 };
 
 const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-/// ≈ 0.74 s of rendered audio — far short of `LONG_TRACK_SECS`.
+/// ≈ 0.74 s of rendered audio — far short of the 30 s track.
 const WARMUP_BLOCKS: usize = 64;
-const LONG_TRACK_SECS: f64 = 30.0;
-const SHORT_TRACK_SECS: f64 = 0.5;
 const EOF_BLOCK_BUDGET: usize = 128;
 
 async fn render_loop(
@@ -56,25 +53,16 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 struct SecondCopyPlaying {
     harness: OfflinePlayerHarness,
     queue: QueueControl<TestPools>,
-    source: LocalWav,
+    source: String,
     first: TrackId,
     playing: TrackId,
 }
 
-async fn fixture_playing_the_second_copy(
-    constant_loud: &'static [u8],
-    track_secs: f64,
-) -> SecondCopyPlaying {
+async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source = LocalWav::constant(
-        "duplicate-source",
-        SAMPLE_RATE,
-        CHANNELS,
-        track_secs,
-        constant_loud,
-    );
-    let first = append_source_loaded(&harness, &queue, source.source()).await;
-    let playing = append_source_loaded(&harness, &queue, source.source()).await;
+    let source = source(track);
+    let first = append_source_loaded(&harness, &queue, source.clone()).await;
+    let playing = append_source_loaded(&harness, &queue, source.clone()).await;
 
     harness
         .run(&queue, move |q| q.select(playing, Transition::None))
@@ -93,28 +81,21 @@ async fn fixture_playing_the_second_copy(
 #[kithara::test(tokio, flash(false))]
 #[case::played_entry(true)]
 #[case::same_url_entry(false)]
-async fn a_failure_only_flags_the_entry_that_played(
-    #[case] played_entry: bool,
-    constant_loud: &'static [u8],
-) {
+async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
     let SecondCopyPlaying {
         harness,
         queue,
         source,
         first,
         playing,
-    } = fixture_playing_the_second_copy(constant_loud, LONG_TRACK_SECS).await;
+    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_30s()).await;
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     harness
         .player()
         .bus()
         .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
-            item: ItemRole::Leading(TrackRef::new(
-                playing,
-                SlotId::new(0),
-                Arc::from(source.source()),
-            )),
+            item: ItemRole::Leading(TrackRef::new(playing, SlotId::new(0), Arc::from(source))),
         }));
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
@@ -130,14 +111,14 @@ async fn a_failure_only_flags_the_entry_that_played(
 }
 
 #[kithara::test(tokio, flash(false))]
-async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'static [u8]) {
+async fn second_entry_with_the_same_source_owns_its_real_eof() {
     let SecondCopyPlaying {
         harness,
         queue,
         source: _source,
         first,
         playing,
-    } = fixture_playing_the_second_copy(constant_loud, SHORT_TRACK_SECS).await;
+    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_0_5s()).await;
     render_loop(&queue, &harness, EOF_BLOCK_BUDGET).await;
 
     assert_eq!(

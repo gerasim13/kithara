@@ -22,19 +22,18 @@ use kithara_integration_tests::{
         offline_queue_fixture_with_options,
     },
 };
-use kithara_test_fixtures::integration_fixtures::{constant_loud, constant_quiet};
+use kithara_test_fixtures::assets;
 
 use crate::{
     bufpool_ext::TestPools,
-    loader_fixture::{LocalWav, append_loaded},
+    loader_fixture::{append_loaded, source},
 };
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-/// ≈ 0.74 s of rendered audio — far short of `TRACK_SECS`.
+/// ≈ 0.74 s of rendered audio — far short of the 30 s tracks.
 const WARMUP_BLOCKS: usize = 64;
-const TRACK_SECS: f64 = 30.0;
 const CROSSFADE_SECS: f32 = 1.0;
 const OUTGOING_EOF_BLOCKS: usize = 192;
 
@@ -57,18 +56,14 @@ struct NonLeadingFixture {
     queue: QueueControl<TestPools>,
     stale: TrackRef,
     current: TrackId,
-    _files: [LocalWav; 3],
 }
 
-async fn non_leading_fixture(
-    constant_quiet: &'static [u8],
-    constant_loud: &'static [u8],
-) -> NonLeadingFixture {
+async fn non_leading_fixture() -> NonLeadingFixture {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let files = [
-        LocalWav::constant("stale", SAMPLE_RATE, CHANNELS, TRACK_SECS, constant_quiet),
-        LocalWav::constant("current", SAMPLE_RATE, CHANNELS, TRACK_SECS, constant_loud),
-        LocalWav::constant("next", SAMPLE_RATE, CHANNELS, TRACK_SECS, constant_quiet),
+        assets::constant_wav_quiet_30s(),
+        assets::constant_wav_loud_30s(),
+        assets::constant_wav_quiet_30s(),
     ];
     let stale = append_loaded(&harness, &queue, &files[0]).await;
     let current = append_loaded(&harness, &queue, &files[1]).await;
@@ -76,9 +71,8 @@ async fn non_leading_fixture(
     NonLeadingFixture {
         harness,
         queue,
-        stale: TrackRef::new(stale, SlotId::new(0), Arc::from(files[0].source())),
+        stale: TrackRef::new(stale, SlotId::new(0), Arc::from(source(&files[0]))),
         current,
-        _files: files,
     }
 }
 
@@ -122,11 +116,9 @@ fn publish_completion(
 #[case::background_failure(Completion::Failure, NonLeadingRole::Background)]
 async fn non_leading_completion_does_not_advance_the_queue(
     #[case] completion: Completion,
-    constant_quiet: &'static [u8],
-    constant_loud: &'static [u8],
     #[case] role: NonLeadingRole,
 ) {
-    let fixture = non_leading_fixture(constant_quiet, constant_loud).await;
+    let fixture = non_leading_fixture().await;
     let (harness, queue) = (&fixture.harness, &fixture.queue);
     let stale_id = fixture.stale.id;
     let current = fixture.current;
@@ -168,10 +160,8 @@ async fn non_leading_completion_does_not_advance_the_queue(
 #[case::failure(Completion::Failure)]
 async fn background_completion_does_not_cut_the_current_track_audio(
     #[case] completion: Completion,
-    constant_quiet: &'static [u8],
-    constant_loud: &'static [u8],
 ) {
-    let fixture = non_leading_fixture(constant_quiet, constant_loud).await;
+    let fixture = non_leading_fixture().await;
     let (harness, queue) = (&fixture.harness, &fixture.queue);
     let current = fixture.current;
 
@@ -210,10 +200,7 @@ async fn background_completion_does_not_cut_the_current_track_audio(
 /// `ItemRole::Outgoing` is produced by the player from the crossfade's actual
 /// terminal notification.
 #[kithara::test(tokio, flash(false))]
-async fn outgoing_eof_does_not_advance_the_promoted_successor(
-    constant_quiet: &'static [u8],
-    constant_loud: &'static [u8],
-) {
+async fn outgoing_eof_does_not_advance_the_promoted_successor() {
     let (harness, queue) = offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
@@ -221,20 +208,8 @@ async fn outgoing_eof_does_not_advance_the_promoted_successor(
         SAMPLE_RATE,
     )
     .await;
-    let outgoing = LocalWav::constant(
-        "outgoing-eof",
-        SAMPLE_RATE,
-        CHANNELS,
-        TRACK_SECS,
-        constant_quiet,
-    );
-    let successor = LocalWav::constant(
-        "outgoing-successor",
-        SAMPLE_RATE,
-        CHANNELS,
-        TRACK_SECS,
-        constant_loud,
-    );
+    let outgoing = assets::constant_wav_quiet_30s();
+    let successor = assets::constant_wav_loud_30s();
     let first = append_loaded(&harness, &queue, &outgoing).await;
     let second = append_loaded(&harness, &queue, &successor).await;
     let mut events: EventReceiver<TestEvent> = queue.subscribe();

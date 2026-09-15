@@ -322,6 +322,23 @@ mod tests {
     }
 
     #[kithara::test]
+    fn atomic_track_id_cas_arm_then_disarm() {
+        let cell = AtomicTrackId::disarmed();
+        cell.arm_if_disarmed(TrackId(3));
+        cell.arm_if_disarmed(TrackId(4));
+        assert_eq!(
+            cell.load(),
+            CrossfadeArm::Armed {
+                for_track: TrackId(3),
+            },
+            "a second arm must not replace the armed track"
+        );
+        assert!(!cell.disarm_if_matches(TrackId(4)));
+        assert!(cell.disarm_if_matches(TrackId(3)));
+        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
+    }
+
+    #[kithara::test]
     fn atomic_cached_position_unknown_loads_none() {
         let cell = AtomicCachedPosition::unknown();
         assert_eq!(Option::<f64>::from(cell.load()), None);

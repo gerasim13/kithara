@@ -5707,7 +5707,6 @@ dependencies = [
  "num-traits",
  "reqwest",
  "serial_test",
- "tempfile",
  "tracing",
  "tracing-subscriber",
  "url",

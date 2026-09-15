@@ -4,6 +4,7 @@ use kithara_audio::{
 use kithara_platform::{
     CancelToken,
     sync::Arc,
+    thread,
     time::{Duration, timeout as platform_timeout},
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo};
@@ -258,12 +259,15 @@ mod probed {
     struct EndlessSource {
         pools: Pools,
         seek_obs: Arc<dyn SeekObserve>,
+        /// Time each step holds the shared worker thread before producing.
+        step: Duration,
     }
 
     impl AudioSource for EndlessSource {
         type Chunk = AudioChunk;
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            thread::sleep(self.step);
             TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
         }
 
@@ -275,12 +279,15 @@ mod probed {
     /// Source that never has data, so its node waits on every pass.
     struct WaitingSource {
         seek_obs: Arc<dyn SeekObserve>,
+        /// Time each step holds the shared worker thread before waiting.
+        step: Duration,
     }
 
     impl AudioSource for WaitingSource {
         type Chunk = AudioChunk;
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            thread::sleep(self.step);
             TrackStep::Blocked(WaitingReason::Waiting)
         }
 
@@ -490,7 +497,9 @@ mod probed {
     }
 
     #[kithara::test(tokio, flash(false))]
-    async fn shared_worker_waiting_track_does_not_starve_producing_track() {
+    #[case::instant_step(Duration::ZERO)]
+    #[case::sync_blocking_step(Duration::from_millis(10))]
+    async fn shared_worker_waiting_track_does_not_starve_producing_track(#[case] step: Duration) {
         let trace = scope();
         let pools = pools();
         let handle = test_scheduler();
@@ -499,6 +508,7 @@ mod probed {
         let (node_b, _pop_b, _) = make_node(
             WaitingSource {
                 seek_obs: new_seek(),
+                step,
             },
             32,
             0,
@@ -511,7 +521,9 @@ mod probed {
     }
 
     #[kithara::test(tokio, flash(false))]
-    async fn shared_worker_endless_producer_does_not_starve_other_tracks() {
+    #[case::instant_step(Duration::ZERO)]
+    #[case::sync_blocking_step(Duration::from_millis(10))]
+    async fn shared_worker_endless_producer_does_not_starve_other_tracks(#[case] step: Duration) {
         const SOURCE_CHUNKS: usize = 1000;
 
         let trace = scope();
@@ -524,6 +536,7 @@ mod probed {
             EndlessSource {
                 pools: pools.clone(),
                 seek_obs: new_seek(),
+                step,
             },
             32,
             0,
