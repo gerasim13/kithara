@@ -9,7 +9,10 @@ use tracing::{debug, warn};
 use crate::{
     error::QueueError,
     event::{AdvanceReason, QueueEvent, TrackStatus},
-    queue::{QueueControl, types::SelectPhase},
+    queue::{
+        QueueControl,
+        types::{SelectPhase, Transition},
+    },
 };
 
 impl<S> QueueControl<S>
@@ -93,7 +96,8 @@ where
             selection
         };
 
-        let Some(transition) = selection else {
+        let autoplay = self.autoplay_target.disarm_if_matches(id);
+        let Some(transition) = selection.or_else(|| autoplay.then_some(Transition::None)) else {
             return;
         };
         if let Err(error) =

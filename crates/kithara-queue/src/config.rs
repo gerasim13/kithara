@@ -61,6 +61,14 @@ where
     #[builder(default = DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
 
+    /// Whether the queue starts playback by itself once the first track
+    /// appended to a queue with nothing selected finishes loading. Off by
+    /// default: the embedding decides when playback starts. A document cannot
+    /// name it, because starting playback is the embedding's choice.
+    #[builder(default = false)]
+    #[patch(skip)]
+    pub should_autoplay: bool,
+
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
@@ -76,6 +84,7 @@ where
         f.debug_struct("QueueConfig")
             .field("max_concurrent_loads", &self.max_concurrent_loads)
             .field("prefetch_duration", &self.prefetch_duration)
+            .field("should_autoplay", &self.should_autoplay)
             .field("max_history_size", &self.max_history_size)
             .finish_non_exhaustive()
     }

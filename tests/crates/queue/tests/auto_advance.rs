@@ -709,3 +709,114 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span(
     drop(queue);
     harness.close().await;
 }
+
+async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPools> {
+    harness
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .should_autoplay(true)
+                .build(),
+        ))
+        .await
+}
+
+/// Autoplay starts the first appended track whichever load finishes first,
+/// then advances to the next one.
+#[kithara::test(tokio)]
+async fn autoplay_starts_the_first_appended_track_whichever_loads_first(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
+    const TRACK_SECS: f64 = 0.4;
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = autoplay_queue(&harness).await;
+    let mut events: EventReceiver<TestEvent> = queue.subscribe();
+
+    let a = local_wav("autoplay-a", TRACK_SECS, constant_quiet);
+    let b = local_wav("autoplay-b", TRACK_SECS, constant_loud);
+    let (source_a, source_b) = (a.source(), b.source());
+    let (id_a, _id_b) = harness
+        .run(&queue, move |q| {
+            (
+                q.append(source_a).expect("append A"),
+                q.append(source_b).expect("append B"),
+            )
+        })
+        .await;
+    wait_loaded(&mut events, id_a).await;
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+
+    let onset = first_onset_frame(&pcm, 0.005)
+        .expect("autoplay must start producing audio without an explicit select");
+    let track_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
+    let window = SAMPLE_RATE as usize / 8;
+    let mean_first = mean_abs_window(&pcm, onset + track_frames / 4, window)
+        .expect("window inside the first audible track fits");
+    let mean_second = mean_abs_window(&pcm, onset + track_frames + track_frames / 4, window)
+        .expect("window inside the second audible track fits");
+
+    assert!(
+        mean_second > mean_first * 4.0,
+        "the quiet first-appended track A must play before the loud B: \
+         mean_first={mean_first}, mean_second={mean_second}"
+    );
+    assert_eq!(
+        queue.current_index(),
+        Some(1),
+        "after A finishes the queue must advance to B"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+/// `PrefetchRequested` can arrive before the autoplayed track is current; it
+/// must not arm slot 0 against the decoder already playing it.
+#[kithara::test(tokio)]
+async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder(
+    constant_three: &'static [u8],
+) {
+    const TRACK_SECS: f64 = 0.4;
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = autoplay_queue(&harness).await;
+    let solo = local_wav("autoplay-solo", TRACK_SECS, constant_three);
+    let _ = append_loaded(&harness, &queue, &solo).await;
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+
+    let onset =
+        first_onset_frame(&pcm, 0.005).expect("the autoplayed track must produce audible samples");
+    let track_frames =
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * TRACK_SECS).unwrap_or(usize::MAX);
+    let window = SAMPLE_RATE as usize / 8;
+    let mean_mid = mean_abs_window(&pcm, onset + track_frames / 4, window)
+        .expect("mid window inside the track fits");
+
+    assert!(
+        mean_mid > 0.005,
+        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed"
+    );
+    assert_eq!(
+        queue.current_index(),
+        Some(0),
+        "current_index must stay on the only track"
+    );
+    drop(queue);
+    harness.close().await;
+}

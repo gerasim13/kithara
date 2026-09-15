@@ -53,6 +53,10 @@ where
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: AtomicTrackId,
+    /// Track whose load completion starts playback: the first one appended
+    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
+    pub(super) autoplay_target: AtomicTrackId,
+    pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
@@ -151,6 +155,7 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
+            should_autoplay,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -183,6 +188,8 @@ where
             select_apply: Arc::new(Mutex::new(())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
+            autoplay_target: AtomicTrackId::disarmed(),
+            should_autoplay,
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {

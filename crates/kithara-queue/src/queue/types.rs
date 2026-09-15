@@ -121,6 +121,29 @@ pub(super) struct AtomicTrackId(AtomicU64);
 impl AtomicTrackId {
     const NONE_BITS: u64 = u64::MAX;
 
+    /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`.
+    pub(super) fn arm_if_disarmed(&self, track: TrackId) {
+        let _ = self.0.compare_exchange(
+            Self::NONE_BITS,
+            track.as_u64(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
+    /// `track` was the armed id.
+    pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
+        self.0
+            .compare_exchange(
+                track.as_u64(),
+                Self::NONE_BITS,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     const fn decode(bits: u64) -> CrossfadeArm {
         if bits == Self::NONE_BITS {
             CrossfadeArm::Disarmed

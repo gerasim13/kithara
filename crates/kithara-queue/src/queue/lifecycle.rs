@@ -76,6 +76,7 @@ where
             drop(navigation);
             self.write_armed_for(CrossfadeArm::Disarmed);
             self.write_cached_position(CachedPosition::Unknown);
+            self.autoplay_target.store(CrossfadeArm::Disarmed);
             self.player.remove_all_items();
             ids
         };
@@ -113,6 +114,9 @@ where
         placement: Placement,
     ) -> TrackId {
         let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
+        if self.should_autoplay && self.current().is_none() {
+            self.autoplay_target.arm_if_disarmed(id);
+        }
 
         let index = {
             let mut guard = self.lock_tracks_mut();
