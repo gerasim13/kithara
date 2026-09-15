@@ -17,7 +17,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
@@ -62,7 +62,7 @@ async fn open_test_mp3(
 /// A genuine stall is caught by the per-test timeout, not a hand-rolled
 /// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
 /// when called from a flash test.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>, stage: &str) {
     loop {
         match AudioRead::next_chunk(audio) {
@@ -80,7 +80,12 @@ async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPoo
 }
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn decoder_file_reads_samples(
     #[future(awt)] mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,
@@ -96,7 +101,12 @@ async fn decoder_file_reads_samples(
 /// Covers three zero-warmup scenarios: seek to 0, seek forward (2s), seek
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 #[case::to_zero(Duration::from_secs(0))]
 #[case::forward(Duration::from_secs(2))]
 async fn decoder_file_single_seek(
@@ -122,7 +132,12 @@ async fn decoder_file_single_seek(
 }
 
 /// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn decoder_file_seek_backward(
     #[future(awt)] mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,
@@ -142,7 +157,12 @@ async fn decoder_file_seek_backward(
 }
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 #[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::default()))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -169,7 +189,12 @@ async fn decoder_file_seek_multiple(
 }
 
 /// Decoder<Stream<File>> events are emitted on seek.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn decoder_file_seek_emits_events(
     #[future(awt)] mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,

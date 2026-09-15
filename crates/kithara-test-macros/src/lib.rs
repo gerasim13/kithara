@@ -79,13 +79,6 @@ pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
     flash::expand(attr, item)
 }
 
-/// Facade re-export variant of [`flash`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
-#[proc_macro_attribute]
-pub fn facade_flash(attr: TokenStream, item: TokenStream) -> TokenStream {
-    flash::expand_facade(attr, item)
-}
-
 /// `#[kithara::no_block]` / `#[kithara::no_block(budget_ms = N)]` — async
 /// poll blocking detector. Wraps an async fn body in a per-poll budget watch.
 /// See [`no_block`] for details.
@@ -94,26 +87,12 @@ pub fn no_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     no_block::expand(attr, item)
 }
 
-/// Facade re-export variant of [`no_block`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
-#[proc_macro_attribute]
-pub fn facade_no_block(attr: TokenStream, item: TokenStream) -> TokenStream {
-    no_block::expand_facade(attr, item)
-}
-
 /// `#[kithara::allow_block]` — sanctions a genuinely blocking function inside
 /// a no-block context. Sync fns get an RAII permit; async fns get a per-poll
 /// permit combinator so no thread-local guard crosses `.await`.
 #[proc_macro_attribute]
 pub fn allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     no_block::expand_allow_block(attr, item)
-}
-
-/// Facade re-export variant of [`allow_block`]. It is emitted by the public
-/// `kithara` crate, so generated paths must resolve through that facade.
-#[proc_macro_attribute]
-pub fn facade_allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
-    no_block::expand_allow_block_facade(attr, item)
 }
 
 /// `#[kithara::probe]` — USDT instrumentation gated by `feature = "usdt"`.

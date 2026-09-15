@@ -8,7 +8,7 @@ enum TestEvent {
     Bus(BusEvent),
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_event_bus_publish_subscribe() {
     let bus = EventBus::new(32);
     let mut rx = bus.subscribe();

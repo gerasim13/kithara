@@ -3,7 +3,6 @@
 //! its resident engine or raw session.
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
@@ -12,7 +11,10 @@ use kithara_play::{
     Cmd, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
     SessionBinding, SessionDispatcher, player::Player,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 
 use super::{engine_session_contract as contract, graph::GraphSession};
 

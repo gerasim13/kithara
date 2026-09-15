@@ -220,27 +220,27 @@ fn asset_url(asset: Asset) -> String {
         .into()
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub(crate) fn tone_mp3() -> String {
     asset_url(assets::sine_mp3_a440_2s())
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub(crate) fn rhythm_a_mp3() -> String {
     asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub(crate) fn rhythm_b_mp3() -> String {
     asset_url(assets::rhythm_mp3_deck_b_120bpm_48k())
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub(crate) fn short_wav() -> String {
     asset_url(assets::sine_wav_a440_2s())
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub(crate) fn long_wav() -> String {
     asset_url(assets::sine_wav_a440_12s())
 }

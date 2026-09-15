@@ -40,7 +40,7 @@ fn decoder_config() -> TestDecoderConfig {
 /// Xing-headered MP3 reports the full duration even when probed against
 /// a 6 % slice of the file. Duration is therefore *not* the bit that
 /// goes stale; it's the byte availability that does.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn xing_partial_probe_reports_full_duration(tone_mp3: &'static [u8]) {
     let full = tone_mp3;
     let partial = partial_slice(full);
@@ -67,7 +67,7 @@ fn xing_partial_probe_reports_full_duration(tone_mp3: &'static [u8]) {
 /// available data must surface an error (not hang, not silently succeed).
 /// This is the `decoder.seek` error path that the FSM hands off to
 /// recreation.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
     let full = tone_mp3;
     let partial = partial_slice(full);
@@ -97,7 +97,7 @@ fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
 /// from the full file. This is what justifies recreating the decoder
 /// (with a fresh view of the now-complete byte range) instead of
 /// bailing out of seek entirely.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn full_decoder_seeks_to_same_target_without_error(tone_mp3: &'static [u8]) {
     let full = tone_mp3;
 

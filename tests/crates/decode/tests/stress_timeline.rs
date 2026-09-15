@@ -12,7 +12,7 @@ use kithara_test_fixtures::fixtures::stress_wav;
 
 use crate::common::test_defaults::SawWav;
 
-#[kithara::test(timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
     const SEEK_ITERATIONS: usize = 200;
     const CHUNKS_PER_BURST: usize = 5;

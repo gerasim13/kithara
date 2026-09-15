@@ -469,7 +469,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn shared_store_keeps_two_hls_working_sets() {
         let state = BuildState::default();
 

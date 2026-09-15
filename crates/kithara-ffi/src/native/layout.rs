@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn foreign_layout_receives_every_source_variant() {
         let layout = ForeignLayout::new(Arc::new(EchoLayout));
         let remote = AssetSource::Remote {
@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(layout.root(&local), "local:/music/track.flac");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn foreign_layout_receives_every_resource_variant() {
         let layout = ForeignLayout::new(Arc::new(EchoLayout));
 
@@ -211,7 +211,7 @@ mod tests {
             .expect("commit resource");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn foreign_layout_callbacks_only_mint_scope_and_key() {
         const PAYLOAD: &[u8] = b"payload";
 
@@ -304,7 +304,10 @@ mod tests {
         assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
-    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
+    #[kithara_test_utils::kithara::test(
+        native,
+        timeout(kithara::platform::time::Duration::from_secs(5))
+    )]
     fn foreign_layout_dictates_real_on_disk_root_and_path() {
         struct FixedLayout;
 
@@ -347,7 +350,10 @@ mod tests {
         assert!(dir.path().join("foreign-root/custom/audio.mp3").exists());
     }
 
-    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
+    #[kithara_test_utils::kithara::test(
+        native,
+        timeout(kithara::platform::time::Duration::from_secs(5))
+    )]
     #[case("../escape")]
     #[case("/absolute/path")]
     #[case("")]
@@ -378,7 +384,7 @@ mod tests {
         assert!(matches!(error, AssetsError::InvalidKey));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     #[case("../escape")]
     #[case("/absolute")]
     #[case("")]
@@ -403,7 +409,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn non_utf8_local_source_is_rejected_without_lossy_conversion() {
         let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let source = AssetSource::Local { path };

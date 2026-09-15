@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn queue_sources() -> (TestServerHelper, [Url; 2]) {
     let server = TestServerHelper::new().await;
     let urls = [
@@ -32,7 +32,12 @@ const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn auto_advance_starts_next_track_without_explicit_play(
     temp_dir: TestTempDir,
     #[future(awt)] queue_sources: (TestServerHelper, [Url; 2]),

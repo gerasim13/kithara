@@ -74,7 +74,7 @@ fn source_frames() -> usize {
 }
 
 /// The plain tone this test measures, with the fixture bound to its budget.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn source_pcm() -> &'static [u8] {
     let bytes = sine_wav_a440_6s().bytes();
     assert_eq!(
@@ -86,7 +86,7 @@ fn source_pcm() -> &'static [u8] {
 }
 
 /// The same tone carrying the source-time markers `marker_timing` looks for.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn marked_source_pcm(source_pcm: &'static [u8]) -> &'static [u8] {
     let bytes = marked_sine_wav_a440_6s().bytes();
     assert_eq!(bytes.len(), source_pcm.len());
@@ -814,7 +814,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     serial,
@@ -836,7 +836,7 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     run_no_sync_passthrough(source_pcm, backend, false).await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     serial,
@@ -860,7 +860,7 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
     run_active_stretch(source_pcm, marked_source_pcm, shifted_pitch, backend, false).await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     serial,
@@ -883,7 +883,7 @@ async fn record_no_sync_unity_playback_artifacts(
     run_no_sync_passthrough(source_pcm, backend, true).await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     serial,

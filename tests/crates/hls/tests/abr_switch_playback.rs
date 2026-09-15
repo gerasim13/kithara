@@ -69,7 +69,7 @@ fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilde
     }
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn create_packaged_abr_fixture() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server
@@ -150,7 +150,7 @@ async fn read_audio_some(
 /// This is the exact scenario from the production crash:
 /// `kithara-app` plays one MP3 plus the plain and encrypted HLS masters.
 /// ABR switches variant on HLS track → worker hangs → all tracks die.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -223,7 +223,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     .expect("read phase join");
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -454,7 +454,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
 /// then stops producing chunks → `recv_outcome_blocking` hang.
 ///
 /// Parameterized: path × ABR mode to isolate DRM vs HLS vs no-ABR.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -598,7 +598,7 @@ async fn stream_continues_after_seek(
 }
 
 /// Same test but without ABR (fixed variant 0) — baseline.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -670,7 +670,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
 /// Regression: after ABR switch + full decode to EOF, random seeks land on
 /// segments whose byte offsets are no longer visible in the `StreamIndex` layout,
 /// causing `read_at` to return Retry forever.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -768,7 +768,7 @@ async fn seek_after_eof_mmap_produces_samples(
 ///
 /// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
 /// Baseline: no ABR, no segments, no variant switching.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -865,7 +865,7 @@ async fn mp3_stream_continues_after_seek(
 /// chunk. After playback resumes, ABR must still work (variant changes again).
 /// Uses chunk metadata (`variant_index`) instead of broadcast events to avoid
 /// broadcast lag issues.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -988,7 +988,7 @@ struct CrossCodecReadStats {
     saw_eof: bool,
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 fn read_manual_cross_codec_phase(
     audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     hls_rx: &mut EventReceiver<TestEvent>,
@@ -1087,7 +1087,7 @@ fn read_manual_cross_codec_phase(
 /// variant 3 FLAC — 37 segments × 6 s each, so about 220 s of audio.
 /// Reading 15 s post-switch must produce at least
 /// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -1124,7 +1124,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
         .build();
 
     // `block_on_underrun(true)` makes every `read()` park on the worker via
-    // `recv_outcome_blocking` (`#[kithara::flash(true)]` → `park_timeout` on the
+    // `recv_outcome_blocking` (`#[kithara_test_utils::kithara::flash(true)]` → `park_timeout` on the
     // virtual clock) rather than zero-filling on underrun. The park is what
     // advances virtual time, so the worker keeps delivering real decoded chunks
     // and the post-switch window accumulates true FLAC frames. A genuine

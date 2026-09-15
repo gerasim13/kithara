@@ -35,7 +35,7 @@ use url::Url;
 /// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
 /// (has a file path). The disk case is native-only because wasm targets do
 /// not expose a real filesystem.
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::ephemeral_mem(true, false)]
 #[case::disk_mmap(false, true)]
 fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
@@ -102,7 +102,7 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
     /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
     /// `MemResources` which would make `wait_range()` block forever.
@@ -126,7 +126,7 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
     server
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,

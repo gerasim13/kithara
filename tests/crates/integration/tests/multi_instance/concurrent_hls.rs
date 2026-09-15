@@ -117,7 +117,7 @@ async fn run_concurrent_hls(
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     browser,
     serial,

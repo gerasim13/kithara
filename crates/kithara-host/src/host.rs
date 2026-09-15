@@ -414,8 +414,7 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::TestPools;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::TestPools, kithara};
 
     use super::*;
 

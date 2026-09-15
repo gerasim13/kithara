@@ -62,7 +62,7 @@ fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) ->
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // 1s stereo WAV.
     let wav = Arc::new(audio_wav_44100.to_vec());

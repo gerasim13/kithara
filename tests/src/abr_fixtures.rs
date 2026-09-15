@@ -38,21 +38,21 @@ fn settings(
 /// ABR settings tuned for tests that want variant switches to fire on
 /// every sample without hysteresis or interval gates.
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn abr_switch_trigger() -> AbrSettings {
     settings(Duration::ZERO, 1.0, 1.0)
 }
 
 /// ABR settings for fast-reacting tests (sub-second switch interval).
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn abr_fast() -> AbrSettings {
     settings(Duration::from_secs(1), 2.0, 0.9)
 }
 
 /// Default initial ABR mode for test fixtures — Auto starting at variant 0.
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub const fn abr_initial_mode() -> AbrMode {
     AbrMode::Auto(None)
 }

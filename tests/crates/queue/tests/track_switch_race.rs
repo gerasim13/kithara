@@ -155,7 +155,7 @@ async fn build_queue(
 /// capacity); we re-loop to keep draining, mirroring the sibling-test idiom.
 /// The helper is flash-active so deadlines are virtual in flash runs; otherwise
 /// every absence window would consume real wall time.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn next_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
     deadline: Duration,
@@ -309,7 +309,7 @@ fn mk_cfg(
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn supersede_while_loading_cancels_slow_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -436,7 +436,7 @@ async fn supersede_while_loading_cancels_slow_track(
 /// Both loads are gated so the head track is still loading when `play()`
 /// runs; `play()` must not re-point the pending selection at the head and
 /// cancel the user's pick.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn play_keeps_pending_select_of_loading_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -548,7 +548,7 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
 // order the completion before the select and dissolve the contended window this
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn concurrent_completion_race_does_not_barge_in(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -644,7 +644,7 @@ async fn concurrent_completion_race_does_not_barge_in(
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn race_tracks() -> (TestServerHelper, CreatedHls, CreatedHls) {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(

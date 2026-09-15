@@ -34,7 +34,7 @@ const CHANNELS: u16 = 2;
 const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsTestServerConfig {
     let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
@@ -88,7 +88,7 @@ fn audio_config(
         .build()
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -147,7 +147,7 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTes
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,

@@ -141,7 +141,7 @@ fn read_final_tail(
     (remaining_samples, saw_final_eof)
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     serial,
     timeout(Duration::from_secs(10)),
@@ -265,7 +265,7 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
     info!("Stress test passed");
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn wav_file() -> NamedTempFile {
     spawn_blocking(|| {
         let file = NamedTempFile::new().expect("create temp file");

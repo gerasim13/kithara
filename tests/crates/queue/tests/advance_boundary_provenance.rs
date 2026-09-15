@@ -241,27 +241,27 @@ async fn flac_pair(variants: usize, segments: usize, seconds: f64) -> (TestServe
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn flac_tracks() -> (TestServerHelper, [Url; 2]) {
     flac_pair(1, SEGMENTS, SEGMENT_SECS).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn multivariant_tracks() -> (TestServerHelper, [Url; 2]) {
     flac_pair(3, SEGMENTS, SEGMENT_SECS).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn crossfade_tracks() -> (TestServerHelper, [Url; 2]) {
     flac_pair(1, CROSSFADE_SEGMENTS, SEGMENT_SECS).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn real_geometry_tracks() -> (TestServerHelper, [Url; 2]) {
     flac_pair(1, REAL_GEOMETRY_SEGMENTS, REAL_GEOMETRY_SEGMENT_SECS).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn aac_tracks() -> (TestServerHelper, [Url; 2]) {
     served_pair([TONE_A_FREQ_HZ, TONE_B_FREQ_HZ].map(|hz| {
         HlsFixtureBuilder::new()
@@ -273,7 +273,12 @@ async fn aac_tracks() -> (TestServerHelper, [Url; 2]) {
     .await
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_emits_only_b_after_a_flac(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -388,7 +393,12 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_with_late_variant_switch_flac(
     #[future(awt)] multivariant_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -532,7 +542,12 @@ async fn natural_eof_advance_with_late_variant_switch_flac(
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
     #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -575,7 +590,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(240)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(240)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real_geometry(
     #[future(awt)] real_geometry_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -626,7 +646,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -770,7 +795,12 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 #[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]
 #[case::eq(false, "crossfade FLAC eq", CrossfadeFlavor::Eq)]
 #[case::eq_stretch(false, "crossfade FLAC eq stretch", CrossfadeFlavor::EqStretch)]
@@ -808,7 +838,12 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
     .await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac(
     #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -847,7 +882,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(
     setup.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -967,7 +1007,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
 /// this case uses 440 Hz vs 880 Hz tone provenance to keep the same replay
 /// contract on the lossy codec.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(5)
+)]
 async fn natural_eof_advance_emits_only_b_aac(
     #[future(awt)] aac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -1311,7 +1356,7 @@ async fn wait_loaded_from(events: &mut EventReceiver<TestEvent>, id: kithara::ev
     );
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
@@ -1347,7 +1392,7 @@ async fn render_until_b_with_postroll(
     )
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_until_b_with_late_variant_switch(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
@@ -1420,7 +1465,7 @@ async fn render_until_b_with_late_variant_switch(
     )
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_crossfade_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
@@ -1470,7 +1515,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
     .await
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
@@ -1553,7 +1598,7 @@ fn drain_variant_applied_events(
     }
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
@@ -1611,7 +1656,7 @@ async fn render_seek_near_end_until_b_with_postroll(
     )
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_until_tone_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,

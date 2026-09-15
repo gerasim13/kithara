@@ -71,7 +71,12 @@ impl Peer for SelfReferencingPeer {
 /// its internal clones.* This is what `HlsSource::Drop →
 /// HlsPeer::teardown()` does in production. This test exercises the
 /// contract with a mini-peer.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(3))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(3)
+)]
 async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();
@@ -114,7 +119,12 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 
 /// Counter-proof: omitting `teardown()` leaves the cycle intact and the
 /// Registry leaks the peer until the Downloader itself is cancelled.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(3))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(3)
+)]
 async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();

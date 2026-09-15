@@ -68,7 +68,7 @@ fn make_chunk_at(
     AudioChunk::new(meta, pcm)
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_pool_get_put_allocation_free() {
     let pools = eager_pools(16, 4_096);
 
@@ -85,7 +85,7 @@ fn test_pool_get_put_allocation_free() {
     });
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_pcm_chunk_access_allocation_free(allocation_ramp: Vec<f32>) {
     let pools = eager_pools(16, 4_096);
 
@@ -154,7 +154,7 @@ fn process_planar(
         .output_frames
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::active_first_chunk(48_000, 0, 64, 16_384)]
 #[case::active_steady_state(48_000, 16, 64, 16_384)]
 #[case::passthrough(44_100, 1, 32, 8_192)]
@@ -185,7 +185,7 @@ fn resampler_process_is_allocation_free(
     });
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn resampler_presize_keeps_output_bit_exact(
     allocation_planar: Vec<f32>,
     allocation_sequence: Vec<f32>,
@@ -212,7 +212,7 @@ fn resampler_presize_keeps_output_bit_exact(
     assert!(!a.is_empty(), "active resampler must emit output");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
@@ -266,7 +266,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     });
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(

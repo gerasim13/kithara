@@ -639,7 +639,7 @@ mod tests {
         ))
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn event_routes_every_forwarded_domain() {
         let item_events = [
             ItemBusEvent::Decoder(DecoderEvent::ResamplerConfigured {
@@ -703,7 +703,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn decoder_events_preserve_every_forwarded_contract() {
         let cases: [ItemEventCase<DecoderEvent>; 4] = [
             (
@@ -820,7 +820,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn audio_events_preserve_every_forwarded_contract() {
         let cases: [ItemEventCase<AudioEvent>; 11] = [
             (
@@ -1005,7 +1005,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn downloader_events_preserve_every_forwarded_contract() {
         let network_error = || kithara::net::NetError::Network("offline".into());
         let cases: [ItemEventCase<DownloaderEvent>; 9] = [
@@ -1159,7 +1159,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn player_events_preserve_every_forwarded_contract() {
         let cases: [PlayerEventCase<PlayerEvent>; 7] = [
             (PlayerEvent::RateChanged { rate: 1.25 }, |event| {
@@ -1222,7 +1222,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn queue_events_preserve_every_forwarded_contract() {
         let id = TrackId::from(21_u64);
         let cases: [PlayerEventCase<QueueEvent>; 11] = [
@@ -1310,7 +1310,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn downloader_request_cancelled_maps_to_item_event() {
         let request_id = request_id(7);
         let event = DownloaderEvent::RequestCancelled {
@@ -1329,7 +1329,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn downloader_request_failed_is_not_duplicated() {
         let request_id = request_id(9);
         let event = DownloaderEvent::RequestFailed {
@@ -1341,7 +1341,7 @@ mod tests {
         assert!(matches!(FfiItemEvent::try_from(&event), Err(NotForwarded)));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn file_total_bytes_resolved_maps_to_item_event() {
         let event = FileEvent::TotalBytesResolved {
             total_bytes: 456,
@@ -1357,7 +1357,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn file_end_of_stream_is_not_duplicated() {
         assert!(matches!(
             FfiItemEvent::try_from(&FileEvent::EndOfStream),
@@ -1365,14 +1365,14 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn decoder_end_of_stream_is_not_duplicated() {
         let event = AudioEvent::EndOfStream { seek_epoch: 3 };
 
         assert!(matches!(FfiItemEvent::try_from(&event), Err(NotForwarded)));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn drm_key_acquired_maps_to_item_event() {
         let event = DrmEvent::KeyAcquired {
             key_host: Some("keys.example.com".into()),
@@ -1392,7 +1392,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn drm_key_fetch_failed_maps_to_item_event() {
         let event = DrmEvent::KeyFetchFailed {
             key_host: Some("keys.example.com".into()),
@@ -1410,7 +1410,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn drm_segment_decrypt_failed_maps_to_item_event() {
         let event = DrmEvent::SegmentDecryptFailed {
             variant: 3,
@@ -1428,7 +1428,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn route_change_reason_from_maps_known_value() {
         assert_eq!(
             FfiRouteChangeReason::from(RouteChangeReason::CategoryChange),
@@ -1436,7 +1436,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn engine_event_to_ffi_maps_master_volume_changed() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::MasterVolumeChanged { volume: 0.5 }),
@@ -1444,7 +1444,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn engine_event_to_ffi_skips_internal_and_duplicate_crossfade_events() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::CrossfadeStarted {
@@ -1462,7 +1462,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn session_event_to_ffi_maps_route_changed_reason() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&SessionEvent::RouteChanged {
@@ -1475,7 +1475,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn stretch_backend_kind_from_maps_bungee() {
         assert_eq!(
             FfiStretchBackendKind::from(StretchBackendKind::Bungee),
@@ -1483,7 +1483,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn dj_event_to_ffi_skips_beat_tick() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&DjEvent::BeatTick {
@@ -1495,7 +1495,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn dj_event_to_ffi_maps_bpm_detected_fields() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&DjEvent::BpmDetected {
@@ -1511,7 +1511,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn dj_event_to_ffi_maps_stretch_backend_changed() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&DjEvent::StretchBackendChanged {
@@ -1523,7 +1523,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn evict_reason_from_maps_quota_bytes() {
         assert_eq!(
             FfiEvictReason::from(EvictReason::QuotaBytes),
@@ -1531,7 +1531,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn asset_event_to_ffi_maps_evicted_reason() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&AssetEvent::Evicted {
@@ -1545,7 +1545,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn player_event_to_ffi_maps_item_did_fail_track_id() {
         let event = PlayerEvent::ItemDidFail {
             item: ItemRole::Leading(TrackRef::new(
@@ -1561,7 +1561,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn queue_event_to_ffi_maps_repeat_mode() {
         let event = QueueEvent::RepeatModeChanged {
             mode: QueueRepeatMode::All,
@@ -1575,7 +1575,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn event_to_ffi_error_maps_request_failed() {
         let event = ItemBusEvent::Downloader(DownloaderEvent::RequestFailed {
             request_id: request_id(13),

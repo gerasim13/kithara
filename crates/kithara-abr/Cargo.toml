@@ -48,6 +48,7 @@ unimock = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+kithara-abr = { path = ".", features = ["usdt"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 proptest = { workspace = true }
 serde_yaml_ng = { workspace = true }

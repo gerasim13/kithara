@@ -107,7 +107,12 @@ fn expected_total_decoded_frames() -> usize {
         .saturating_sub(native_encoder_delay)
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn single_track_silence_trim_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),
@@ -156,7 +161,7 @@ async fn single_track_silence_trim_strips_leading_priming(
     harness.close().await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -233,7 +238,12 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn two_tracks_gapless_stitch_continuity_metric(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
@@ -283,7 +293,12 @@ async fn two_tracks_gapless_stitch_continuity_metric(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
     fused_seam: Vec<f32>,
     fused_seam_stereo: Vec<f32>,
@@ -326,7 +341,12 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
     temp_dir: TestTempDir,
     #[future(awt)] apple_probe: (TestServerHelper, CreatedHls),
@@ -464,7 +484,12 @@ async fn render_apple_fused_deficit_seam(
     result
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn disabled_gapless_mode_keeps_full_decoded_length(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
@@ -506,7 +531,12 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_metadata(
     temp_dir: TestTempDir,
     #[future(awt)] untagged_primed: (TestServerHelper, CreatedHls),
@@ -537,7 +567,12 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     temp_dir: TestTempDir,
     #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
@@ -613,7 +648,12 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1)
+)]
 async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
     temp_dir: TestTempDir,
     #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
@@ -1344,7 +1384,7 @@ fn assert_close_to(
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn untagged_trimmed() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1355,7 +1395,7 @@ async fn untagged_trimmed() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn untagged_trimmed_next() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1370,7 +1410,7 @@ async fn untagged_trimmed_next() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn untagged_primed() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1381,7 +1421,7 @@ async fn untagged_primed() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn trimmed() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1392,7 +1432,7 @@ async fn trimmed() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn trimmed_stitch() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1404,7 +1444,7 @@ async fn trimmed_stitch() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn trimmed_next() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1419,7 +1459,7 @@ async fn trimmed_next() -> (TestServerHelper, CreatedHls) {
     .await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn primed() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -1470,7 +1510,7 @@ async fn apple_source(start_frame: u64) -> (TestServerHelper, CreatedHls) {
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn apple_probe() -> (TestServerHelper, CreatedHls) {
     apple_source(0).await
 }
@@ -1479,7 +1519,7 @@ async fn apple_probe() -> (TestServerHelper, CreatedHls) {
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn apple_first() -> (TestServerHelper, CreatedHls) {
     apple_source(0).await
 }
@@ -1488,7 +1528,7 @@ async fn apple_first() -> (TestServerHelper, CreatedHls) {
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn apple_next() -> (TestServerHelper, CreatedHls) {
     apple_source(APPLE_FUSED_DEFICIT_SOURCE_FRAMES).await
 }

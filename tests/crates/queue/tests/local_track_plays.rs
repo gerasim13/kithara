@@ -226,7 +226,7 @@ async fn build_queue_with_tick(
     (queue, downloader, store, tick_handle)
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None)))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -464,7 +464,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// collapses real time. `wait_for_loader_done` accepts `Loaded |
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -671,28 +671,28 @@ async fn local_queue_playlist_behavior(
     queue.close().await;
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_mp3() -> (LocalSource, TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_fixture_url(LocalSource::Mp3, &helper).await;
     (LocalSource::Mp3, helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_encrypted_hls() -> (LocalSource, TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_fixture_url(LocalSource::HlsAacAes128, &helper).await;
     (LocalSource::HlsAacAes128, helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_hls() -> (LocalSource, TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_fixture_url(LocalSource::HlsAac, &helper).await;
     (LocalSource::HlsAac, helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_playlist() -> (TestServerHelper, Vec<Url>) {
     let helper = TestServerHelper::new().await;
     let kinds = [

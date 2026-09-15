@@ -74,7 +74,7 @@ fn segment_first_frame(segment: usize) -> u64 {
     (segment * SEGMENT_SIZE / bytes_per_frame()) as u64
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn gated_audio(
     hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
@@ -101,7 +101,7 @@ async fn gated_audio(
     HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     timeout(Duration::from_secs(30)),

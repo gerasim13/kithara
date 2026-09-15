@@ -15,7 +15,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     timeout(Duration::from_secs(2)),
     hang_timeout_secs(1),
@@ -65,7 +65,7 @@ async fn prefetch_403_returns_err_quickly(
     Ok(())
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn denied_key() -> PackagedTestServer {
     PackagedTestServer::with_error_rules(vec![HttpErrorRule {
         kind: HlsRouteKind::Key,

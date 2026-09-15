@@ -106,7 +106,7 @@ fn l2_norm(samples: &[f32]) -> f64 {
         .sqrt()
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn spec_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
     let specs: Vec<_> = available_backends()
         .into_iter()
@@ -123,7 +123,7 @@ fn spec_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
     let durations: Vec<_> = available_backends()
         .into_iter()
@@ -157,7 +157,7 @@ fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) 
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn total_frames_are_consistent_across_backends(tone_mp3: &'static [u8]) {
     let frame_counts: Vec<_> = available_backends()
         .into_iter()
@@ -187,7 +187,7 @@ fn total_frames_are_consistent_across_backends(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn seek_then_first_chunk_timestamp_is_after_target(tone_mp3: &'static [u8]) {
     const TARGET: Duration = Duration::from_millis(500);
     let tol = Duration::from_millis(200);
@@ -210,7 +210,7 @@ fn seek_then_first_chunk_timestamp_is_after_target(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn end_of_stream_returns_none_repeatedly(tone_mp3: &'static [u8]) {
     for backend in available_backends() {
         let mut dec = backend.make_mp3(tone_mp3);
@@ -230,7 +230,7 @@ fn end_of_stream_returns_none_repeatedly(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn wav_pcm_round_trip_matches_signal_across_backends(protocol_wav: &'static [u8]) {
     for backend in available_backends() {
         let mut dec = backend.make_wav(protocol_wav);
@@ -305,7 +305,7 @@ impl StandaloneCase {
 /// bitstreams that the device must decode through the Apple backend (the
 /// only decoder shipped in the iOS build — no Symphonia fallback).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::alac(StandaloneCase::AlacM4a)]
 #[case::native_flac(StandaloneCase::NativeFlac)]
 fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'static [u8]; 2]) {
@@ -338,7 +338,7 @@ fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'s
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     const TOL_REL: f64 = 0.02;
 
@@ -365,13 +365,13 @@ fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn protocol_wav() -> &'static [u8] {
     sine_wav_a440_full_scale_2s().bytes()
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn standalone_audio() -> [&'static [u8]; 2] {
     let flac = flac_unknown_length_saw_1s().bytes();
     assert_eq!(&flac[..4], b"fLaC", "fixture must be native FLAC");

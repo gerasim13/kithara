@@ -85,7 +85,7 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
 }
 
 /// (ok mp3 url with a `.mp3` extension, unavailable 503 url) on the shared server.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3_endpoints(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url, url::Url) {
     let helper = TestServerHelper::new().await;
     let ok = helper.register_behavior(FixtureBehavior {
@@ -155,7 +155,7 @@ async fn open_resource(
 // Keep this warmup nonblocking: under full-suite load a blocking underrun arms
 // the consumer hang watchdog before the HLS producer necessarily gets scheduled.
 // The loop already drives preload and handles Pending explicitly.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn warm_hls_worker(
     url: &url::Url,
     store: AssetStore<TestPools>,
@@ -240,7 +240,7 @@ async fn read_hls_stream_some(
 }
 
 /// `no_block`: the synchronous HLS stream read crosses the platform gate that this regression exercises.
-#[kithara::allow_block]
+#[kithara_test_utils::kithara::allow_block]
 fn read_hls_stream_bytes(
     stream: &mut Stream<Hls<TestPools>>,
     buf: &mut [u8],
@@ -251,7 +251,7 @@ fn read_hls_stream_bytes(
         .unwrap_or_else(|err| panic!("HLS stream should read for {}: {err}", url))
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn open_audio_hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
     let segment_duration =
         Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
@@ -369,7 +369,12 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
     Resource::position(resource).as_secs_f64()
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(5)
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -425,7 +430,12 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     );
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(5)
+)]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
@@ -485,7 +495,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     browser,
     flash(false),
@@ -587,7 +597,12 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(5)
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -679,7 +694,12 @@ enum WarmupTeardown {
 
 /// Sequential HLS warmups from two isolated sessions must not poison each
 /// other. Covers three teardown modes for the first session.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(5)
+)]
 #[cfg_attr(
     not(target_os = "android"),
     case::shutdown_symphonia(WarmupTeardown::Shutdown, DecoderBackend::Symphonia)
@@ -791,7 +811,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     drop(worker_b);
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     browser,
@@ -818,7 +838,12 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(25)),
+    hang_timeout_secs(3)
+)]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -954,7 +979,12 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     player.close().await;
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(5)
+)]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
@@ -1061,7 +1091,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 /// must keep carrying audio across a transition that swaps the source under it.
 /// Repeating one kind until a rare gap surfaces belongs to
 /// `crossfade_hls_to_mp3_repeats`, not here.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(10),
@@ -1195,7 +1225,7 @@ async fn stress_offline_crossfade_no_gaps(
 
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::with_extension_symphonia(mp3_extension().await, DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -1295,7 +1325,7 @@ enum LocalKind {
     HlsAac,
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -1379,17 +1409,17 @@ async fn local_resource_decodes_with_duration(
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn audio_hls_pair() -> (HlsTestServer, HlsTestServer) {
     (open_audio_hls_server().await, open_audio_hls_server().await)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn aac_source() -> (TestServerHelper, url::Url) {
     create_packaged_single_variant_fixture(AudioCodec::AacLc).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn flac_source() -> (TestServerHelper, url::Url) {
     create_packaged_single_variant_fixture(AudioCodec::Flac).await
 }
@@ -1413,12 +1443,12 @@ async fn registered_mp3(
     (helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3_extension(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url) {
     registered_mp3(tone_mp3, Some("track.mp3")).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3_no_extension(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url) {
     registered_mp3(tone_mp3, None).await
 }
@@ -1443,12 +1473,12 @@ async fn local_source(kind: LocalKind) -> (TestServerHelper, url::Url) {
     (helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_mp3() -> (TestServerHelper, url::Url) {
     local_source(LocalKind::Mp3).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_hls() -> (TestServerHelper, url::Url) {
     local_source(LocalKind::HlsAac).await
 }

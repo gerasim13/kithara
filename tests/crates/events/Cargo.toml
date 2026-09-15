@@ -20,7 +20,7 @@ flash = ["kithara/flash"]
 no-block = ["kithara/no-block"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["test-utils", "events", "platform"] }
+kithara = { workspace = true, default-features = false, features = ["events", "platform"] }
 kithara-events = { workspace = true }
 kithara-test-dylib = { workspace = true }
 

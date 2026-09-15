@@ -80,19 +80,19 @@ async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn delayed_thirty(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     delayed_server(hls_saw_30).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     delayed_server(hls_saw_20).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn stalled_boundary(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, SegmentGateHandle) {
     let mut config = wav_config(hls_saw_30, vec![1_000_000, 5_000_000]);
     config.codecs = Some("wav".to_string());
@@ -100,7 +100,7 @@ async fn stalled_boundary(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, Seg
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, HlsTestServer) {
     let (init, pcm) = hls_saw_15;
     let segments = pcm.len() / D.segment_size;
@@ -122,7 +122,7 @@ async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, HlsTes
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     HlsTestServer::new(wav_config(
         hls_saw_30,
@@ -132,19 +132,19 @@ async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn manual_six(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     HlsTestServer::new(wav_config(hls_saw_6, vec![5_000_000, 1_000_000])).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn manual_eight(hls_saw_8: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     HlsTestServer::new(wav_config(hls_saw_8, vec![5_000_000, 1_000_000])).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn first_boundary(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
     // This case needs six-second playlist durations to cross the default ABR buffer gate.
     let mut config = wav_config(hls_saw_6, vec![256_000, 512_000, 1_024_000]);
@@ -441,7 +441,7 @@ fn read_phase_until_samples<S: StreamType>(
 /// was asking for something the transition cannot do at any landing. Pacing the
 /// wait gives the switch the same opportunity it has in production; the
 /// assertion itself is unchanged.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 fn read_phase_until<S: StreamType>(
     audio: &mut RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
@@ -622,7 +622,7 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
 /// - V0 delay triggers ABR downswitch → `VariantApplied` to V1
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -755,7 +755,7 @@ async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty
 /// must publish an `EscapeStalled` switch to V1. V0 is the only variant that
 /// fits the initial throughput estimate; V1 is the sole escape candidate once
 /// V0 is excluded, so no pre-stall down-switch can satisfy the test.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -916,7 +916,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
 /// — historically the test used `[3 Mbps, 1 Mbps]` and relied on the
 /// pre-seed cold-start behaviour where `Auto(Some(0))` stayed on V0
 /// only because `decide` returned `NoEstimate` until samples arrived.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1079,7 +1079,7 @@ async fn multi_track_shared_abr_with_cache(
 /// Current behavior: downloader resets cursor to segment 0 on variant
 /// switch, downloading the entire new variant from the start. With ABR
 /// oscillation this produces 2× bandwidth usage.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1165,7 +1165,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
 /// playback (not via `with_initial_abr_mode`) lands at the next segment
 /// boundary, fires `VariantApplied`, and subsequent reader segments come
 /// from the chosen variant.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1304,7 +1304,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
 /// `AbrHandle::set_mode`. This is the exact reproducer of the production
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
 /// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1423,7 +1423,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(
 /// `set_mode`. As a result `apply_boundary_crossing` never runs after a
 /// Manual click, `peek_pending_decision` is never observed, and the
 /// switch stays pending forever.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1557,7 +1557,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
 /// that the outgoing is parked for the pending switch. Today that event
 /// never fires: the drain reaches EOF, the intent is aborted, the release
 /// never happens, and the `VariantApplied` below never arrives.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1687,7 +1687,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
 /// re-runs the peer's `apply_seek_change` path which mutates state
 /// without going through the ABR controller, masking the wake hook from
 /// `on_mode_changed → tick`.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1857,7 +1857,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
 /// no delay rules → fastest possible fetch path. Without the buffer
 /// gate an aggressive up-switch would land at segment 1; with it the
 /// first boundary stays neutral.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -1965,7 +1965,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
 /// boundary mismatch is addressed independently or the test is
 /// rewritten to deterministically force the rapid-recreate race
 /// (likely needs `DelayRule` on segment fetches).
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -2096,7 +2096,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
 /// Uses a packaged AAC fmp4 fixture with `DelayRule` on the high
 /// variant to imitate the real-world CDN latency that lets the reader
 /// land mid-segment when the user clicks lq.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,
@@ -2324,7 +2324,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 /// - `sw_cross_codec_aac_to_flac`: V0 (slq AAC) → V3 (slossless
 ///   FLAC), cross-codec recreate.
 /// - `hw_*` mirror the above on the Apple backend.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,

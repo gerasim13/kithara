@@ -577,7 +577,7 @@ mod tests {
             .ok_or_else(|| HlsSpecError::MissingBlob(key.to_owned()))
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn parses_blob_backed_spec() {
         let media = blob_key(b"abcdef");
         let init = blob_key(b"init");
@@ -604,7 +604,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn rejects_invalid_variant_count() {
         let spec = HlsSpec {
             variant_count: 0,
@@ -633,14 +633,14 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn rejects_packaged_sine_freq_above_nyquist() {
         let spec = packaged_signal_spec(PackagedSignal::Sine { freq_hz: 50_000.0 });
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn resolves_packaged_sweep() {
         let spec = packaged_signal_spec(PackagedSignal::Sweep {
             start_hz: 220.0,
@@ -657,7 +657,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn rejects_packaged_sweep_endpoint_above_nyquist() {
         let spec = packaged_signal_spec(PackagedSignal::Sweep {
             start_hz: 220.0,
@@ -668,7 +668,7 @@ mod tests {
         assert!(error.to_string().contains("Nyquist"));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn resolves_packaged_audio_start_frame_on_sine() {
         let spec = HlsSpec {
             packaged_audio: Some(PackagedAudioRequest {

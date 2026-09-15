@@ -53,7 +53,7 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
 /// invisible at the `Audio` surface — so we catch it via a global
 /// panic hook that flips a flag when the watchdog's panic message
 /// lands on any thread.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -148,7 +148,7 @@ fn count_files_recursive(root: &Path) -> usize {
 /// behavior, free of ABR-switch noise. The assertion's upper bound is
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
+#[kithara_test_utils::kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
 async fn idle_prefetch_is_capped(
     temp_dir: TestTempDir,
     #[future(awt)] capped_hls: (TestServerHelper, url::Url),
@@ -232,7 +232,7 @@ async fn idle_prefetch_is_capped(
 
 const SEGMENTS: usize = 24;
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn capped_hls() -> (TestServerHelper, url::Url) {
     let server = TestServerHelper::new().await;
     // A variant long enough that "stopped at the cap" and "drained the

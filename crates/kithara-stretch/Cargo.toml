@@ -55,7 +55,7 @@ hotpath = { workspace = true, optional = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "tls-rustls"] }
 

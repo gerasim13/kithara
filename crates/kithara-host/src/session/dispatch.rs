@@ -479,7 +479,6 @@ mod tests {
     };
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::sync::{
@@ -487,7 +486,10 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
 

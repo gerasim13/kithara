@@ -41,7 +41,7 @@ impl Consts {
     const SEEK_TARGETS: [f64; 5] = [9.0, 5.0, 7.5, 11.0, 8.1];
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(
     not(target_os = "android"),
     case::quick_symphonia(1, DecoderBackend::Symphonia)

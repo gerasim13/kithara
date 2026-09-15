@@ -130,10 +130,12 @@ impl Segmenter {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_encode::EncodedAccessUnit;
     use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};

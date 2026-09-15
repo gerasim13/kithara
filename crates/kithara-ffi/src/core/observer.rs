@@ -1,14 +1,5 @@
 use crate::types::{FfiItemEvent, FfiPlayerEvent};
 
-/// Local shim so `#[kithara::mock]` resolves on wasm, which does not
-/// depend on the `kithara` facade crate (only on `kithara-test-macros`).
-/// On native the real `kithara` crate is in scope and provides the macro,
-/// so the shim is wasm-only to avoid an ambiguous-name conflict.
-#[cfg(target_arch = "wasm32")]
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
-
 /// Receives player-level state changes from Rust.
 ///
 /// All calls happen on an arbitrary background thread.
@@ -43,7 +34,7 @@ pub trait ItemLoadCallback: Send + Sync {
 /// [`SALT_HEADER`] — implementations that derive a per-session cipher
 /// from the salt should re-build it on every call. Implementations that
 /// hold a pre-built cipher (legacy behaviour) can ignore the argument.
-#[kithara::mock(api = FfiKeyProcessorMock)]
+#[kithara_test_macros::mock(api = FfiKeyProcessorMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiKeyProcessor: Send + Sync {
     fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
@@ -64,7 +55,7 @@ mod tests {
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn observer_traits_are_send_sync() {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();

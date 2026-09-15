@@ -73,7 +73,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn initial_samples_are_ready_on_another_thread() {
         let pools = build().unwrap_or_else(|error| panic!("FFI pool region: {error}"));
         let initial_peak = pools.stats().peak_allocated_bytes;
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(peak, initial_peak);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn returned_capacity_is_bounded() {
         const BYTE_GUARDS: usize = 33;
         const BYTE_COUNT_CAPACITY: usize = 1;

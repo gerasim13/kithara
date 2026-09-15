@@ -268,10 +268,12 @@ impl<S> BroadcastConfig<S> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_platform::time::Duration;
     use kithara_stream::{AudioCodec, ContainerFormat};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::{BroadcastConfig, BroadcastConfigPatch, BroadcastError};

@@ -254,7 +254,7 @@ async fn run_case(
 /// `DelayRule` that drains the buffer at a known point) rather than an
 /// ambient-load race. Unignore once the underrun is forced deterministically.
 /// Run with `--run-ignored`.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[ignore = "load-dependent flake, not yet deterministic — paced offline render starves decode under host load and trips the player underrun path; needs a forced-underrun trigger to become a reliable RED for the production forward-skip"]
 #[cfg_attr(not(target_os = "android"), case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, flac_source().await, 44_100))]
 #[cfg_attr(target_os = "android", case::sustained_flac_android(Scenario::SustainedFlac, DecoderBackend::default(), flac_source().await, 44_100))]
@@ -323,12 +323,12 @@ async fn prepare_flac_source(delay_ms: Option<u64>) -> (TestServerHelper, Url, O
     (helper, master, delay_ms)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn flac_source() -> (TestServerHelper, Url, Option<u64>) {
     prepare_flac_source(None).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn delayed_flac_source() -> (TestServerHelper, Url, Option<u64>) {
     prepare_flac_source(Some(150)).await
 }

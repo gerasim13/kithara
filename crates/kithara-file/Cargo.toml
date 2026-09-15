@@ -77,7 +77,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
+kithara-file = { path = ".", features = ["usdt"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

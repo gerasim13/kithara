@@ -4,12 +4,12 @@ include!(concat!(env!("OUT_DIR"), "/app_config_baked.rs"));
 mod tests {
     use super::baked_env;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_name_the_document_never_references_is_absent() {
         assert_eq!(baked_env("KITHARA_NOT_REFERENCED_BY_APP_YAML"), None);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_document_text_survives_the_build_verbatim() {
         assert_eq!(
             super::BAKED_DOCUMENT,

@@ -13,7 +13,7 @@ type Census = (
     Vec<(Provider, Result<Vec<String>, String>)>,
 );
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn provider_sources() -> Census {
     let server = TestServerHelper::new().await;
     let mut entries = Vec::new();
@@ -32,7 +32,7 @@ async fn provider_sources() -> Census {
     (server, entries)
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources: Census) {
     let (_server, entries) = provider_sources;
     let mut blocked = Vec::new();

@@ -105,7 +105,7 @@ fn read_to_end(mut stream: Stream<File<TestPools>>) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     flash(false),
@@ -179,7 +179,7 @@ async fn follower_joins_active_download_without_second_get() {
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     flash(false),

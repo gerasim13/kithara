@@ -41,10 +41,6 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_with_flash_path(attr, item, &quote!(::kithara_platform::flash))
 }
 
-pub(crate) fn expand_facade(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_with_flash_path(attr, item, &quote!(::kithara::platform::flash))
-}
-
 fn expand_with_flash_path(
     attr: TokenStream,
     item: TokenStream,

@@ -10,7 +10,6 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_events::EventBus;
 #[cfg(feature = "no-block")]
 use kithara_platform::no_block::force_panic_mode;
@@ -19,7 +18,10 @@ use kithara_play::{
     Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionBinding,
     SessionDispatcher,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use kithara_warp::BeatGridId;
 
 use super::ring::{

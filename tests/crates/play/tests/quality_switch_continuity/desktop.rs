@@ -172,7 +172,7 @@ fn host_frame(position: f64, label: &str) -> i64 {
 /// Desktop-graph twin of the module's `render_paced`; the guard keeps the
 /// modelled playback clock on the same virtual clock as the fixture delays and
 /// the decode worker.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_paced(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f32> {
     let block = harness.render(frames).await;
     let _ = harness.tick_and_drain().await;
@@ -452,7 +452,7 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     native,
@@ -487,7 +487,7 @@ async fn kithara_app_manual_aac_to_flac_switch_is_gapless(
     assert_no_desktop_click(&switched.samples, &control.samples);
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn desktop_source() -> (TestServerHelper, CreatedHls) {
     let server = TestServerHelper::new().await;
     let created = server

@@ -90,7 +90,7 @@ fn run_rapid_random_seeks(
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -191,7 +191,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,

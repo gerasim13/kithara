@@ -63,7 +63,6 @@ audio = [
     "kithara/storage",
     "kithara/stream",
     "kithara/stretch-signalsmith",
-    "kithara/test-utils",
     "kithara/tokio-net",
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
@@ -76,7 +75,6 @@ wasm = [
     "kithara/download",
     "kithara/queue",
     "kithara/mock",
-    "kithara/test-utils",
     "kithara/symphonia",
     "kithara/resample-rubato",
     "kithara/analysis-beat",
@@ -114,6 +112,7 @@ usdt = ["dep:kithara", "kithara/usdt"]
 [dependencies]
 kithara-encode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)

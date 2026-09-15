@@ -41,7 +41,7 @@ pub mod audio_artifact;
 #[cfg(feature = "all")]
 pub mod audio_mock;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub use kithara::bufpool::testing as bufpool_ext;
+pub use kithara_test_utils::bufpool as bufpool_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod cochlea;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]

@@ -245,10 +245,12 @@ struct TimelineOverflow;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_output::{OfflineRenderRequest, OfflineRenderer, RenderSinkError};
     use kithara_platform::CancelScope;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
 
     use super::*;
     use crate::HostConfig;

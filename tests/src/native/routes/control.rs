@@ -189,13 +189,13 @@ mod tests {
     use super::*;
     use crate::{kithara, test_server_state::TestServerState};
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn network_starts_online() {
         let state = TestServerState::new();
         assert!(state.network_online(), "server must start reachable");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn network_switch_flips_both_ways() {
         let state = TestServerState::new();
         state.set_network_online(false);
@@ -207,7 +207,7 @@ mod tests {
         assert!(state.network_online(), "switch must bring the server back");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn signal_spec_serves_a_generated_body() {
         let content = content_from_spec(ContentSpec::Signal {
             name: "signal_mp3_track_sine440_187s.mp3".to_owned(),
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(content_type, Some("audio/mpeg"));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn signal_spec_rejects_an_unregistered_name() {
         let Err(error) = content_from_spec(ContentSpec::Signal {
             name: "signal_mp3_not_a_generator.mp3".to_owned(),
@@ -240,7 +240,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn asset_spec_serves_a_file_of_the_generated_hls_bundle() {
         let content = content_from_spec(ContentSpec::Asset {
             name: "hls/index-slq-a1.m3u8".to_owned(),
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(content_type, Some("application/vnd.apple.mpegurl"));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn asset_spec_rejects_a_route_the_bundle_does_not_serve() {
         let Err(error) = content_from_spec(ContentSpec::Asset {
             name: "hls/index-not-a-variant.m3u8".to_owned(),
@@ -273,7 +273,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn behavior_registration_yields_a_token() {
         let state = TestServerState::new();
         let token = register_behavior_spec(

@@ -79,7 +79,7 @@ impl Default for TestTempDir {
 ///
 /// Panics when the native temporary directory cannot be created.
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn temp_dir() -> TestTempDir {
     TestTempDir::new()
 }
@@ -90,7 +90,7 @@ pub fn temp_dir() -> TestTempDir {
 ///
 /// Panics when the native temporary directory cannot be created.
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn temp_path() -> (TestTempDir, PathBuf) {
     let dir = TestTempDir::new();
     let path = dir.path().to_path_buf();
@@ -98,61 +98,61 @@ pub fn temp_path() -> (TestTempDir, PathBuf) {
 }
 
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn cancel_token() -> CancelToken {
     CancelToken::never()
 }
 
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn rt_cancel() -> CancelToken {
     CancelToken::never()
 }
 
 #[must_use]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub fn cancel_token_cancelled() -> CancelToken {
     let token = CancelToken::never();
     token.cancel();
     token
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn served_mp3() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
     (server, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn served_short_mp3() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE880_30S);
     (server, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn served_silence() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SILENCE_1S);
     (server, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn served_aac() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::AAC_SINE440_60S_320K);
     (server, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn mixed_plain() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, false).await;
     (server, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn mixed_encrypted() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, true).await;

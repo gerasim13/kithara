@@ -131,7 +131,7 @@ fn non_finite_report(label: &str, samples: &[f32]) -> Vec<String> {
         .collect()
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::flat(GainDb::DEFAULT)]
 #[case::boosted(GainDb::MAX)]
 #[case::killed(GainDb::MIN)]
@@ -152,7 +152,7 @@ fn eq_maps_silence_to_exact_silence(dsp_silence: Vec<f32>, #[case] gain_db: Gain
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn limiter_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
@@ -163,7 +163,7 @@ fn limiter_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let pools = test_pools();
     let mut eq = eq_with_gain(&pools, GainDb::MAX, 5, 2);
@@ -176,7 +176,7 @@ fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::mono_three_band(1, 3)]
 #[case::stereo_five_band(2, 5)]
 #[case::stereo_ten_band(2, 10)]
@@ -198,7 +198,7 @@ fn eq_at_zero_db_is_bit_exact_identity(
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip(
     dsp_tone_a440: Vec<f32>,
     dsp_silence: Vec<f32>,
@@ -222,7 +222,7 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip(
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::default_ceiling(LIMITER_CEILING, dsp_tone_ceiling())]
 #[case::unity_ceiling(1.0, dsp_tone_ceiling_unity())]
 #[case::low_ceiling(0.5, dsp_tone_ceiling_low())]
@@ -240,7 +240,7 @@ fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32, #[case] inp
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn master_chain_at_unity_is_bit_exact_identity(dsp_tone_unity: Vec<f32>) {
     let pools = test_pools();
     let mut eq = eq_with_gain(&pools, GainDb::default(), 5, 2);
@@ -256,7 +256,7 @@ fn master_chain_at_unity_is_bit_exact_identity(dsp_tone_unity: Vec<f32>) {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::tiny(1e-30)]
 #[case::subnormal(f32::MIN_POSITIVE / 2.0)]
 #[case::huge(1e30)]
@@ -292,7 +292,7 @@ fn eq_output_stays_finite_on_pathological_input(
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::tiny(1e-30)]
 #[case::huge(1e30)]
 #[case::nan(f32::NAN)]
@@ -397,7 +397,7 @@ fn shape_tolerance(freq_hz: f32) -> f32 {
     core::f32::consts::PI * freq_hz / f32::from(HOST_RATE) + 0.005
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::low(200.0, dsp_tone_round_low())]
 #[case::mid(1_000.0, dsp_tone_round_mid())]
 fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32, #[case] input: Vec<f32>) {
@@ -432,7 +432,7 @@ fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32, #[case] input:
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn resample_round_trip_keeps_sweep_band_energy(dsp_sweep: Vec<f32>) {
     const TOLERANCE: f32 = 0.03;
 
@@ -461,7 +461,7 @@ fn resample_round_trip_keeps_sweep_band_energy(dsp_sweep: Vec<f32>) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::tiny(1e-30)]
 #[case::huge(1e30)]
 fn resample_round_trip_stays_finite_on_pathological_input(

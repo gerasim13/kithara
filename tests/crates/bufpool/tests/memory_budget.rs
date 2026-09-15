@@ -1,9 +1,7 @@
-use kithara::{
-    self,
-    bufpool::{PoolConfig, PoolError, testing::pools_with},
-};
+use kithara::bufpool::{PoolConfig, PoolError};
+use kithara_test_utils::bufpool::pools_with;
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn byte_growth_never_crosses_overall_budget() {
     let budget = 64 * 1024;
     let pools = pools_with(
@@ -27,7 +25,7 @@ fn byte_growth_never_crosses_overall_budget() {
     assert!(pools.stats().allocated_bytes <= budget);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn byte_and_sample_pools_compete_for_one_budget() {
     let budget = 64 * 1024;
     let pools = pools_with(
@@ -51,7 +49,7 @@ fn byte_and_sample_pools_compete_for_one_budget() {
     drop((bytes, samples));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn retained_bytes_stabilize_across_cycles() {
     let pools = pools_with(
         1024 * 1024,

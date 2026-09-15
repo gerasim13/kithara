@@ -11,7 +11,7 @@ use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
 use kithara_test_fixtures::fixtures::tone_wav;
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_progressive_file_timeline_monotonic(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 
@@ -58,7 +58,7 @@ fn test_progressive_file_timeline_monotonic(tone_wav: &'static [u8]) {
     assert!(chunk_count > 0, "should have decoded some chunks");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_progressive_file_seek_resets_frame_offset(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 
@@ -106,7 +106,7 @@ mod hls_timeline {
 
     use crate::common::test_defaults::SawWav;
 
-    #[kithara::fixture]
+    #[kithara_test_utils::kithara::fixture]
     async fn timeline_server() -> HlsTestServer {
         const SEGMENT_COUNT: usize = 10;
         let segment_duration = SawWav::DEFAULT.segment_size as f64
@@ -125,7 +125,7 @@ mod hls_timeline {
         .await
     }
 
-    #[kithara::test(
+    #[kithara_test_utils::kithara::test(
         tokio,
         timeout(Duration::from_secs(10)),
         hang_timeout_secs(1),

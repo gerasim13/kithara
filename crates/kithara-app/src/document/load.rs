@@ -435,7 +435,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn no_file_leaves_the_baked_document_in_force() {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
@@ -456,7 +456,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_file_overrides_only_what_it_names() {
         let dir = tempdir();
         let path = write(
@@ -480,7 +480,7 @@ mod tests {
     /// is a value that default cannot produce, so a regression that silently
     /// falls back to the crate default is caught rather than matched by
     /// coincidence.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_net_section_compression_reaches_the_options_the_app_builds() {
         let dir = tempdir();
         let path = write(
@@ -508,7 +508,7 @@ mod tests {
     /// ceiling and converts the pool is pinned inside `kithara-worker` by
     /// `a_patch_writes_only_the_field_it_names` and
     /// `a_pool_section_carries_the_documents_thread_count_and_name`.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_worker_keys_survive_the_load_pipeline() {
         let dir = tempdir();
         let path = write(
@@ -530,7 +530,7 @@ mod tests {
     /// A document's `queue` key reaches the accessor unchanged, and a knob it
     /// never names stays absent so the crate default that built `QueueConfig`
     /// stands.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_queue_section_survives_the_load_pipeline() {
         let dir = tempdir();
         let path = write(&dir, "queue", "queue:\n  max_concurrent_loads: 5\n");
@@ -553,7 +553,7 @@ mod tests {
     /// then writes through, nested settings included, is pinned inside
     /// `kithara-stream` by `a_patch_writes_only_the_concurrency_it_names` and
     /// `a_nested_abr_patch_reaches_the_downloader`.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_downloader_section_carries_its_nested_abr_settings() {
         let dir = tempdir();
         let path = write(
@@ -579,7 +579,7 @@ mod tests {
 
     /// A document's `flush` key reaches the policy the asset store's hub is
     /// built with, and a knob it never names keeps the crate default.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_flush_section_reaches_the_policy_the_app_builds() {
         let dir = tempdir();
         let path = write(&dir, "flush", "flush:\n  debounce: 250ms\n");
@@ -600,7 +600,7 @@ mod tests {
     /// The three sections a track is opened with each carry their own patch,
     /// and the baked `hls.size_probe_method` an overlay never names survives
     /// alongside them.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_audio_hls_and_file_sections_each_reach_their_own_patch() {
         let dir = tempdir();
         let path = write(
@@ -636,7 +636,7 @@ mod tests {
     /// `kithara-ui`'s `source::config` module, which apply a patch onto a
     /// value they seeded themselves.
     #[cfg(feature = "gui")]
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_ui_and_draw_pool_sections_compose_one_ui_config() {
         let dir = tempdir();
         let path = write(
@@ -665,7 +665,7 @@ mod tests {
     /// The document's `beat:` section reaches the analyzer configuration the
     /// application hands the analysis service. `22_050` is the crate's own
     /// detector rate, so the overlay names one it cannot produce by accident.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_beat_section_reaches_the_analyzer_configuration() {
         let dir = tempdir();
         let path = write(&dir, "beat-target-rate", "beat:\n  target_rate: 32000\n");
@@ -686,7 +686,7 @@ mod tests {
     /// the key that carried it rather than being clamped into something the
     /// detector can search.
     #[cfg(feature = "beat-dsp")]
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_beat_section_the_detector_refuses_names_the_key_that_carried_it() {
         let dir = tempdir();
         let path = write(
@@ -707,7 +707,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_pools_section_survives_the_load_pipeline() {
         let dir = tempdir();
         let path = write(
@@ -727,7 +727,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_assets_store_section_survives_the_load_pipeline() {
         let dir = tempdir();
         let path = write(
@@ -746,7 +746,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_silent_document_leaves_the_store_on_the_stable_default_root() {
         let dir = tempdir();
         let path = write(&dir, "silent-store", "assets_store:\n  max_assets: 8\n");
@@ -762,7 +762,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_document_that_names_a_backend_gets_that_one() {
         let dir = tempdir();
         let path = write(
@@ -784,7 +784,7 @@ mod tests {
     /// patch of its own, so `main` reads the key off the built `AppConfig` and
     /// hands it to the Host builder. Seeded off the Host's own default (44100)
     /// so the assertion cannot pass on a key that never arrived.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_document_names_the_output_rate_on_the_app_section() {
         let dir = tempdir();
         let path = write(&dir, "output-rate", "app:\n  sample_rate: 48000\n");
@@ -803,7 +803,7 @@ mod tests {
     /// level is refused by `deny_unknown_fields` through the whole
     /// merge-expand-type pipeline instead of silently parsing and being
     /// ignored.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_network_section_is_rejected() {
         let dir = tempdir();
         let path = write(
@@ -820,7 +820,7 @@ mod tests {
         assert!(report.contains("network"), "{report}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_empty_overlay_leaves_the_baked_document_in_force() {
         let dir = tempdir();
         let path = write(&dir, "empty", "");
@@ -837,7 +837,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_overlay_of_comments_alone_leaves_the_baked_document_in_force() {
         let dir = tempdir();
         let path = write(&dir, "comments", "# fill this in later\n");
@@ -847,7 +847,7 @@ mod tests {
         assert!(!config.tracks().is_empty());
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_overlay_whose_root_is_a_sequence_names_that_file() {
         let dir = tempdir();
         let path = write(&dir, "sequence-root", "- a\n- b\n");
@@ -864,7 +864,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_path_named_explicitly_must_exist() {
         let dir = tempdir();
         let missing = dir.path().join("absent.yaml");
@@ -874,7 +874,7 @@ mod tests {
         assert!(matches!(error, LoadError::Missing(_)));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_file_beside_the_binary_may_be_absent() {
         let dir = tempdir();
         let absent = dir.path().join("not-there.yaml");
@@ -882,7 +882,7 @@ mod tests {
         Config::load_with(None, Some(&absent), &env).expect("an unnamed file is optional");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_unresolved_reference_refuses_to_start() {
         let dir = tempdir();
         let path = write(
@@ -904,7 +904,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_malformed_file_names_its_path() {
         let dir = tempdir();
         let path = write(&dir, "malformed", "hls: [not, a, mapping]\n");
@@ -916,7 +916,7 @@ mod tests {
         assert!(report.contains("<baked app.yaml>"), "{report}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_reference_in_a_typed_field_reports_the_reference_not_its_value() {
         let dir = tempdir();
         let path = write(
@@ -933,7 +933,7 @@ mod tests {
         assert!(!report.contains("test-value"), "{report}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_dump_carries_references_not_secrets() {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
@@ -945,7 +945,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_debug_render_carries_references_not_secrets() {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 

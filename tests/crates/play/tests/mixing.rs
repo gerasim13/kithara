@@ -148,7 +148,7 @@ fn assert_near(actual: f32, expected: f32, what: &str) {
     );
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 #[case::two(vec![constant_four(), constant_two()], &[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
 #[case::four(
     vec![constant_four(), constant_three(), constant_two(), constant_quiet()],
@@ -171,7 +171,7 @@ async fn players_render_exact_weighted_sum(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn zeroed_players_are_silent_and_gains_are_independent(
     constant_four: &'static [u8],
     constant_three: &'static [u8],
@@ -189,7 +189,7 @@ async fn zeroed_players_are_silent_and_gains_are_independent(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity: &'static [u8]) {
     let values = [constant_unity; 4];
     let levels = [1.0_f32; 4];
@@ -215,7 +215,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity:
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn sub_threshold_mix_passes_through_untouched(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
     harness.apply(&[1.0]).await.expect("apply mix");
@@ -236,7 +236,7 @@ async fn sub_threshold_mix_passes_through_untouched(constant_four: &'static [u8]
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn single_player_without_a_mix_is_unchanged(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -248,7 +248,7 @@ async fn single_player_without_a_mix_is_unchanged(constant_four: &'static [u8]) 
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn rejected_mix_changes_no_rendered_gain(
     constant_four: &'static [u8],
     constant_two: &'static [u8],
@@ -274,7 +274,7 @@ async fn rejected_mix_changes_no_rendered_gain(
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;

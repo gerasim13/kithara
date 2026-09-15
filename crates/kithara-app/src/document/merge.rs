@@ -29,7 +29,7 @@ mod tests {
         serde_yaml_ng::from_str(source).expect("valid yaml")
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_named_field_wins_and_its_siblings_survive() {
         let mut base = yaml("net:\n  compression: [gzip]\n  is_insecure: false\n");
 
@@ -39,7 +39,7 @@ mod tests {
         assert_eq!(base["net"]["compression"][0], Value::from("gzip"));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_sequence_is_replaced_whole_not_appended() {
         let mut base = yaml("playlist:\n  tracks: [a, b, c]\n");
 
@@ -48,7 +48,7 @@ mod tests {
         assert_eq!(base["playlist"]["tracks"], yaml("[d]"));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_section_the_overlay_never_names_is_untouched() {
         let mut base = yaml("player:\n  crossfade_duration: 5.0\nplaylist:\n  tracks: [a]\n");
 
@@ -57,7 +57,7 @@ mod tests {
         assert_eq!(base["player"]["crossfade_duration"], Value::from(5.0));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn merging_reaches_nested_mappings() {
         let mut base = yaml("a:\n  b:\n    c: 1\n    d: 2\n");
 
@@ -67,7 +67,7 @@ mod tests {
         assert_eq!(base["a"]["b"]["d"], Value::from(2));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_key_only_the_overlay_has_is_added() {
         let mut base = yaml("a:\n  b: 1\n");
 
@@ -77,7 +77,7 @@ mod tests {
         assert_eq!(base["a"]["c"], Value::from(2));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_overlay_null_blanks_the_value_and_keeps_the_key() {
         let mut base = yaml("a: 1\nb: 2\n");
 

@@ -25,7 +25,7 @@ use url::Url;
 use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -151,7 +151,7 @@ async fn cold_seek_far_segment_hls_offline(
     drop(temp);
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn cold_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()

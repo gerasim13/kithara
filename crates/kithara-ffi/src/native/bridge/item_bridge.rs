@@ -307,7 +307,7 @@ mod tests {
         ItemEventBridge::dispatch_variant_events(observer, &ItemBusEvent::Abr(event), variants);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn file_error_maps_to_item_failed() {
         let event = ItemBusEvent::File(FileEvent::Error {
             error: FileError::Io("boom".into()),
@@ -322,7 +322,7 @@ mod tests {
     /// The queue settles a failed track too, and reaches the same observer.
     /// Whichever source gets there first owns the pair; a protocol error
     /// arriving after it must not repeat what the item already reported.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_protocol_error_after_settlement_does_not_repeat_the_pair() {
         let observer_impl = Arc::new(CollectingItemObserver::default());
         let observer: Arc<dyn ItemObserver> = observer_impl.clone();
@@ -337,7 +337,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_protocol_error_on_a_live_item_emits_the_pair() {
         let observer_impl = Arc::new(CollectingItemObserver::default());
         let observer: Arc<dyn ItemObserver> = observer_impl.clone();
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(observer_impl.take_events().len(), 2);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn registered_variants_preserve_metadata_and_apply_initial() {
         let observer_impl = Arc::new(CollectingItemObserver::default());
         let observer: Arc<dyn ItemObserver> = observer_impl.clone();
@@ -398,7 +398,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn selected_and_applied_variants_use_known_metadata_or_fallback() {
         let observer_impl = Arc::new(CollectingItemObserver::default());
         let observer: Arc<dyn ItemObserver> = observer_impl.clone();
@@ -455,7 +455,7 @@ mod tests {
     }
 
     #[cfg(target_pointer_width = "64")]
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn overflowing_variant_indices_are_filtered_or_skipped() {
         let overflow = usize::try_from(u64::from(u32::MAX) + 1)
             .expect("64-bit hosts can represent indices above u32::MAX");

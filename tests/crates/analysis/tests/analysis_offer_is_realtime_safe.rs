@@ -34,7 +34,7 @@ fn offer_under_rt(
     producer.offer(pcm, spec, at)
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
     let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
     let cancel = CancelToken::never();

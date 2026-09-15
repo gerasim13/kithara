@@ -182,13 +182,6 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-#[cfg(feature = "test-utils")]
-pub use kithara_test_utils::{kithara::mock, no_block};
-#[cfg(feature = "test-utils")]
-pub use kithara_test_utils::{
-    kithara::{fixture, test},
-    kithara_facade::{allow_block, flash, no_block},
-};
 #[cfg(all(
     feature = "warp",
     not(target_arch = "wasm32"),

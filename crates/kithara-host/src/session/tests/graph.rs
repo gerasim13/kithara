@@ -2,8 +2,6 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
-#[cfg(test)]
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
@@ -12,6 +10,8 @@ use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
     player::PlayerMember,
 };
+#[cfg(test)]
+use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
     TopologyOperation,

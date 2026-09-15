@@ -13,7 +13,12 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),

@@ -109,12 +109,12 @@ async fn drm_source(delay_ms: Option<u64>) -> (TestServerHelper, Url) {
     (helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn drm_track() -> (TestServerHelper, Url) {
     drm_source(None).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn delayed_drm_track() -> (TestServerHelper, Url) {
     drm_source(Some(150)).await
 }
@@ -222,7 +222,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     queue.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -251,7 +251,7 @@ async fn drm_seek_resumes(
 
 // flash(false): the e2e this mirrors runs real-clock; the stall window is
 // timing-dependent, so the real-clock lane is the one expected to catch it.
-#[kithara::test(tokio, flash(false))]
+#[kithara_test_utils::kithara::test(tokio, flash(false))]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -278,7 +278,7 @@ async fn drm_seek_resumes_realtime(
     run_seek_scenario(&url, backend, abr, temp_dir).await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]

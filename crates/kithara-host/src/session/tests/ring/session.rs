@@ -5,14 +5,16 @@ use std::{
 
 use firewheel::FirewheelCtx;
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
 use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
 use super::{

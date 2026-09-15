@@ -72,7 +72,7 @@ async fn render_with_tap(constant_half: &'static [u8]) -> (Vec<f32>, Vec<f32>, u
     (rendered, tapped, drops)
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn zero_output_sink_is_processed_beside_graph_out(constant_half: &'static [u8]) {
     let (rendered, tapped, drops) = render_with_tap(constant_half).await;
 
@@ -89,7 +89,7 @@ async fn zero_output_sink_is_processed_beside_graph_out(constant_half: &'static 
     assert_eq!(drops, 0);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
     let (rendered, tapped, _) = render_with_tap(constant_half).await;
 
@@ -104,7 +104,7 @@ async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
     assert_eq!(tapped, rendered, "mix tap must be bit-exact with graph_out");
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_half: &'static [u8]) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
@@ -136,7 +136,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'static [u8]) {
     let harness = playing_harness(constant_half).await;
     let mut tap = harness
@@ -166,7 +166,7 @@ async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'st
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'static [u8]) {
     const TIGHT_CAPACITY: usize = 2_048;
 
@@ -194,7 +194,7 @@ async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'st
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn second_enable_is_rejected_and_disable_releases_the_writer(constant_half: &'static [u8]) {
     let harness = playing_harness(constant_half).await;
     let tap = harness

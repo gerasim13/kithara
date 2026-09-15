@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     use crate::kithara;
 
-    #[kithara::test(tokio)]
+    #[kithara_test_utils::kithara::test(tokio)]
     async fn shared_server_is_one_instance_and_serves_health() {
         let a = shared().base_url.clone();
         let b = shared().base_url.clone();

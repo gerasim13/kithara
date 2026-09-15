@@ -45,7 +45,7 @@ compatible native software stack.
 
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>)</td></tr>
 
-<tr><td><code>audio</code> / <code>bufpool</code> / <code>decode</code> / <code>events</code> / <code>host</code> / <code>platform</code> / <code>play</code> / <code>resampler</code> / <code>signal</code> / <code>stream</code> / <code>test-utils</code> / <code>warp</code></td><td>yes</td><td>Enables the matching facade module or support crate; <code>signal</code> also enables process signals in <code>kithara-platform</code></td></tr>
+<tr><td><code>audio</code> / <code>bufpool</code> / <code>decode</code> / <code>events</code> / <code>host</code> / <code>platform</code> / <code>play</code> / <code>resampler</code> / <code>signal</code> / <code>stream</code> / <code>warp</code></td><td>yes</td><td>Enables the matching facade module or support crate; <code>signal</code> also enables process signals in <code>kithara-platform</code></td></tr>
 
 <tr><td><code>abr</code> / <code>drm</code> / <code>storage</code> / <code>stretch</code></td><td>via composite features</td><td>Enables the matching facade module independently; <code>hls</code>, <code>assets</code>, and stretch backend features select them as needed</td></tr>
 
@@ -149,9 +149,8 @@ advanced control — multi-slot engine, crossfade, EQ — reach into
 speed-control type `StretchControls` is re-exported even when no stretch backend
 is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.
-`mock` and `no_block` macros are gated by `test-utils`; `test`, `fixture`, and
-`flash` are gated by `probe`. The facade `flash` macro emits `kithara::platform::flash`
-paths so integration tests do not need a direct `kithara-platform` dependency.
+The facade re-exports no test macros; tests take them from
+`kithara_test_utils::kithara`.
 The `prelude` collects the everyday types.
 
 ## Integration

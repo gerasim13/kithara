@@ -471,7 +471,7 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
 #[cfg_attr(
@@ -557,14 +557,14 @@ async fn hls_seek_near_end_fresh_player_stress(
     }
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn sidx_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper, true).await;
     (helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn plain_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper, false).await;

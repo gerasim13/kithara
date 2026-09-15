@@ -186,7 +186,7 @@ enum Trigger {
 
 /// No eager exact size, body open: seek lands while only placeholder geometry
 /// is available.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     serial,
@@ -209,7 +209,7 @@ async fn immediate_seek_size_withheld(
 
 /// Body withheld: seek lands on an undelivered segment — the closest model of
 /// the genuinely-immediate user seek.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     serial,
@@ -401,7 +401,7 @@ async fn wait_loaded(
     assert!(loaded, "track {id:?} must load through Queue loader");
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn gated_source() -> (PackagedTestServer, SegmentGateHandle) {
     PackagedTestServer::with_segment_gate(GATED_VARIANT, GATED_SEGMENT).await
 }

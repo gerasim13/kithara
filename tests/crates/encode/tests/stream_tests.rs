@@ -75,7 +75,7 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
     left
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn pushed_f32_sine_survives_encode_mux_and_decode(stream_sine: Vec<f32>) {
     let track = encode_stream(&stream_sine);
     assert!(

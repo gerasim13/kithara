@@ -339,7 +339,7 @@ struct QueueLog {
     durations: BTreeMap<usize, f64>,
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let block_duration = render_block_duration();
     let mut receiver = census.queue.subscribe();
@@ -636,7 +636,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
 /// last await and over captured samples only. It occupies the poll it runs in
 /// the way the budget is meant to catch, but there is no product work left to
 /// starve.
-#[kithara::allow_block]
+#[kithara_test_utils::kithara::allow_block]
 fn census_acoustics(take: &Take) {
     let rendered = take.rendered.as_slice();
     let ordered = take.ordered.as_slice();
@@ -689,7 +689,7 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
 
 /// Gapless: no output frame may be claimed by two tracks at once. A premature
 /// switch shows up here as an overlap the configuration never asked for.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -704,7 +704,7 @@ async fn gapless_hls_queue_plays_every_track_end_to_end(
 
 /// Crossfade: the overlap must be exactly the configured one, at the boundary
 /// and nowhere else.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -719,7 +719,7 @@ async fn crossfaded_hls_queue_plays_every_track_end_to_end(
 
 /// The same gapless census over local files: a track that arrives whole rather
 /// than segment by segment must still be played to its last frame.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -733,7 +733,7 @@ async fn gapless_local_queue_plays_every_track_end_to_end(
 }
 
 /// The same crossfade census over local files.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -750,7 +750,7 @@ async fn crossfaded_local_queue_plays_every_track_end_to_end(
 /// body on a server, and crosses back. Every assertion the other legs carry
 /// applies unchanged, because only the transport differs: the same ramp, the
 /// same built length, the same provenance.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -765,7 +765,7 @@ async fn gapless_network_queue_plays_every_track_end_to_end(
 
 /// The same seam with a crossfade: the overlap must be exactly the configured
 /// one, which is the shape a track cut short breaks first.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -780,7 +780,7 @@ async fn crossfaded_network_queue_plays_every_track_end_to_end(
 
 /// A queue whose neighbours never share a reader: each seam hands over from a
 /// segmented stream to a file, or back, and must still land on the frame.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -795,7 +795,7 @@ async fn gapless_mixed_queue_plays_every_track_end_to_end(
 
 /// The same mixed queue with the crossfade: the overlap is the configured one
 /// at a seam whose two sides are read differently.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -813,7 +813,7 @@ async fn crossfaded_mixed_queue_plays_every_track_end_to_end(
 /// container carries neither a readable ramp direction nor a peak the fade
 /// oracle can read, so what is left is the attribution - each track serves the
 /// length it was built to, and the seam overlaps by nothing at all.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -829,7 +829,7 @@ async fn gapless_mpeg_queue_serves_every_track_whole(
 /// The same seam with the crossfade the reported defect was heard as: the
 /// overlap must be exactly the configured one, and a track cut short shows up
 /// as an overlap wider than the queue announced.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -870,27 +870,27 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
     }
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn hls_tracks() -> PreparedTracks {
     prepare_tracks(HLS_QUEUE).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn local_tracks() -> PreparedTracks {
     prepare_tracks(LOCAL_QUEUE).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn network_tracks() -> PreparedTracks {
     prepare_tracks(NETWORK_QUEUE).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mixed_tracks() -> PreparedTracks {
     prepare_tracks(MIXED_QUEUE).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mpeg_tracks() -> PreparedTracks {
     prepare_tracks(MPEG_QUEUE).await
 }

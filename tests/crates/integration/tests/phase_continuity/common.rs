@@ -152,7 +152,7 @@ where
 /// retry budget then measures how fast the host is, which is why a loaded
 /// machine reports a starved decoder. The sibling `consumer_pace` below already
 /// carries the same guard.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 fn read_block_with_position<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
@@ -190,7 +190,7 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 }
 
 /// Async twin of [`read_block_with_position`]; same reason for the guard.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
@@ -211,7 +211,7 @@ where
     }
 }
 
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn consumer_pace(duration: Duration) {
     sleep(duration).await;
 }
@@ -470,7 +470,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn measure_matches_predicted_for_clean_sine(phase_sine_measured: Vec<f32>) {
         let spec = SinePhaseSpec::default_440();
         let pcm = phase_sine_measured;
@@ -490,7 +490,7 @@ mod tests {
     /// for additive white Gaussian noise. If this passes, the LS fit is
     /// correct; any larger error from real AAC must come from non-white
     /// noise structure, not a bug in the estimator.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn measure_error_matches_theory_for_white_noise(phase_noise: Vec<f64>) {
         let spec = SinePhaseSpec::default_440();
         let delta = spec.delta_rad_per_sample();
@@ -517,7 +517,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn window_robust_to_amplitude_noise(phase_sine_jitter: Vec<f32>) {
         let spec = SinePhaseSpec::default_440();
         let chan = spec.channels as usize;
@@ -539,7 +539,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn anchor_detects_sample_drop_of_two(
         phase_sine_anchor: Vec<f32>,
         phase_sine_dropped: Vec<f32>,

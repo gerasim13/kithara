@@ -330,7 +330,7 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
 /// deterministic and faster (the storage condvar / park waits collapse to zero
 /// real time). The sub-0.5-sample assertions in `e2e_phase_scan` ARE the PCM
 /// oracle — any virtualization-induced divergence trips them.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -361,7 +361,7 @@ async fn phase_continuity_file_local_socket_free(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -547,7 +547,7 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -570,7 +570,7 @@ async fn dump_fixture_raw_bytes(raw_signals: [(SignalAsset, &'static [u8]); 2]) 
     }
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn raw_signals() -> [(SignalAsset, &'static [u8]); 2] {
     [SignalAsset::AAC_SINE440_60S, SignalAsset::M4A_SINE440_60S].map(|asset| {
         (
@@ -580,7 +580,7 @@ fn raw_signals() -> [(SignalAsset, &'static [u8]); 2] {
     })
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn listening_sources() -> [ServedSignal; 4] {
     [
         served_signal(SignalAsset::M4A_SINE440_60S).await,
@@ -590,7 +590,7 @@ async fn listening_sources() -> [ServedSignal; 4] {
     ]
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -660,7 +660,7 @@ async fn dump_aac_for_listening(
     println!("\nDumped to {}", dump_dir.display());
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -747,7 +747,7 @@ async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -901,7 +901,7 @@ async fn codec_distortion_profile(
     run_codec_compare(codec, reference, backend).await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -1088,7 +1088,7 @@ fn first_signal_window_phase(
 /// phases must match within sub-sample tolerance. Before the reset rebuild
 /// they diverged by ~2 access units; the assertion compares against the
 /// production [`TOLERANCE_SAMPLES`] — the same contract `hls.rs:211` enforces.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -1172,102 +1172,102 @@ async fn seek_to_zero_decoder_warmup_is_deterministic(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn local_m4a() -> (SignalAsset, TestTempDir, PathBuf) {
     local_signal(SignalAsset::M4A_SINE440_60S_320K)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn served_aac() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S_320K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn local_mp3_sine440_60_s_320_k() -> (SignalAsset, TestTempDir, PathBuf) {
     local_signal(SignalAsset::MP3_SINE440_60S_320K)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_aac_sine440_60_s_128_k() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S_128K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_aac_sine440_60_s_192_k() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S_192K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_aac_sine440_60_s_256_k() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S_256K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_aac_sine440_60_s_320_k() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S_320K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_m4_a_sine440_60_s_128_k() -> ServedSignal {
     served_signal(SignalAsset::M4A_SINE440_60S_128K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_m4_a_sine440_60_s_192_k() -> ServedSignal {
     served_signal(SignalAsset::M4A_SINE440_60S_192K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_m4_a_sine440_60_s_256_k() -> ServedSignal {
     served_signal(SignalAsset::M4A_SINE440_60S_256K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_m4_a_sine440_60_s_320_k() -> ServedSignal {
     served_signal(SignalAsset::M4A_SINE440_60S_320K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_mp3_sine440_60_s_128_k() -> ServedSignal {
     served_signal(SignalAsset::MP3_SINE440_60S_128K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_mp3_sine440_60_s_192_k() -> ServedSignal {
     served_signal(SignalAsset::MP3_SINE440_60S_192K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_mp3_sine440_60_s_256_k() -> ServedSignal {
     served_signal(SignalAsset::MP3_SINE440_60S_256K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_mp3_sine440_60_s_320_k() -> ServedSignal {
     served_signal(SignalAsset::MP3_SINE440_60S_320K).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_mp3_sine440_60_s() -> ServedSignal {
     served_signal(SignalAsset::MP3_SINE440_60S).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_wav_sine440_60_s() -> ServedSignal {
     served_signal(SignalAsset::WAV_SINE440_60S).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_aac_sine440_60_s() -> ServedSignal {
     served_signal(SignalAsset::AAC_SINE440_60S).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_m4_a_sine440_60_s() -> ServedSignal {
     served_signal(SignalAsset::M4A_SINE440_60S).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn signal_flac_sine440_60_s() -> ServedSignal {
     served_signal(SignalAsset::FLAC_SINE440_60S).await
 }

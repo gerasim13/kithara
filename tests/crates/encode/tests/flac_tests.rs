@@ -12,7 +12,7 @@ use kithara_test_fixtures::{
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn normalize_flac_codec_config_accepts_mp4_metadata_block(flac_config: &'static [u8]) {
     let normalized = normalize_flac_codec_config(flac_config)
         .expect("BUG: hard-coded dfLa payload normalises successfully");
@@ -20,7 +20,7 @@ fn normalize_flac_codec_config_accepts_mp4_metadata_block(flac_config: &'static 
     assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn encode_packaged_flac_happy_path_emits_monotonic_access_units(encoder_saw_flac: Pcm) {
     let pcm = encoder_saw_flac;
     let media_info = MediaInfo::builder()

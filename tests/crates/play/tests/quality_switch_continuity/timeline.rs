@@ -125,7 +125,7 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
         .expect("non-empty lag search")
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     native,
@@ -246,7 +246,7 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn sweep_source() -> (TestServerHelper, CreatedHls) {
     let server = TestServerHelper::new().await;
     let created = server

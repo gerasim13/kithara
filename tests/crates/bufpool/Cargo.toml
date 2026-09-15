@@ -21,7 +21,6 @@ no-block = ["kithara/no-block"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
-    "test-utils",
     "bufpool",
     "platform",
     "tokio-net",

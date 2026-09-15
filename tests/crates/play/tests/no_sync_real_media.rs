@@ -178,14 +178,26 @@ struct CapturedAudio {
     start_positions_secs: Vec<f64>,
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(300))
+)]
 async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(
     #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
 ) {
     run_real_media_matrix(false, real_media_sources).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(360)))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(360))
+)]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 async fn record_no_sync_real_media_artifacts(
     #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
@@ -238,7 +250,7 @@ async fn hls_ladder_url(server: &TestServerHelper) -> Url {
         .master_url()
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn real_media_sources() -> (TestServerHelper, Url, TestTempDir) {
     let server = TestServerHelper::new().await;
     let hls = hls_ladder_url(&server).await;
@@ -1056,7 +1068,7 @@ async fn open_resource(
 /// calls in the test body, not in the helpers it calls — and the consumer would
 /// drain the rings at host speed against producers advancing at virtual speed,
 /// making every captured window a property of the machine.
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn render_paced(
     host: &OfflineHostHarness<TestPools>,
     decks: &[Deck],

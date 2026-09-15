@@ -22,6 +22,7 @@ tls-rustls = []
 tls-native = []
 
 [dependencies]
+kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 

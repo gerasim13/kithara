@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn aac() -> (TestServerHelper, Vec<u8>) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
@@ -29,7 +29,12 @@ async fn aac() -> (TestServerHelper, Vec<u8>) {
     (server, bytes)
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {
@@ -78,7 +83,12 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
     );
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
 async fn aac_seek_to_start_discards_previous_signal_history(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {

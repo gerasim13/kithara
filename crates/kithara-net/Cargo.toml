@@ -86,7 +86,7 @@ wreq-util = { workspace = true, optional = true }
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
 kithara-net = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 

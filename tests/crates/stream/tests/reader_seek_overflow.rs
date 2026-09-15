@@ -186,7 +186,7 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
 /// computes these deltas. With `probe_byte_len`, even the legacy path is
 /// safe. This test verifies defense-in-depth: `Stream::seek()` bounds-checks
 /// and returns Err for overflow deltas.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::epoch_10(595_033, 9_223_372_036_854_115_238i64)]
 #[case::epoch_11(544_238, 9_223_372_036_854_233_317i64)]
 fn seek_corrupted_delta_from_production_is_rejected(
@@ -215,7 +215,7 @@ fn seek_corrupted_delta_from_production_is_rejected(
 }
 
 /// Normal current-relative seeks with bounded deltas.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case::backward(500_000, -100_000, 400_000)]
 #[case::forward(100_000, 200_000, 300_000)]
 fn seek_current_normal(#[case] start: u64, #[case] delta: i64, #[case] expected: u64) {
@@ -232,7 +232,7 @@ fn seek_current_normal(#[case] start: u64, #[case] delta: i64, #[case] expected:
 }
 
 /// Genuine seek past EOF returns error (graceful, no crash).
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn seek_past_eof_still_rejected() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);
@@ -247,7 +247,7 @@ fn seek_past_eof_still_rejected() {
 }
 
 /// `SeekFrom::End` with negative delta works.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn seek_from_end_backward() {
     let source = MockSource::new(1_000_000);
     let mut stream = mock_stream(source);
@@ -258,7 +258,7 @@ fn seek_from_end_backward() {
 }
 
 /// Read after seek returns correct data.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn read_after_seek() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);

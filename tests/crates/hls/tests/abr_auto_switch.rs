@@ -43,7 +43,7 @@ impl Consts {
 /// Also verifies that `content_duration` from fast initial segments (< 10ms)
 /// is accumulated for buffer level tracking, which is required for up-switch
 /// decisions (`min_buffer_for_up_switch_secs` check).
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> HlsTestServer {
     let init_segment = Arc::new(hls_header_thirty);
     let pcm_data = Arc::new(hls_pcm_thirty);
@@ -73,7 +73,7 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Hl
     server
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     serial,

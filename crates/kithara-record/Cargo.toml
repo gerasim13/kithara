@@ -30,7 +30,7 @@ ringbuf = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 

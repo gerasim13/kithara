@@ -6,7 +6,7 @@ use kithara::{
 
 use super::common::{fast_settings, variants};
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn manual_switch_wins_over_in_flight_auto_decisions() {
     let variants = variants(&[300_000, 1_000_000, 3_000_000]);
     let settings = fast_settings();
@@ -36,7 +36,7 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn variants_snapshot_is_stable_for_decide() {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let settings = fast_settings();

@@ -169,7 +169,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
 /// `hls` exercises the HLS branch in the same restart shape so we catch
 /// any regression in `track_replay_after_switch.rs`-adjacent code paths
 /// when the cold-replay fix lands.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::mp3_with_extension(mp3_with_extension().await)]
 #[case::mp3_no_extension(mp3_no_extension().await)]
 #[case::hls(hls().await)]
@@ -215,17 +215,17 @@ async fn replay_source(kind: WarmReplayKind) -> (TestServerHelper, Url) {
     (helper, url)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3_with_extension() -> (TestServerHelper, Url) {
     replay_source(WarmReplayKind::Mp3WithExtension).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mp3_no_extension() -> (TestServerHelper, Url) {
     replay_source(WarmReplayKind::Mp3NoExtension).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn hls() -> (TestServerHelper, Url) {
     replay_source(WarmReplayKind::Hls).await
 }

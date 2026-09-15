@@ -8,7 +8,7 @@ use kithara_integration_tests::{storage_ext::read_bytes, temp_dir};
 
 use super::support::{asset_scope, pending, resource};
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(1024, 512, 0)]
 #[case(4096, 2048, 8192)]
 #[case(16384, 8192, 32768)]
@@ -45,7 +45,7 @@ fn streaming_resource_complex_write_patterns(
     writer.commit(None).unwrap();
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(1, 100)]
 #[case(2, 50)]
 fn streaming_resource_concurrent_writes(
@@ -83,7 +83,7 @@ fn streaming_resource_concurrent_writes(
     writer.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(0, 1024)]
 #[case(2048, 1024)]
 #[case(4096, 512)]
@@ -123,7 +123,7 @@ fn streaming_resource_edge_case_reads(
     writer.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(vec![(0, 1024), (2048, 1024)])]
 #[case(vec![(0, 512), (1024, 512)])]
 fn streaming_resource_multiple_range_operations(
@@ -163,7 +163,7 @@ fn streaming_resource_multiple_range_operations(
     writer.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(false)]
 #[case(true)]
 fn streaming_resource_commit_behavior(
@@ -218,7 +218,7 @@ fn streaming_resource_commit_behavior(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(1024)]
 #[case(4096)]
 #[case(16384)]

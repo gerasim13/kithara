@@ -352,7 +352,7 @@ async fn run_seek_scenario(
     let _ = ids;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::one_track(&["/master.m3u8"], 0)]
 #[case::first_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 0)]
 #[case::second_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 1)]
@@ -377,7 +377,7 @@ async fn queue_seek_at_index(
 ///
 /// Without `#[ignore]` this pins a real regression: until the coalescer exists,
 /// this test fails under `just test` and keeps the bug visible.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
 #[ignore = "pins real regression — pending downloader request coalescer; unignore when single-flight layer lands"]
 async fn queue_seek_same_url_twice_index0(
     #[future(awt)] packaged_source: PackagedTestServer,
@@ -396,7 +396,7 @@ async fn queue_seek_same_url_twice_index0(
 /// every segment fetch to emulate a cold-network CDN. Seeks past the
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_long_cold_cache_far_segment(
     temp_dir: TestTempDir,
     #[future(awt)] long_hls: (TestServerHelper, Url),
@@ -476,7 +476,7 @@ async fn queue_seek_long_cold_cache_far_segment(
 /// the physical stream length, so `source.seek(Current(delta))` lands
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_multi_variant_cold_far(
     temp_dir: TestTempDir,
     #[future(awt)] multi_hls: (TestServerHelper, Url),
@@ -539,7 +539,7 @@ async fn queue_seek_multi_variant_cold_far(
     queue.close().await;
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn long_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
@@ -560,7 +560,7 @@ async fn long_hls() -> (TestServerHelper, Url) {
     (helper, master)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn multi_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
@@ -586,7 +586,7 @@ async fn multi_hls() -> (TestServerHelper, Url) {
     (helper, master)
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn packaged_source() -> PackagedTestServer {
     PackagedTestServer::new().await
 }

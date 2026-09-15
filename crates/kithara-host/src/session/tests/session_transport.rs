@@ -2,11 +2,10 @@
 
 use std::num::NonZeroU32;
 
-use kithara_bufpool::testing::pools;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use kithara_play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
 
 use super::ring::{ManualRingConfig, ManualRingSession};

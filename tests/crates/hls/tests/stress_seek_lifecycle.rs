@@ -90,7 +90,7 @@ fn freeze_active_variant(abr: &AbrHandle) -> usize {
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn audio_server(
     hls_header_forty: Vec<u8>,
     hls_pcm_forty: Vec<u8>,
@@ -143,7 +143,7 @@ async fn audio_server(
     server
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,

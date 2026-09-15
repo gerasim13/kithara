@@ -56,8 +56,9 @@ tracing = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
+kithara-queue = { path = ".", features = ["usdt"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

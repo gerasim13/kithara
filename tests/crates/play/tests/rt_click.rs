@@ -127,7 +127,7 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
     stream
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
@@ -163,7 +163,7 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
@@ -211,7 +211,7 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
     (processor, control, fading)
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
     let (mut processor, mut control, fading) = fading_in(constant_half);
 
@@ -232,7 +232,7 @@ fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'static [u8]) {
     let (mut processor, mut control, fading) = fading_in(constant_half);
 
@@ -246,7 +246,7 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'stati
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(constant_half: &'static [u8]) {
     let (mut processor, mut control, fading) = fading_in(constant_half);
 
@@ -269,7 +269,7 @@ fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(constant_half
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_changed_crossfade_duration_applies_to_the_next_fade(
     constant_half: &'static [u8],
     constant_quarter: &'static [u8],
@@ -300,7 +300,7 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_track_started_without_a_crossfade_is_instant(
     constant_quarter: &'static [u8],
     constant_half: &'static [u8],

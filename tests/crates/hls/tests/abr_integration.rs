@@ -22,12 +22,12 @@ fn variants_from_master(master: &ParsedMaster) -> Vec<VariantInfo> {
         .collect()
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn abr_settings_default() -> AbrSettings {
     AbrSettings::default()
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn test_master_playlist_data() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -41,13 +41,13 @@ video/360p/playlist.m3u8
 "#
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn parsed_master_playlist(test_master_playlist_data: &str) -> ParsedMaster {
     parse_master_playlist(test_master_playlist_data.as_bytes())
         .expect("Failed to parse master playlist")
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn variants_from_parsed_playlist(parsed_master_playlist: ParsedMaster) -> Vec<VariantInfo> {
     variants_from_master(&parsed_master_playlist)
 }
@@ -56,7 +56,7 @@ fn variants_from_parsed_playlist(parsed_master_playlist: ParsedMaster) -> Vec<Va
 /// constructs and holds settings; actual decisions are covered in the
 /// scheduler / integration tests. We only verify the controller builds
 /// successfully for a range of selector indices (including out-of-bounds).
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -70,7 +70,7 @@ fn test_manual_selector_different_indices(
     let _ = AbrMode::manual(selector_index);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
     variants_from_parsed_playlist: Vec<VariantInfo>,
@@ -84,7 +84,7 @@ fn test_abr_controller_no_selector(
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case(0.0, 0.0)]
 #[case(1.0, 0.0)]
 #[case(5.0, 0.0)]
@@ -102,7 +102,7 @@ fn test_abr_decision_with_different_conditions(
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     let variants = variants_from_master(&parsed_master_playlist);
 
@@ -117,7 +117,7 @@ fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     assert_eq!(variants[2].variant_index.get(), 2);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn test_abr_controller_async_usage() {
     let controller = AbrController::new(AbrSettings::default());
     // Default settings seed an initial throughput estimate (see

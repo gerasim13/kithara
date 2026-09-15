@@ -269,7 +269,7 @@ async fn run_case_paced(
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -552,7 +552,7 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
 /// vs `decode_head` in `execute_recreation`): the same seek+switch seams as
 /// `multi_switch`, but the consumer sleeps after every read so `committed`
 /// lags the producer the way full-suite CPU contention makes it lag.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -635,7 +635,7 @@ async fn phase_continuity_hls_diag_paced(
 /// across sustained FLAC, the AAC→FLAC switch, 48 kHz resampling, and forced
 /// underruns — so the symptom needs true real-time cpal pressure or the live
 /// production stream, not a paced offline pull.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -711,32 +711,32 @@ async fn phase_continuity_hls_known_warmup_drift(
     run_case(fixture, backend, true, drm, scenario, server).await;
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn he_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::Single(Codec::AacHeV2), None, false).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mixed_high_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::AacWithFlacTop, Some(320_000), false).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mixed_encrypted_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::AacWithFlacTop, Some(320_000), true).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn aac_high_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::Single(Codec::AacLc), Some(320_000), false).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn flac_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::Single(Codec::Flac), None, false).await
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn mixed_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::AacWithFlacTop, None, false).await
 }

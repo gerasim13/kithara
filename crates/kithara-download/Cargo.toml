@@ -48,7 +48,7 @@ url = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-download = { path = ".", features = ["usdt"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 serde_yaml_ng = { workspace = true }

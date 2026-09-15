@@ -11,12 +11,12 @@ use kithara_analysis::{
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::testing::{Pools, TestPools, pools};
 use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{thread, time::Duration};
 use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 
 struct Consts;
 

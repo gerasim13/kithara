@@ -81,12 +81,12 @@ kithara = { workspace = true, default-features = false, features = [
     "play",
     "queue",
     "stream",
-    "test-utils",
 ] }
 kithara-audio = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
 
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -132,6 +132,7 @@ kithara = { workspace = true, default-features = false, features = [
     "symphonia",
     "webcodecs",
 ] }
+
 # `resample-rubato` is in `kithara-play`'s default set, so turning defaults off
 # to keep the native device builds lean silently left wasm with
 # `NoResamplerBackend`. A WebAudio context runs at one rate, and every track
@@ -139,7 +140,6 @@ kithara = { workspace = true, default-features = false, features = [
 # is 48 kHz against a 44.1 kHz context — then failed to open with "resampler
 # backend none does not support fixed-ratio mode". rubato is what native plays
 # through, so wasm resamples the same way rather than a cheaper way.
-kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
 js-sys = { workspace = true }

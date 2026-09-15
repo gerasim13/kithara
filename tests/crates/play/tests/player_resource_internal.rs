@@ -222,13 +222,13 @@ impl AudioControl for PositionReader {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn duration_reflects_underlying_reader(constant_half: &'static [u8]) {
     let pr = make_player_resource(constant_half, 1.0);
     assert!((pr.duration() - 1.0).abs() < 0.01);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn read_returns_constant_samples_full(constant_half: &'static [u8]) {
     let mut pr = make_player_resource(constant_half, 1.0);
     let mut left = vec![0.0f32; 128];
@@ -244,7 +244,7 @@ async fn read_returns_constant_samples_full(constant_half: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn full_read_refills_before_the_next_callback_drains_scratch() {
     const CALLBACK_FRAMES: usize = 512;
 
@@ -272,7 +272,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn reset_for_seek_drops_buffered_samples() {
     let reader = PositionReader::new(1.0);
     let resource = Resource::from_reader(reader, None);
@@ -305,7 +305,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 /// in progress), `read()` must zero-fill the output buffers. Otherwise
 /// the caller's stale samples from the previous audio-thread cycle leak
 /// through, heard as a looped/glitched frame during seek.
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn read_zeroes_output_when_no_data_available() {
     let reader = MockReader::faulty(Consts::AUDIO_SPEC, Fault::Stall);
     let resource = Resource::from_reader(reader, None);
@@ -332,7 +332,7 @@ async fn read_zeroes_output_when_no_data_available() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
     let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, 900.0 / 44100.0, constant_half);
     let resource = Resource::from_reader(reader, None);
@@ -352,7 +352,7 @@ async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
     assert!(remaining < 512);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8]) {
     let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, 0.01, constant_half);
     let resource = Resource::from_reader(reader, None);
@@ -389,7 +389,7 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
 /// reach its natural end. After the fix, `Err` sets `failed=true`
 /// and `read()` returns the new `Failed` variant, so callers can
 /// distinguish "track aborted mid-stream" from "track played out".
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn read_returns_failed_not_eof_on_decoder_error() {
     let reader = MockReader::faulty(Consts::AUDIO_SPEC, Fault::DecodeError);
     let resource = Resource::from_reader(reader, None);

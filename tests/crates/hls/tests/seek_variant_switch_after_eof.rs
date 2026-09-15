@@ -23,7 +23,7 @@ use tracing::info;
 /// pending seek target (`seek_obs`) so the new variant's rebuilt plan includes
 /// the segment the parked reader waits on (historically the midstream-switch
 /// drain discarded the new seek epoch's on-demand request).
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     timeout(Duration::from_secs(10)),

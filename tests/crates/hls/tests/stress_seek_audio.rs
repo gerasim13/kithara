@@ -147,13 +147,13 @@ fn assert_seek_size_probes(fixture: SeekAudioFixture, counter: &SizeProbeCounter
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn wav_hundred(hls_sized_wav_hundred: Vec<u8>) -> (Url, SizeProbeCounter) {
     wav_seek(hls_sized_wav_hundred, 100).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn wav_forty_eight(hls_sized_wav_forty_eight: Vec<u8>) -> (Url, SizeProbeCounter) {
     wav_seek(hls_sized_wav_forty_eight, 48).await
 }
@@ -175,7 +175,7 @@ async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (Url, SizeProbeCou
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn flac_hundred() -> (Url, SizeProbeCounter) {
     let helper = TestServerHelper::new().await;
     let created = helper
@@ -216,7 +216,7 @@ async fn flac_hundred() -> (Url, SizeProbeCounter) {
 ///    - Level 2: continuity (consecutive frames follow a pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 5. Final seek near the end → read to EOF
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
+#[kithara_test_utils::kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::wav_apple_ephemeral(

@@ -637,10 +637,12 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_warp::{
         Beat, BeatGrid, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
         MapAxis, MapPoint, MapPosition, SessionAxis, SessionEpoch, SessionFrame,

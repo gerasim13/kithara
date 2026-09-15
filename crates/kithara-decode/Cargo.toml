@@ -97,7 +97,8 @@ jni = { workspace = true }
 ndk-context = { workspace = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
+kithara-decode = { path = ".", features = ["usdt"] }
 kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }

@@ -144,7 +144,7 @@ mod tests {
     use super::Document;
     use crate::baked::BAKED_DOCUMENT;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_baked_document_parses_under_the_schema() {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document matches the schema");
@@ -163,7 +163,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_unknown_field_is_refused_and_named() {
         let error = serde_yaml_ng::from_str::<Document>("player:\n  fade_style: dj\n")
             .expect_err("a typo must not pass silently");
@@ -171,7 +171,7 @@ mod tests {
         assert!(error.to_string().contains("fade_style"), "{error}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_empty_document_is_all_defaults() {
         let document: Document = serde_yaml_ng::from_str("{}").expect("an empty document is valid");
 
@@ -218,7 +218,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_assets_store_section_names_the_cache_capacity() {
         let document: Document = serde_yaml_ng::from_str("assets_store:\n  cache_capacity: 32\n")
             .expect("a valid document");
@@ -233,7 +233,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_pools_section_names_one_pool_without_touching_the_other() {
         let document: Document = serde_yaml_ng::from_str("pools:\n  bytes:\n    max_buffers: 64\n")
             .expect("a valid document");
@@ -245,7 +245,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_dispatcher_section_names_the_wait_budget() {
         let document: Document = serde_yaml_ng::from_str("dispatcher:\n  wait_timeout: 4ms\n")
             .expect("a valid document");
@@ -256,7 +256,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_dispatcher_thread_name_is_not_a_document_key() {
         let error = serde_yaml_ng::from_str::<Document>("dispatcher:\n  name: renamed\n")
             .expect_err("one document key must not rename every dispatcher");
@@ -264,7 +264,7 @@ mod tests {
         assert!(error.to_string().contains("name"), "{error}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_play_worker_section_names_the_track_ceiling() {
         let document: Document =
             serde_yaml_ng::from_str("play_worker:\n  capacity: 4\n").expect("a valid document");
@@ -275,7 +275,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_worker_section_names_the_compute_task_ceiling() {
         let document: Document =
             serde_yaml_ng::from_str("worker:\n  max_compute_tasks: 4\n").expect("a valid document");
@@ -290,7 +290,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_worker_pool_key_names_the_owned_mode() {
         let document: Document = serde_yaml_ng::from_str(
             "worker:\n  pool:\n    mode: owned\n    name: analysis\n    threads: 2\n",
@@ -306,7 +306,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_network_section_is_rejected() {
         let error = serde_yaml_ng::from_str::<Document>("network:\n  size_probe_method: head\n")
             .expect_err("network was renamed to hls");
@@ -314,7 +314,7 @@ mod tests {
         assert!(error.to_string().contains("network"), "{error}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_playback_section_is_rejected() {
         let error = serde_yaml_ng::from_str::<Document>("playback:\n  crossfade_seconds: 5.0\n")
             .expect_err("playback was folded into player.crossfade_duration");
@@ -322,7 +322,7 @@ mod tests {
         assert!(error.to_string().contains("playback"), "{error}");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_resource_section_is_rejected() {
         let error = serde_yaml_ng::from_str::<Document>("resource:\n  preload_chunks: 5\n")
             .expect_err("resource was split into its own audio, hls, and file sections");

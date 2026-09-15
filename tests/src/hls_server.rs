@@ -83,7 +83,7 @@ impl TestServer {
     );
 }
 
-#[::kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn test_server() -> TestServer {
     TestServer::new().await
 }
@@ -661,7 +661,7 @@ impl PackagedTestServer {
     }
 }
 
-#[::kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 pub async fn packaged_test_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }
@@ -1016,7 +1016,7 @@ mod tests {
     // The budget is preserved as a real stall oracle (a genuinely stuck request
     // still exhausts the paced 5s), not relaxed. Off the `flash` feature the
     // scope is a ZST no-op and the clock is already real.
-    #[kithara::test(tokio)]
+    #[kithara_test_utils::kithara::test(tokio)]
     async fn segment_gate_withholds_get_until_release() {
         let (server, gate) = PackagedTestServer::with_segment_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");
@@ -1062,7 +1062,7 @@ mod tests {
     // across every real HEAD/GET so the virtual clock is paced to real time and
     // no `time::timeout` budget collapses ahead of the in-flight response. The
     // budget stays a real stall oracle, not relaxed (see the sibling test).
-    #[kithara::test(tokio)]
+    #[kithara_test_utils::kithara::test(tokio)]
     async fn segment_size_gate_reports_zero_until_release_head() {
         let (server, gate) = PackagedTestServer::with_segment_size_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");

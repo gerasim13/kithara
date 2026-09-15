@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 /// CDN soft-error: server returns 200 OK with text/html body.
 /// The HLS engine must reject this before caching and return a
 /// content-type error — not a decoder parse failure.
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn html_body_rejected_before_caching(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {

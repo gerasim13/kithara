@@ -547,12 +547,12 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn event_bridge_is_send() {
         assert_send::<EventBridge>();
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn hls_protocol_failure_is_not_duplicated_by_queue_status() {
         assert_protocol_failure_is_not_duplicated(
             ItemBusEvent::Hls(HlsEvent::Error {
@@ -562,7 +562,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn file_protocol_failure_is_not_duplicated_by_queue_status() {
         assert_protocol_failure_is_not_duplicated(
             ItemBusEvent::File(FileEvent::Error {
@@ -576,7 +576,7 @@ mod tests {
     /// failure settled without one — a decode, DRM or storage refusal — has no
     /// protocol bridge behind it. The queue is then the only source the item
     /// has, and silence here is the item never learning it failed.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn queue_failure_without_a_protocol_event_still_reaches_the_item() {
         let item = AudioPlayerItem::new(item_config());
         *item.inserted.lock() = true;
@@ -608,7 +608,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn terminal_events_route_to_their_exact_item_when_sources_repeat() {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let (delayed, delayed_observer) = register_observed_item(&items);
@@ -660,7 +660,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_current_item_event_updates_the_last_current_identity() {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(*last_current.lock(), Some(id));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn event_without_item_identity_routes_to_last_current() {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let (_previous, previous_observer) = register_observed_item(&items);
@@ -709,7 +709,7 @@ mod tests {
     /// The queue can settle a track before the protocol bridge delivers its
     /// own error, so the pair must be owned by whoever arrives first rather
     /// than by a fixed source.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_second_queue_failure_does_not_repeat_the_pair() {
         let item = AudioPlayerItem::new(item_config());
         *item.inserted.lock() = true;
@@ -739,7 +739,7 @@ mod tests {
     /// it keep the item playable — unlike the old byte-ratio telemetry that
     /// under-reported a VBR-FLAC quiet intro (~0.66s decoded byte-ratio at a
     /// 0.917s playhead) and made the host pause into a buffering deadlock.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn loaded_ranges_cover_playhead() {
         let item = AudioPlayerItem::new(item_config());
         let ranges = EventBridge::loaded_ranges(4.0);
@@ -748,19 +748,19 @@ mod tests {
 
     /// A fully cached track reports its whole span, not just what a decoder
     /// running a few seconds ahead of the playhead has produced.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn loaded_ranges_cover_the_cached_span() {
         let ranges = EventBridge::loaded_ranges(120.0);
         assert_eq!(ranges.len(), 1);
         assert!((ranges[0].duration_seconds - 120.0).abs() < f64::EPSILON);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn loaded_ranges_empty_when_nothing_is_available() {
         assert!(EventBridge::loaded_ranges(0.0).is_empty());
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn current_track_advance_emits_advanced_only() {
         let observer_impl = Arc::new(CollectingPlayerObserver::default());
         let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
@@ -792,7 +792,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn repeat_mode_changed_maps_to_ffi_repeat_mode() {
         let observer_impl = Arc::new(CollectingPlayerObserver::default());
         let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
@@ -814,7 +814,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn track_load_failed_passes_reason_and_auto_skipped() {
         let observer_impl = Arc::new(CollectingPlayerObserver::default());
         let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
@@ -841,7 +841,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn queue_dispatch_forwards_every_remaining_host_event() {
         let item_id = TrackId::from(17_u64);
         let cases: [QueueEventCase; 7] = [
@@ -962,7 +962,7 @@ mod tests {
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
     #[cfg(not(target_os = "linux"))]
-    #[kithara::test(tokio)]
+    #[kithara_test_utils::kithara::test(tokio)]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),

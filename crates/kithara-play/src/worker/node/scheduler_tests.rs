@@ -231,8 +231,8 @@ async fn worker_preload_gate_reopens_after_seek() {
 }
 
 /// Scheduler contracts observed through the product's `chunk_admitted` and
-/// `scheduler_pass` probes. Only the tracing backend records probes in-process.
-#[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+/// `scheduler_pass` probes.
+#[cfg(feature = "usdt")]
 mod probed {
     use kithara_test_utils::test::usdt::{ProbeEvent, Scope, scope};
 

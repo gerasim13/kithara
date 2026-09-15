@@ -38,7 +38,7 @@ fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
     (state, peer)
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn three_peers_maintain_independent_variant_indices() {
     let controller = AbrController::with_estimator(
         fast_settings(),

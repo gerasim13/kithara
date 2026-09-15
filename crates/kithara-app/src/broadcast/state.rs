@@ -63,7 +63,7 @@ mod tests {
         AppHost::new(HostConfig::builder().build()).expect("test host")
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_request_without_a_measured_rate_keeps_asking() {
         let mut bar = broadcaster::<Unmeasured>();
         let host = host();
@@ -75,7 +75,7 @@ mod tests {
         assert!(matches!(bar.phase, Phase::Requested));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn the_bar_asks_its_packager_whether_this_build_can_go_on_air() {
         assert!(Broadcaster::<Ready>::is_available());
         assert!(
@@ -84,7 +84,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_request_no_packager_can_serve_returns_the_bar_to_off() {
         let mut bar = broadcaster::<Absent>();
         let host = host();
@@ -96,7 +96,7 @@ mod tests {
         assert!(!bar.is_on_air());
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_served_request_puts_the_bar_on_air_with_the_stream_url() {
         let mut bar = broadcaster::<Ready>();
         let host = host();
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(bar.url(), Some(Ready::URL));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn stopping_hands_over_a_job_and_finishes_only_on_completion() {
         let mut bar = broadcaster::<Ready>();
         let host = host();
@@ -132,7 +132,7 @@ mod tests {
         assert!(matches!(bar.phase, Phase::Off));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn toggling_a_pending_request_withdraws_it() {
         let mut bar = broadcaster::<Unmeasured>();
         let host = host();

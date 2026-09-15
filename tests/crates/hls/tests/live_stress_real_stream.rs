@@ -307,7 +307,7 @@ fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[kithara::flash(true)]
+#[kithara_test_utils::kithara::flash(true)]
 async fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
     loop {
         if let Poll::Ready(chunk) = poll_chunk(audio, stage) {
@@ -326,7 +326,7 @@ fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
     }
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     browser,
     serial,
@@ -399,7 +399,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     info!(chunks_read, "real DRM playback smoke completed");
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     browser,
     serial,
@@ -651,7 +651,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let _ = events_task.await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -723,7 +723,7 @@ async fn live_real_stream_seek_regression(
     let _ = events_task.await;
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -805,7 +805,7 @@ async fn live_real_stream_seek_resume_native(
     .expect("read phase join");
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,
@@ -1150,7 +1150,7 @@ async fn live_stress_real_stream_seek_read_cache(
 ///
 /// RED before steps 4-6: downloader hot-spins on empty Batch(vec![]) at
 /// playlist tail, hang detector fires after 30s.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     browser,
     serial,
@@ -1233,7 +1233,7 @@ async fn live_ephemeral_small_cache_playback(
 ///
 /// RED: seek invalidates the downloader position; with small cache the
 /// sought segment is often evicted → hang detector fires.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     native,
     serial,

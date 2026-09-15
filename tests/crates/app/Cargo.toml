@@ -21,7 +21,6 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
-    "test-utils",
     "analysis",
     "assets",
     "bufpool",

@@ -117,7 +117,7 @@ fn metrics(processor: &PlayerNodeProcessor) -> RtMetricsSnapshot {
     processor.playback().metrics().snapshot()
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn decode_error_is_counted_not_logged() {
     let processor = render_loaded(faulty_track("broken.mp3", Fault::DecodeError));
 
@@ -127,7 +127,7 @@ fn decode_error_is_counted_not_logged() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
     let (processor, rendered) = render_loaded_blocks(faulty_track("stalled.mp3", Fault::Stall), 4);
 
@@ -142,14 +142,14 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_healthy_track_reports_no_trouble(constant_half: &'static [u8]) {
     let processor = render_loaded(healthy_track(constant_half, "ok.mp3"));
 
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     let (reader, counts) = MockReader::seek_split(spec());
     let (mut processor, mut control) = processor();
@@ -184,7 +184,7 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     let (reader, counts) = MockReader::seek_split(spec());
     let resource = boxed(Resource::from_reader(reader, None), "split.mp3");
@@ -206,7 +206,7 @@ fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn unloading_one_seek_binding_preserves_other_identity() {
     let (first_reader, first_counts) = MockReader::seek_split(spec());
     let first = boxed(Resource::from_reader(first_reader, None), "same.mp3");
@@ -250,7 +250,7 @@ fn unloading_one_seek_binding_preserves_other_identity() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
 
@@ -272,7 +272,7 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, healthy_track(constant_half, "ok.mp3"));

@@ -46,7 +46,7 @@ async fn render_loop(
 ///
 /// `ItemRole::Outgoing` is produced by the player from the crossfade's actual
 /// terminal notification; this test never publishes or injects a player event.
-#[kithara::test(tokio, flash(false))]
+#[kithara_test_utils::kithara::test(tokio, flash(false))]
 async fn outgoing_eof_does_not_advance_the_promoted_successor(
     constant_quiet: &'static [u8],
     constant_loud: &'static [u8],

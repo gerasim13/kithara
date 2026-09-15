@@ -176,7 +176,7 @@ fn drain_player_events(
     events
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(
@@ -197,7 +197,7 @@ async fn player_insert_scenarios(
     assert_eq!(player.item_count(), expected_count);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case(RemoveAtScenario::ExistingItem)]
 #[case(RemoveAtScenario::OutOfBounds)]
 #[case(RemoveAtScenario::ShiftCurrentIndex)]
@@ -233,7 +233,7 @@ async fn player_remove_at_scenarios(
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case(false)]
 #[case(true)]
 async fn player_remove_all_resets_state(
@@ -253,7 +253,7 @@ async fn player_remove_all_resets_state(
     assert_eq!(player.status(), PlayerStatus::Unknown);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn player_advance_through_queue(constant_half: &'static [u8]) {
     let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
@@ -268,7 +268,7 @@ async fn player_advance_through_queue(constant_half: &'static [u8]) {
     assert_eq!(player.current_index(), 2);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn player_advance_emits_event(constant_half: &'static [u8]) {
     let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
@@ -279,7 +279,7 @@ async fn player_advance_emits_event(constant_half: &'static [u8]) {
     assert!(matches!(event, Ok(PlayerEvent::CurrentItemChanged { .. })));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'static [u8]) {
     let (player, _session) = make_fixture_player(0.0);
     let item = make_tagged_resource(constant_half, "item-1", 0.05);
@@ -313,7 +313,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
 /// into the real-time arena is the only place a session wake policy can reach
 /// the resource. A reader left on the direct-consumer default publishes its
 /// reader events inline from the audio callback.
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn an_inserted_resource_adopts_the_session_wake_mode() {
     let (player, _session) = make_fixture_player(0.0);
     let (reader, recorded) = MockReader::wake_mode_tracking(Consts::AUDIO_SPEC);
@@ -341,7 +341,7 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u8]) {
     // Centralization delta: re-selecting the already-current index (e.g. while
     // paused) must not re-announce — announce gates on identity, not on calls.
@@ -367,7 +367,7 @@ fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn replacing_current_item_re_announces_on_next_play(constant_half: &'static [u8]) {
     // Dual of suppression: replacing the audio under the current index must
     // re-announce on the next play — index equality must not mask a change.
@@ -393,7 +393,7 @@ fn replacing_current_item_re_announces_on_next_play(constant_half: &'static [u8]
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn arm_next_loads_item_and_returns_src(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
@@ -405,7 +405,7 @@ fn arm_next_loads_item_and_returns_src(constant_half: &'static [u8]) {
     assert_eq!(src.as_ref(), "memory://item-2");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn seek_seconds_updates_position_optimistically() {
     let (player, _session) = make_fixture_player(0.0);
     player.ensure_engine_started().unwrap();
@@ -417,7 +417,7 @@ fn seek_seconds_updates_position_optimistically() {
     assert_eq!(player.position_seconds(), Some(54.689_879_542));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn arm_next_returns_none_for_empty_slot(constant_half: &'static [u8]) {
     let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
@@ -432,7 +432,7 @@ fn arm_next_returns_none_for_empty_slot(constant_half: &'static [u8]) {
     assert_eq!(player.armed_next(), None);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn arm_next_idempotent_for_same_index(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
@@ -448,7 +448,7 @@ fn arm_next_idempotent_for_same_index(constant_half: &'static [u8]) {
     assert_eq!(player.armed_next(), Some(1));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn arm_next_replaces_previously_armed_slot(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["a", "b", "c"]);
 
@@ -464,7 +464,7 @@ fn arm_next_replaces_previously_armed_slot(constant_half: &'static [u8]) {
     assert_eq!(player.armed_next(), Some(2));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn commit_next_index_mismatch_returns_typed_error(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
@@ -482,7 +482,7 @@ fn commit_next_index_mismatch_returns_typed_error(constant_half: &'static [u8]) 
     ));
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
@@ -506,7 +506,7 @@ fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) 
     assert!(saw_changed, "commit_next must publish CurrentItemChanged");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
@@ -519,7 +519,7 @@ fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
     assert_eq!(player.current_index(), 1);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn unarm_next_clears_when_not_activated_and_unloads(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["a", "b"]);
     let src = player
@@ -532,7 +532,7 @@ fn unarm_next_clears_when_not_activated_and_unloads(constant_half: &'static [u8]
     assert_eq!(src.as_ref(), "memory://b");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
@@ -545,7 +545,7 @@ fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
     assert_eq!(player.current_index(), 1);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["item-1", "item-2", "item-3"]);
     let src = player
@@ -565,7 +565,7 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'
 /// slot, not unload-then-reload. Without this, the second user-driven
 /// switch silently no-ops because `items[index]` was emptied by
 /// `arm_next`'s `take()` and `enqueue_to_processor` returns `None`.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["item-1", "item-2"]);
     player.select_item(0, true).unwrap();

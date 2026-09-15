@@ -27,12 +27,12 @@ impl Consts {
     const WINDOW_FRAMES: usize = 2_048;
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn server() -> TestServerHelper {
     TestServerHelper::new().await
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     native,
     tokio,
     multi_thread,

@@ -1,6 +1,7 @@
-use kithara::{self, bufpool::testing::pools, platform::tokio::task::spawn_blocking};
+use kithara::platform::tokio::task::spawn_blocking;
+use kithara_test_utils::bufpool::pools;
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn byte_buffer_supports_checked_writes() {
     let pools = pools();
     let mut buffer = pools.get::<u8>();
@@ -10,7 +11,7 @@ fn byte_buffer_supports_checked_writes() {
     assert_eq!(&buffer[..], b"hello");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn returned_buffer_is_reused_empty() {
     let pools = pools();
     {
@@ -25,7 +26,7 @@ fn returned_buffer_is_reused_empty() {
     assert!(buffer.capacity() >= 4);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn sample_buffer_has_requested_length() {
     let pools = pools();
     let mut buffer = pools
@@ -36,7 +37,7 @@ fn sample_buffer_has_requested_length() {
     assert_eq!(buffer[0], 1.5);
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn cloned_facade_shares_physical_pools() {
     let pools = pools();
     let clone = pools.clone();
@@ -50,7 +51,7 @@ fn cloned_facade_shares_physical_pools() {
     assert!(buffer.capacity() >= 128);
 }
 
-#[kithara::test(tokio, browser)]
+#[kithara_test_utils::kithara::test(tokio, browser)]
 async fn multi_threaded_contention_preserves_data() {
     let pools = pools();
     let threads = 8usize;

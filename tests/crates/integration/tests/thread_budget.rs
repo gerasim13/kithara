@@ -45,7 +45,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     }
 }
 
-#[kithara::test(serial)]
+#[kithara_test_utils::kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let pools = pools();
@@ -71,7 +71,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     native,
@@ -122,7 +122,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     );
 }
 
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     multi_thread,
     native,
@@ -222,7 +222,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 }
 
 #[ignore = "requires isolated process-wide quiescence"]
-#[kithara::test(serial)]
+#[kithara_test_utils::kithara::test(serial)]
 fn thread_budget_process_ceiling() {
     let count = wait_for_named_threads(0, Duration::from_secs(30));
     assert_eq!(
