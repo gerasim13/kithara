@@ -98,9 +98,18 @@ fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
     (peak, left)
 }
 
+/// Loads the symbol cache std keeps for the rest of the process the first
+/// time a panic prints a backtrace, so the overflow panic below cannot read
+/// as heap a dropped scope left behind.
+fn prime_panic_backtrace() {
+    let primed = catch_unwind(|| panic!("priming the panic backtrace cache"));
+    assert!(primed.is_err());
+}
+
 #[test]
 fn continuous_probes_keep_the_heap_bounded() {
     setup_tracing();
+    prime_panic_backtrace();
 
     let (peak, left) = hammer("unobserved", "unobserved");
     eprintln!("unobserved: peak +{peak} B, left +{left} B");
