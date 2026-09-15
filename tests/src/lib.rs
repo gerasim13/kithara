@@ -115,6 +115,10 @@ pub mod test_defaults;
 pub mod test_server;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod token_store;
+/// The probe recorder the native suites read. `kithara-test-utils` compiles
+/// the USDT module only off wasm, so the re-export follows it there rather
+/// than breaking every wasm test binary on an import that cannot resolve.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod usdt_trace;
 /// Scenario machinery for the user-simulation suites: the action vocabulary,
 /// the scripted scenarios built from it, and the harness that applies them to a
