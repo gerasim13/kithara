@@ -37,7 +37,7 @@ wasm MODE="check" *ARGS:
         ;;
     esac
 
-# Android tasks: build, aar, or another xtask mode.
+# Android tasks: build, aar, doc, or another xtask mode.
 [positional-arguments]
 android MODE="build" *ARGS:
     #!/usr/bin/env bash
@@ -50,6 +50,9 @@ android MODE="build" *ARGS:
         ;;
       aar)
         just _xtask android aar
+        ;;
+      doc)
+        just _xtask android doc "$@"
         ;;
       *)
         just _xtask android "$mode" "$@"
