@@ -14,6 +14,11 @@ env:
   # unset fails to build rather than to find a file. The guest keeps it beside
   # the rest of the CI state it owns.
   KITHARA_FIXTURE_CACHE: C:\kithara-ci\fixtures
+  # The guest is the only Windows machine, so its build directory is state it
+  # keeps rather than something a lane claims on a shared root. A checkout is
+  # wiped on every run, so leaving this unset rebuilt the workspace - the part
+  # of this lane that costs hours - from source each time.
+  CARGO_TARGET_DIR: C:\kithara-ci\target
 
 concurrency:
   group: windows-${{ github.ref }}

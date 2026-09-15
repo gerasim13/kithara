@@ -20,6 +20,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # A called workflow inherits nothing from its caller, so a workflow that runs
+  # a lane on the Linux fleet says for itself where that lane builds and what it
+  # reuses - the same three the shared lane workflow states. Without them the
+  # lane builds in the checkout, which `actions/checkout` wipes on every run, so
+  # the device suite recompiled the workspace from source each time.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  CARGO_TARGET_DIR: /cache/lanes/lane-android-test
 
 concurrency:
   group: android-${{ github.ref }}
