@@ -267,3 +267,36 @@ fn enabling_without_a_parent_withdraws_local_geometry() {
         .expect("parent geometry becomes available");
     assert_eq!(group.snapshot().state(), BeatGridState::Live);
 }
+
+#[kithara::test]
+fn local_tempo_on_a_group_without_geometry_starts_at_its_target() {
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("group identity"),
+        NonZeroU32::new(48_000).expect("sample rate"),
+        SessionEpoch::new(0),
+        SyncMemberKind::Grid,
+        SyncMode::LocalSync,
+    );
+    group.tempo = TempoSource::Local(BeatsPerMinute::try_from(90.0).expect("tempo"));
+    let now = SessionFrame::new(48_000);
+    let admission = group
+        .transact_at(
+            SyncOperation::Tempo {
+                target: group.id(),
+                tempo: BeatsPerMinute::try_from(120.0).expect("tempo"),
+            },
+            now,
+        )
+        .expect("a group without geometry commits its local tempo");
+    assert!(matches!(admission.0, SyncAdmission::StateChanged { .. }));
+    let grid = group.snapshot();
+    let beat = |frame| match grid.beat_at(MapPoint::new(
+        grid.stamp(),
+        MapPosition::Session(SessionFrame::new(frame)),
+    )) {
+        BeatGridQuery::Resolved(value) => f64::from(*value.value().value()),
+        other => panic!("committed local grid must resolve: {other:?}"),
+    };
+    assert_eq!(beat(48_000), 0.0);
+    assert_eq!(beat(96_000), 2.0);
+}

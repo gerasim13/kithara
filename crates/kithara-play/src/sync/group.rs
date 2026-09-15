@@ -242,16 +242,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     ) -> Result<SessionAnchor, SyncError> {
         let axis = self.session_axis()?;
         let target = f64::from(tempo) / SECONDS_PER_MINUTE;
-        let playing = match self
-            .grid
-            .tempo_at(MapPoint::new(self.grid.stamp(), MapPosition::Session(now)))
-        {
-            BeatGridQuery::Resolved(estimate) => f64::from(*estimate.value()) / SECONDS_PER_MINUTE,
-            _ => {
-                return Err(SyncError::InvalidGroupGridState {
-                    state: self.grid.state(),
-                });
+        let origin = MapPoint::new(self.grid.stamp(), MapPosition::Session(now));
+        let playing = match (self.grid.state(), self.grid.tempo_at(origin)) {
+            (_, BeatGridQuery::Resolved(estimate)) => {
+                f64::from(*estimate.value()) / SECONDS_PER_MINUTE
             }
+            (BeatGridState::Unavailable(_), _) => target,
+            (state, _) => return Err(SyncError::InvalidGroupGridState { state }),
         };
         SessionAnchor::new(now, beat, playing, axis)
             .and_then(|anchor| anchor.retarget(now, target, self.tempo_smoothing_seconds))
