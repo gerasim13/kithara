@@ -6,7 +6,7 @@ use firewheel::dsp::filter::smoothing_filter::DEFAULT_SMOOTH_SECONDS;
 use kithara::{
     assets::AssetStore,
     host::HostConfig,
-    platform::time::{self, Duration},
+    platform::time::Duration,
     play::{
         EqBandConfig, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         ResourceConfig, ResourceSrc, SessionError,
@@ -108,6 +108,7 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
             .sample_rate(sample_rate)
             .worker(worker)
             .maybe_eq_layout(case.eq_layout.map(layout))
+            .block_on_underrun(true)
             .build(),
     );
     let queue = Queue::new(QueueConfig::builder().player(player).build());
@@ -141,11 +142,13 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
     (harness, id.as_u64())
 }
 
-/// Render `blocks` at the block's own pace: a tight render loop outruns the
-/// decoder and the window fills with zeros, which every oracle here would pass.
+/// Render `blocks` of decoded output.
+///
+/// The fixture player parks its reads on an underrun, so the loop advances at
+/// the decoder's pace without a wall-clock budget: every block returned here
+/// carries frames the decoder produced, and a jump across a window boundary can
+/// only have come from DSP.
 async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
-    let block_budget =
-        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
     let mut pcm = Vec::with_capacity(blocks * Consts::BLOCK_FRAMES * Consts::CHANNELS);
     for _ in 0..blocks {
         harness
@@ -153,12 +156,11 @@ async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
             .await
             .expect("tick sine queue");
         pcm.extend(harness.render(Consts::BLOCK_FRAMES).await);
-        time::sleep(block_budget).await;
     }
     pcm
 }
 
-/// Render at the block's pace until a rendered block satisfies `arrived`, or
+/// Render until a rendered block satisfies `arrived`, or
 /// `SETTLE_BLOCKS` have passed: the control path has latency, and the step is
 /// measured on the window that contains it. Returns the window and whether the
 /// change arrived inside it.
@@ -207,6 +209,32 @@ fn assert_step_is_ramped(
         "{label}: a step reached DSP unsmoothed: max jump {observed} > bound {bound} (baseline \
          {baseline}, amplitude delta {amplitude_delta}, smooth {smooth_seconds}s)"
     );
+}
+
+/// Every window the smoothing oracles read is decoded output.
+///
+/// A render the decoder cannot fill writes the frames it had and zero-fills the
+/// rest, and the silence lands inside the window as a jump no ramp bound
+/// allows: the oracle then reports an unsmoothed step the DSP never produced.
+/// The fixture parks its reads instead, so an unpaced loop cannot manufacture
+/// that gap.
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+async fn an_unpaced_render_loop_returns_no_silent_block() {
+    let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
+
+    let pcm = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+
+    let block = Consts::BLOCK_FRAMES * Consts::CHANNELS;
+    let quietest = pcm
+        .chunks_exact(block)
+        .map(peak)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        quietest > Consts::AUDIBLE_PEAK,
+        "an unpaced render returned a block at peak {quietest}; the window the step oracles \
+         measure carries frames the decoder never produced"
+    );
+    harness.close().await;
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
