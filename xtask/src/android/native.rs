@@ -149,8 +149,14 @@ pub(crate) fn run_binary(session: &Path, binary: &Path, args: &[String]) -> Resu
 }
 
 impl Prepared {
-    pub(crate) fn run(&self, device_url: &str, cancel: &child::Cancel) -> Result<()> {
-        let result = self.run_inner(device_url, cancel);
+    /// `filter` is a nextest expression narrowing the run to the tests it selects.
+    pub(crate) fn run(
+        &self,
+        device_url: &str,
+        filter: Option<&str>,
+        cancel: &child::Cancel,
+    ) -> Result<()> {
+        let result = self.run_inner(device_url, filter, cancel);
         let _ = write_cache_stats(&self.session, &self.evidence);
         let stopped = self.session.stop();
         let removed = self.session.control(
@@ -172,7 +178,12 @@ impl Prepared {
         }
     }
 
-    fn run_inner(&self, device_url: &str, cancel: &child::Cancel) -> Result<()> {
+    fn run_inner(
+        &self,
+        device_url: &str,
+        filter: Option<&str>,
+        cancel: &child::Cancel,
+    ) -> Result<()> {
         let started = std::time::Instant::now();
         let mut session = self.session.clone();
         session
@@ -186,7 +197,7 @@ impl Prepared {
             self.evidence.join("session.json"),
             serde_json::to_vec_pretty(&session)?,
         )?;
-        let mut list = self.nextest(NextestAction::List)?;
+        let mut list = self.nextest(NextestAction::List, filter)?;
         list.args(["--message-format", "json"]);
         logged(
             &mut list,
@@ -198,7 +209,7 @@ impl Prepared {
         if junit.exists() {
             fs::remove_file(&junit)?;
         }
-        let mut run = self.nextest(NextestAction::Run)?;
+        let mut run = self.nextest(NextestAction::Run, filter)?;
         let result = logged(
             &mut run,
             &self.evidence.join("run.stdout.log"),
@@ -215,7 +226,7 @@ impl Prepared {
         Ok(())
     }
 
-    fn nextest(&self, action: NextestAction) -> Result<Command> {
+    fn nextest(&self, action: NextestAction, filter: Option<&str>) -> Result<Command> {
         let executable = std::env::current_exe()?;
         let runner = serde_json::to_string(&[
             executable.display().to_string(),
@@ -236,6 +247,9 @@ impl Prepared {
             .envs(&self.environment)
             .env_remove("FFMPEG_DIR")
             .env("CARGO_TARGET_DIR", &self.cargo_target);
+        if let Some(filter) = filter {
+            command.args(["-E", filter]);
+        }
         Ok(command)
     }
 }

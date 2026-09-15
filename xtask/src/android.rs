@@ -89,6 +89,9 @@ pub(crate) enum AndroidCommand {
         /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
         #[arg(long)]
         skip_build: bool,
+        /// Nextest expression selecting the Rust tests to run on the device.
+        #[arg(long, env = "KITHARA_ANDROID_TEST_FILTER")]
+        filter: Option<String>,
     },
 }
 
@@ -148,12 +151,14 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
             avd,
             serial,
             skip_build,
+            filter,
         } => run_tests(
             &ctx.root,
             &ctx.config,
             profile,
             request(avd.as_deref(), serial.as_deref()),
             skip_build,
+            filter.as_deref().filter(|filter| !filter.is_empty()),
             &ext.android,
         ),
     }
@@ -516,6 +521,7 @@ fn run_tests(
     profile: BuildProfile,
     request: Request<'_>,
     skip_build: bool,
+    filter: Option<&str>,
     android: &AndroidConfig,
 ) -> Result<()> {
     let _run_lease = test_run_lease(workspace_root)?;
@@ -616,7 +622,7 @@ fn run_tests(
             "rust_prepare",
             native::prepare(workspace_root, config, selected, evidence.path(), &cancel),
         )?;
-        let rust = record.stage("rust_tests", native.run(&device_url, &cancel));
+        let rust = record.stage("rust_tests", native.run(&device_url, filter, &cancel));
         let native_report = evidence.path().join("native/junit.xml");
         if native_report.is_file() {
             results::merge(&[instrumentation, native_report], &report)?;

@@ -5,7 +5,17 @@ name: Android
 # which is what makes running them here worth the minutes.
 on:
   workflow_call:
+    inputs:
+      filter:
+        description: nextest expression for the Rust tests; empty runs them all
+        required: false
+        type: string
   workflow_dispatch:
+    inputs:
+      filter:
+        description: nextest expression for the Rust tests; empty runs them all
+        required: false
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,6 +40,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run instrumentation and Rust tests
+        env:
+          KITHARA_ANDROID_TEST_FILTER: ${{ inputs.filter }}
         run: just ci lane android-test --kind platforms
 
       - name: Upload test results and run evidence
