@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "probe"))]
-use std::collections::HashMap;
 use std::{
     ops::Deref,
     sync::{Mutex, PoisonError},
@@ -24,12 +22,6 @@ use crate::{
     navigation::NavigationState,
     track::{TrackRecord, Tracks},
 };
-
-/// Test-only respawn resource cache. Aliased so the field declaration
-/// stays free of the structural `Arc<Mutex<HashMap<…>>>` god-map
-/// pattern (see `arch.no-arc-mutex-godmap`).
-#[cfg(any(test, feature = "probe"))]
-pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 
 /// AVQueuePlayer-analogue orchestration facade.
 ///
@@ -61,23 +53,10 @@ where
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: AtomicTrackId,
-    /// Whether this queue auto-starts playback once the first registered
-    /// track finishes loading. Configured via
-    /// [`QueueConfig::should_autoplay`]. `false` means the user must
-    /// call [`Queue::select`] manually.
-    ///
-    /// Currently consumed only by the test-utils harness — the
-    /// production register/insert paths do not arm autoplay yet (see
-    /// `register_for_test` / `complete_load_for_test`). Gated with the
-    /// same `cfg` so the field carries no cost outside tests.
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) should_autoplay: bool,
-    /// First registered track id awaiting autoplay-on-load. Set when
-    /// `autoplay = true` and the queue has no active selection;
-    /// consumed when the matching id finishes loading.
-    /// [`CrossfadeArm::Disarmed`] = no pending target.
-    #[cfg(any(test, feature = "probe"))]
+    /// Track whose load completion starts playback: the first one appended
+    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
     pub(super) autoplay_target: AtomicTrackId,
+    pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
@@ -89,13 +68,6 @@ where
     /// committed, so the superseded track barges in. Held only across the synchronous
     /// apply critical section — never across an `.await`.
     pub(super) select_apply: Arc<Mutex<()>>,
-    /// Test-only respawn resource cache. Populated by
-    /// [`Queue::supply_test_resource_for_respawn`] and consumed by
-    /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
-    /// re-selected. Lets harness tests exercise the respawn path
-    /// without a real loader.
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) test_resources: Arc<Mutex<TestResources>>,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -183,10 +155,7 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
-            #[cfg(any(test, feature = "probe"))]
             should_autoplay,
-            #[cfg(not(any(test, feature = "probe")))]
-                should_autoplay: _,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -212,19 +181,15 @@ where
             loader,
             tracks,
             bus,
-            #[cfg(any(test, feature = "probe"))]
-            should_autoplay,
             admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
-            #[cfg(any(test, feature = "probe"))]
-            test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
-            #[cfg(any(test, feature = "probe"))]
             autoplay_target: AtomicTrackId::disarmed(),
+            should_autoplay,
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {
@@ -383,8 +348,8 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode,
-        SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
+        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq,
+        SlotId, bridge::slot_channels,
     };
     use kithara_test_utils::kithara;
 
@@ -439,7 +404,6 @@ pub(crate) mod tests {
                 }
                 Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
                 Cmd::QueryStreamShape => Reply::StreamShape(None),
-                Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
                 _ => Reply::Ok,
             };
             Ok(reply)

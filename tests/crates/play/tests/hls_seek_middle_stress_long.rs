@@ -28,17 +28,15 @@ use kithara_integration_tests::{
     event::TestEvent,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
+    test_defaults::Consts as Shared,
+    usdt_trace,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
         wait_for_position_event,
     },
 };
-use kithara_test_utils::probe::capture::install as install_recorder;
 
-use crate::{
-    bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
-};
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -174,38 +172,37 @@ async fn observe_playback(
 
 async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, target: f64) {
     let mut progress_rx = queue.subscribe();
-    let recorder = install_recorder();
+    let trace = usdt_trace::scope();
     queue
         .seek(target)
         .unwrap_or_else(|error| panic!("{stage}: seek to {target:.2}s: {error}"));
 
+    let seek_output = |event: &usdt_trace::ProbeEvent| {
+        event.target == "kithara_audio_probe"
+            && event.probe == "post_seek_output"
+            && event
+                .field("pending")
+                .is_some_and(|pending| pending != 0 && event.field("epoch") == Some(pending))
+    };
     timeout(Consts::RATE_SEEK_PROGRESS_BUDGET, async {
-        let output = recorder
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_audio_probe"
-                        && event.probe_name() == Some("post_seek_output")
-                        && event.u64("pending").is_some_and(|pending| {
-                            pending != 0 && event.u64("epoch") == Some(pending)
-                        })
-                },
-                Consts::RATE_SEEK_PROGRESS_BUDGET,
-            )
-            .await
+        trace
+            .wait_for(|events| events.iter().any(seek_output))
+            .await;
+        let events = trace.events();
+        let output_index = events
+            .iter()
+            .position(seek_output)
             .unwrap_or_else(|| panic!("{stage}: seek produced no output"));
-        let output_seq = output.seq().expect("probe sequence");
-        let seek_epoch = output.u64("epoch").expect("post-seek output epoch");
-        recorder
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_stream_probe"
-                        && event.probe_name() == Some("write_playhead")
-                        && event.seq().is_some_and(|seq| seq > output_seq)
-                },
-                Consts::RATE_SEEK_PROGRESS_BUDGET,
-            )
-            .await
-            .unwrap_or_else(|| panic!("{stage}: HLS read did not progress after seek"));
+        let seek_epoch = events[output_index]
+            .field("epoch")
+            .expect("post-seek output epoch");
+        trace
+            .wait_for(|events| {
+                events[output_index + 1..].iter().any(|event| {
+                    event.target == "kithara_stream_probe" && event.probe == "write_playhead"
+                })
+            })
+            .await;
 
         loop {
             match progress_rx.recv().await.map(|envelope| envelope.event) {

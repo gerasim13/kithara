@@ -11,13 +11,14 @@ autotests = false
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-kithara = { workspace = true, features = ["mock", "probe", "offline", "signal", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = ["usdt", "mock", "offline", "signal", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = [
+    "usdt",
     "analysis",
     "backend-cpal",
     "encode",
@@ -25,7 +26,6 @@ kithara = { workspace = true, features = [
     "ffmpeg",
     "full",
     "mock",
-    "probe",
     "queue",
     "resample-rubato",
     "stretch-signalsmith",

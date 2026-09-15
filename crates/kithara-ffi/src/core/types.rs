@@ -4,8 +4,8 @@ use kithara::{
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        ItemStatus, PlayError, PlayerStatus, RouteChangeReason, StretchBackendKind,
-        TimeControlStatus, TimeRange,
+        ItemStatus, PlayError, PlayerStatus, RouteChangeReason, SessionDuckingMode,
+        StretchBackendKind, TimeControlStatus, TimeRange,
     },
     queue::{AdvanceReason, QueueRepeatMode, RepeatMode, TrackStatus as TS, Transition},
     stream::{AudioCodec, ContainerFormat},
@@ -312,6 +312,28 @@ impl From<RepeatMode> for FfiRepeatMode {
             RepeatMode::One => Self::One,
             RepeatMode::All => Self::All,
             _ => Self::Unknown,
+        }
+    }
+}
+
+/// How far the whole session output drops under a competing sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDuckingMode {
+    /// Full level.
+    Off,
+    /// Lowered to 40%.
+    Soft,
+    /// Lowered to 20%.
+    Hard,
+}
+
+impl From<FfiDuckingMode> for SessionDuckingMode {
+    fn from(value: FfiDuckingMode) -> Self {
+        match value {
+            FfiDuckingMode::Off => Self::Off,
+            FfiDuckingMode::Soft => Self::Soft,
+            FfiDuckingMode::Hard => Self::Hard,
         }
     }
 }

@@ -5,9 +5,9 @@ use std::sync::LazyLock;
 use arbitrary::Arbitrary;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    bufpool::testing::{Pools, TestPools, pools},
     play::{ResourceConfig, ResourceSrc},
 };
+use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 use libfuzzer_sys::fuzz_target;
 
 static POOLS: LazyLock<Pools> = LazyLock::new(pools);

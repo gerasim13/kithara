@@ -6,7 +6,10 @@ use kithara::{
     events::TrackId,
     host::{HostConfig, HostOwned},
     platform::time::{self, Duration},
-    play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition},
+    play::{
+        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
+        SessionDuckingMode,
+    },
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -61,6 +64,14 @@ impl MixHarness {
             );
         }
         Self { host, players }
+    }
+
+    async fn set_ducking(&self, mode: SessionDuckingMode) {
+        let player = self.players[0].control().clone();
+        self.host
+            .run(move || player.set_session_ducking(mode))
+            .await
+            .expect("set session ducking");
     }
 
     async fn play(&self, values: &[&'static [u8]]) {
@@ -284,6 +295,41 @@ async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'stat
         harness.players[0].volume(),
         1.0,
         "session mix must not mirror player content volume"
+    );
+    harness.close().await;
+}
+
+/// Ducking lowers the whole session output, deeper for `Hard` than `Soft`, and
+/// `Off` restores the undocked level on a playing session.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn ducking_lowers_and_restores_the_session_output(constant_four: &'static [u8]) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    let undocked = harness.steady_peak().await;
+    assert_near(undocked, 0.4, "undocked playback");
+
+    let mut levels = Vec::new();
+    for mode in [SessionDuckingMode::Soft, SessionDuckingMode::Hard] {
+        harness.set_ducking(mode).await;
+        levels.push(harness.steady_peak().await);
+    }
+    let [soft, hard] = levels[..] else {
+        unreachable!("two ducked levels");
+    };
+    assert!(
+        soft < undocked * 0.5 && soft > 0.0,
+        "soft ducking must lower the output: undocked={undocked}, soft={soft}"
+    );
+    assert!(
+        hard < soft,
+        "hard ducking must go below soft: soft={soft}, hard={hard}"
+    );
+
+    harness.set_ducking(SessionDuckingMode::Off).await;
+    assert_near(
+        harness.steady_peak().await,
+        undocked,
+        "ducking off restores the level",
     );
     harness.close().await;
 }

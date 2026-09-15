@@ -132,6 +132,11 @@ pub mod ui {
     pub use kithara_ui::*;
 }
 
+#[cfg(feature = "usdt")]
+pub mod usdt {
+    pub use kithara_test_utils::probe::operation_id;
+}
+
 #[cfg(feature = "warp")]
 pub mod warp {
     pub use kithara_warp::*;
@@ -177,12 +182,8 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-#[cfg(feature = "test-utils")]
-pub use kithara_test_utils::{kithara::mock, no_block};
-#[cfg(feature = "probe")]
-pub use kithara_test_utils::{
-    kithara::{fixture, test},
-    kithara_facade::{allow_block, flash, no_block},
+pub use kithara_test_macros::{
+    allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
 };
 #[cfg(all(
     feature = "warp",

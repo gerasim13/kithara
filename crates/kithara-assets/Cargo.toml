@@ -11,7 +11,7 @@ categories = ["caching"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 # HTTP backend forwarding. kithara-assets reaches the single kithara-net
 # package only through kithara-storage -> kithara-test-utils -> kithara-events
 # (network event types). These forwards give kithara-net a backend in
@@ -57,10 +57,10 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 tempfile = { workspace = true }
 
 [dev-dependencies]
-kithara-assets = { path = "." }
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-assets = { path = ".", features = ["usdt"] }
+kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }

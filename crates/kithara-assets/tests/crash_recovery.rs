@@ -11,9 +11,8 @@ use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, FlushHub, FlushPolicy, ResourceKey, StorageBackend,
     WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{CancelToken, time::Duration};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 use tempfile::tempdir;
 

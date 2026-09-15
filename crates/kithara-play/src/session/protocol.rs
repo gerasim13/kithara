@@ -1,5 +1,5 @@
 mod wire {
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU32, NonZeroUsize};
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
@@ -109,7 +109,6 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
-        #[cfg(any(test, feature = "probe"))]
         SetPlayerMasterVolumes {
             levels: Vec<PlayerLevel>,
         },
@@ -134,7 +133,6 @@ mod wire {
         SetSessionDucking {
             mode: SessionDuckingMode,
         },
-        SessionDucking,
         SetSessionTempo {
             tempo: Tempo,
         },
@@ -147,6 +145,9 @@ mod wire {
         QuerySessionTransport,
         InvalidateAudioRoute {
             reason: String,
+        },
+        SetSampleRate {
+            sample_rate: NonZeroU32,
         },
         QuerySampleRate,
         QueryStreamShape,
@@ -173,7 +174,6 @@ mod wire {
     pub enum Reply {
         Ok,
         PlayerRegistered(RegisteredPlayer),
-        SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
@@ -237,10 +237,15 @@ mod handle {
     };
     use kithara_warp::BeatGridId;
 
-    #[cfg(any(test, feature = "probe"))]
-    use super::wire::PlayerLevel;
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
-    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
+    use super::wire::{
+        AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionSampleRate,
+    };
+    use crate::{
+        api::{SessionDuckingMode, SlotId},
+        effects::eq::EqBandConfig,
+        error::PlayError,
+        rt::StreamShape,
+    };
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -401,6 +406,10 @@ mod handle {
             .map(|_| ())
         }
 
+        pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
+        }
+
         #[must_use]
         pub(crate) fn pending() -> Self {
             Self(Arc::new(SessionSlot {
@@ -463,7 +472,6 @@ mod handle {
             .map(|_| ())
         }
 
-        #[cfg(any(test, feature = "probe"))]
         pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
             if levels.is_empty() {
                 return Ok(());

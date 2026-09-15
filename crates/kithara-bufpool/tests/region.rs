@@ -2,12 +2,12 @@ use std::{mem::size_of, sync::Barrier, thread};
 
 use kithara_bufpool::{
     HasPool, OverallBudget, Percent, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey,
-    VecKey, pool_schema, testing::TestPools,
+    VecKey, pool_schema,
 };
 use kithara_platform::sync::Arc;
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 
 fn config(max_buffers: usize) -> PoolConfig {
     PoolConfig::builder().max_buffers(max_buffers).build()

@@ -1,5 +1,14 @@
 include!(concat!(env!("OUT_DIR"), "/app_config_baked.rs"));
 
+/// The value a `$KITHARA_...` reference resolves to: the process environment
+/// first, then the value this build baked in obfuscated. Tests that talk to a
+/// key server read their credentials here, so a test binary carries them the
+/// same way the application does.
+#[must_use]
+pub fn secret(name: &str) -> Option<String> {
+    std::env::var(name).ok().or_else(|| baked_env(name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::baked_env;

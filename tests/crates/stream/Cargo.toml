@@ -18,15 +18,15 @@ no-block = ["kithara/no-block"]
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "usdt",
     "events",
     "platform",
-    "probe",
     "storage",
     "stream",
     "tokio-net",
 ] }
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 futures = { workspace = true }
 thiserror = { workspace = true }

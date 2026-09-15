@@ -14,11 +14,11 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    usdt_trace::{self, ProbeEvent},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_sized_wav_forty_eight, hls_sized_wav_hundred};
 use kithara_test_fixtures::signal;
-use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 use url::Url;
 
@@ -169,15 +169,15 @@ impl AssetOpenStats {
 /// Real asset-store backend opens during the run: each cache miss reaches
 /// `EvictAssets::{acquire,open}_resource_with_ctx`, which fire the
 /// `kithara_assets_probe` probe. Cache hits short-circuit above this layer.
-fn asset_open_stats(recorder: &Recorder) -> AssetOpenStats {
+fn asset_open_stats(events: &[ProbeEvent]) -> AssetOpenStats {
     let mut stats = AssetOpenStats::default();
-    for event in recorder.snapshot() {
+    for event in events {
         if event.target != "kithara_assets_probe" {
             continue;
         }
-        match event.probe_name() {
-            Some("acquire_resource_with_ctx") => stats.record_acquire(),
-            Some("open_resource_with_ctx") => stats.record_open(),
+        match event.probe {
+            "acquire_resource_with_ctx" => stats.record_acquire(),
+            "open_resource_with_ctx" => stats.record_open(),
             _ => {}
         }
     }
@@ -197,9 +197,9 @@ fn assert_backend_open_count(
     fixture: SeekAudioFixture,
     segment_count: usize,
     cache_capacity_override: Option<usize>,
-    recorder: &Recorder,
+    events: &[ProbeEvent],
 ) {
-    let stats = asset_open_stats(recorder);
+    let stats = asset_open_stats(events);
     let opens = stats.total;
     let full_cache = cache_capacity_override.is_some_and(|cap| cap >= segment_count);
     info!(
@@ -212,15 +212,14 @@ fn assert_backend_open_count(
         full_cache,
         "asset-store backend opens during seek stress"
     );
+    let bound = segment_count + FULL_CACHE_OPEN_SLACK;
     if full_cache {
-        let bound = segment_count + FULL_CACHE_OPEN_SLACK;
         assert!(
             opens <= bound,
             "full cache must open each segment ~once (no thrash): opens={opens}, \
              segment_count={segment_count}, bound={bound}, stats={stats:?}"
         );
     } else {
-        let bound = segment_count + FULL_CACHE_OPEN_SLACK;
         assert!(
             stats.acquire <= bound,
             "capped cache must not re-acquire segment resources repeatedly: \
@@ -234,12 +233,12 @@ fn assert_backend_open_count(
     }
 }
 
-/// Snapshot of the three HLS layout/queue-reset probe counts at one instant
-/// in the run. The per-seek-churn contract compares two of these to isolate
-/// steady-state churn from one-time startup size resolution. The marker
-/// probes sit on the three HLS layout/queue reset sites (`Frame::recompute`,
-/// `rebuild_queue`, `reset_for_seek`) that should stay invariant across
-/// same-variant seeks on a fully-cached single-variant in-memory track.
+/// The three HLS layout/queue-reset probe counts at one instant in the run.
+/// The per-seek-churn contract compares two of these to isolate steady-state
+/// churn from one-time startup size resolution. The marker probes sit on the
+/// three HLS layout/queue reset sites (`Frame::recompute`, `rebuild_queue`,
+/// `reset_for_seek`) that should stay invariant across same-variant seeks on
+/// a fully-cached single-variant in-memory track.
 #[derive(Clone, Copy, Debug)]
 struct ChurnSnapshot {
     recompute: usize,
@@ -247,25 +246,21 @@ struct ChurnSnapshot {
     reset_for_seek: usize,
 }
 
-/// Tally all three `kithara_hls_probe` reset-site counts from a SINGLE
-/// recorder snapshot. The recorder buffer holds 100k+ probe events by the
-/// end of a 1000-seek run and `Recorder::snapshot` clones it whole, so this
-/// counts the three probe names in one pass rather than re-cloning the buffer
-/// once per name. Counts are identical to per-name filtering.
-fn snapshot_hls_churn(recorder: &Recorder) -> ChurnSnapshot {
+/// Tallies the three `kithara_hls_probe` reset-site counts in one pass.
+fn snapshot_hls_churn(events: &[ProbeEvent]) -> ChurnSnapshot {
     let mut snap = ChurnSnapshot {
         recompute: 0,
         rebuild_queue: 0,
         reset_for_seek: 0,
     };
-    for event in recorder.snapshot() {
+    for event in events {
         if event.target != "kithara_hls_probe" {
             continue;
         }
-        match event.probe_name() {
-            Some("recompute") => snap.recompute += 1,
-            Some("rebuild_queue") => snap.rebuild_queue += 1,
-            Some("reset_for_seek") => snap.reset_for_seek += 1,
+        match event.probe {
+            "recompute" => snap.recompute += 1,
+            "rebuild_queue" => snap.rebuild_queue += 1,
+            "reset_for_seek" => snap.reset_for_seek += 1,
             _ => {}
         }
     }
@@ -551,7 +546,7 @@ async fn stress_seek_audio_hls(
         )
         .block_on_underrun(true)
         .build();
-    let recorder = install_recorder();
+    let trace = usdt_trace::scope();
 
     let mut audio = worker
         .open(config)
@@ -581,7 +576,6 @@ async fn stress_seek_audio_hls(
         "Audio spec"
     );
 
-    let churn_recorder = recorder.clone();
     let result = spawn_blocking(move || {
         let mut warmup_churn: Option<ChurnSnapshot> = None;
         let chunk_duration_secs = 0.05;
@@ -718,7 +712,7 @@ async fn stress_seek_audio_hls(
             total_samples_read += n as u64;
 
             if i + 1 == WARMUP_K {
-                warmup_churn = Some(snapshot_hls_churn(&churn_recorder));
+                warmup_churn = Some(snapshot_hls_churn(&usdt_trace::events()));
             }
 
             if (i + 1) % 200 == 0 {
@@ -733,8 +727,6 @@ async fn stress_seek_audio_hls(
                 );
             }
         }
-
-        let end_churn = snapshot_hls_churn(&churn_recorder);
 
         info!(
             successful_reads,
@@ -823,6 +815,7 @@ async fn stress_seek_audio_hls(
             }
         }
 
+        let end_churn = snapshot_hls_churn(&usdt_trace::events());
         let warmup_churn =
             warmup_churn.expect("warmup churn snapshot captured (WARMUP_K < SEEK_ITERATIONS)");
         (warmup_churn, end_churn)
@@ -832,7 +825,12 @@ async fn stress_seek_audio_hls(
     match result {
         Ok((warmup_churn, end_churn)) => {
             assert_seek_size_probes(fixture, &counter);
-            assert_backend_open_count(fixture, segment_count, cache_capacity_override, &recorder);
+            assert_backend_open_count(
+                fixture,
+                segment_count,
+                cache_capacity_override,
+                &trace.events(),
+            );
             let full_cache = cache_capacity_override.is_some_and(|cap| cap >= segment_count);
             if ephemeral && matches!(fixture, SeekAudioFixture::WavFileLike) && full_cache {
                 assert_seek_churn_steady_state(warmup_churn, end_churn);

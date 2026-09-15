@@ -83,7 +83,7 @@ impl TestServer {
     );
 }
 
-#[::kithara::fixture]
+#[kithara::fixture]
 pub async fn test_server() -> TestServer {
     TestServer::new().await
 }
@@ -661,7 +661,7 @@ impl PackagedTestServer {
     }
 }
 
-#[::kithara::fixture]
+#[kithara::fixture]
 pub async fn packaged_test_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }

@@ -37,7 +37,7 @@ fn cleanup_failure_blocks_successor_publication() {
     drop(lease);
 
     assert!(
-        index.has_slot_for_test(&key),
+        index.inner.slots.contains_key(&key),
         "failed cleanup must keep an exact tombstone"
     );
     assert_eq!(

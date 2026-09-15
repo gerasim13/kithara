@@ -54,6 +54,34 @@ fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
     )
 }
 
+/// One sample level held for the whole track: a queue entry whose loudness
+/// tells which track is playing.
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::quiet_0_4s(17_640, 3_276)]
+#[case::quiet_1s(44_100, 3_276)]
+#[case::quiet_1_5s(66_150, 3_276)]
+#[case::quiet_8s(352_800, 3_276)]
+#[case::quiet_30s(1_323_000, 3_276)]
+#[case::quiet_120s(5_292_000, 3_276)]
+#[case::two_1s(44_100, 6_553)]
+#[case::three_0_2s(8_820, 9_830)]
+#[case::three_0_4s(17_640, 9_830)]
+#[case::three_1s(44_100, 9_830)]
+#[case::three_5s(220_500, 9_830)]
+#[case::three_8s(352_800, 9_830)]
+#[case::four_1_5s(66_150, 13_106)]
+#[case::loud_0_4s(17_640, 26_213)]
+#[case::loud_0_5s(22_050, 26_213)]
+#[case::loud_1s(44_100, 26_213)]
+#[case::loud_1_5s(66_150, 26_213)]
+#[case::loud_8s(352_800, 26_213)]
+#[case::loud_30s(1_323_000, 26_213)]
+fn constant_wav(total_frames: usize, level: i16) -> Vec<u8> {
+    wav_from_fn(Consts::SAMPLE_RATE, Consts::CHANNELS, total_frames, |_| {
+        level
+    })
+}
+
 /// 440 Hz tone with two lower-amplitude source-time markers.
 #[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK, Consts::MARKER_PEAK)]

@@ -196,7 +196,7 @@ fn relevant<'a>(
                 *feature,
                 "default"
                     | "mock"
-                    | "probe"
+                    | "usdt"
                     | "flash"
                     | "hang"
                     | "tokio-net"
@@ -223,7 +223,7 @@ mod tests {
         let product =
             parse("kithara-ffi v1|android,uniffi\nkithara-decode v1|android\nkithara-host v1|\n")
                 .unwrap();
-        let debug = parse("kithara-ffi v1|android,dev,test,uniffi\nkithara-decode v1|android,probe\nkithara-host v1|offline\n").unwrap();
+        let debug = parse("kithara-ffi v1|android,dev,test,uniffi\nkithara-decode v1|android,usdt\nkithara-host v1|offline\n").unwrap();
         compare(&product, &debug).unwrap();
         let mut leaked = debug;
         leaked
@@ -243,7 +243,7 @@ mod tests {
             parse("kithara-decode v1|android\nkithara-net v1|client-wreq\nsymphonia v1|\n")
                 .unwrap();
         assert!(compare(&product, &direct).is_err());
-        let instrumented = parse("kithara-decode v1|android,mock,probe\nkithara-net v1|client-wreq,mock\nkithara-test-dylib v1|\n").unwrap();
+        let instrumented = parse("kithara-decode v1|android,mock,usdt\nkithara-net v1|client-wreq,mock\nkithara-test-dylib v1|\n").unwrap();
         compare(&product, &instrumented).unwrap();
     }
 

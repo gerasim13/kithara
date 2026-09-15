@@ -48,9 +48,9 @@ tempfile = { workspace = true, optional = true }
 ffmpeg-next = { workspace = true, optional = true, features = ["static"] }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

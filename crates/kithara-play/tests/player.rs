@@ -1,7 +1,6 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::SeekOutcome;
-use kithara_bufpool::testing::{TestPools, pools};
 use kithara_decode::GaplessMode;
 use kithara_events::Envelope;
 use kithara_platform::time::Duration;
@@ -12,7 +11,10 @@ use kithara_play::{
 };
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use kithara_warp::WarpConfig;
 
 fn worker() -> PlayWorker<TestPools> {

@@ -3,7 +3,7 @@ message: |
   Test artifacts must not live in production source. Names with the
   `_for_test`/`_for_tests` suffix or `tests`/`test` modules in
   `crates/*/src/` (outside `#[cfg(test)] mod`) pollute the public API
-  and rustdoc, leak into `cargo build --features test-utils`, and often
+  and rustdoc, leak into production builds, and often
   create parallel write paths that bypass documented prod entry points
   (see AGENTS.md, "Do not introduce parallel mutable sources of truth
   without an explicit transition contract").

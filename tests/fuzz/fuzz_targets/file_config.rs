@@ -5,9 +5,9 @@ use std::{path::PathBuf, sync::LazyLock};
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    bufpool::testing::{Pools, TestPools, pools},
     file::{FileConfig, FileSrc},
 };
+use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 

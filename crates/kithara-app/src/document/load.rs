@@ -36,7 +36,7 @@ use super::{
     schema::Document,
 };
 use crate::{
-    baked::{BAKED_DOCUMENT, baked_env},
+    baked::{BAKED_DOCUMENT, secret},
     config::AppConfigPatch,
     pools::PoolsSection,
 };
@@ -234,9 +234,7 @@ impl Config {
     /// Returns [`LoadError`] when a named file is missing or unreadable, a
     /// document does not match the schema, or a reference resolves nowhere.
     pub fn load(explicit: Option<&Path>, beside: Option<&Path>) -> Result<Self, LoadError> {
-        Self::load_with(explicit, beside, &|name| {
-            std::env::var(name).ok().or_else(|| baked_env(name))
-        })
+        Self::load_with(explicit, beside, &secret)
     }
 
     fn load_with(

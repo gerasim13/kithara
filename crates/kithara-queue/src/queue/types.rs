@@ -121,15 +121,23 @@ pub(super) struct AtomicTrackId(AtomicU64);
 impl AtomicTrackId {
     const NONE_BITS: u64 = u64::MAX;
 
-    /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`. Returns `true`
-    /// when this call performed the arm. Used only by the cfg-gated
-    /// autoplay path (`register_for_test`).
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
+    /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`.
+    pub(super) fn arm_if_disarmed(&self, track: TrackId) {
+        let _ = self.0.compare_exchange(
+            Self::NONE_BITS,
+            track.as_u64(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
+    /// `track` was the armed id.
+    pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
         self.0
             .compare_exchange(
-                Self::NONE_BITS,
                 track.as_u64(),
+                Self::NONE_BITS,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -144,21 +152,6 @@ impl AtomicTrackId {
                 for_track: TrackId(bits),
             }
         }
-    }
-
-    /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true`
-    /// when `track` was the armed id. Used only by the cfg-gated
-    /// autoplay path (`complete_load_for_test`).
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                track.as_u64(),
-                Self::NONE_BITS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
     }
 
     pub(super) const fn disarmed() -> Self {
@@ -331,8 +324,15 @@ mod tests {
     #[kithara::test]
     fn atomic_track_id_cas_arm_then_disarm() {
         let cell = AtomicTrackId::disarmed();
-        assert!(cell.arm_if_disarmed(TrackId(3)));
-        assert!(!cell.arm_if_disarmed(TrackId(4)));
+        cell.arm_if_disarmed(TrackId(3));
+        cell.arm_if_disarmed(TrackId(4));
+        assert_eq!(
+            cell.load(),
+            CrossfadeArm::Armed {
+                for_track: TrackId(3),
+            },
+            "a second arm must not replace the armed track"
+        );
         assert!(!cell.disarm_if_matches(TrackId(4)));
         assert!(cell.disarm_if_matches(TrackId(3)));
         assert_eq!(cell.load(), CrossfadeArm::Disarmed);

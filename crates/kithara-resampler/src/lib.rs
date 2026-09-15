@@ -16,7 +16,7 @@ mod mono;
 #[cfg(feature = "resample-rubato")]
 pub mod rubato;
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
 
 pub use backend::{NoResamplerBackend, ResamplerBackend};

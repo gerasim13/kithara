@@ -8,27 +8,28 @@ publish = false
 autotests = false
 
 [package.metadata.cargo-machete]
-ignored = ["reqwest", "serial_test"]
+ignored = ["kithara-test-utils", "reqwest", "serial_test"]
 
 [features]
-default = ["client-reqwest", "tls-rustls"]
+default = ["client-reqwest", "tls-rustls", "usdt"]
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
 e2e = []
 network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["backend-cpal", "download", "mock", "offline", "probe", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 cochlea-features = { workspace = true }
 firewheel = { workspace = true }

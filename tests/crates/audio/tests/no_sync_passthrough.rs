@@ -16,7 +16,7 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
@@ -512,12 +512,13 @@ async fn render_passthrough(
     capture
 }
 
-/// Render the same source through a `Queue` control at the same cadence.
+/// Render the same `sine_wav_a440_6s` source through a `Queue` control at the
+/// same cadence.
 ///
 /// Carries the clock guard of [`render_passthrough`] for the same reason: the
 /// tick-and-render pair must not outrun the decode worker.
 #[kithara::flash(true)]
-async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
+async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -527,27 +528,42 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
         SAMPLE_RATE,
     )
     .await;
-    let worker = harness.worker().clone();
-    let mut audio = worker
-        .open(audio_config(source, stretch, Vec::new()))
-        .await
-        .expect("queue audio construction");
-    wait_for_preload(&audio).await;
-    audio.preload().expect("queue audio preload");
-
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .player(harness.take_player())
-                .should_autoplay(false)
                 .build(),
         ))
         .await;
+    let mut events = queue.subscribe::<QueueEvent>();
+    let source = sine_wav_a440_6s()
+        .path()
+        .expect("the queue fixture lives on disk")
+        .to_string_lossy()
+        .into_owned();
     let id = harness
-        .run(&queue, move |q| {
-            q.insert_loaded_for_test(resource_from_reader(audio))
+        .run(&queue, move |q| q.append(source))
+        .await
+        .expect("append local queue fixture");
+    assert!(
+        time::timeout(Duration::from_secs(5), async {
+            while let Ok(envelope) = events.recv().await {
+                if matches!(
+                    envelope.event,
+                    QueueEvent::TrackStatusChanged {
+                        id: seen,
+                        status: TrackStatus::Loaded,
+                    } if seen == id
+                ) {
+                    return true;
+                }
+            }
+            false
         })
-        .await;
+        .await
+        .unwrap_or(false),
+        "local queue fixture must load through the product loader"
+    );
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
@@ -900,8 +916,8 @@ async fn run_no_sync_passthrough(
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
     let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
-    let queue_baseline = render_queue_passthrough(source, None).await;
-    let queue_unity = render_queue_passthrough(source, Some((backend, 1.0))).await;
+    let queue_baseline = render_queue_passthrough(None).await;
+    let queue_unity = render_queue_passthrough(Some((backend, 1.0))).await;
     let mut failures = Vec::new();
     for (label, pcm) in [
         ("queue effect-free", queue_baseline.as_slice()),

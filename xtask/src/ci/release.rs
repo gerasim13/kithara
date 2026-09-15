@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::{process::Process, run::PipelineKind};
 use crate::{
+    android,
     config::{KitharaExt, PublishStep, ReleaseConfig},
     publish, release,
 };
@@ -164,13 +165,20 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
         &["platform", "apple", "doc"],
         "Apple documentation",
     )?;
+    package_docs(process, ctx, ext, "apple")
+}
+
+/// Zip one rendered documentation directory into the release asset the channel
+/// names, and record its checksum beside it.
+fn package_docs(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
+    let docs = ext.release.docs_channel(channel)?;
     zip_directory(
         process,
         &ctx.config.tools,
-        &ctx.root.join(&ext.release.docs_archive),
-        &ctx.root.join(&ext.release.docs_asset),
+        &ctx.root.join(&docs.archive),
+        &ctx.root.join(&docs.asset),
     )?;
-    write_checksum(&ctx.root.join(&ext.release.docs_asset))
+    write_checksum(&ctx.root.join(&docs.asset))
 }
 
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -206,7 +214,10 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
         copy_required(&source, &destination)?;
         write_checksum(&destination)?;
     }
-    Ok(())
+    // Dokka reads the Kotlin the archive above generated, so the documentation
+    // is rendered here rather than in a job that would have to build it again.
+    android::render_docs()?;
+    package_docs(process, ctx, ext, "android")
 }
 
 pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
@@ -256,10 +267,10 @@ fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
     [
         config.core_asset.as_str(),
         config.merged_asset.as_str(),
-        config.docs_asset.as_str(),
         config.wasm_asset.as_str(),
     ]
     .into_iter()
+    .chain(config.docs_assets())
     .chain(config.platform_assets.iter().map(String::as_str))
     .filter(|name| !name.is_empty())
 }

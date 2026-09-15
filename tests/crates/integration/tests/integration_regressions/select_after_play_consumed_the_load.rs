@@ -26,8 +26,8 @@ use kithara::{
     },
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
-        ResourceSrc, SessionBinding, SessionDispatcher, SessionDuckingMode, SessionSampleRate,
-        SharedEq, SlotId, bridge::slot_channels, player::PlayerControlSource,
+        ResourceSrc, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
+        bridge::slot_channels, player::PlayerControlSource,
     },
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };

@@ -23,7 +23,7 @@ test = false
 required-features = ["all"]
 
 [features]
-default = ["all"]
+default = ["all", "usdt"]
 # The complete cross-component suite keeps the feature graph it had before the
 # domain facades became separate packages. Domain test packages opt out of it
 # and enable only their helper closure below.
@@ -57,14 +57,12 @@ audio = [
     "kithara/net",
     "kithara/platform",
     "kithara/play",
-    "kithara/probe",
     "kithara/resample-rubato",
     "kithara/resampler",
     "kithara/signal",
     "kithara/storage",
     "kithara/stream",
     "kithara/stretch-signalsmith",
-    "kithara/test-utils",
     "kithara/tokio-net",
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
@@ -76,9 +74,7 @@ wasm = [
     "kithara/full",
     "kithara/download",
     "kithara/queue",
-    "kithara/probe",
     "kithara/mock",
-    "kithara/test-utils",
     "kithara/symphonia",
     "kithara/resample-rubato",
     "kithara/analysis-beat",
@@ -109,12 +105,14 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
+# External DTrace acceptance for the real USDT provider.
+usdt = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-encode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }

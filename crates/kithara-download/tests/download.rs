@@ -17,7 +17,6 @@ use kithara_abr::{
     Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
     VariantInfo,
 };
-use kithara_bufpool::testing::pools as test_pools;
 use kithara_events::{Envelope, EventBus};
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
@@ -26,7 +25,7 @@ use kithara_platform::{
     time::{self, Duration, Instant},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools as test_pools, kithara};
 use url::Url;
 
 use super::{
