@@ -1679,7 +1679,7 @@ async fn wait_test_server_port(receiver: Receiver<u16>, timeout: Duration) -> Re
 /// processes alive via [`ChildGuard`]) and the `WebDriver` session.
 /// The caller must keep the harness alive for the session's lifetime
 /// and drop it **after** the session is closed.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn selenium_setup() -> (SeleniumHarness, WasmPlayerSelenium) {
     let config = SeleniumConfig::from_env();
     let harness = SeleniumHarness::start(config)
@@ -1709,7 +1709,7 @@ async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Resu
     }
 }
 
-#[kithara::test(selenium)]
+#[kithara_test_utils::kithara::test(selenium)]
 async fn selenium_player_scenarios(
     #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
 ) {
@@ -1718,7 +1718,7 @@ async fn selenium_player_scenarios(
     selenium_teardown(session, "player_scenarios", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara_test_utils::kithara::test(selenium)]
 async fn selenium_diagnostic_suite(
     #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
 ) {
@@ -1727,7 +1727,7 @@ async fn selenium_diagnostic_suite(
     selenium_teardown(session, "diagnostic_suite", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara_test_utils::kithara::test(selenium)]
 async fn selenium_hls_log_scenario(
     #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
 ) {
@@ -1736,7 +1736,7 @@ async fn selenium_hls_log_scenario(
     selenium_teardown(session, "hls_log_scenario", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara_test_utils::kithara::test(selenium)]
 async fn selenium_drm_playback_scenario(
     #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
 ) {
@@ -1753,7 +1753,7 @@ async fn selenium_drm_playback_scenario(
 /// - After page load: 0 workers (engine starts lazily)
 /// - Steady state after track load: 2 workers (engine + shared audio)
 /// - Ephemeral `spawn_blocking` workers (probe/decoder) cleaned up
-#[kithara::test(selenium)]
+#[kithara_test_utils::kithara::test(selenium)]
 async fn selenium_worker_count(
     #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
 ) {

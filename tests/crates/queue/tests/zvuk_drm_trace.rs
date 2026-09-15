@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 /// Lives in `suite_network` — it talks to a real VPN-gated host and is
 /// pointless without `KITHARA_DRM_KEY` + `KITHARA_DRM_AUTH_TOKEN`
 /// baked at build time (`option_env!`).
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn zvuk_drm_master_playlist_trace() {
     install_tracing();
 

@@ -71,7 +71,7 @@ mod tests {
         shortcut(&key, modifiers)
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn the_full_screen_accelerator_matches_the_hint_the_menu_draws() {
         assert!(matches!(
             press(
@@ -87,7 +87,7 @@ mod tests {
         assert!(press(Key::Character("f".into()), Modifiers::empty()).is_none());
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_bare_delete_removes_the_focused_track() {
         assert!(matches!(
             press(Key::Named(Named::Delete), Modifiers::empty()),
@@ -99,7 +99,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     #[case::paused(false, TICK_INTERVAL_IDLE_MS)]
     #[case::playing(true, TICK_INTERVAL_ACTIVE_MS)]
     fn subscription_tick_matches_playback_state(
@@ -114,7 +114,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn idle_tick_is_slower_than_active_tick() {
         assert!(
             TICK_INTERVAL_IDLE_MS > TICK_INTERVAL_ACTIVE_MS,

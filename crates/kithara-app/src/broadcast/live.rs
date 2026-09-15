@@ -154,7 +154,7 @@ mod tests {
         (stream, session, shutdown)
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let session = SampleRateSession::new(0);
         let shutdown = CancelToken::root();
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(config.bit_rate, 192_000);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn starting_takes_the_output_group_and_stopping_gives_it_back() {
         let (stream, session, shutdown) = on_air(48_000);
         assert!(
@@ -199,7 +199,7 @@ mod tests {
         shutdown.cancel();
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_dropped_output_group_ends_the_stream() {
         let (stream, session, shutdown) = on_air(48_000);
         session.outputs.lock().take();
@@ -219,7 +219,7 @@ mod tests {
     /// the real configuration document schema, and the patch it carries must
     /// reach a `BroadcastConfig` without disturbing fields the document left
     /// unnamed.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_broadcast_section_parses_and_reaches_the_config() {
         let document: Document = serde_yaml_ng::from_str("broadcast:\n  bit_rate: 256000\n")
             .expect("the document types");

@@ -244,7 +244,7 @@ mod document_tests {
     use crate::theme::{Palette, Rgb};
 
     /// One named color is written and the other fifteen keep the theme's own.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_palette_section_repaints_only_the_colors_it_names() {
         let mut palette = Palette::default();
         let untouched = palette.bg;
@@ -262,13 +262,13 @@ mod document_tests {
 
     /// `Rgb` is a three-byte tuple, so a document naming two channels is
     /// refused rather than padded with a zero.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_color_short_of_a_channel_is_refused() {
         serde_yaml_ng::from_str::<AppConfigPatch>("palette:\n  accent: [10, 20]\n")
             .expect_err("a two-channel color is not one this palette can hold");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_document_names_the_ui_package() {
         let patch: AppConfigPatch =
             serde_yaml_ng::from_str("ui_package: /opt/kithara/ui\n").expect("the document types");

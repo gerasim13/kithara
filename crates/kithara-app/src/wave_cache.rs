@@ -315,7 +315,7 @@ mod tests {
         TrackAnalysisCache::new(fp(), &test_pools(), chunk_seconds())
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn disk_reads_reuse_cache_scratch() {
         const BLOB_BYTES: usize = 64 * 1024;
 
@@ -366,7 +366,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn oversized_disk_read_does_not_stay_charged_to_the_cache() {
         const RETAINED_BYTES: usize = 2 * 1024 * 1024;
 
@@ -405,7 +405,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn invalid_disk_blob_does_not_stay_charged_to_the_cache() {
         const BLOB_BYTES: usize = 64 * 1024;
 
@@ -451,7 +451,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn source_identity_ignores_query_without_a_discriminator() {
         let store = memory_store();
         let a = target_for(&store, "https://h.example/track/streamhq.mp3?id=123", None);
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(a.key(), again.key(), "keys are stable across calls");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn explicit_discriminator_separates_query_selected_content() {
         let store = memory_store();
         let src = "https://h.example/track/streamhq.mp3?id=123";
@@ -476,7 +476,7 @@ mod tests {
         assert_ne!(a.key(), b.key());
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn config_target_is_stable_and_layout_owned() {
         let store = memory_store();
         let cfg = config(&store, "https://h.example/a.mp3?token=1", None);
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(first.key().rel_path(), Some("analysis/track.analysis"));
     }
 
-    #[kithara::test(native)]
+    #[kithara_test_utils::kithara::test(native)]
     fn local_path_sources_are_keyable() {
         let store = memory_store();
         let target = AnalysisTarget::for_config(&config(&store, "/tmp/song.mp3", None));
@@ -507,7 +507,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
         let layouts =
             AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
@@ -524,7 +524,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn memory_store_round_trips() {
         let store = memory_store();
         let target = target(&store, "root_a");
@@ -539,7 +539,7 @@ mod tests {
         assert!(cached.analysis().beat().is_some(), "beat grid rides along");
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn same_key_in_different_stores_keeps_distinct_memory_entries() {
         let first_store = memory_store();
         let second_store = memory_store();
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(cache.mem.get(first.key()).map(Vec::len), Some(2));
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn empty_analysis_is_not_memoized() {
         let store = memory_store();
         let target = target(&store, "root_empty");
@@ -585,7 +585,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn memory_tier_is_bounded() {
         let store = memory_store();
         let mut cache = analysis_cache();
@@ -607,7 +607,7 @@ mod tests {
         assert!(cache.get(&oldest, rate()).is_none());
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn an_unsettled_snapshot_without_resume_state_is_rejected() {
         let mut coverage = Coverage::default();
         coverage.insert(FrameRange::new(0, 500));
@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_settled_snapshot_is_cached_even_with_a_gap_left_in_it() {
         let store = memory_store();
         let target = target(&store, "root_settled");

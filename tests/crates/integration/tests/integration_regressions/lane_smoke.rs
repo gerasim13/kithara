@@ -5,7 +5,7 @@ use kithara_integration_tests::{PrivateTestServer, TestServerHelper};
 /// Proves the lane builds and reaches the test server. This is the only
 /// green test in `suite_integration_regressions`, distinguishing a broken lane
 /// from a red regression test.
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn lane_reaches_test_server() {
     let helper = TestServerHelper::new().await;
     assert!(
@@ -20,7 +20,7 @@ async fn lane_reaches_test_server() {
 ///
 /// Runs against a private server because it leaves data routes dead for the
 /// span of the test, which on the shared server every parallel sibling sees.
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn network_switch_is_reachable_over_http() {
     let server = PrivateTestServer::start().await;
     let helper = server.helper();

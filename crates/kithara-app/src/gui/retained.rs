@@ -154,7 +154,7 @@ mod tests {
     /// The studio's own documents draw under the retained host. The control
     /// census answers for one control at a time; this answers for the page the
     /// application actually ships, mounted the way the window mounts it.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn the_studio_draws_under_the_retained_host() {
         let package = Package::load(None).expect("the app package must answer for both decks");
         let endpoints = endpoints::Registry::default();

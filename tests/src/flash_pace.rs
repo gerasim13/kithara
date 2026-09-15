@@ -2,13 +2,13 @@
 //!
 //! Some shared helpers and harness tasks (real-time playback-gap simulators, the
 //! test-server network-delay releaser) must advance the *virtual* clock from code
-//! that runs outside a `#[kithara::test]` body — where the macro's lexical
+//! that runs outside a `#[kithara_test_utils::kithara::test]` body — where the macro's lexical
 //! sleep-rewrite does not reach and stateless time calls (`time::sleep` /
 //! `thread::sleep`) default to REAL because they gate on the per-callstack
 //! `flash_enabled()` flag, which only the body sets.
 //!
 //! The ONLY sanctioned way to make such a region follow the test's flash mode is
-//! the `#[kithara::flash]` guard macro: it is a no-op off the `flash` feature and
+//! the `#[kithara_test_utils::kithara::flash]` guard macro: it is a no-op off the `flash` feature and
 //! off ambient (so `flash(false)` tests keep real timing), and virtual inside an
 //! ambient flash test. Raw `flash::enter_dynamic` / `flash::dynamic` are that
 //! macro's private expansion and must never be called by hand.

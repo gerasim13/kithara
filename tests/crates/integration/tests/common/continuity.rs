@@ -133,7 +133,7 @@ pub(crate) async fn render_offline_window(
         // Inter-block pacing MUST drive the virtual clock so the decode worker
         // (a `spawn_named` flash pacer parked on the engine) advances and fills
         // the producer ring before the next `render` samples it. `virtual_pace`
-        // is the `#[kithara::flash]`-guarded sleep: inside the test driver's poll
+        // is the `#[kithara_test_utils::kithara::flash]`-guarded sleep: inside the test driver's poll
         // it is a BRIDGED wait that releases the task's `active_async` slot, lets
         // the clock jump, and re-acquires on resume — so the worker delivers real
         // PCM exactly as on the real clock instead of the render zero-filling

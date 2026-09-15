@@ -100,13 +100,13 @@ compatible native software stack.
 
 <tr><td><code>tokio-net</code></td><td>no</td><td>Tokio networking helpers forwarded to <code>kithara-platform</code></td></tr>
 
-<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara::test(..., multi_thread)]</code></td></tr>
+<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara_test_utils::kithara::test(..., multi_thread)]</code></td></tr>
 
 <tr><td><code>full</code></td><td>no</td><td>The former always-present core plus <code>file + hls + offline + record</code>, including with <code>--no-default-features</code></td></tr>
 
 <tr><td><code>all</code></td><td>no</td><td>Every facade domain with CPAL, Symphonia, FDK-AAC, Rubato, Signalsmith, reqwest, and rustls; mutually exclusive alternative backends stay off</td></tr>
 
-<tr><td><code>probe</code></td><td>no</td><td>USDT probes forwarded across all public facade crates that expose probes</td></tr>
+<tr><td><code>usdt</code></td><td>no</td><td>USDT probes forwarded across all public facade crates that expose probes</td></tr>
 
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks forwarded across all public facade crates that expose mocks</td></tr>
 

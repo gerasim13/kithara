@@ -97,7 +97,7 @@ async fn wait_for_position_at_least(
 /// If this test reproduces, we have a live repro that points at
 /// silvercomet-specific HTTP / format behaviour rather than anything in
 /// the kithara pipeline abstract.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

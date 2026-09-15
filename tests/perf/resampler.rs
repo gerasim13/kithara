@@ -120,7 +120,7 @@ enum PerfScenario {
     QualityComparison,
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case("resampler_quality", PerfScenario::QualityComparison)]
 #[case("resampler_passthrough", PerfScenario::PassthroughDetection)]
 #[case("resampler_deinterleave", PerfScenario::DeinterleaveOverhead)]

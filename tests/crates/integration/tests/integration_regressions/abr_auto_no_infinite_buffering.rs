@@ -28,7 +28,7 @@ const READ_DEADLINE: Duration = Duration::from_secs(30);
 /// Toggling auto/manual ABR and bandwidth caps while the first
 /// segment is buffering must not wedge the stream; a subsequent read must
 /// still produce bytes.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn abr_mode_storm_does_not_wedge_loading(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
@@ -102,7 +102,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
     );
 }
 
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 async fn abr_source() -> HlsTestServer {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: VARIANT_COUNT,

@@ -636,7 +636,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn repeated_existing_generation_writes_reuse_actor_scratch() {
         const RETAINED_BYTES: usize = 2 * 1024 * 1024;
 
@@ -737,7 +737,7 @@ mod tests {
         });
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara_test_utils::kithara::test(native, tokio)]
     async fn ordered_replacement_round_trips_on_memory_and_disk() {
         round_trip(StorageBackend::Memory).await;
         let directory = tempfile::tempdir().expect("temporary disk store");

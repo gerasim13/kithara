@@ -32,7 +32,7 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     )
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half: &'static [u8]) {
     let oracle = loaded_harness(constant_half).await;
     assert_eq!(oracle.player().rate(), 1.0);

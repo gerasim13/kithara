@@ -256,7 +256,7 @@ fn hosted_engine_claims(ui: &CompiledUi) -> Vec<(&str, &'static str)> {
     claims
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn documents_compile_against_the_registry() {
     for layout in LAYOUTS {
         compile_ui(layout).unwrap();
@@ -433,7 +433,7 @@ fn list_min(pane: &ExpandedNode) -> f32 {
     found.expect("the browser panel draws a track list").h.min()
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_address_names_an_instance_the_host_routes() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -459,7 +459,7 @@ fn every_address_names_an_instance_the_host_routes() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -478,7 +478,7 @@ fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -518,7 +518,7 @@ fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -541,7 +541,7 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -568,7 +568,7 @@ fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_bar_reveals_its_telemetry_as_the_window_widens() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -589,7 +589,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -610,7 +610,7 @@ fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_window_minimum_holds_the_micro_bar() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -628,7 +628,7 @@ fn the_window_minimum_holds_the_micro_bar() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_walker_reaches_the_nodes_the_documents_declare() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -661,7 +661,7 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -689,7 +689,7 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -716,7 +716,7 @@ fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
 
 /// The bar cell that takes the mix on air: one press target on the toggle,
 /// and a dot that reads whether the stream is serving.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_bar_carries_the_broadcast_cell() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -748,7 +748,7 @@ fn the_bar_carries_the_broadcast_cell() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -805,7 +805,7 @@ fn strip_controls<'a>(paths: &[&'a str], letter: &str) -> Vec<&'a str> {
         .collect()
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_channel_strip_carries_the_supported_control_set() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -857,7 +857,7 @@ impl Reads for BandReads {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn one_band_count_decides_which_eq_bank_a_deck_draws() {
     for (bands, drawn, spare) in [
         (3.0, "deck.eq.mid", "deck.eq.low_mid"),
@@ -876,7 +876,7 @@ fn one_band_count_decides_which_eq_bank_a_deck_draws() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     for unstated in [
         None,
@@ -897,7 +897,7 @@ fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_mode_menu_asks_the_key_the_deck_answers() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let mut asked = Vec::new();
@@ -922,7 +922,7 @@ fn the_mode_menu_asks_the_key_the_deck_answers() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_eq_bank_carries_its_pointer_menu() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -934,7 +934,7 @@ fn every_eq_bank_carries_its_pointer_menu() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -951,7 +951,7 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn eq_banks_stack_their_knobs_from_high_to_low() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -964,7 +964,7 @@ fn eq_banks_stack_their_knobs_from_high_to_low() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_eq_bank_centers_its_knobs() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let mut centered = 0;
@@ -988,7 +988,7 @@ fn every_eq_bank_centers_its_knobs() {
     assert_eq!(centered, 4, "two banks on each of two decks");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_app_hides_controls_outside_the_supported_playback_contract() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -1005,7 +1005,7 @@ fn the_app_hides_controls_outside_the_supported_playback_contract() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn tempo_and_volume_controls_bind_to_the_deck_they_address() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let controls = controls(&ui);
@@ -1027,7 +1027,7 @@ fn tempo_and_volume_controls_bind_to_the_deck_they_address() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_hosted_deck_tempo_surface_remains_on_iced() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let mut writers: Vec<&str> = controls(&ui)
@@ -1050,7 +1050,7 @@ fn the_hosted_deck_tempo_surface_remains_on_iced() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_deck_transport_carries_the_zoom_pair() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let controls = controls(&ui);
@@ -1073,7 +1073,7 @@ fn the_deck_transport_carries_the_zoom_pair() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_layout_addresses_only_the_decks_it_lays_out() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1105,7 +1105,7 @@ fn a_layout_addresses_only_the_decks_it_lays_out() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_laid_out_deck_takes_dropped_tracks() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1129,7 +1129,7 @@ fn every_laid_out_deck_takes_dropped_tracks() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn deck_letter_captions_name_their_deck() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1282,7 +1282,7 @@ fn optional_modules<'a>(ui: &'a CompiledUi, key: &str) -> Vec<(&'a str, &'a str)
 
 /// One cell per module the app can lay out without, and the pane it names
 /// leaves the layout while the cell is off.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_module_cell_switches_the_pane_it_names() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1334,7 +1334,7 @@ fn every_module_cell_switches_the_pane_it_names() {
 
 /// A build without a packager has nothing for the air controls to command, so
 /// the app must not draw them at all.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn every_air_control_hides_with_the_packager() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1352,7 +1352,7 @@ fn every_air_control_hides_with_the_packager() {
 /// The burger the bar carries as its first cell: one press target per command
 /// the menu offers, plus the surface it opens - which costs the application no
 /// endpoint at all, because whether a menu stands open is not its business.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_bar_carries_the_app_menu() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1385,7 +1385,7 @@ fn the_bar_carries_the_app_menu() {
     }
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn each_deck_picks_its_own_stream_quality() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1420,7 +1420,7 @@ fn each_deck_picks_its_own_stream_quality() {
 /// The package this application ships is read from disk the way a release
 /// reads it, so drift between the documents on disk and what the build
 /// embeds cannot hide behind the embedded copy.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
@@ -1436,7 +1436,7 @@ fn the_shipped_package_compiles_from_disk() {
 /// This is the check that stands between a package and a window that draws a
 /// player which cannot play: the screen compiles either way, and only the
 /// paths it answers on say whether the application can reach it.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_path_the_screen_does_not_answer_on_is_named() {
     let ui = compile_ui(DeckLayout::Dual).expect("the shipped screen must compile");
     let origin = SourceUri("app.klayout.ron".to_owned());
@@ -1453,7 +1453,7 @@ fn a_path_the_screen_does_not_answer_on_is_named() {
 
 /// Nothing laid out is not a defect: the documents this build carries draw,
 /// which is what a developer running from a build directory sees.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
     let package = Package::load(Some(&root)).expect("a package nobody laid out must load");
@@ -1466,7 +1466,7 @@ fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing(
 /// A package dresses the pages it ships: the skin its manifest names is the
 /// one every page is compiled and painted against, which is what lets a
 /// package change how the application looks without a rebuild.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
     let root = tempfile::tempdir().expect("a temporary package root");
     std::fs::write(
@@ -1495,7 +1495,7 @@ fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
 
 /// A package that names no skin wears the built-in one rather than refusing to
 /// load, so a package may carry pages and nothing else.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_package_naming_no_skin_wears_the_built_in_one() {
     let root = tempfile::tempdir().expect("a temporary package root");
     std::fs::write(
@@ -1522,7 +1522,7 @@ fn a_package_naming_no_skin_wears_the_built_in_one() {
 
 /// What the disk says about a role wins over what the build embeds: a manifest
 /// laid out beside the executable is the one that answers.
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
     let root = tempfile::tempdir().expect("a temporary package root");
     std::fs::write(

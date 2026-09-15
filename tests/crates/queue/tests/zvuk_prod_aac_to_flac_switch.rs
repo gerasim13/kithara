@@ -117,7 +117,7 @@ where
 /// seconds, then force a runtime switch to the FLAC lossless variant. Standalone
 /// FLAC from startup is known green; this test isolates the AAC decoder teardown
 /// plus FLAC decoder construction path.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

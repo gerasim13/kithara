@@ -211,7 +211,7 @@ impl Drop for OnAir {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn the_session_renders_the_source_tone(broadcast_tone: Vec<f32>) {
     let harness = playing_harness(broadcast_tone).await;
 
@@ -226,7 +226,7 @@ async fn the_session_renders_the_source_tone(broadcast_tone: Vec<f32>) {
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone: Vec<f32>) {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const TONE_RENDER_FRAMES: usize = 110_250;
@@ -265,7 +265,7 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn an_intake_gap_breaks_the_served_playlist(broadcast_tone: Vec<f32>) {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const GAP_AFTER_WRITES: usize = 100;

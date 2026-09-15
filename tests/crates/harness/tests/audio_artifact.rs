@@ -15,7 +15,7 @@ fn read(reader: &AssetReader<TestPools>) -> Vec<u8> {
     bytes
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn recording_core_writes_float_wav_through_disk_assets() {
     let temp = tempdir().expect("temporary artifact directory");
     let set = AudioArtifactSet::new(temp.path(), "header", 48_000, 2).expect("audio artifact set");
@@ -37,7 +37,7 @@ fn recording_core_writes_float_wav_through_disk_assets() {
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn recording_core_preserves_payload_across_packet_boundary() {
     let temp = tempdir().expect("temporary artifact directory");
     let set = AudioArtifactSet::new(temp.path(), "packets", 48_000, 1).expect("audio artifact set");

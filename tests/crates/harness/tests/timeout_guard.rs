@@ -5,7 +5,7 @@ use kithara::platform::{
     tokio::task::{spawn_blocking, yield_now},
 };
 
-#[kithara::test(native, timeout(Duration::from_secs(2)))]
+#[kithara_test_utils::kithara::test(native, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]
 #[should_panic(expected = "timed out")]
 fn sync_infinite_loop_is_killed_by_timeout() {
@@ -14,7 +14,7 @@ fn sync_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]
@@ -24,7 +24,7 @@ async fn async_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]

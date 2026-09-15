@@ -192,7 +192,7 @@ mod tests {
     /// A document copied into this application under a name the toolkit
     /// already ships takes that name over without saying so, and then drifts
     /// where nobody is looking. Only the two above may.
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn this_build_replaces_only_the_toolkit_documents_it_means_to() {
         let toolkit = builtin::resolver();
 

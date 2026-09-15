@@ -53,7 +53,7 @@ enum PerfScenario {
     Throughput,
 }
 
-#[kithara::test(flash(false))]
+#[kithara_test_utils::kithara::test(flash(false))]
 #[case("decoder_wav", PerfScenario::DecodeLoop)]
 #[case("decoder_probe", PerfScenario::ProbeLatency)]
 #[case("decoder_f32_conversion", PerfScenario::F32Conversion)]

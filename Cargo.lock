@@ -5015,7 +5015,6 @@ dependencies = [
  "futures",
  "kithara",
  "kithara-integration-tests",
- "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5158,7 +5157,6 @@ dependencies = [
 name = "kithara-events-tests"
 version = "0.0.1-alpha4"
 dependencies = [
- "kithara",
  "kithara-events",
  "kithara-test-dylib",
  "kithara-test-utils",
@@ -5373,7 +5371,6 @@ dependencies = [
  "hex",
  "kithara",
  "kithara-integration-tests",
- "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5437,7 +5434,6 @@ dependencies = [
  "kithara-devtools",
  "kithara-encode",
  "kithara-events",
- "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5654,7 +5650,6 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
- "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5705,7 +5700,6 @@ dependencies = [
  "kithara-app",
  "kithara-devtools",
  "kithara-integration-tests",
- "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",

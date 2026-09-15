@@ -114,7 +114,7 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
     blocks
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -158,7 +158,7 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
 /// The other half of the same contract: the faster media clock has to be
 /// backed by the source actually draining faster. Without this, scaling the
 /// clock alone would satisfy the trap above while the audio kept its speed.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn a_faster_rate_drains_the_real_source_sooner(
     drain_tone: &'static [u8],
     temp_dir: TestTempDir,

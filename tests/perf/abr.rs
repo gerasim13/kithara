@@ -30,7 +30,7 @@ enum PerfScenario {
     PureDecision,
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 #[case("abr_decision", PerfScenario::DecisionMaking)]
 #[case("abr_creation", PerfScenario::ControllerCreation)]
 #[case("abr_pure_decision", PerfScenario::PureDecision)]

@@ -20,7 +20,7 @@ use super::{
 };
 use crate::gui::ui::{cache::DeckLayout, endpoints::Registry, package::Package};
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn studio_capture_writes_both_hosts() {
     let Some(dir) = env::var_os("KITHARA_STUDIO_CAPTURE").map(PathBuf::from) else {
         return;

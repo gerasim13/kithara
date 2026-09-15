@@ -122,7 +122,7 @@ fn wav_rate(store: &AssetStore<TestPools>, key: &ResourceKey) -> u32 {
     u32::from_le_bytes(header[24..28].try_into().expect("WAV sample rate"))
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn route_change_keeps_recording_and_broadcast_running(broadcast_tone: Vec<f32>) {
     let harness = playing_harness(broadcast_tone).await;
     let pools = pools();

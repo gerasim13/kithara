@@ -21,7 +21,7 @@ fn assert_tone(pcm: &[f32], label: &str) {
     assert_carries_the_tone(pcm, TONE_HZ, SAMPLE_RATE, label);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn the_media_playlist_arrives_only_once_a_segment_exists(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
 
@@ -40,7 +40,7 @@ async fn the_media_playlist_arrives_only_once_a_segment_exists(origin_tone: Vec<
     assert!(origin.get("v/0/live.m3u8").await.is_ok());
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn the_live_playlist_slides_a_bounded_window(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
@@ -80,7 +80,7 @@ async fn the_live_playlist_slides_a_bounded_window(origin_tone: Vec<f32>) {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn an_evicted_segment_outlives_the_playlist_by_the_grace(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin
@@ -106,7 +106,7 @@ async fn an_evicted_segment_outlives_the_playlist_by_the_grace(origin_tone: Vec<
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn the_fetched_segments_decode_back_to_the_source_tone(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(4).await;
@@ -131,7 +131,7 @@ async fn the_fetched_segments_decode_back_to_the_source_tone(origin_tone: Vec<f3
     assert_tone(&decoded[PRIMING_SKIP_FRAMES..], "fetched stream");
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn stopping_leaves_a_fetchable_vod_tail(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
@@ -172,7 +172,7 @@ async fn stopping_leaves_a_fetchable_vod_tail(origin_tone: Vec<f32>) {
 /// A day of virtual time costs nothing on a clock that advances, and a real
 /// one has no such day to spare — so this reads the simulated clock only.
 #[cfg(feature = "flash")]
-#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn a_live_origin_leaves_the_virtual_clock_free(origin_tone: Vec<f32>) {
     const A_DAY: Duration = Duration::from_secs(86_400);
 
@@ -184,7 +184,7 @@ async fn a_live_origin_leaves_the_virtual_clock_free(origin_tone: Vec<f32>) {
     assert!(origin.handle.status().is_live);
 }
 
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 async fn cancelling_the_parent_stops_the_origin_and_the_worker(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(2).await;
@@ -212,7 +212,7 @@ async fn cancelling_the_parent_stops_the_origin_and_the_worker(origin_tone: Vec<
 }
 
 #[cfg(feature = "no-block")]
-#[kithara::test(tokio, flash(false))]
+#[kithara_test_utils::kithara::test(tokio, flash(false))]
 #[should_panic(expected = "no_block")]
 async fn synchronous_stop_does_not_hide_runtime_blocking(origin_tone: Vec<f32>) {
     let _mode = kithara::platform::no_block::force_panic_mode();

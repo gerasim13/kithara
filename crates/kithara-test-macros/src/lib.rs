@@ -79,6 +79,13 @@ pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
     flash::expand(attr, item)
 }
 
+/// Test-utils re-export variant of [`flash`]. Its generated paths resolve through
+/// `kithara_test_utils`, so test crates need no direct `kithara-platform`.
+#[proc_macro_attribute]
+pub fn test_utils_flash(attr: TokenStream, item: TokenStream) -> TokenStream {
+    flash::expand_test_utils(attr, item)
+}
+
 /// `#[kithara::no_block]` / `#[kithara::no_block(budget_ms = N)]` — async
 /// poll blocking detector. Wraps an async fn body in a per-poll budget watch.
 /// See [`no_block`] for details.

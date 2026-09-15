@@ -157,7 +157,7 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 #[cfg_attr(
     not(target_os = "android"),
     case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
@@ -355,19 +355,19 @@ mod unit_tests {
 
     use super::*;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn rms_of_silence_is_zero(rms_silence: Vec<f32>) {
         let silence = rms_silence;
         assert!(rms(&silence).abs() < f32::EPSILON);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn rms_of_unit_signal_is_one(rms_unit: Vec<f32>) {
         let signal = rms_unit;
         assert!((rms(&signal) - 1.0).abs() < 1e-4);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn blocks_for_three_seconds_matches_expected() {
         let blocks = Shared::blocks_for_seconds(3.0, Consts::BLOCK_FRAMES);
         assert_eq!(blocks, 259);

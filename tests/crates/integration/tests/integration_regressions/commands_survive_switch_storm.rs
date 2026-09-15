@@ -86,7 +86,7 @@ fn drain_active_gets(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handles: Vec<_> = (0..TRACK_COUNT)

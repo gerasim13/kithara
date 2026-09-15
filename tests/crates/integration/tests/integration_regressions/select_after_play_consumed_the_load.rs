@@ -109,7 +109,7 @@ fn spawn_ticker(queue: &Queue<TestPools>) -> QueueTicker {
 /// A local fixture per track: the load has to run and land asynchronously,
 /// but nothing about this test depends on how long it takes — the gate owns
 /// the ordering — so it stays off the shared test server.
-#[kithara::fixture]
+#[kithara_test_utils::kithara::fixture]
 fn gated_paths(temp_dir: TestTempDir, tone_mp3: &'static [u8]) -> (TestTempDir, Vec<PathBuf>) {
     let paths = (0..TRACK_COUNT)
         .map(|index| {
@@ -129,7 +129,7 @@ fn resource_config(path: &Path, store: &AssetStore<TestPools>) -> ResourceConfig
     .build()
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn a_track_play_consumed_mid_load_can_be_selected_again(
     gated_paths: (TestTempDir, Vec<PathBuf>),
 ) {

@@ -122,7 +122,7 @@ pub(crate) mod tests {
             .build()
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn initial_samples_are_ready_on_another_thread() {
         let pools = build(&PoolsSection::default())
             .unwrap_or_else(|error| panic!("app pool region: {error}"));
@@ -154,7 +154,7 @@ pub(crate) mod tests {
     /// The value itself is pinned in `kithara-bufpool`, which owns `PoolConfig`
     /// and can read its fields; what this pins is the routing -- that a named
     /// pool's settings reach that pool and no other.
-    #[kithara::test(native, flash(false))]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_pools_document_reaches_the_pool_it_names_and_no_other() {
         let section: PoolsSection = serde_yaml_ng::from_str("bytes:\n  max_buffers: 64\n")
             .expect("a valid pools document parses");
@@ -171,7 +171,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn a_document_budget_replaces_the_regions_own() {
         let section: PoolsSection = serde_yaml_ng::from_str("budget_bytes: 1048576\n")
             .expect("a valid pools document parses");
@@ -181,7 +181,7 @@ pub(crate) mod tests {
         assert_eq!(pools.stats().max_bytes, 1_048_576);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn returned_capacity_is_bounded() {
         const BYTE_GUARDS: usize = 33;
         const BYTE_COUNT_CAPACITY: usize = 1;

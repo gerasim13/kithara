@@ -58,7 +58,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
-kithara-queue = { path = ".", features = ["usdt"] }
+kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

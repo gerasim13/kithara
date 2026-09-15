@@ -43,7 +43,7 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 ///
 /// Lives in `suite_network` because the upstream is VPN-gated and the creds
 /// rot.
-#[kithara::test(tokio)]
+#[kithara_test_utils::kithara::test(tokio)]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

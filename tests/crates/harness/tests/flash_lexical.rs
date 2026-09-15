@@ -1,4 +1,4 @@
-//! B4 lexical body-only flash containment: `#[kithara::test(flash(true))]`
+//! B4 lexical body-only flash containment: `#[kithara_test_utils::kithara::test(flash(true))]`
 //! rewrites the test BODY's direct time-primitive calls onto the unconditional
 //! `virtual_*` engine variants, so the body's own time reads collapse onto
 //! the VIRTUAL clock WITHOUT setting `FLASH_ACTIVE`. A prod-like fn the body
@@ -22,7 +22,7 @@ async fn unannotated_prod_now() -> Instant {
     Instant::now()
 }
 
-#[kithara::test(tokio, flash(true), timeout(Duration::from_secs(5)))]
+#[kithara_test_utils::kithara::test(tokio, flash(true), timeout(Duration::from_secs(5)))]
 async fn lexical_collapses_body_not_callee() {
     // BODY: `Instant::now` and `time::sleep` are lexically rewritten to the
     // unconditional `virtual_*` engine variants. The body sleep registers

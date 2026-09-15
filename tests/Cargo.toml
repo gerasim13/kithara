@@ -112,7 +112,6 @@ usdt = ["dep:kithara", "kithara/usdt"]
 [dependencies]
 kithara-encode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)

@@ -93,7 +93,7 @@ fn assert_carries_the_tone(pcm: &[f32], label: &str) {
     );
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>) {
     let snapshot = broadcast(&packaging_tone);
 
@@ -121,7 +121,7 @@ fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>
     assert_carries_the_tone(&decoded[PRIMING_SKIP_FRAMES..], "concatenated stream");
 }
 
-#[kithara::test]
+#[kithara_test_utils::kithara::test]
 fn a_late_joiner_decodes_one_segment_on_its_own(packaging_tone: Vec<f32>) {
     let snapshot = broadcast(&packaging_tone);
 

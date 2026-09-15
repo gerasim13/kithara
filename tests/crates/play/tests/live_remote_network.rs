@@ -54,7 +54,7 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
 /// Requires internet (silvercomet) and corporate VPN (zvuk).
 // flash(false): live-internet sockets are invisible to the flash engine; virtual
 // sleep/deadline would outrun the real download and fail spuriously.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     timeout(Duration::from_secs(30)),
@@ -244,7 +244,7 @@ async fn live_remote_resource_decodes_with_duration(
 /// `select_item` + `duration_seconds()`. This is what the GUI reads.
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
-#[kithara::test(
+#[kithara_test_utils::kithara::test(
     tokio,
     flash(false),
     timeout(Duration::from_secs(30)),
