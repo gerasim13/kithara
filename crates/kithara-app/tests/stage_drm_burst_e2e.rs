@@ -1,6 +1,6 @@
 use ::kithara::net::{Headers, HttpClient, NetOptions, RangeSpec};
 use futures::future::join_all;
-use kithara_app::pools;
+use kithara_app::{pools, secret};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -68,8 +68,8 @@ async fn stage_drm_range_get_probe_returns_full_size_map() {
     const PROBE_BURST_SEGMENTS: usize = 32;
     /// Mirrors `HlsConfig::head_estimation_concurrency` in production.
     const PROBE_BURST_CONCURRENCY: usize = 8;
-    let auth = std::env::var(ENV_AUTH)
-        .unwrap_or_else(|_| panic!("{ENV_AUTH} must be set to a valid zvuk stage X-Auth-Token"));
+    let auth = secret(ENV_AUTH)
+        .unwrap_or_else(|| panic!("{ENV_AUTH} must be set to a valid zvuk stage X-Auth-Token"));
     let client = stage_client();
     let headers = drm_headers(&auth);
     let master_url = Url::parse(TRACK_MASTER).expect("master URL");
