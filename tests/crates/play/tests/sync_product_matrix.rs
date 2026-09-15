@@ -1381,7 +1381,9 @@ impl ProductHarness {
                 rendered = deadline;
                 if frames > 0 {
                     let frames = usize::try_from(frames).expect("tempo interval fits usize");
-                    let _ = self.render(case, frames).await;
+                    let _ = self
+                        .capture_blocks(case, frames, self.block_frames, self.paced)
+                        .await;
                 }
             }
             start = target;
