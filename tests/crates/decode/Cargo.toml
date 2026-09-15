@@ -24,7 +24,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 kithara = { workspace = true, features = ["mock", "offline", "probe", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 futures = { workspace = true }

@@ -64,6 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang libclang-dev lld llvm mold ninja-build pkg-config \
     bubblewrap socat ripgrep nodejs npm tar zstd \
     mesa-vulkan-drivers \
+    pulseaudio libasound2-plugins \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
@@ -230,3 +231,11 @@ COPY --from=minio-client /usr/bin/mc /usr/local/bin/mc
 # over — an emulator writes into the SDK it was created in — and they can only
 # name an owner that already exists.
 RUN useradd --create-home --shell /bin/bash runner
+
+# A container has no sound card, so a playback test had no device to open and
+# its clock never advanced. ALSA's default device is routed to PulseAudio, and
+# the first client spawns a daemon for the job's account that plays into a null
+# sink at real-time pace — no process has to be started before the job.
+RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > /etc/asound.conf \
+ && mkdir -p /etc/pulse/client.conf.d \
+ && printf 'autospawn = yes\n' > /etc/pulse/client.conf.d/00-kithara-ci.conf

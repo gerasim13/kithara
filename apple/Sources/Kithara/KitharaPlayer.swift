@@ -422,34 +422,39 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return
         }
 
-        switch type {
-        case .began:
-            let wasPlaying = currentRate > 0
-            _pausedByInterruption.withLock { $0 = wasPlaying }
-            if wasPlaying {
-                pause()
-            }
-        case .ended:
-            let armed = _pausedByInterruption.withLock { paused -> Bool in
-                let armed = paused
-                paused = false
-                return armed
-            }
-            if armed && interruptionAllowsResume(notification) {
-                play()
-            }
-        @unknown default:
-            return
+        let action = _pausedByInterruption.withLock { armed -> InterruptionAction in
+            let action = InterruptionPolicy.action(
+                for: type,
+                options: interruptionOptions(notification),
+                isPlaying: currentRate > 0,
+                armed: armed
+            )
+            armed = action.armed
+            return action
+        }
+
+        if action.pause {
+            pause()
+        }
+        // A rebuild attempted before the platform session is active again is
+        // retried by the session worker.
+        if action.rebuildOutput {
+            notifyAudioRouteChanged(reason: "AVAudioSession.interruptionEnded")
+        }
+        if action.resume {
+            play()
         }
     }
 
-    private func interruptionAllowsResume(_ notification: Notification) -> Bool {
+    private func interruptionOptions(
+        _ notification: Notification
+    ) -> AVAudioSession.InterruptionOptions {
         guard
             let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
         else {
-            return false
+            return []
         }
-        return AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
+        return AVAudioSession.InterruptionOptions(rawValue: rawOptions)
     }
 #else
     private func bindPlatformAudioSession() {}

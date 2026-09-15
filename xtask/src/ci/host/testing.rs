@@ -28,10 +28,21 @@ pub(crate) fn install_double(bin: &Path, role: &str) -> PathBuf {
     );
     fs::create_dir_all(bin).expect("create the tool directory");
     let destination = bin.join(format!("{role}{}", std::env::consts::EXE_SUFFIX));
-    let staging = bin.join(format!(".{role}.new{}", std::env::consts::EXE_SUFFIX));
-    fs::copy(&source, &staging).expect("stage the fake tool");
-    fs::rename(staging, &destination).expect("publish the fake tool");
+    publish(&source, &destination);
     destination
+}
+
+/// A copy is written, and a test thread that forks while the copy is open for
+/// writing hands that descriptor to its child; executing the copy then fails
+/// with "Text file busy" until the child execs. A link writes nothing.
+#[cfg(unix)]
+fn publish(source: &Path, destination: &Path) {
+    std::os::unix::fs::symlink(source, destination).expect("publish the fake tool");
+}
+
+#[cfg(not(unix))]
+fn publish(source: &Path, destination: &Path) {
+    fs::copy(source, destination).expect("publish the fake tool");
 }
 
 #[cfg(unix)]

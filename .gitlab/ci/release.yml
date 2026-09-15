@@ -6,6 +6,8 @@
   timeout: 180 minutes
   needs:
     - apple:test
+    - job: deps:semver
+      optional: true
 
 release:xcframework:
   extends: .release-build
@@ -73,6 +75,8 @@ release:android:
   timeout: 180 minutes
   needs:
     - apple:test
+    - job: deps:semver
+      optional: true
   script:
     - just ci run release-android
   artifacts:

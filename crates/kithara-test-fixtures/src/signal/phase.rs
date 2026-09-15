@@ -60,7 +60,7 @@ pub fn distance(a: usize, b: usize) -> usize {
     apart.min(SAW_PERIOD - apart)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 

@@ -22,7 +22,6 @@ selenium = []
 
 [dependencies]
 kithara = { workspace = true, features = ["full", "probe", "symphonia", "resample-rubato"] }
-kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
@@ -32,9 +31,12 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-integration-tests = { workspace = true, default-features = false, features = ["all"] }
 thirtyfour = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-integration-tests = { workspace = true, default-features = false, features = ["wasm"] }
+
 gloo-timers = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }

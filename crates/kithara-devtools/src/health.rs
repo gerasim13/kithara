@@ -171,7 +171,15 @@ fn build_stages(project: &ProjectConfig) -> Result<Vec<Stage>> {
         own_crates: own_crate_names(&metadata, &project.health.lockbud_exclude),
         lockbud_toolchain: format!("+{}", lockbud_toolchain()),
     };
-    Ok(build_stages_with(&resolved))
+    let mut stages = build_stages_with(&resolved);
+    if !includes_semver(std::env::var("KITHARA_PIPELINE_KIND").ok().as_deref()) {
+        stages.retain(|stage| stage.name != "semver-checks");
+    }
+    Ok(stages)
+}
+
+fn includes_semver(pipeline_kind: Option<&str>) -> bool {
+    matches!(pipeline_kind, Some("weekly"))
 }
 
 /// Which nightly built the deadlock driver. The image installs one and names it
@@ -261,7 +269,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         .advisory(),
         Stage::new("quality-report", "cargo", &["xtask", "quality", "report"]),
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
-        Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
         // The powerset owns which crates refuse a combination and holds them
         // out of the workspace pass, so this is one command rather than a shape
@@ -340,7 +347,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         )
         .own_crates(own_crates)
         .strict(),
-        Stage::new("workspace-unused-pub", "cargo", &["workspace-unused-pub"]),
     ]
 }
 
@@ -815,6 +821,26 @@ mod tests {
             "workspace crates are never published to crates.io, so the default \
              registry baseline can never resolve"
         );
+    }
+
+    #[test]
+    fn semver_checks_are_reserved_for_the_weekly_health_audit() {
+        assert!(includes_semver(Some("weekly")));
+        assert!(!includes_semver(Some("nightly")));
+        assert!(!includes_semver(Some("release")));
+        assert!(!includes_semver(None));
+    }
+
+    #[test]
+    fn health_omits_dependency_scanners_without_a_workspace_verdict() {
+        let stages = build_stages_with(&Resolved::default());
+
+        for name in ["shear", "workspace-unused-pub"] {
+            assert!(
+                !stages.iter().any(|stage| stage.name == name),
+                "{name} has cfg- or test-only false positives and does not own a health verdict"
+            );
+        }
     }
 
     #[test]

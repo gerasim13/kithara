@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
-use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
+use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
-const CACHE_ENVIRONMENT: [&str; 6] = [
+const CACHE_ENVIRONMENT: [&str; 7] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -12,6 +12,15 @@ const CACHE_ENVIRONMENT: [&str; 6] = [
     // content-addressed and namespaced by a build fingerprint, so sharing them
     // across runners cannot serve one build's bytes to another.
     "KITHARA_FIXTURE_CACHE=/cache/fixtures",
+    // Every runner mounts this one root, and a lane claims the directory named
+    // after it underneath: a lane that lands on a different runner than last
+    // time then still finds its own warm build. A runner-owned directory made
+    // that a full rebuild, which is most of what a lane spent its time on.
+    "KITHARA_CI_TARGET_ROOT=/cache/lanes",
+    // What a job builds into when it claims no lane directory. It stays one
+    // directory per runner, on a path of its own, so a checkout that predates
+    // the lane keying keeps exactly the cache it reused before instead of
+    // meeting every other job in one cargo lock.
     "CARGO_TARGET_DIR=/cache/target",
     "RUSTC_WRAPPER=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
@@ -19,7 +28,10 @@ const CACHE_ENVIRONMENT: [&str; 6] = [
     // Setting the wrapper and not this is how a cache gets installed, enabled,
     // and still never hit.
     "CARGO_INCREMENTAL=0",
-    "SCCACHE_DIR=/cache/sccache",
+    // GitHub checks each job out under this stable container path. Without a
+    // base directory sccache hashes the host-specific checkout path, so two
+    // otherwise identical runners cannot reuse Rust objects.
+    "SCCACHE_BASEDIRS=/runner/_work/kithara/kithara",
     // Well under the volume it lives on, and sccache evicts by least use
     // rather than growing until the disk decides for it.
     "SCCACHE_CACHE_SIZE=100G",
@@ -62,14 +74,15 @@ impl Container<'_> {
     /// for, and the compiler cache because `sccache` keys on the inputs of a
     /// compilation, so one runner's entry is another's hit.
     ///
-    /// The build directory is not shared. Its artefacts are valid only for the exact
-    /// features, profile and toolchain that produced them, so runners of
-    /// different shapes reuse none of each other's and only contend for the
-    /// same directory — which is how one grew past two hundred gigabytes while
-    /// every job still compiled from source. Each runner keeps its own and
-    /// warms it with its own repeat work. A host path keeps that write-heavy
-    /// cache on the disk selected by the machine profile instead of wherever
-    /// Docker stores named volumes.
+    /// The build root is shared, and a lane claims the directory named after it
+    /// underneath. Build artefacts are valid only for the exact features,
+    /// profile and toolchain that produced them, which is why one directory for
+    /// every job reuses nothing — but a lane asks for the same shape on every
+    /// run, so the directory it claims is warm whichever runner picked the job
+    /// up. A runner-owned directory instead decided reuse by which runner
+    /// happened to be free, and a lane that moved compiled the workspace again.
+    /// A host path keeps that write-heavy cache on the disk selected by the
+    /// machine profile instead of wherever Docker stores named volumes.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
         vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
@@ -87,13 +100,25 @@ impl Container<'_> {
                     .into_owned(),
                 "/cache/target",
             ),
+            (
+                Self::lane_root(host).to_string_lossy().into_owned(),
+                "/cache/lanes",
+            ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
     }
 
+    /// Where a job that claims no lane directory builds. One per runner, which
+    /// is what such a job reused before the lane keying existed.
     pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root.join("target").join(&runner.name)
+    }
+
+    /// The one build root every runner mounts. A lane owns one directory under
+    /// it; the budget is enforced over the root.
+    pub(super) fn lane_root(host: &LinuxHost) -> PathBuf {
+        host.cache_root.join("lanes")
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -120,11 +145,17 @@ impl Container<'_> {
     /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
-    pub(super) fn environment() -> Vec<String> {
+    pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
         let mut environment: Vec<String> = CACHE_ENVIRONMENT
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
+        environment.push(format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"));
+        // The S3 backend is shared, but each runner needs its own daemon
+        // endpoint. An explicit socket lets the lane start that daemon before
+        // Cargo's parallel compilers can race to start it.
+        environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
+        environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
         environment.extend(
             LINUX_LINKER_ENV
                 .iter()
@@ -168,7 +199,9 @@ mod tests {
     /// testing.
     #[test]
     fn a_job_is_told_which_linker_to_use() {
-        let environment = Container::environment();
+        let host = super::super::profile::tests::host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        let environment = Container::environment(runner);
 
         for (name, value) in LINUX_LINKER_ENV {
             assert!(
@@ -176,5 +209,16 @@ mod tests {
                 "{name} is missing from {environment:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_runner_keeps_its_ready_cache_daemon_available_for_its_job() {
+        let host = super::super::profile::tests::host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+
+        assert!(
+            Container::environment(runner)
+                .contains(&format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"))
+        );
     }
 }

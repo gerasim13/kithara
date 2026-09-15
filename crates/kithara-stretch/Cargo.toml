@@ -29,7 +29,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-num-traits = { workspace = true }
+num-traits = { workspace = true, features = ["std"] }
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -58,6 +58,9 @@ signalsmith-stretch = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "probe", "tls-rustls"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

@@ -4,9 +4,9 @@ use std::path::Path;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{PlayerEvent, TrackId},
+    events::TrackId,
     platform::time::{self, Duration},
-    play::{Resource, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestTempDir, kithara,

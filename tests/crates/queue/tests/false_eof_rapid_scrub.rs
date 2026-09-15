@@ -2,9 +2,10 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{EventReceiver, PlayerEvent},
+    events::EventReceiver,
     hls::AbrMode,
     platform::time::{Duration, Instant, timeout},
+    play::PlayerEvent,
     queue::{QueueControl, Transition},
 };
 use kithara_app::pools::AppPools;

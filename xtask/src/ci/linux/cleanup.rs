@@ -116,13 +116,17 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Where the live per-runner target caches sit on disk, so their contents can
-/// be held to a budget.
+/// Where the live build caches sit on disk, so their contents can be held to a
+/// budget: the root every runner claims a lane directory under, and the
+/// per-runner directory a job that claims no lane still builds in.
 fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
-    host.runners
-        .iter()
-        .map(|runner| Container::target_dir(host, runner))
-        .collect()
+    let mut dirs = vec![Container::lane_root(host)];
+    dirs.extend(
+        host.runners
+            .iter()
+            .map(|runner| Container::target_dir(host, runner)),
+    );
+    dirs
 }
 
 #[cfg(test)]
@@ -168,13 +172,14 @@ mod tests {
     #[test]
     fn build_cache_budget_uses_the_profile_storage_root() {
         let host = crate::ci::linux::profile::tests::host_fixture();
-        assert_eq!(
-            target_dirs(&host),
-            host.runners
-                .iter()
-                .map(|runner| host.cache_root.join("target").join(&runner.name))
-                .collect::<Vec<_>>()
-        );
+        let expected: Vec<_> = std::iter::once(host.cache_root.join("lanes"))
+            .chain(
+                host.runners
+                    .iter()
+                    .map(|runner| host.cache_root.join("target").join(&runner.name)),
+            )
+            .collect();
+        assert_eq!(target_dirs(&host), expected);
     }
 
     #[test]

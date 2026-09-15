@@ -323,6 +323,43 @@ mod tests {
         assert_eq!(s.commit_if_epoch(current, || 11), Some(11));
     }
 
+    #[kithara::test]
+    fn seek_epoch_arc_observes_begun_seeks() {
+        let s = state();
+        let epoch = s.seek_epoch_arc();
+        assert_eq!(epoch.load(Ordering::Acquire), 0);
+
+        assert_eq!(s.begin(Duration::from_secs(1)), 1);
+        assert_eq!(epoch.load(Ordering::Acquire), 1);
+    }
+
+    #[kithara::test]
+    fn pending_epoch_marks_and_clears_only_the_matching_seek() {
+        let s = state();
+        assert_eq!(s.pending_epoch(), None);
+        assert!(!s.clear_pending_epoch(1));
+
+        let stale = s.begin(Duration::from_secs(1));
+        let current = s.begin(Duration::from_secs(2));
+        s.mark_pending(current);
+        assert_eq!(s.pending_epoch(), Some(current));
+        assert!(!s.clear_pending_epoch(stale));
+        assert_eq!(s.pending_epoch(), Some(current));
+        assert!(s.clear_pending_epoch(current));
+        assert_eq!(s.pending_epoch(), None);
+        assert!(!s.clear_pending_epoch(current));
+    }
+
+    #[kithara::test]
+    fn decoder_seek_latch_is_one_shot_per_begin() {
+        let s = state();
+        assert!(!s.take_decoder_seek());
+
+        s.begin(Duration::from_secs(1));
+        assert!(s.take_decoder_seek());
+        assert!(!s.take_decoder_seek());
+    }
+
     /// `complete(old_epoch)` must NOT clear a newer seek's flushing flag.
     #[kithara::test]
     fn stale_complete_leaves_newer_seek_intact() {

@@ -260,9 +260,41 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
     })
 }
 
+/// Move the running executable out of the way of the build that replaces it.
+///
+/// Cargo writes the new binary over the old one, and the old one is this
+/// process: Windows refuses to remove a file that is open for execution, where
+/// Unix unlinks it and leaves the running image alone. Renaming it is allowed
+/// while it runs, and both processes keep the image they opened, so the build
+/// writes a fresh file and the displaced one is removed by the next refresh.
+#[cfg(not(unix))]
+fn displace_running_executable(root: &Path) -> Result<()> {
+    let Ok(executable) = env::current_exe().and_then(fs::canonicalize) else {
+        return Ok(());
+    };
+    let Ok(target) = fs::canonicalize(layout::target_dir(root)) else {
+        return Ok(());
+    };
+    if !executable.starts_with(&target) {
+        return Ok(());
+    }
+    let displaced = executable.with_extension("exe.displaced");
+    // A displaced binary from a refresh whose process has since exited. One
+    // still running cannot be removed, and does not have to be: the rename
+    // below overwrites it.
+    let _ = fs::remove_file(&displaced);
+    fs::rename(&executable, &displaced).with_context(|| {
+        format!(
+            "moving the running xtask aside so Cargo can replace it: {}",
+            executable.display()
+        )
+    })
+}
+
 #[cfg(not(unix))]
 fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
     ensure!(parent > 1, "invalid self-cache build parent process");
+    displace_running_executable(root)?;
     let mut command = cargo_build_command(root, release);
     // Cargo stays on the same Windows console, so control events reach both processes.
     // std has no Windows parent-change probe, so that check remains Unix-only.

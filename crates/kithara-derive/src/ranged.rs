@@ -46,21 +46,35 @@ impl Bound {
             other => (other, 1.0),
         };
         let value = match (literal, number) {
-            (Expr::Lit(literal), Number::Float) if let Lit::Float(value) = &literal.lit => {
-                Value::Float(value.base10_parse::<f64>()? * sign)
-            }
-            (Expr::Lit(literal), Number::Integer) if let Lit::Int(value) = &literal.lit => {
-                let magnitude = value.base10_parse::<u128>()?;
-                let positive = sign > 0.0 || magnitude == 0;
-                Value::Integer(
-                    positive,
-                    if positive {
-                        magnitude
-                    } else {
-                        u128::MAX - magnitude
-                    },
-                )
-            }
+            (Expr::Lit(literal), Number::Float) => match &literal.lit {
+                Lit::Float(value) => Value::Float(value.base10_parse::<f64>()? * sign),
+                _ => {
+                    return Err(Error::new(
+                        expr.span(),
+                        "expected a float literal, optionally negated",
+                    ));
+                }
+            },
+            (Expr::Lit(literal), Number::Integer) => match &literal.lit {
+                Lit::Int(value) => {
+                    let magnitude = value.base10_parse::<u128>()?;
+                    let positive = sign > 0.0 || magnitude == 0;
+                    Value::Integer(
+                        positive,
+                        if positive {
+                            magnitude
+                        } else {
+                            u128::MAX - magnitude
+                        },
+                    )
+                }
+                _ => {
+                    return Err(Error::new(
+                        expr.span(),
+                        "expected an integer literal, optionally negated",
+                    ));
+                }
+            },
             _ => {
                 return Err(Error::new(
                     expr.span(),

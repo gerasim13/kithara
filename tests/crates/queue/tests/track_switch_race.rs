@@ -432,6 +432,81 @@ async fn supersede_while_loading_cancels_slow_track(
     queue.close().await;
 }
 
+/// `play()` right after `select(target)` must keep that pending selection.
+/// Both loads are gated so the head track is still loading when `play()`
+/// runs; `play()` must not re-point the pending selection at the head and
+/// cancel the user's pick.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+async fn play_keeps_pending_select_of_loading_track(
+    #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
+) {
+    let (helper, head, target) = race_tracks;
+    let head_init = helper.register_init_gate(head.token(), Consts::VARIANT);
+    let target_init = helper.register_init_gate(target.token(), Consts::VARIANT);
+    let head_url = head.master_url();
+    let target_url = target.master_url();
+
+    let temp = temp_dir();
+    let (queue, downloader, store) = build_queue(&temp).await;
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
+
+    let head_id = queue
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&head_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append head track");
+    let target_id = queue
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&target_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append target track");
+    wait_for_init_requested(&head_init, Consts::OBSERVE_DEADLINE)
+        .await
+        .unwrap_or_else(|e| panic!("head init gate: {e}"));
+    wait_for_init_requested(&target_init, Consts::OBSERVE_DEADLINE)
+        .await
+        .unwrap_or_else(|e| panic!("target init gate: {e}"));
+
+    queue
+        .run(move |q| q.select(target_id, Transition::None))
+        .await
+        .expect("select target");
+    queue.run(QueueControl::play).await;
+
+    assert_ne!(
+        queue.track(target_id).map(|entry| entry.status),
+        Some(TrackStatus::Cancelled),
+        "play() cancelled the pending selection of the loading target",
+    );
+
+    head_init.release();
+    target_init.release();
+    let target_current = wait_for_queue_state(
+        &queue,
+        Consts::LOAD_DEADLINE,
+        |queue| queue.current().map(|entry| entry.id) == Some(target_id),
+        |event| {
+            matches!(
+                event,
+                QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == target_id
+            )
+        },
+    )
+    .await;
+    assert!(
+        target_current,
+        "target never became current (current={:?}, head={head_id:?})",
+        queue.current().map(|entry| entry.id),
+    );
+
+    tick_handle.stop().await;
+    queue.close().await;
+}
+
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
 fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
