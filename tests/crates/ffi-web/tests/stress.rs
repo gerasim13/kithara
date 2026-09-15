@@ -553,6 +553,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     info!(duration_secs, max_seek, "Duration known");
 
     const SEEK_COUNT: usize = 1000;
+    let started_ms = Date::now();
     let sample_rate = audio.spec().sample_rate.get();
     let channels = audio.spec().channels as usize;
     let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
@@ -617,6 +618,9 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 
         total_samples += n as u64;
 
+        if (i + 1) % 100 == 0 {
+            warn!(elapsed_ms = Date::now() - started_ms, "DIAG rapid");
+        }
         if (i + 1) % 200 == 0 {
             info!(
                 iteration = i + 1,
@@ -692,6 +696,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     let max_seek = duration_secs - 0.5;
     info!(warmup, duration_secs, "Warmup done");
 
+    let zero_started_ms = Date::now();
     let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
     for i in 0..500 {
         let pos = rng.range_f64(0.001, max_seek);
@@ -701,6 +706,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
             .unwrap_or(0);
 
         if i % 100 == 99 {
+            warn!(elapsed_ms = Date::now() - zero_started_ms, "DIAG zero");
             yield_ms(1).await;
         }
     }
