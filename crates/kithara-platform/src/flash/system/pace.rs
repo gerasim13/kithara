@@ -224,22 +224,46 @@ mod tests {
 
     /// Tests sharing one process share the engine, so an op in flight for one
     /// test can span a deadline another test registers much later. Real time
-    /// that passed before that deadline existed must not pay for it: a 30 s
-    /// harness timeout fired a second after a 37 s neighbour began.
+    /// banked before that deadline existed pays for it only up to the lag
+    /// bound: a 30 s harness timeout fired a second after a 37 s neighbour
+    /// began.
     #[kithara::test(native, flash(false))]
     fn a_deadline_does_not_inherit_real_time_from_before_it_was_set() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
 
         flash.real_io_enter();
-        thread::sleep(Duration::from_millis(150));
+        thread::sleep(Duration::from_millis(400));
         let start = RealInstant::now();
-        let waiter = spawn_park_for(&flash, Duration::from_millis(120));
+        let waiter = spawn_park_for(&flash, Duration::from_millis(200));
         waiter.join().expect("waiter thread panicked");
         let elapsed = start.elapsed();
         flash.real_io_exit();
 
-        assert_paced_elapsed(elapsed, 120);
+        let lag = Duration::from_nanos(super::super::sched::MAX_PACE_LAG_NANOS);
+        assert_paced_elapsed(elapsed + lag, 200);
+    }
+
+    /// A timer that fires late leaves the clock trailing real time, and the
+    /// next short deadline is paid from that lag rather than slept again;
+    /// otherwise every short timer costs a whole OS sleep quantum.
+    #[kithara::test(native, flash(false))]
+    fn a_deadline_is_paid_from_the_lag_a_late_timer_left() {
+        let _guard = guard();
+        let flash = FlashInner::new_arc();
+
+        flash.real_io_enter();
+        thread::sleep(Duration::from_millis(45));
+        let start = RealInstant::now();
+        let waiter = spawn_park_for(&flash, Duration::from_millis(40));
+        waiter.join().expect("waiter thread panicked");
+        let elapsed = start.elapsed();
+        flash.real_io_exit();
+
+        assert!(
+            elapsed < Duration::from_millis(40),
+            "a deadline within the carried lag slept its full duration: {elapsed:?}"
+        );
     }
 
     #[kithara::test(native, flash(false))]
