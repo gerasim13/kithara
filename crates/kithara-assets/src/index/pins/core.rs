@@ -267,11 +267,7 @@ mod tests {
         let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(
-            path.clone(),
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        );
+        let idx = PinsIndex::with_persist_at(path.clone(), crate::test_pools::byte_buffer(&pools));
         assert!(idx.snapshot().is_empty());
         assert!(
             !path.exists(),
@@ -281,11 +277,7 @@ mod tests {
 
     fn disk_index(path: &std::path::Path) -> PinsIndex {
         let pools = crate::test_pools::pools();
-        PinsIndex::with_persist_at(
-            path.to_path_buf(),
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        )
+        PinsIndex::with_persist_at(path.to_path_buf(), crate::test_pools::byte_buffer(&pools))
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -445,11 +437,7 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        let idx = PinsIndex::with_persist_at(
-            path,
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        );
+        let idx = PinsIndex::with_persist_at(path, crate::test_pools::byte_buffer(&pools));
         assert!(idx.snapshot().is_empty());
     }
 
@@ -465,11 +453,7 @@ mod tests {
         let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(
-            path,
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        );
+        let idx = PinsIndex::with_persist_at(path, crate::test_pools::byte_buffer(&pools));
         let idx2 = idx.clone();
 
         idx.add("from_first", PinDurability::Durable).unwrap();

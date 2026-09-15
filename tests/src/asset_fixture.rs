@@ -2,12 +2,9 @@
 
 use std::collections::HashSet;
 
-use kithara::{
-    assets::{
-        Assets, AssetsResult,
-        index::{PinDurability, PinsIndex as InnerPinsIndex},
-    },
-    platform::CancelToken,
+use kithara::assets::{
+    Assets, AssetsResult,
+    index::{PinDurability, PinsIndex as InnerPinsIndex},
 };
 
 use crate::bufpool_ext::Pools;
@@ -36,7 +33,7 @@ impl PinsIndex {
             let _ = std::fs::create_dir_all(parent);
         }
         Ok(Self {
-            inner: InnerPinsIndex::with_persist_at(path, CancelToken::never(), pools.get::<u8>()),
+            inner: InnerPinsIndex::with_persist_at(path, pools.get::<u8>()),
         })
     }
 
