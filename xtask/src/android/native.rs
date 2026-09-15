@@ -158,6 +158,7 @@ impl Prepared {
     ) -> Result<()> {
         let result = self.run_inner(device_url, filter, cancel);
         let _ = write_cache_stats(&self.session, &self.evidence);
+        let _ = pull_hang_dumps(&self.session, &self.evidence);
         let stopped = self.session.stop();
         let removed = self.session.control(
             &[
@@ -340,6 +341,33 @@ fn write_cache_stats(session: &runner::Session, evidence: &Path) -> Result<()> {
         None,
     )?;
     fs::write(evidence.join("fixture-cache.log"), &output.stdout)?;
+    Ok(())
+}
+
+/// A timed-out test writes its hang dump inside the session directory, which
+/// is removed with the session; the run's evidence is the only place it lasts.
+fn pull_hang_dumps(session: &runner::Session, evidence: &Path) -> Result<()> {
+    let listed = session.control(
+        &[
+            "run-as",
+            &session.package,
+            "toybox",
+            "find",
+            &session.directory,
+            "-name",
+            "kithara-hang-*.json",
+        ],
+        None,
+    )?;
+    let dumps = evidence.join("hang-dumps");
+    for path in String::from_utf8_lossy(&listed.stdout).lines() {
+        let Some(name) = Path::new(path).file_name() else {
+            continue;
+        };
+        let dump = session.control(&["run-as", &session.package, "cat", path], None)?;
+        fs::create_dir_all(&dumps)?;
+        fs::write(dumps.join(name), &dump.stdout)?;
+    }
     Ok(())
 }
 

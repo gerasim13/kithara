@@ -400,7 +400,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
+    let outcome = execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
         Lane::ReleaseXcframework => {
             super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
         }
@@ -423,7 +423,11 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &swiftpm_cache,
             &ext.ci.lanes,
         ),
-    })
+    });
+    if outcome.is_ok() {
+        environment.settle_lane_build()?;
+    }
+    outcome
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does

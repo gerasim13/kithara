@@ -355,7 +355,10 @@ fuzz SECONDS="120" *TARGETS:
     fi
     for target in "${targets[@]}"; do
         echo "fuzz: ${target} for {{ SECONDS }}s"
-        cargo +nightly fuzz run --fuzz-dir tests/fuzz "${target}" -- \
+        # The workspace release profile links with fat LTO, which drops the
+        # sanitizer-coverage globals ASan's module destructor still names.
+        CARGO_PROFILE_RELEASE_LTO=false \
+            cargo +nightly fuzz run --fuzz-dir tests/fuzz "${target}" -- \
             -max_total_time={{ SECONDS }}
     done
 
