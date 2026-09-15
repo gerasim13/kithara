@@ -222,6 +222,26 @@ mod tests {
         );
     }
 
+    /// Tests sharing one process share the engine, so an op in flight for one
+    /// test can span a deadline another test registers much later. Real time
+    /// that passed before that deadline existed must not pay for it: a 30 s
+    /// harness timeout fired a second after a 37 s neighbour began.
+    #[kithara::test(native, flash(false))]
+    fn a_deadline_does_not_inherit_real_time_from_before_it_was_set() {
+        let _guard = guard();
+        let flash = FlashInner::new_arc();
+
+        flash.real_io_enter();
+        thread::sleep(Duration::from_millis(150));
+        let start = RealInstant::now();
+        let waiter = spawn_park_for(&flash, Duration::from_millis(120));
+        waiter.join().expect("waiter thread panicked");
+        let elapsed = start.elapsed();
+        flash.real_io_exit();
+
+        assert_paced_elapsed(elapsed, 120);
+    }
+
     #[kithara::test(native, flash(false))]
     fn pacer_retargets_earlier_deadline_mid_wait() {
         let _guard = guard();

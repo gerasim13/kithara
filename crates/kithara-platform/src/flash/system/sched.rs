@@ -14,6 +14,7 @@ use super::{
     wake::{Token, Wake},
 };
 use crate::{
+    common::time::Instant as RealInstant,
     flash::{ctx, diag, ids::ThreadKey},
     sync::Arc,
 };
@@ -65,6 +66,10 @@ pub(super) struct Entry {
     /// `Some` for deadline-less waiters only. See [`Parked`].
     pub(super) parked: Option<Parked>,
     pub(super) kind: WaitKind,
+    /// Real and virtual instants of registration, recorded while an op is in
+    /// flight: the deadline owes real time from here, not from an anchor that
+    /// may predate it.
+    pub(super) paced_from: Option<(RealInstant, u64)>,
     pub(super) wake: Wake,
 }
 
@@ -75,15 +80,17 @@ impl Entry {
         Self {
             kind,
             wake,
+            paced_from: None,
             parked: Some(parked),
         }
     }
 
     /// A waiter the engine itself will release by crossing its deadline, so no
     /// parking site is recorded.
-    fn timed(kind: WaitKind, wake: Wake) -> Self {
+    fn timed(paced_from: Option<(RealInstant, u64)>, kind: WaitKind, wake: Wake) -> Self {
         Self {
             kind,
+            paced_from,
             wake,
             parked: None,
         }
@@ -167,11 +174,28 @@ impl Core {
         if self.sched.real_io == 0 {
             return None;
         }
-        let (anchor_real, anchor_virtual) = self.sched.pace_anchor?;
-        let (&(min, _), _) = self.sched.timed.iter().next()?;
-        let need = min.saturating_sub(anchor_virtual);
-        let have = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        Some(StdDuration::from_nanos(need.saturating_sub(have)))
+        self.sched.pace_anchor?;
+        let (&(min, _), first) = self.sched.timed.iter().next()?;
+        Some(StdDuration::from_nanos(self.pace_owed(min, first)))
+    }
+
+    /// Real nanoseconds the deadline `min` still owes while an op is in flight:
+    /// the stricter of the pace anchor and the entry's own registration, so real
+    /// time that passed before the deadline existed is never credited to it.
+    fn pace_owed(&self, min: u64, entry: &Entry) -> u64 {
+        let owed = |(real, virt): (RealInstant, u64)| {
+            let elapsed = u64::try_from(real.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            min.saturating_sub(virt).saturating_sub(elapsed)
+        };
+        self.sched
+            .pace_anchor
+            .map_or(0, owed)
+            .max(entry.paced_from.map_or(0, owed))
+    }
+
+    /// The registration stamp a timed entry carries while an op is in flight.
+    fn pace_stamp(&self, clock: &Clock) -> Option<(RealInstant, u64)> {
+        (self.sched.real_io != 0).then(|| (RealInstant::now(), clock.now_nanos()))
     }
 
     /// Decrement the async slot count under a held `core` lock and return the
@@ -216,18 +240,15 @@ impl Core {
             self.registry.account_woken(&woken);
             return WakeBatch(woken);
         }
-        let Some((&(min, _), _)) = self.sched.timed.iter().next() else {
+        let Some((&(min, _), first)) = self.sched.timed.iter().next() else {
             // WHY: Quiescent with NO timed waiter to advance to. Any parked yield-waiter was already drained above (when `timed` is empty the
             // all-`Thread` guard is vacuously true), so reaching here means there is nothing runnable at all: stay put.
             return WakeBatch(Vec::new());
         };
-        if self.sched.real_io != 0
-            && let Some((anchor_real, anchor_virtual)) = self.sched.pace_anchor
-        {
+        if paced {
             // WHY: PACE while real I/O is in flight: virtual time may not outrun real time, so the earliest deadline fires only once the
             // equivalent REAL time has accrued since the first in-flight op anchored the pace.
-            let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            if min > anchor_virtual.saturating_add(elapsed) {
+            if self.pace_owed(min, first) > 0 {
                 // WHY: Wake the pacer to re-target the next real deadline - but NEVER the pacer waking itself. The pacer runs this same advance rule
                 // after each park, and a self-unpark would arm its own park token, so the following `park_timeout` returns immediately -> busy-spin
                 // until the deadline comes due.
@@ -311,9 +332,10 @@ impl FlashInner {
         let mut s = self.core.lock();
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
+        let paced_from = s.pace_stamp(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
+            Entry::timed(paced_from, WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -343,9 +365,14 @@ impl FlashInner {
         }
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
+        let paced_from = s.pace_stamp(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token))),
+            Entry::timed(
+                paced_from,
+                WaitKind::Thread(thread_id),
+                Wake::Sync(Arc::clone(&token)),
+            ),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -369,9 +396,10 @@ impl FlashInner {
         let mut s = self.core.lock();
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
+        let paced_from = s.pace_stamp(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
+            Entry::timed(paced_from, WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -465,9 +493,14 @@ impl FlashInner {
         // since, leaving the deadline below the current virtual instant.
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
+        let paced_from = s.pace_stamp(&self.clock);
         s.sched.timed.insert(
             (deadline_nanos, id),
-            Entry::timed(WaitKind::Condvar(cvid), Wake::Sync(Arc::clone(&token))),
+            Entry::timed(
+                paced_from,
+                WaitKind::Condvar(cvid),
+                Wake::Sync(Arc::clone(&token)),
+            ),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -640,9 +673,11 @@ impl FlashInner {
         let deadline_nanos = self.clock.now_nanos().saturating_add(delta_nanos);
         let id = s.registry.fresh_id();
         let key = (deadline_nanos, id);
+        let paced_from = s.pace_stamp(&self.clock);
         s.sched.timed.insert(
             key,
             Entry::timed(
+                paced_from,
                 WaitKind::Timed,
                 Wake::Task {
                     waker,
