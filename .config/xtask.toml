@@ -246,7 +246,7 @@ nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
 default_count = 50
-max_count = 100
+max_count = 1000
 test_threads = "num-cpus"
 max_test_threads = 256
 # A directory of this run's own, inside the checkout it builds. Sharing the
