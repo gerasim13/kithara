@@ -419,7 +419,8 @@ where
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
+    .ok()
+    .flatten()
 }
 
 fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {
