@@ -7,7 +7,7 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
-        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SharedEq, SlotControl},
         effects::eq::EqBandConfig,
         rt::StreamShape,
@@ -130,6 +130,9 @@ mod wire {
             writer: MixTapWriter,
         },
         DisableMixTap,
+        SetSessionDucking {
+            mode: SessionDuckingMode,
+        },
         SetSessionTempo {
             tempo: Tempo,
         },
@@ -237,7 +240,12 @@ mod handle {
     use super::wire::{
         AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionSampleRate,
     };
-    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
+    use crate::{
+        api::{SessionDuckingMode, SlotId},
+        effects::eq::EqBandConfig,
+        error::PlayError,
+        rt::StreamShape,
+    };
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -396,6 +404,10 @@ mod handle {
                 reason: reason.to_owned(),
             })
             .map(|_| ())
+        }
+
+        pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
         }
 
         #[must_use]

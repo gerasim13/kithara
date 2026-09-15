@@ -221,6 +221,19 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    // MARK: - Ducking
+
+    /// Lower or restore the whole session output under a competing sound,
+    /// such as a call or a navigation prompt. Failures arrive as `.error`
+    /// events.
+    public func setDuckingMode(_ mode: DuckingMode) {
+        do {
+            try _inner.setDuckingMode(mode: mode.ffi)
+        } catch {
+            _eventSubject.send(.error(error: String(describing: error)))
+        }
+    }
+
     // MARK: - Rate
 
     /// Synchronous one-shot read of the live playback rate (`0.0` while

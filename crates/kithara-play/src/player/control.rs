@@ -8,7 +8,7 @@ use kithara_platform::sync::Arc;
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig, bridge::RtMetricsSnapshot,
+    ResourceConfig, SessionDuckingMode, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -60,6 +60,12 @@ where
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.invalidate_audio_route(reason))
+    }
+
+    /// Lower or restore the whole session output under a competing sound.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_session_ducking(mode))
     }
 
     /// Whether playback is explicitly paused.

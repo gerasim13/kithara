@@ -15,7 +15,7 @@ use super::{
     transport::SessionTransportState,
 };
 use crate::{
-    api::SlotId,
+    api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
     effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
@@ -315,6 +315,7 @@ pub(super) mod lifecycle {
             state.mix_tap = None;
             state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
+            state.session_output_memo = None;
             state.session_limiter_node_id = None;
         }
         Ok(())
@@ -462,6 +463,22 @@ pub(super) mod slots {
 
 pub(super) mod controls {
     use super::*;
+
+    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
+        mode: SessionDuckingMode,
+    ) {
+        state.session_ducking = mode;
+        if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_output_node_id,
+            &mut state.session_output_memo,
+        ) {
+            memo.volume = Volume::Linear(mode.gain());
+            let mut queue = fw_ctx.event_queue(session_id);
+            memo.update_memo(&mut queue);
+        }
+    }
 
     /// Validates the whole request before mutating anything, so an invalid
     /// entry leaves the batch untouched. Omitted players are unchanged.

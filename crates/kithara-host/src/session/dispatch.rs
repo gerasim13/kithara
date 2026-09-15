@@ -203,6 +203,10 @@ where
             tap::disable(state);
             Reply::Ok
         }
+        Cmd::SetSessionDucking { mode } => {
+            controls::set_session_ducking(state, mode);
+            Reply::Ok
+        }
         Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),

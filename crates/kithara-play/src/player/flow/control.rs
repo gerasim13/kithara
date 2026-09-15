@@ -3,7 +3,7 @@ use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, RouteDescription, SessionEvent, SlotId},
+    api::{RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent, SlotId},
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -139,6 +139,8 @@ impl<S> PlayerRuntime<S> {
             /// replaced.
             #[call(set_master_eq_layout)]
             pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
+            /// Lower or restore the whole session output under a competing sound.
+            pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
             /// Pump audio backend/runtime state.
             pub fn tick(&self) -> Result<(), PlayError>;
         }

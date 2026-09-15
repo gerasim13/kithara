@@ -31,7 +31,10 @@ use crate::{
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
+    types::{
+        FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
+        FfiRepeatMode,
+    },
 };
 
 fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
@@ -459,6 +462,17 @@ impl NativeInner {
         *obs = Some(observer);
         drop(obs);
         drop(eb);
+    }
+
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.queue
+            .set_session_ducking(mode.into())
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {

@@ -9,7 +9,10 @@ use kithara::{
 use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
+    types::{
+        FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
+        FfiRepeatMode,
+    },
     web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
 };
 
@@ -384,6 +387,10 @@ impl WasmInner {
 
     pub(crate) fn set_playing_rate(&self, rate: f32) {
         store_f32(&self.playing_rate, rate);
+    }
+
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::SetDucking(mode.into()))
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {

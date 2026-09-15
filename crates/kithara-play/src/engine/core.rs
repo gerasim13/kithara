@@ -18,7 +18,7 @@ use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
-    api::{EngineEvent, SlotId},
+    api::{EngineEvent, SessionDuckingMode, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
@@ -192,6 +192,10 @@ impl<S> EngineImpl<S> {
             return Ok(());
         }
         self.session.invalidate_audio_route(reason)
+    }
+
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.session.set_session_ducking(mode)
     }
 
     pub fn is_running(&self) -> bool {

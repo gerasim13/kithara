@@ -250,6 +250,11 @@ fn dispatch_cmd(
             apply_abr_mode(queue, variant_index);
         }
         WorkerCmd::SetRepeat(mode) => queue.set_repeat(mode),
+        WorkerCmd::SetDucking(mode) => {
+            if let Err(err) = queue.set_session_ducking(mode) {
+                clog!("[WORKER] session ducking failed: {err}");
+            }
+        }
         WorkerCmd::PeakBitrate {
             wifi_bps,
             cellular_bps,
