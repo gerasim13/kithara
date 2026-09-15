@@ -2,9 +2,10 @@
 
 //! Regression contract for forward playback at a withheld HLS segment.
 //!
-//! The decoder must wait for the real segment gate and then resume after the
-//! body arrives. The test observes only the public read outcome and the test
-//! server's real request gate; it does not add an observation path to audio.
+//! The decoder must park at the real segment gate and then resume after the
+//! body arrives. Parking is measured off the `decode_step` USDT probe: a
+//! parked worker fires it only on the occasional wake, while a busy-spin fires
+//! it thousands of times over the same window.
 
 use std::{
     num::NonZeroUsize,
@@ -29,6 +30,7 @@ use kithara_integration_tests::{
     SegmentGateHandle,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
 use tracing::info;
@@ -40,6 +42,19 @@ const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 /// The segment whose body is withheld; forward playback parks at its start.
 const GATED_SEGMENT: usize = 4;
+/// Window over which the parked worker's decode steps are counted.
+const OBSERVE_WINDOW: Duration = Duration::from_millis(700);
+/// Upper bound on `decode_step` firings over the window while parked. The
+/// busy-spin fires it thousands of times per second; a parked worker re-checks
+/// the source phase per wake and stays an order of magnitude below this.
+const MAX_PARKED_DECODE_STEPS: usize = 100;
+
+fn count_decode_steps(events: &[ProbeEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| event.target == "kithara_audio_probe" && event.probe == "decode_step")
+        .count()
+}
 
 #[kithara::fixture]
 async fn gated_audio(
@@ -77,6 +92,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
     #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
 ) {
     let (server, gate) = gated_audio;
+    let trace = usdt_trace::scope();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -131,8 +147,17 @@ async fn forward_into_withheld_segment_waits_and_resumes(
             time::sleep(Duration::from_millis(5)).await;
         }
 
+        let before = count_decode_steps(&usdt_trace::events());
+        assert!(
+            before > 0,
+            "decode_step never fired before the withheld boundary"
+        );
+        time::sleep(OBSERVE_WINDOW).await;
+        let parked = count_decode_steps(&usdt_trace::events()).saturating_sub(before);
+
         release_flag.store(true, Ordering::Release);
         release_gate.release();
+        parked
     });
 
     let decode_at_boundary = Arc::clone(&at_boundary);
@@ -191,10 +216,20 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         (frames_before, frames_after)
     });
 
-    releaser.await.expect("releaser joins");
+    let parked = releaser.await.expect("releaser joins");
     let (frames_before, frames_after) = decode.await.expect("decode task joins");
+    drop(trace);
 
-    info!(frames_before, frames_after, "F5 forward-withhold result");
+    info!(
+        frames_before,
+        frames_after, parked, "F5 forward-withhold result"
+    );
+
+    assert!(
+        parked <= MAX_PARKED_DECODE_STEPS,
+        "decode busy-spun at the withheld boundary: {parked} decode steps in \
+         {OBSERVE_WINDOW:?}, bound {MAX_PARKED_DECODE_STEPS}"
+    );
 
     assert!(
         frames_before > 0,
