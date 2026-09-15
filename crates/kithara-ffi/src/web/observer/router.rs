@@ -1,25 +1,19 @@
 use std::mem;
 
-use js_sys::Reflect;
-#[cfg(feature = "analysis")]
-use js_sys::{Function, Object};
+use js_sys::{Function, Reflect};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
 };
-#[cfg(feature = "analysis")]
-use send_wrapper::SendWrapper;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use web_sys::{BroadcastChannel, MessageEvent, console};
 
 use super::{decode::decode, decode_item::decode_item_event, marshal::get_id_req};
-#[cfg(feature = "analysis")]
-use crate::web::analysis::encode::ANALYSIS_SCOPE;
 use crate::{
     item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
-    web::observer::source::EVENT_CHANNEL,
+    web::{analysis::AnalysisRoute, observer::source::EVENT_CHANNEL},
 };
 
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
@@ -30,13 +24,12 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 pub(crate) struct Routes {
     queue_view: Arc<Mutex<QueueView>>,
     sinks: Arc<Mutex<Sinks>>,
+    analysis: AnalysisRoute,
 }
 
 #[derive(Default)]
 struct Sinks {
     player: Option<Arc<dyn PlayerObserver>>,
-    #[cfg(feature = "analysis")]
-    analysis: Option<SendWrapper<Function>>,
     installed: bool,
 }
 
@@ -45,12 +38,12 @@ impl Routes {
         Self {
             queue_view,
             sinks: Arc::new(Mutex::default()),
+            analysis: AnalysisRoute::default(),
         }
     }
 
-    #[cfg(feature = "analysis")]
     pub(crate) fn set_analysis(&self, func: Function) {
-        self.sinks.lock().analysis = Some(SendWrapper::new(func));
+        self.analysis.set(func);
         self.arm();
     }
 
@@ -86,27 +79,13 @@ impl Routes {
     }
 
     fn dispatch(&self, data: &JsValue) {
-        match scope(data).as_deref() {
-            Some("item") => self.route_item_message(data),
-            #[cfg(feature = "analysis")]
-            Some(ANALYSIS_SCOPE) => self.route_analysis(data),
-            _ => self.route_player(data),
+        let scope = scope(data);
+        if self.analysis.dispatch(scope.as_deref(), data) {
+            return;
         }
-    }
-
-    #[cfg(feature = "analysis")]
-    fn route_analysis(&self, data: &JsValue) {
-        let func = self
-            .sinks
-            .lock()
-            .analysis
-            .as_ref()
-            .map(|func| (*func).clone());
-        if let Some(func) = func {
-            if let Some(payload) = data.dyn_ref::<Object>() {
-                let _ = Reflect::delete_property(payload, &JsValue::from_str(SCOPE_KEY));
-            }
-            let _ = func.call1(&JsValue::UNDEFINED, data);
+        match scope.as_deref() {
+            Some("item") => self.route_item_message(data),
+            _ => self.route_player(data),
         }
     }
 

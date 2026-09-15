@@ -1,7 +1,5 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
-#[cfg(feature = "analysis")]
-use kithara::analysis::AnalysisToken;
 use kithara::{
     abr::AbrMode,
     assets::StorageBackend,
@@ -27,7 +25,7 @@ use crate::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
-    web::{analysis::runs::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
+    web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
 struct Consts;
@@ -210,10 +208,12 @@ fn dispatch_cmd(
                 .map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
-        #[cfg(feature = "analysis")]
         WorkerCmd::Analyze { id, request_id } => {
             let state = build_state.borrow();
-            if let Err(error) = start_analysis(queue, &state, analysis, id, request_id) {
+            if let Err(error) = analysis
+                .borrow_mut()
+                .start_queued(queue, id, request_id, |url| build_config(&state, url))
+            {
                 crate::web::interop::send_reply(request_id, Err(error));
             }
         }
@@ -433,37 +433,6 @@ fn replace_track(
         .map_err(|e| e.to_string())?;
     queue.remove(old_id).map_err(|e| e.to_string())?;
     Ok(old_id)
-}
-
-#[cfg(feature = "analysis")]
-fn start_analysis(
-    queue: &FfiQueueControl,
-    state: &BuildState,
-    analysis: &Rc<RefCell<AnalysisRuns>>,
-    id: TrackId,
-    request_id: u32,
-) -> Result<(), String> {
-    let source = queue
-        .track_source(id)
-        .ok_or_else(|| format!("track {id:?} is not queued"))?;
-    let token = source
-        .uri()
-        .map(AnalysisToken::from)
-        .ok_or_else(|| format!("track {id:?} has a source with no readable location"))?;
-    let config = match source {
-        FfiTrackSource::Config(config) => *config,
-        FfiTrackSource::Uri(ref url) => build_config(state, url)
-            .ok_or_else(|| format!("track {id:?} carries a url kithara cannot parse: {url}"))?,
-        _ => {
-            return Err(format!(
-                "track {id:?} carries a source this build cannot open"
-            ));
-        }
-    };
-    analysis
-        .borrow_mut()
-        .start(queue, config, id, token, request_id);
-    Ok(())
 }
 
 #[cfg(test)]

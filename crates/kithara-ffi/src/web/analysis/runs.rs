@@ -66,6 +66,37 @@ impl AnalysisRuns {
         }
     }
 
+    pub(crate) fn start_queued<F>(
+        &mut self,
+        queue: &FfiQueueControl,
+        id: TrackId,
+        request_id: u32,
+        config_for: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str) -> Option<FfiResourceConfig>,
+    {
+        let source = queue
+            .track_source(id)
+            .ok_or_else(|| format!("track {id:?} is not queued"))?;
+        let token = source
+            .uri()
+            .map(AnalysisToken::from)
+            .ok_or_else(|| format!("track {id:?} has a source with no readable location"))?;
+        let config = match source {
+            crate::pools::FfiTrackSource::Config(config) => *config,
+            crate::pools::FfiTrackSource::Uri(ref url) => config_for(url)
+                .ok_or_else(|| format!("track {id:?} carries a url kithara cannot parse: {url}"))?,
+            _ => {
+                return Err(format!(
+                    "track {id:?} carries a source this build cannot open"
+                ));
+            }
+        };
+        self.start(queue, config, id, token, request_id);
+        Ok(())
+    }
+
     /// Open a pass for `id` on the queue's decoded-audio axis.
     pub(crate) fn start(
         &mut self,

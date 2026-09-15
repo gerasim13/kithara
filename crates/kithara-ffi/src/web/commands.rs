@@ -61,7 +61,6 @@ pub(crate) enum WorkerCmd {
     RemoveAll,
     /// Start (or restart) the analysis pass for a queued track, replying via
     /// `request_id`.
-    #[cfg(feature = "analysis")]
     Analyze {
         id: TrackId,
         request_id: u32,
