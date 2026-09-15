@@ -5158,6 +5158,7 @@ dependencies = [
 name = "kithara-events-tests"
 version = "0.0.1-alpha4"
 dependencies = [
+ "kithara",
  "kithara-events",
  "kithara-test-dylib",
  "kithara-test-utils",

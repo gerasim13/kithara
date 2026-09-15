@@ -12,14 +12,15 @@ ignored = ["kithara-test-utils"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-client-reqwest = ["kithara-test-utils/client-reqwest"]
-client-wreq = ["kithara-test-utils/client-wreq"]
-tls-rustls = ["kithara-test-utils/tls-rustls"]
-tls-native = ["kithara-test-utils/tls-native"]
-flash = ["kithara-test-utils/flash"]
-no-block = ["kithara-test-utils/no-block"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash"]
+no-block = ["kithara/no-block"]
 
 [dependencies]
+kithara = { workspace = true, default-features = false, features = ["events", "platform"] }
 kithara-events = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
