@@ -24,9 +24,10 @@ See the workspace tooling for end-to-end builds:
 - `just tooling xtask wasm postbuild` — post-build patches for the wasm output.
 
 Apple and Android builds use the `standard` feature set unless
-`KITHARA_FFI_FEATURES` supplies a comma-separated replacement. An empty value
-builds the platform core without optional capabilities. WASM keeps its required
-`wasm` feature and adds the selected features. For example:
+`KITHARA_FFI_FEATURES` supplies a comma-separated replacement. Apple and Android
+always include their required Signalsmith time-stretch backend; an empty value
+removes only optional capabilities. WASM keeps its required `wasm` feature and
+adds the selected features. For example:
 
 ```sh
 KITHARA_FFI_FEATURES= just platform apple xcframework
