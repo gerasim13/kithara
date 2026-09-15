@@ -204,8 +204,6 @@ impl SlotControl {
     ) {
         debug_assert!(self.can_schedule_track_seek(item_id));
         self.scheduled_seeks.retain(|seek| seek.item_id != item_id);
-        self.prepared_launch_epochs
-            .retain(|(bound_id, _)| *bound_id != item_id);
         self.scheduled_seeks.push(ScheduledTrackSeek {
             item_id,
             position,
@@ -285,9 +283,9 @@ impl SlotControl {
                 })
                 .is_ok()
             {
+                self.prepared_launch_epochs
+                    .retain(|(item_id, _)| *item_id != request.item_id);
                 if request.disposition.is_prepared_launch() {
-                    self.prepared_launch_epochs
-                        .retain(|(item_id, _)| *item_id != request.item_id);
                     self.prepared_launch_epochs
                         .push((request.item_id, seek_epoch));
                 }
@@ -376,6 +374,8 @@ impl SlotControl {
         }
         self.prepared_launch_epochs
             .retain(|(bound_id, epoch)| *bound_id != item_id || *epoch != seek_epoch);
+        self.scheduled_seeks
+            .retain(|seek| seek.item_id != item_id || !seek.disposition.is_prepared_launch());
         true
     }
 
@@ -1071,6 +1071,49 @@ mod tests {
         assert!(!control.set_prepared_launch_armed(item, true));
         assert!(control.scheduled_seeks.is_empty());
         assert!(inputs.cmd_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn cancelling_a_replaced_transferred_launch_cancels_the_transferred_epoch() {
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        control.bind_seek(item, Arc::new(CountSeek(AtomicUsize::new(0))));
+        let launch = ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        });
+        control.schedule_track_seek(item, Duration::from_secs(3), launch);
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(LEAD);
+        assert!(inputs.cmd_rx.try_pop().is_some());
+        control.schedule_track_seek(item, Duration::from_secs(5), launch);
+
+        assert!(control.cancel_prepared_launches(item, true));
+
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::CancelPreparedLaunch { item_id, prepared_seek_epoch: 7, .. })
+                if item_id == item
+        ));
+    }
+
+    #[kithara::test]
+    fn cancelling_a_transferred_launch_drops_its_queued_replacement() {
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let item = TrackId::allocate();
+        control.bind_seek(item, Arc::new(CountSeek(AtomicUsize::new(0))));
+        let launch = ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: kithara_warp::WarpMapRevision::first(),
+        });
+        control.schedule_track_seek(item, Duration::from_secs(3), launch);
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(LEAD);
+        control.schedule_track_seek(item, Duration::from_secs(5), launch);
+
+        assert!(control.cancel_prepared_launches(item, true));
+
+        assert!(!control.set_prepared_launch_armed(item, true));
     }
 
     #[kithara::test]

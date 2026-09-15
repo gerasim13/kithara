@@ -226,23 +226,35 @@ where
                         }
                     },
                 );
-                if prepared_source_cue
-                    && self.runtime.phase_kind()
-                        == crate::player::state::phase::PlayerPhaseKind::Playing
-                    && self
-                        .runtime
-                        .core
-                        .engine
-                        .set_prepared_launch_armed(slot, item, true)
-                {
-                    self.runtime
-                        .core
-                        .items
-                        .consume_awaiting_initial_source_cue(item);
+                if prepared_source_cue {
+                    self.arm_prepared_launch_while_playing(slot, item);
                 }
             }
         }
         Ok(Some(admission))
+    }
+
+    /// Arms a scheduled prepared launch while the player is playing.
+    ///
+    /// The armed launch owns the track's initial source cue, so the cue is
+    /// consumed only once the launch accepts the arm.
+    pub(crate) fn arm_prepared_launch_while_playing(
+        &mut self,
+        slot: crate::api::SlotId,
+        item: TrackId,
+    ) {
+        if self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing
+            && self
+                .runtime
+                .core
+                .engine
+                .set_prepared_launch_armed(slot, item, true)
+        {
+            self.runtime
+                .core
+                .items
+                .consume_awaiting_initial_source_cue(item);
+        }
     }
 
     /// Acknowledges the prepared warp map once matching PCM reaches presentation.

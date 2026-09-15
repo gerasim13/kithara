@@ -40,6 +40,28 @@ pub(crate) fn seek_outcome(
     }
 }
 
+/// Chooses how a Host seek reaches the deck.
+///
+/// An audible deck keeps its old stream until the activation, so only the
+/// decoder seek is scheduled. A deck that is not yet audible has no stream to
+/// preserve: it waits for the quantized activation and launches at the cue.
+pub(crate) const fn host_seek_disposition(
+    activation: kithara_warp::SessionFrame,
+    warp_map: kithara_warp::WarpMapRevision,
+    audible: bool,
+) -> crate::bridge::ScheduledSeekDisposition {
+    if audible {
+        crate::bridge::ScheduledSeekDisposition::SeekOnly { activation }
+    } else {
+        crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
+            crate::bridge::PreparedLaunchIdentity {
+                activation,
+                warp_map,
+            },
+        )
+    }
+}
+
 pub(crate) type PlayerSync = GroupState<PlayerMember>;
 
 /// Host-owned synchronization member that retains one native player.

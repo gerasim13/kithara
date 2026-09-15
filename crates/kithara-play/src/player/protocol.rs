@@ -408,6 +408,13 @@ where
                 reconcile.prepared.activation_beat,
             ),
         ));
+        let disposition = target::host_seek_disposition(
+            reconcile.prepared.activation,
+            reconcile.prepared.warp_map,
+            self.runtime
+                .playback_snapshot()
+                .is_some_and(|snapshot| snapshot.is_playing()),
+        );
         let items = &self.runtime.core.items;
         let sync = &mut self.sync;
         let transition = items.free_adoption_transition(prepared.item);
@@ -417,9 +424,7 @@ where
                 prepared.slot,
                 prepared.item,
                 destination,
-                crate::bridge::ScheduledSeekDisposition::SeekOnly {
-                    activation: reconcile.prepared.activation,
-                },
+                disposition,
                 || {
                     items.commit_current_track_plan(
                         prepared.item,
@@ -452,6 +457,9 @@ where
             commit()
         };
         let _ = result?;
+        if disposition.is_prepared_launch() {
+            self.arm_prepared_launch_while_playing(prepared.slot, prepared.item);
+        }
         kithara::probe_event!(
             warp_plan_published,
             warp_map_revision = u64::from(reconcile.prepared.warp_map),
@@ -696,5 +704,28 @@ mod tests {
 
         assert!(matches!(outcome, SeekOutcome::Landed { target, landed_at }
             if target == Duration::from_secs(1) && landed_at == target));
+    }
+
+    #[kithara::test]
+    fn host_seek_launches_a_deck_that_is_not_yet_audible_at_the_cue() {
+        let activation = kithara_warp::SessionFrame::new(96_000);
+        let warp_map = kithara_warp::WarpMapRevision::first();
+
+        assert!(matches!(
+            target::host_seek_disposition(activation, warp_map, false),
+            crate::bridge::ScheduledSeekDisposition::PreparedLaunch(identity)
+                if identity == crate::bridge::PreparedLaunchIdentity { activation, warp_map }
+        ));
+    }
+
+    #[kithara::test]
+    fn host_seek_keeps_the_audible_stream_until_the_activation() {
+        let activation = kithara_warp::SessionFrame::new(96_000);
+
+        assert!(matches!(
+            target::host_seek_disposition(activation, kithara_warp::WarpMapRevision::first(), true),
+            crate::bridge::ScheduledSeekDisposition::SeekOnly { activation: scheduled }
+                if scheduled == activation
+        ));
     }
 }
