@@ -5249,6 +5249,7 @@ name = "kithara-ffi-web-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "gloo-timers",
+ "js-sys",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
