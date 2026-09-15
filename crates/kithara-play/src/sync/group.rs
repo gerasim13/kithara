@@ -143,17 +143,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(())
     }
 
-    /// Records the parent's committed session anchor; under
-    /// [`SyncMode::HostSync`] republishes this group's session grid on it.
-    pub fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
-        if self.mode == SyncMode::HostSync {
-            let candidate = self.session_candidate(anchor)?;
-            self.publish_grid(candidate)?;
-        }
-        self.parent_anchor = Some(anchor);
-        Ok(())
-    }
-
     /// Commits a deck state change and its session grid as one transaction.
     pub(crate) fn transact_at(
         &mut self,
@@ -439,6 +428,36 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
+    /// Records the parent's committed session anchor; under
+    /// [`SyncMode::HostSync`] republishes this group's session grid on it.
+    ///
+    /// A preparation not yet presented, or a Free handoff not yet installed,
+    /// was planned in output frames of the previous axis, so crossing an axis
+    /// boundary drops it.
+    pub fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        if self.mode == SyncMode::HostSync {
+            let crosses_axis = self.crosses_axis_boundary(anchor);
+            let candidate = self.session_candidate(anchor)?;
+            self.publish_grid(candidate)?;
+            if crosses_axis {
+                self.prepared = None;
+                self.preparing = None;
+            }
+        }
+        self.parent_anchor = Some(anchor);
+        Ok(())
+    }
+
+    /// Whether committing `anchor` steps this deck's live grid onto the
+    /// successor axis, withdrawing whatever was prepared on the current one.
+    pub(crate) fn crosses_axis_boundary(&self, anchor: SessionAnchor) -> bool {
+        self.mode == SyncMode::HostSync
+            && self.grid.state() == BeatGridState::Live
+            && self.session_axis().is_ok_and(|axis| {
+                axis != anchor.axis() && is_successor_epoch(axis.epoch(), anchor.axis().epoch())
+            })
+    }
+
     /// The tempo a `Disable` latches from the group or its first live grid.
     pub(crate) fn seed_local_tempo(&self) -> Option<BeatsPerMinute> {
         self.deck_tempo().or_else(|| {

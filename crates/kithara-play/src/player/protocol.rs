@@ -333,8 +333,7 @@ where
     }
 
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
-        self.sync.publish_session_anchor(anchor)?;
-        Ok(())
+        Self::commit_session_anchor(self, anchor)
     }
 
     fn host_level(&self) -> f32 {

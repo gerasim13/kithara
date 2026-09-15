@@ -548,6 +548,59 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
 }
 
 #[kithara::test]
+fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
+    let anchor = |rate, epoch| {
+        SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(0.0).expect("beat"),
+            2.0,
+            SessionAxis::new(
+                NonZeroU32::new(rate).expect("sample rate"),
+                SessionEpoch::new(epoch),
+            ),
+        )
+        .expect("session anchor")
+    };
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        NonZeroU32::new(44_100).expect("sample rate"),
+        SessionEpoch::new(0),
+        SyncMemberKind::Grid,
+        SyncMode::HostSync,
+    );
+    group
+        .publish_session_anchor(anchor(44_100, 0))
+        .expect("the first anchor makes the deck grid live");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = reconcile(&mut group, track, ReconcileCause::GridAvailable);
+    let admission = group
+        .transact(SyncOperation::Sync {
+            target: group.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(48_000)
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                preparation_source: 48_448,
+                playback_rate: RateTarget::default(),
+            },
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Free,
+        })
+        .expect("free");
+    assert!(matches!(admission, SyncAdmission::Preparing { .. }));
+
+    group
+        .publish_session_anchor(anchor(48_000, 1))
+        .expect("the successor epoch steps the deck through an unavailable grid");
+
+    assert!(group.preparing().is_none());
+}
+
+#[kithara::test]
 fn installed_free_receipt_is_consumed_once() {
     let mut group = live_deck();
     let _ = group
@@ -876,6 +929,42 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
+}
+
+#[kithara::test]
+fn a_route_boundary_drops_the_preparation_planned_on_the_previous_axis() {
+    let anchor = |rate, epoch| {
+        SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(0.0).expect("beat"),
+            2.0,
+            SessionAxis::new(
+                NonZeroU32::new(rate).expect("sample rate"),
+                SessionEpoch::new(epoch),
+            ),
+        )
+        .expect("session anchor")
+    };
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        NonZeroU32::new(44_100).expect("sample rate"),
+        SessionEpoch::new(0),
+        SyncMemberKind::Grid,
+        SyncMode::HostSync,
+    );
+    group
+        .publish_session_anchor(anchor(44_100, 0))
+        .expect("the first anchor makes the deck grid live");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let admission = reconcile(&mut group, track, ReconcileCause::GridAvailable);
+    assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+
+    group
+        .publish_session_anchor(anchor(48_000, 1))
+        .expect("the successor epoch steps the deck through an unavailable grid");
+
+    assert!(group.prepared().is_none());
 }
 
 #[kithara::test]

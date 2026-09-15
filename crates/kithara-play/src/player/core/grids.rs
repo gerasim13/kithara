@@ -93,18 +93,7 @@ where
             },
         );
         self.replan_track(item);
-        let source_cue = self
-            .runtime
-            .core
-            .items
-            .initial_source_cue(item)
-            .and_then(|cue| source_cue_beat(&snapshot, cue));
-        let prepared_launch = self.sync.mode() == kithara_warp::SyncMode::HostSync
-            && self
-                .runtime
-                .core
-                .items
-                .await_initial_source_cue_if(item, source_cue.is_some());
+        let prepared_launch = self.await_prepared_launch(item, &snapshot);
         self.reconcile_item_grid(item, cause, None, prepared_launch)
             .map_err(|rejected| {
                 let (error, _) = rejected.into();
@@ -449,6 +438,81 @@ impl<S> PlayerImpl<S>
 where
     S: Send + Sync + 'static,
 {
+    /// Commits the owner's session anchor.
+    ///
+    /// Crossing an axis boundary withdraws the launch, plan activation and
+    /// Free handoff prepared on the previous axis. Once the successor axis is
+    /// live, the current track is reconciled onto it with the same launch
+    /// disposition a grid publication derives.
+    pub(crate) fn commit_session_anchor(
+        &mut self,
+        anchor: kithara_warp::SessionAnchor,
+    ) -> Result<(), SyncError> {
+        let before = self.sync.snapshot().state();
+        let item = self.runtime.core.items.current_item_id();
+        let withdraws = self.sync.crosses_axis_boundary(anchor);
+        let withdraws_prepared = withdraws && self.sync.prepared().is_some();
+        if withdraws_prepared
+            && let (Some(slot), Some(item)) = (self.runtime.slot(), item)
+            && !self.runtime.core.engine.cancel_prepared_launches(
+                slot,
+                item,
+                self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing,
+            )
+        {
+            return Err(SyncError::SlotChannelFull);
+        }
+        let withdraws_preparing = withdraws && self.sync.preparing().is_some();
+        self.sync.publish_session_anchor(anchor)?;
+        let Some(item) = item else {
+            return Ok(());
+        };
+        if withdraws_preparing {
+            self.runtime.core.items.cancel_outgoing_free_adoption(item);
+        }
+        if withdraws_prepared {
+            self.replan_track(item);
+        }
+        if self.sync.mode() != kithara_warp::SyncMode::HostSync
+            || !matches!(before, BeatGridState::Unavailable(_))
+            || self.sync.snapshot().state() != BeatGridState::Live
+        {
+            return Ok(());
+        }
+        let Some(grid) = self.runtime.core.items.track_grid(item) else {
+            return Ok(());
+        };
+        let prepared_launch = self.await_prepared_launch(item, &grid.snapshot);
+        self.reconcile_item_grid(
+            item,
+            ReconcileCause::TransportChanged,
+            None,
+            prepared_launch,
+        )
+        .map(|_| ())
+        .map_err(|rejected| {
+            let (error, _) = rejected.into();
+            error
+        })
+    }
+
+    /// Whether the track's selected cue resolves on `grid` and so keeps
+    /// waiting for a synchronized launch.
+    fn await_prepared_launch(&self, item: TrackId, grid: &BeatGridSnapshot) -> bool {
+        let source_cue = self
+            .runtime
+            .core
+            .items
+            .initial_source_cue(item)
+            .and_then(|cue| source_cue_beat(grid, cue));
+        self.sync.mode() == kithara_warp::SyncMode::HostSync
+            && self
+                .runtime
+                .core
+                .items
+                .await_initial_source_cue_if(item, source_cue.is_some())
+    }
+
     fn replan_track(&self, item: TrackId) {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
