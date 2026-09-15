@@ -521,7 +521,13 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 /// - After each seek: read_with_yield must produce >0 samples (not stuck)
 /// - All samples must be finite and in [-1.0, 1.0]
 /// - Tolerate at most 1% dead seeks (pipeline restart race)
-#[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(
+    wasm,
+    serial,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1),
+    tracing("kithara_hls::wait=debug")
+)]
 async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
