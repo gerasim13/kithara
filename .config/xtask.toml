@@ -2602,15 +2602,21 @@ merged_asset = "Kithara.xcframework.zip"
 platform_assets = ["kithara.aar", "rust-tls.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600
-# Documentation channel: DocC archive (`just platform apple doc`) zipped + uploaded as a
-# release asset.
-docs_asset = "Kithara-docs.zip"
-docs_archive = "docs-build/Kithara.doccarchive"
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped + deployed
 # to GitHub Pages classic on the gh-pages branch.
 wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
+
+# Documentation channels: each `doc` recipe's output directory, zipped and
+# uploaded as a release asset.
+[ext.release.docs.apple]
+asset = "Kithara-docs.zip"
+archive = "docs-build/Kithara.doccarchive"
+
+[ext.release.docs.android]
+asset = "kithara-android-docs.zip"
+archive = "docs-build/kithara-android"
 
 # What each packaging run collects. Whether a version has to be named is the
 # pipeline's answer rather than a profile's: this same release profile builds

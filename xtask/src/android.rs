@@ -429,7 +429,14 @@ fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
 
 fn run_doc(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
     run_build(profile, android, tools)?;
+    render_docs().map(drop)
+}
 
+/// Render the Kotlin API documentation from the generated bindings already on
+/// disk, and answer with the directory it was written to. The release job
+/// builds the AAR through its own recipe, so the documentation step must not
+/// build again.
+pub(crate) fn render_docs() -> Result<PathBuf> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -459,7 +466,7 @@ fn run_doc(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) 
     }
 
     println!("==> Documentation: {}", docs.display());
-    Ok(())
+    Ok(docs)
 }
 
 /// Resolved before the run takes anything, so a failure while preparing is
