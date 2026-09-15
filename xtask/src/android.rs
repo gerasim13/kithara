@@ -55,6 +55,12 @@ pub(crate) enum AndroidCommand {
     Clippy,
     /// Build release JNI/Kotlin bindings and export stable release AAR files.
     Aar,
+    /// Build the Kotlin bindings and render the API documentation for them.
+    Doc {
+        /// Build profile for the underlying Rust JNI libraries.
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
+    },
     /// Boot an emulator (if needed), install the demo APK, and launch it.
     ///
     /// Pass `--debug` to start the activity with `am start -D`, which
@@ -130,6 +136,7 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
         AndroidCommand::Build { profile } => run_build(profile, &ext.android, tools),
         AndroidCommand::Clippy => run_clippy(&ctx.root, &ext.android, tools),
         AndroidCommand::Aar => run_aar(&ext.android, tools),
+        AndroidCommand::Doc { profile } => run_doc(profile, &ext.android, tools),
         AndroidCommand::Run {
             profile,
             avd,
@@ -418,6 +425,48 @@ fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
         println!("    {}", aar.display());
     }
     Ok(())
+}
+
+fn run_doc(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
+    run_build(profile, android, tools)?;
+    render_docs().map(drop)
+}
+
+/// Render the Kotlin API documentation from the generated bindings already on
+/// disk, and answer with the directory it was written to. The release job
+/// builds the AAR through its own recipe, so the documentation step must not
+/// build again.
+pub(crate) fn render_docs() -> Result<PathBuf> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+    let android_root = workspace_root.join("android");
+    let gradlew = android_root.join("gradlew");
+    if !gradlew.exists() {
+        bail!("gradlew not found at {}", gradlew.display());
+    }
+
+    println!("==> Rendering Kotlin API documentation");
+    let status = Command::new(&gradlew)
+        .args([":lib:dokkaGenerate", "-x", "generateKitharaFfi"])
+        .current_dir(&android_root)
+        .status()
+        .context("failed to run Gradle dokkaGenerate")?;
+    if !status.success() {
+        bail!("Gradle dokkaGenerate failed");
+    }
+
+    let docs = workspace_root.join("docs-build/kithara-android");
+    if !docs.join("index.html").is_file() {
+        bail!(
+            "expected documentation was not produced: {}",
+            docs.display()
+        );
+    }
+
+    println!("==> Documentation: {}", docs.display());
+    Ok(docs)
 }
 
 /// Resolved before the run takes anything, so a failure while preparing is

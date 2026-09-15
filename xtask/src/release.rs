@@ -147,9 +147,10 @@ fn nightly_assets(cfg: &ReleaseConfig, artifacts: &Path) -> Result<Vec<PathBuf>>
             primary.display()
         );
     }
-    let optional = [&cfg.merged_asset, &cfg.docs_asset, &cfg.wasm_asset]
+    let optional = [cfg.merged_asset.as_str(), cfg.wasm_asset.as_str()]
         .into_iter()
-        .chain(cfg.platform_assets.iter());
+        .chain(cfg.docs_assets())
+        .chain(cfg.platform_assets.iter().map(String::as_str));
     let mut assets = vec![primary];
     for name in optional {
         if name.is_empty() {
@@ -420,13 +421,15 @@ fn prepare(
         }
     }
 
-    stage_dir_asset(
-        &tag,
-        &cfg.docs_asset,
-        &cfg.docs_archive,
-        "documentation",
-        tools,
-    )?;
+    for (name, channel) in &cfg.docs {
+        stage_dir_asset(
+            &tag,
+            &channel.asset,
+            &channel.archive,
+            &format!("{name} documentation"),
+            tools,
+        )?;
+    }
     stage_dir_asset(
         &tag,
         &cfg.wasm_asset,
@@ -713,7 +716,9 @@ fn publish_extras(
     for name in &cfg.platform_assets {
         upload_extra_asset(cfg, tag, name, true, artifacts, tools)?;
     }
-    upload_extra_asset(cfg, tag, &cfg.docs_asset, false, artifacts, tools)?;
+    for name in cfg.docs_assets() {
+        upload_extra_asset(cfg, tag, name, false, artifacts, tools)?;
+    }
     Ok(())
 }
 
@@ -1525,10 +1530,10 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
             );
         }
     }
-    for name in std::iter::once(&cfg.core_asset)
-        .chain(std::iter::once(&cfg.merged_asset))
-        .chain(std::iter::once(&cfg.docs_asset))
-        .chain(cfg.platform_assets.iter())
+    for name in [cfg.core_asset.as_str(), cfg.merged_asset.as_str()]
+        .into_iter()
+        .chain(cfg.docs_assets())
+        .chain(cfg.platform_assets.iter().map(String::as_str))
         .filter(|name| !name.is_empty())
     {
         let path = Path::new(name);
@@ -1714,6 +1719,26 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::config::DocsChannel;
+
+    fn docs_fixture() -> BTreeMap<String, DocsChannel> {
+        BTreeMap::from([
+            (
+                "android".to_string(),
+                DocsChannel {
+                    asset: "kithara-android-docs.zip".into(),
+                    archive: "docs-build/kithara-android".into(),
+                },
+            ),
+            (
+                "apple".to_string(),
+                DocsChannel {
+                    asset: "Kithara-docs.zip".into(),
+                    archive: "docs-build/Kithara.doccarchive".into(),
+                },
+            ),
+        ])
+    }
 
     const MANIFEST_SAMPLE: &str =
         "// header\nlet version = \"0.0.1-alpha3\"\nlet checksum = \"abc\"\nlet other = 1\n";
@@ -1789,8 +1814,7 @@ mod tests {
             core_asset: "KitharaFFIInternal.xcframework.zip".into(),
             merged_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
-            docs_asset: "Kithara-docs.zip".into(),
-            docs_archive: "docs-build/Kithara.doccarchive".into(),
+            docs: docs_fixture(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
             pages_branch: "gh-pages".into(),
@@ -1835,8 +1859,7 @@ mod tests {
             core_asset: "KitharaFFIInternal.xcframework.zip".into(),
             merged_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
-            docs_asset: "Kithara-docs.zip".into(),
-            docs_archive: "docs-build/Kithara.doccarchive".into(),
+            docs: docs_fixture(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
             pages_branch: "gh-pages".into(),
@@ -1879,8 +1902,7 @@ mod tests {
             core_asset: String::new(),
             merged_asset: String::new(),
             platform_assets: Vec::new(),
-            docs_asset: String::new(),
-            docs_archive: String::new(),
+            docs: BTreeMap::new(),
             wasm_asset: String::new(),
             wasm_dist: String::new(),
             pages_branch: String::new(),
@@ -1901,7 +1923,13 @@ mod tests {
             core_asset: "primary.zip".into(),
             merged_asset: "single.zip".into(),
             platform_assets: vec!["kithara.aar".into()],
-            docs_asset: "docs.zip".into(),
+            docs: BTreeMap::from([(
+                "apple".to_string(),
+                DocsChannel {
+                    asset: "docs.zip".into(),
+                    archive: "docs-build/Kithara.doccarchive".into(),
+                },
+            )]),
             wasm_asset: String::new(),
             ..release_config_fixture()
         };

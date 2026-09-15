@@ -86,6 +86,8 @@ release:android:
       - kithara.aar.sha256
       - rust-tls.aar
       - rust-tls.aar.sha256
+      - kithara-android-docs.zip
+      - kithara-android-docs.zip.sha256
 
 release:publish:
   extends:

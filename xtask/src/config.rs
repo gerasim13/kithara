@@ -603,12 +603,10 @@ pub(crate) struct ReleaseConfig {
     /// Additional required CI-built artifacts published with the Apple
     /// frameworks, such as Android AARs.
     pub(crate) platform_assets: Vec<String>,
-    /// Documentation channel: zip name for the DocC archive uploaded as a
-    /// release asset. Empty disables the docs channel.
-    pub(crate) docs_asset: String,
-    /// Workspace-relative DocC archive dir zipped into [`Self::docs_asset`]
-    /// (the `just platform apple doc` output).
-    pub(crate) docs_archive: String,
+    /// Documentation channels, keyed by the platform that renders them. Each
+    /// names the directory a `doc` recipe writes and the zip it is published
+    /// as. An empty map disables the docs channel.
+    pub(crate) docs: BTreeMap<String, DocsChannel>,
     /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
     /// GitHub Pages classic. Empty disables the wasm channel.
     pub(crate) wasm_asset: String,
@@ -635,6 +633,20 @@ impl ReleaseConfig {
             .with_context(|| format!("ext.release.packages.{name} is not defined"))
     }
 
+    pub(crate) fn docs_channel(&self, name: &str) -> Result<&DocsChannel> {
+        self.docs
+            .get(name)
+            .with_context(|| format!("ext.release.docs.{name} is not defined"))
+    }
+
+    /// Every published documentation zip, in a stable order.
+    pub(crate) fn docs_assets(&self) -> impl Iterator<Item = &str> {
+        self.docs
+            .values()
+            .map(|channel| channel.asset.as_str())
+            .filter(|name| !name.is_empty())
+    }
+
     pub(crate) fn channel(&self, name: &str) -> Result<&ChannelProfile> {
         self.channels
             .get(name)
@@ -645,10 +657,20 @@ impl ReleaseConfig {
         match key {
             AssetKey::Core => &self.core_asset,
             AssetKey::Merged => &self.merged_asset,
-            AssetKey::Docs => &self.docs_asset,
             AssetKey::Wasm => &self.wasm_asset,
         }
     }
+}
+
+/// One rendered documentation set: the directory a `doc` recipe writes and the
+/// zip that directory is published as.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct DocsChannel {
+    /// Zip name uploaded as a release asset.
+    pub(crate) asset: String,
+    /// Workspace-relative directory zipped into [`Self::asset`].
+    pub(crate) archive: String,
 }
 
 /// One packaged artifact, named by what it carries rather than by file.
@@ -657,7 +679,6 @@ impl ReleaseConfig {
 pub(crate) enum AssetKey {
     Core,
     Merged,
-    Docs,
     Wasm,
 }
 
