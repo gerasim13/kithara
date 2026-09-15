@@ -396,6 +396,8 @@ mod tests {
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
+    #[cfg(not(target_os = "linux"))]
+    use kithara_test_fixtures::fixtures::short_decoder_wav;
 
     use super::*;
     #[cfg(not(target_os = "linux"))]
@@ -932,27 +934,12 @@ mod tests {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn short_wav() -> tempfile::NamedTempFile {
+    fn wav_file(bytes: &[u8]) -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new()
             .suffix(".wav")
             .tempfile()
             .expect("temporary WAV fixture");
-        const PCM_BYTES: usize = 88;
-        let mut wav = Vec::with_capacity(44 + PCM_BYTES);
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + PCM_BYTES as u32).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16_u32.to_le_bytes());
-        wav.extend_from_slice(&1_u16.to_le_bytes());
-        wav.extend_from_slice(&1_u16.to_le_bytes());
-        wav.extend_from_slice(&44_100_u32.to_le_bytes());
-        wav.extend_from_slice(&88_200_u32.to_le_bytes());
-        wav.extend_from_slice(&2_u16.to_le_bytes());
-        wav.extend_from_slice(&16_u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&(PCM_BYTES as u32).to_le_bytes());
-        wav.resize(44 + PCM_BYTES, 0);
-        file.write_all(&wav).expect("write temporary WAV fixture");
+        file.write_all(bytes).expect("write temporary WAV fixture");
         file
     }
 
@@ -963,7 +950,7 @@ mod tests {
     /// itself.
     #[cfg(not(target_os = "linux"))]
     #[kithara_test_utils::kithara::test(tokio)]
-    async fn polling_thread_reloads_a_consumed_track_after_eof() {
+    async fn polling_thread_reloads_a_consumed_track_after_eof(short_decoder_wav: &'static [u8]) {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
@@ -984,7 +971,7 @@ mod tests {
         queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
         let mut events = queue.subscribe();
-        let wav = short_wav();
+        let wav = wav_file(short_decoder_wav);
         let id = queue
             .append(wav.path().to_string_lossy().into_owned())
             .expect("open queue accepts a local track");

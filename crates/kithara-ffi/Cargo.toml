@@ -165,6 +165,7 @@ tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["download", "net", "signal"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 futures = { workspace = true }

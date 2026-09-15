@@ -5179,6 +5179,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
