@@ -5,6 +5,9 @@
 //! unbuilt. The directory records which content its artifacts may come from,
 //! and a checkout that claims it stamps every file whose content is not the
 //! only one recorded, so cargo rebuilds exactly those and reuses the rest.
+//! A build the record did not see — a job that never claimed the directory,
+//! or one that died before releasing it — leaves artifacts of unknown content,
+//! so every file is stamped until a lane succeeds again.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,6 +27,8 @@ impl Consts {
     const LOCK_FILE: &str = ".kithara-lane.lock";
     /// The content the directory's artifacts may have been built from.
     const SOURCES_FILE: &str = ".kithara-lane-sources";
+    /// Stands for content a build the record did not see may have used.
+    const UNKNOWN_BLOB: &str = "unknown";
 }
 
 /// Git blob ids per tracked path.
@@ -33,6 +38,7 @@ type Sources = BTreeMap<String, BTreeSet<String>>;
 pub(super) struct LaneBuild {
     _lock: FileLock,
     record: PathBuf,
+    claimed: Sources,
     tracked: Sources,
 }
 
@@ -54,6 +60,14 @@ impl LaneBuild {
         let tracked = tracked_sources(project_root)?;
         let record = dir.join(Consts::SOURCES_FILE);
         let mut recorded = read_sources(&record)?;
+        if unseen_build(dir, &record)? {
+            for path in tracked.keys() {
+                recorded
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(Consts::UNKNOWN_BLOB.to_owned());
+            }
+        }
         let now = SystemTime::now();
         for path in stale_paths(&recorded, &tracked) {
             let file = project_root.join(path);
@@ -73,14 +87,69 @@ impl LaneBuild {
         Ok(Self {
             _lock: lock,
             record,
+            claimed: recorded,
             tracked,
         })
     }
 
-    /// A lane that succeeded built what it reads from this checkout's content.
-    pub(super) fn settle(&self) -> Result<()> {
-        write_sources(&self.record, &self.tracked)
+    /// Records the job's builds as seen: a lane that succeeded built what it
+    /// reads from this checkout's content, and one that failed may still hold
+    /// everything the claim recorded.
+    pub(super) fn settle(&self, succeeded: bool) -> Result<()> {
+        let sources = if succeeded {
+            &self.tracked
+        } else {
+            &self.claimed
+        };
+        write_sources(&self.record, sources)
     }
+}
+
+/// Whether cargo wrote a unit fingerprint after the record was last written.
+fn unseen_build(dir: &Path, record: &Path) -> Result<bool> {
+    let seen = match fs::metadata(record) {
+        Ok(metadata) => metadata.modified()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", record.display()));
+        }
+    };
+    // `<profile>/.fingerprint` and `<target triple>/<profile>/.fingerprint`.
+    let mut fingerprints = Vec::new();
+    for profile in subdirectories(dir)? {
+        fingerprints.push(profile.join(".fingerprint"));
+        for nested in subdirectories(&profile)? {
+            fingerprints.push(nested.join(".fingerprint"));
+        }
+    }
+    for fingerprint in fingerprints {
+        for unit in subdirectories(&fingerprint)? {
+            for file in
+                fs::read_dir(&unit).with_context(|| format!("listing {}", unit.display()))?
+            {
+                if file?.metadata()?.modified()? > seen {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn subdirectories(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("listing {}", dir.display())),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            found.push(entry.path());
+        }
+    }
+    Ok(found)
 }
 
 /// Paths whose recorded content is anything but exactly what is checked out.
@@ -245,7 +314,7 @@ mod tests {
             fs::metadata(&file).unwrap().modified().unwrap() > old,
             "stamped"
         );
-        claim.settle().unwrap();
+        claim.settle(true).unwrap();
         drop(claim);
         File::options()
             .write(true)
@@ -259,5 +328,56 @@ mod tests {
             old,
             "a settled lane reuses what it built from this content"
         );
+    }
+
+    /// A job without the claim may have rebuilt any unit from other content.
+    #[test]
+    fn a_build_the_record_did_not_see_stamps_everything_until_the_lane_succeeds() {
+        let checkout = tempfile::tempdir().unwrap();
+        let lane = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .current_dir(checkout.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        let file = checkout.path().join("lib.rs");
+        fs::write(&file, "one").unwrap();
+        git(&["add", "lib.rs"]);
+        let old = SystemTime::UNIX_EPOCH;
+        let set_old = |path: &Path| {
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        };
+        set_old(&file);
+        let record = lane.path().join(Consts::SOURCES_FILE);
+        write_sources(&record, &tracked_sources(checkout.path()).unwrap()).unwrap();
+        set_old(&record);
+        let unit = lane.path().join("debug/.fingerprint/lib-0123");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(unit.join("lib-lib"), "hash").unwrap();
+
+        let claim = LaneBuild::claim(checkout.path(), lane.path()).unwrap();
+        assert!(
+            fs::metadata(&file).unwrap().modified().unwrap() > old,
+            "stamped"
+        );
+        claim.settle(false).unwrap();
+        drop(claim);
+
+        set_old(&file);
+        let claim = LaneBuild::claim(checkout.path(), lane.path()).unwrap();
+        assert!(
+            fs::metadata(&file).unwrap().modified().unwrap() > old,
+            "a failed lane leaves the unseen content recorded"
+        );
+        claim.settle(true).unwrap();
     }
 }

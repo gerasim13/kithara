@@ -442,9 +442,11 @@ impl CiEnvironment {
         })
     }
 
-    /// Records that the lane built from this checkout's content alone.
-    pub(crate) fn settle_lane_build(&self) -> Result<()> {
-        self.lane_build.as_ref().map_or(Ok(()), LaneBuild::settle)
+    /// Records what the lane's builds came from once it has finished.
+    pub(crate) fn settle_lane_build(&self, succeeded: bool) -> Result<()> {
+        self.lane_build
+            .as_ref()
+            .map_or(Ok(()), |build| build.settle(succeeded))
     }
 
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {

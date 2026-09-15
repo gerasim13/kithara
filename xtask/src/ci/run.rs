@@ -424,10 +424,8 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         ),
     });
-    if outcome.is_ok() {
-        environment.settle_lane_build()?;
-    }
-    outcome
+    let settled = environment.settle_lane_build(outcome.is_ok());
+    outcome.and(settled)
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
