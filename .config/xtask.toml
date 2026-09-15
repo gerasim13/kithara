@@ -1596,6 +1596,24 @@ kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
 
+# libFuzzer needs the nightly sanitizer flags, so the targets build on the
+# pinned nightly the image links as `nightly`. Each target runs for a fixed
+# budget rather than to exhaustion: the lane looks for inputs that crash a
+# parser or a resource state machine, and a crash is saved under
+# `tests/fuzz/artifacts/` for reproduction.
+[ext.ci.lanes.deep-fuzz]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "cargo-fuzz", "just"]
+program = "just"
+steps = [{ args = ["test", "fuzz"], label = "libFuzzer targets" }]
+role = "deep"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+queue = "heavy-linux"
+timeout_minutes = 90
+
 # Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
 # workspace: ten suites, each naming one package, the production files it may
 # mutate, and the `test()` filters that must kill the mutants, run against
@@ -2859,6 +2877,10 @@ install_hint = "cargo install cargo-modules"
 [tools.cargo-semver-checks]
 pin = "cargo-semver-checks"
 install_hint = "cargo install cargo-semver-checks"
+
+[tools.cargo-fuzz]
+pin = "cargo-fuzz"
+install_hint = "cargo install --locked cargo-fuzz"
 
 [tools.cargo-hakari]
 pin = "cargo-hakari"

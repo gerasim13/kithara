@@ -4,7 +4,7 @@
 
 ## Run
 
-Requires nightly toolchain (`cargo-fuzz` uses LibFuzzer, nightly-only).
+Requires nightly toolchain (`cargo-fuzz` uses LibFuzzer, nightly-only). `just test fuzz [SECONDS] [TARGETS...]` runs every target, or the named ones, for a fixed time; CI runs it nightly and weekly in the `deep-fuzz` lane.
 
 ```sh
 cargo +nightly fuzz run <target>

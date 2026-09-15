@@ -80,6 +80,7 @@ kithara = { workspace = true, features = [
     "probe",
     "test-utils",
     "symphonia",
+    "stretch-signalsmith",
     "backend-cpal",
     "client-reqwest",
     "tls-rustls",

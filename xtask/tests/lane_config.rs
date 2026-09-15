@@ -264,6 +264,7 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "deep-rtsan-hls",
         "deep-ui",
         "deep-miri",
+        "deep-fuzz",
         "quality-assess",
         "quality-similarity",
         "quality-architecture",

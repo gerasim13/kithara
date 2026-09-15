@@ -648,6 +648,38 @@
   <require os> macos
   <require tools> cargo just
   just perf bench ci
+# deep-fuzz / branch
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / platforms
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / merge-request
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / quarantine
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / main
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / nightly
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / weekly
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / release
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
 # deep-miri / branch
   <require os> linux
   <require tools> cargo just

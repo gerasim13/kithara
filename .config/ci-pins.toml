@@ -70,6 +70,7 @@ windows_eval_iso_url = "https://software-static.download.prss.microsoft.com/dbaz
 ast-grep = "0.45.0"
 cargo-crap = "0.3.1"
 cargo-deny = "0.20.2"
+cargo-fuzz = "0.13.1"
 cargo-geiger = "0.13.0"
 cargo-hack = "0.6.45"
 cargo-hakari = "0.9.38"
