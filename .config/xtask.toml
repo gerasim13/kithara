@@ -123,8 +123,8 @@ machete_exclude = ["kithara-workspace-hack"]
 # --workspace` compiles and reports on like any other member, and which is not
 # the product a deadlock verdict is about. The same set is named in
 # `[architecture.filters] exclude_crates`, per stage, the way every other
-# `[health]` list is. Product crates are not listed: kithara-storage's 8
-# `possibly` double locks fail the stage until that code is fixed.
+# `[health]` list is. Product crates are not listed: a finding in one fails
+# the stage.
 lockbud_exclude = [
   "kithara-abr-tests",
   "kithara-analysis-tests",
