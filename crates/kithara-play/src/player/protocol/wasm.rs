@@ -73,6 +73,12 @@ impl PlayerSync {
             .map_or(Ok(None), |owned| owned.reanchored_prepared(anchor))
     }
 
+    pub(crate) fn crosses_axis_boundary(&self, anchor: SessionAnchor) -> bool {
+        self.owned
+            .as_ref()
+            .is_some_and(|owned| owned.crosses_axis_boundary(anchor))
+    }
+
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
         if let Some(owned) = self.owned.as_mut() {
             owned.adopt_reanchored(successor);
