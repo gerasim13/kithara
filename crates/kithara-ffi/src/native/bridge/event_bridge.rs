@@ -979,6 +979,7 @@ mod tests {
         );
 
         let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
             let joined = thread.join();
@@ -992,7 +993,7 @@ mod tests {
 
         assert!(
             reload_started,
-            "tick after EOF must restart the consumed repeat-one track"
+            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
         );
         assert!(
             joined.is_ok(),
