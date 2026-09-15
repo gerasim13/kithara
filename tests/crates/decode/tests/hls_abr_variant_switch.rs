@@ -34,7 +34,7 @@ use tracing::info;
 /// - All bytes should be readable sequentially
 /// - Variant switch should be seamless from reader's perspective
 /// - No gaps or duplicates in byte stream
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -151,7 +151,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
 }
 
 /// Simpler test without ABR - just verify basic multi-segment reading works
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -221,7 +221,7 @@ async fn test_basic_multi_segment_reading(
 /// 4. Reader seeks back to offset 0 - this requires loading segment 0 from variant 2
 /// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -305,7 +305,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     Ok(())
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn slow_abr() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
@@ -315,7 +315,7 @@ async fn slow_abr() -> AbrTestServer {
     .await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn fast_abr() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
@@ -325,7 +325,7 @@ async fn fast_abr() -> AbrTestServer {
     .await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn backward_abr() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),

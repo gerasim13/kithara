@@ -9,7 +9,7 @@ use kithara::{
 };
 use kithara_integration_tests::decode_mock::{ScriptedOptions, scripted_decoder};
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn scripted_decoder_exposes_gapless_track_info() {
     let mut gapless = GaplessInfo::default();
     gapless.leading_frames = 2_112;

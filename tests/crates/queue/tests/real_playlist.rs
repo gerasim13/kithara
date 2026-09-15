@@ -119,7 +119,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 // flash(false): real-CDN e2e; sleeps are wall-clock gain windows racing real sockets.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     42,
@@ -416,7 +416,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 // flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -629,7 +629,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 /// on-device startup is ~4.5s, dominated by serialized variant-playlist
 /// fetches.
 // flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 async fn prod_tracks_sequential_startup_latency() {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
@@ -824,7 +824,7 @@ async fn seam_out_of(
 /// of a track lands far short of it, and the failure names the second it
 /// happened on.
 // flash(false): real-CDN e2e; the outgoing track is played through in wall clock.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

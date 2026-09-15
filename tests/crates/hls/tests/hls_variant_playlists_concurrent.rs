@@ -200,7 +200,7 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
     format!("{request_ids:?}")
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -272,7 +272,7 @@ async fn variant_media_playlists_load_concurrently(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn prepared_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper).await;

@@ -204,7 +204,7 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -260,7 +260,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     }
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -327,7 +327,7 @@ async fn capture_intent_sequence(intents: &[SyncIntent], prepared: &PreparedSour
     }
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -389,7 +389,7 @@ async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: Prepar
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -437,7 +437,7 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
     }
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,

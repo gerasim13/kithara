@@ -1,7 +1,7 @@
 use kithara::bufpool::{PoolConfig, PoolError};
 use kithara_test_utils::bufpool::{pools, pools_with};
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn oversized_sample_buffer_is_trimmed_on_return() {
     let pools = pools_with(
         1024 * 1024,
@@ -23,7 +23,7 @@ fn oversized_sample_buffer_is_trimmed_on_return() {
     assert!(reused.capacity() >= 4_096);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn ensure_len_within_capacity_does_not_change_accounting() {
     let pools = pools();
     let mut buffer = pools
@@ -41,7 +41,7 @@ fn ensure_len_within_capacity_does_not_change_accounting() {
     assert_eq!(pools.stats().allocated_bytes, bytes_before);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn sample_growth_respects_hard_budget() {
     let pools = pools_with(
         1_024,

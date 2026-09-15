@@ -55,7 +55,7 @@ mod tests {
     use super::router;
     use crate::{http_server::TestHttpServer, kithara, test_server_state::TestServerState};
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn store_route_serves_a_generated_record() {
         let asset = assets::sine_wav_a440_6s();
         let state = TestServerState::new();
@@ -70,7 +70,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn store_route_answers_not_found_for_a_missing_record() {
         let state = TestServerState::new();
         let server = TestHttpServer::new(router().with_state(Arc::clone(&state))).await;
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn store_route_stays_reachable_while_the_network_is_offline() {
         let state = TestServerState::new();
         state.set_network_online(false);

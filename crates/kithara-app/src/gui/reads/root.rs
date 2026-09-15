@@ -255,7 +255,7 @@ mod tests {
 
     /// The waveform read is where a renderer learns what the analysis has not
     /// covered; a snapshot that holds the whole track leaves it empty.
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_waveform_read_carries_what_the_snapshot_has_not_covered() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         fixture.decks[0]
@@ -278,7 +278,7 @@ mod tests {
         assert!(whole.unready.is_empty(), "{:?}", whole.unready);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         fixture.decks[0].0.abr_mode_is_auto = false;
@@ -311,7 +311,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_read_tree_answers_every_key_the_renderer_asks_for() {
         const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
 
@@ -359,7 +359,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_air_controls_hide_when_the_build_carries_no_packager() {
         let fixture = Fixture::new(["+0.0%", "+0.0%"]);
         let root = fixture.root();
@@ -380,7 +380,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_menu_states_what_the_only_window_draws() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         {
@@ -417,7 +417,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_module_the_menu_switches_off_leaves_the_layout() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         {
@@ -462,7 +462,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_menu_reads_its_own_state_and_the_layout_in_force() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         fixture.menu.toggle_layouts();
@@ -501,7 +501,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn every_deck_reads_the_shared_eq_mode() {
         for (mode, bands) in [(EqMode::ThreeBand, 3.0), (EqMode::FourBand, 4.0)] {
             let fixture = fixture_in(mode);
@@ -525,7 +525,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_three_band_app_has_no_mid_band_gains() {
         let fixture = fixture_in(EqMode::ThreeBand);
         let root = fixture.root();

@@ -27,7 +27,7 @@ async fn render_to_eof(queue: &QueueControl<TestPools>, harness: &OfflinePlayerH
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false))]
 async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = LocalWav::constant(

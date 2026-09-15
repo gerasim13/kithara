@@ -17,7 +17,7 @@ use kithara_test_fixtures::fixtures::tone_mp3;
 
 use crate::common::test_defaults::Consts;
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[cfg_attr(
     not(target_os = "android"),
     case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)
@@ -161,12 +161,7 @@ async fn audio_file_mp3_decodes_with_duration(
 /// The body is throttled so the reader meets the download frontier a loopback
 /// server hides, and the waits between reads are paced against that delivery,
 /// which is why the clock stays real.
-#[kithara_test_utils::kithara::test(
-    tokio,
-    multi_thread,
-    flash(false),
-    timeout(Duration::from_secs(120))
-)]
+#[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -267,7 +262,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
 /// Uses throttled server: Content-Length is sent immediately but body
 /// arrives in small chunks, so only a fraction is downloaded when
 /// the decoder initializes. Duration must still reflect the full track.
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 #[case::throttled_no_hint(None)]
 #[case::throttled_with_hint(Some("mp3"))]
 async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hint: Option<&str>) {
@@ -314,7 +309,7 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {

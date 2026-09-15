@@ -66,7 +66,7 @@ fn stalled_successor(server: &TestServerHelper, label: &str) -> String {
         .to_string()
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = local_wav("seek", 120.0, constant_quiet);
@@ -85,7 +85,7 @@ async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u
 
 /// Track A reaches real EOF while B is a real HTTP load that stalls. Selecting
 /// A again must reload the retained product source and restart playback.
-#[kithara_test_utils::kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads(
     constant_three: &'static [u8],
 ) {
@@ -131,7 +131,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
 
 /// Switching back to a consumed track must switch the audio, not merely the
 /// selection bookkeeping.
-#[kithara_test_utils::kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(
@@ -191,7 +191,7 @@ async fn switch_back_to_consumed_track_switches_audio(
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn play_button_marks_current_loaded_track_consumed(constant_three: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source_a = local_wav("play-button-a", 8.0, constant_three);
@@ -213,7 +213,7 @@ async fn play_button_marks_current_loaded_track_consumed(constant_three: &'stati
 
 /// Re-selecting A must cancel a pending switch to a real load that remains
 /// unavailable, so its eventual completion cannot barge into playback.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn reselect_playing_track_cancels_pending_switch(constant_three: &'static [u8]) {
     const TRACK_SECS: f64 = 5.0;
     const WARMUP_BLOCKS: usize = 64;

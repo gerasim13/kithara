@@ -76,7 +76,7 @@ async fn fetch(client: &Client, url: &str, headers: &[(&str, String)]) -> Result
 /// Stage DRM equivalent is parked: server returns keys that don't
 /// decrypt their corresponding segments (3/3 tracks tested 2026-05-20);
 /// waiting on server-team.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn prod_chain_sanity_check() {
     let auth_token =
         std::env::var("KITHARA_DRM_PROD_AUTH_TOKEN").expect("set KITHARA_DRM_PROD_AUTH_TOKEN");

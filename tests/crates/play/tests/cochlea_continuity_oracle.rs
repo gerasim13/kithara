@@ -108,7 +108,7 @@ fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize
         .count()
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control(
     constant_half: &'static [u8],
 ) {

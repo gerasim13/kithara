@@ -253,7 +253,7 @@ fn period_share(duration: Duration, period: Duration) -> f64 {
     duration.as_secs_f64() / period.as_secs_f64() * 100.0
 }
 
-#[kithara_test_utils::kithara::test(native, serial, flash(false))]
+#[kithara::test(native, serial, flash(false))]
 fn no_sync_player_render_hot_path_p99_stays_below_half_period(deadline_tracks: [&'static [u8]; 4]) {
     let mut timings = Vec::with_capacity(Consts::BLOCK_FRAMES.len() * Consts::TRACK_COUNTS.len());
 

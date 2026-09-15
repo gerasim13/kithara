@@ -146,7 +146,7 @@ mod tests {
         Url::parse(text).expect("valid url")
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_declared_header_reaches_the_matching_resource() {
         let policy = policy(PROVIDER);
 
@@ -162,7 +162,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_host_no_rule_names_gets_no_headers() {
         let policy = policy(PROVIDER);
 
@@ -173,7 +173,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_hex_salt_is_lowercase_hex_of_the_declared_length() {
         let policy = policy(PROVIDER);
 
@@ -190,7 +190,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn an_alphanumeric_salt_takes_the_declared_alphabet_and_length() {
         let policy = policy(&format!(
             "{PROVIDER}      seed:\n        length: 16\n        alphabet: alphanumeric\n"
@@ -205,7 +205,7 @@ mod tests {
         assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()), "{salt}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn each_key_request_carries_a_fresh_salt() {
         let policy = policy(PROVIDER);
         let key_url = url("https://example.com/keyserver/key");
@@ -219,7 +219,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn declaring_the_generated_header_is_refused() {
         let document: Document = serde_yaml_ng::from_str(concat!(
             "drm:\n  providers:\n    - name: example\n      domains: [example.com]\n",
@@ -247,21 +247,21 @@ mod tests {
         document.drm
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_hex_salt_of_no_length_is_refused() {
         let error = drm_policy(&seed(0, "hex")).expect_err("an empty salt is not a salt");
 
         assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn an_alphanumeric_salt_of_no_length_is_refused() {
         let error = drm_policy(&seed(0, "alphanumeric")).expect_err("an empty salt is not a salt");
 
         assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn an_odd_hex_salt_length_is_refused() {
         let error = drm_policy(&seed(7, "hex")).expect_err("hex needs whole bytes");
 
@@ -281,7 +281,7 @@ mod tests {
 
     /// `app.yaml` warns that the prod WAF validates alphabet and length and
     /// answers 418 on deviation. Nothing else pins the shipped shape.
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn the_shipped_prod_provider_salts_with_eight_lowercase_hex_characters() {
         let salt = shipped_salt("https://cdn-hls-slicer.zvuk.com/drm/track/0/key.bin");
 
@@ -295,7 +295,7 @@ mod tests {
 
     /// The 8-char hex prod format on stage silently corrupts decrypt output, so
     /// the stage shape is pinned separately from prod's.
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn the_shipped_stage_provider_salts_with_sixteen_alphanumeric_characters() {
         let salt = shipped_salt("https://ecs-stage-slicer-01.zvq.me/drm/track/0/key.bin");
 
@@ -303,7 +303,7 @@ mod tests {
         assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()), "{salt}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn every_shipped_provider_domain_reaches_its_rule() {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");

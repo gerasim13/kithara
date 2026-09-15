@@ -33,7 +33,7 @@ impl Consts {
     const SECONDS_PER_MINUTE: f64 = 60.0;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn records() -> Vec<(String, f64)> {
     let spec = std::env::var("KITHARA_TEMPO_RECORDS").unwrap_or_else(|_| {
         panic!("KITHARA_TEMPO_RECORDS must name records as /path=bpm;/path=bpm")
@@ -128,7 +128,7 @@ fn marker_tempo(grid: &BeatArtifact, rate: f64) -> Option<f64> {
     tempo.is_finite().then_some(tempo)
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn missing_marker_counts_as_multiple_beat_spans() {
     let grid = BeatArtifact::new(
         120.0,
@@ -145,7 +145,7 @@ fn missing_marker_counts_as_multiple_beat_spans() {
     assert!((tempo - grid.bpm()).abs() < f64::EPSILON);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
     let grid = BeatArtifact::new(
         100.0,
@@ -164,7 +164,7 @@ fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
 }
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>) {
     for (path, known) in records {
         let (grid, rate) = grid_of(&path).await;
@@ -182,7 +182,7 @@ async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>
 }
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn the_reported_tempo_is_the_tempo_the_markers_march_at(records: Vec<(String, f64)>) {
     for (path, _known) in records {
         let (grid, rate) = grid_of(&path).await;

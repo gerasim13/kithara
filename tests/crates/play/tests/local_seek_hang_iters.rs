@@ -225,7 +225,7 @@ async fn build_resource(
     resource
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(
     not(target_os = "android"),
     case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
@@ -413,7 +413,7 @@ async fn local_seek_middle_hang_iters(
     }
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn seek_source() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()

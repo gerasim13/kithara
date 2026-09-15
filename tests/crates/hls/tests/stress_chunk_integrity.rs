@@ -102,7 +102,7 @@ async fn next_chunk_with_timeout<R: AudioRead>(
     }
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn audio_server(
     hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
@@ -144,7 +144,7 @@ async fn audio_server(
     server
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     timeout(Duration::from_secs(60)),

@@ -120,7 +120,7 @@ fn http_500() -> NetError {
     status(500)
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::one_retry(1, Duration::from_millis(10))]
 #[case::two_retries(2, Duration::from_millis(10))]
 #[case::three_retries(3, Duration::from_millis(10))]
@@ -139,7 +139,7 @@ async fn test_retryable_errors_success_after_retries(
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
 #[case(3)]
@@ -154,7 +154,7 @@ async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usi
     assert!(matches!(result, Err(NetError::Status { .. })));
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(2, 1)]
 #[case(3, 2)]
 #[case(4, 3)]
@@ -179,7 +179,7 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(1, Duration::from_millis(100), Duration::from_millis(1000))]
 #[case(2, Duration::from_millis(100), Duration::from_millis(1000))]
 #[case(3, Duration::from_millis(100), Duration::from_millis(1000))]
@@ -199,7 +199,7 @@ async fn test_exponential_backoff_with_max_delay(
     assert!(result.is_err());
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn test_all_net_methods_with_retry() {
     let failures_before_success = 1;
     let mock_net = make_retry_mock(failures_before_success, http_500());
@@ -212,7 +212,7 @@ async fn test_all_net_methods_with_retry() {
     assert_success_all_net_methods(&retry_net).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
 async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
@@ -229,7 +229,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn test_zero_max_retries() {
     let result = try_with_retry(1, http_500(), 0, Duration::from_millis(10)).await;
     assert!(matches!(result, Err(NetError::Status { .. })));

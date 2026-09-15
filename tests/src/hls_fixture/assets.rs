@@ -169,13 +169,13 @@ pub fn test_key_store(
 }
 
 /// Fixture: test assets
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 pub fn assets_fixture() -> TestAssets {
     create_test_assets()
 }
 
 /// Fixture: test HTTP client
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 pub fn net_fixture() -> HttpClient {
     create_test_net()
 }

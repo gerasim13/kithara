@@ -46,7 +46,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn document_query_identity_separates_tracks_without_splitting_renewed_urls() {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");

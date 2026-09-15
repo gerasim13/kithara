@@ -41,7 +41,7 @@ const SEGMENT_COUNT: usize = 8;
 /// The segment whose body is withheld; forward playback parks at its start.
 const GATED_SEGMENT: usize = 4;
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn gated_audio(
     hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
@@ -66,7 +66,7 @@ async fn gated_audio(
     HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     serial,

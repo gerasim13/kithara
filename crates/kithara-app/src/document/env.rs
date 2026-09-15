@@ -144,7 +144,7 @@ mod tests {
             .collect()
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn whole_string_reference_becomes_the_value() {
         let pairs = env(&[("KITHARA_TOKEN", "secret")]);
         let mut value: Value = serde_yaml_ng::from_str("key: $KITHARA_TOKEN").expect("valid yaml");
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(value["key"], Value::from("secret"));
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn embedded_reference_is_substituted_in_place() {
         let pairs = env(&[("KITHARA_HOST", "cdn.example")]);
         let mut value: Value = serde_yaml_ng::from_str("key: https://${KITHARA_HOST}/master.m3u8")
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(value["key"], Value::from("https://cdn.example/master.m3u8"));
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn references_resolve_at_any_depth() {
         let pairs = env(&[("KITHARA_TOKEN", "secret")]);
         let mut value: Value = serde_yaml_ng::from_str(
@@ -181,7 +181,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_literal_dollar_inside_a_word_is_left_alone() {
         let pairs = env(&[]);
         let mut value: Value = serde_yaml_ng::from_str("key: costs 5$ today").expect("valid yaml");
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(value["key"], Value::from("costs 5$ today"));
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn every_missing_name_is_reported_not_just_the_first() {
         let pairs = env(&[]);
         let mut value: Value =
@@ -204,7 +204,7 @@ mod tests {
         assert!(report.contains("KITHARA_TWO"), "{report}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_missing_name_is_reported_with_the_position_it_sits_at() {
         let pairs = env(&[]);
         let mut value: Value = serde_yaml_ng::from_str(
@@ -218,7 +218,7 @@ mod tests {
         assert!(report.contains("drm.providers[0].cipher_key"), "{report}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn an_empty_value_counts_as_missing() {
         let pairs = env(&[("KITHARA_TOKEN", "")]);
         let mut value: Value = serde_yaml_ng::from_str("key: $KITHARA_TOKEN").expect("valid yaml");

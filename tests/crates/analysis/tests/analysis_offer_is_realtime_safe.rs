@@ -15,7 +15,6 @@ use kithara_integration_tests::{
     kithara,
 };
 use kithara_test_fixtures::play_fixtures::quarter;
-use kithara_test_utils::kithara::rtsan_forbid_blocking;
 
 const RATE: u32 = 44_100;
 const SAMPLES: usize = 2048;
@@ -24,7 +23,7 @@ fn spec(rate: NonZeroU32) -> AudioSpec {
     AudioSpec::new(2, rate)
 }
 
-#[rtsan_forbid_blocking]
+#[kithara::rtsan_forbid_blocking]
 fn offer_under_rt(
     producer: &mut AnalysisProducer,
     pcm: &[f32],
@@ -34,7 +33,7 @@ fn offer_under_rt(
     producer.offer(pcm, spec, at)
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
     let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
     let cancel = CancelToken::never();

@@ -201,7 +201,7 @@ fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
     }
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     serial,

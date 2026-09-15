@@ -19,7 +19,7 @@ use kithara_test_fixtures::{
 };
 use reqwest::Client;
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_test_server_helper_serves_audio_fixture_urls(
     #[future(awt)] server: TestServerHelper,
 ) {
@@ -34,12 +34,7 @@ async fn test_test_server_helper_serves_audio_fixture_urls(
     assert!(mp3_url.path().ends_with(".mp3"));
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case("wav", "audio/wav", "WAV file")]
 #[case("mp3", "audio/mpeg", "MP3 file")]
 async fn test_test_server_helper_serves_format(
@@ -82,12 +77,7 @@ async fn test_test_server_helper_serves_format(
     assert!(content_length > 0, "{}: content length should be > 0", desc);
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalAsset::MP3_SAW_1S, "audio/mpeg")]
 #[case(SignalAsset::FLAC_SAW_1S, "audio/flac")]
 #[case(SignalAsset::AAC_SAW_1S, "audio/aac")]
@@ -128,12 +118,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalAsset::AAC_SAW_1S, "audio/aac")]
 #[case(SignalAsset::FLAC_SAW_1S, "audio/flac")]
 async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
@@ -201,12 +186,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     );
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_create_packaged_hls_returns_stable_typed_urls(
     #[future(awt)] server: TestServerHelper,
 ) {
@@ -250,12 +230,7 @@ async fn test_create_packaged_hls_returns_stable_typed_urls(
     assert!(!segment.bytes().await.unwrap().is_empty());
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_packaged_test_server_serves_audio_mp4_resources(
     #[future(awt)] packaged_server: PackagedTestServer,
 ) {
@@ -287,12 +262,7 @@ async fn test_packaged_test_server_serves_audio_mp4_resources(
     assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case::aac("aac", AudioCodec::AacLc)]
 #[case::flac("flac", AudioCodec::Flac)]
 async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
@@ -407,12 +377,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Symphonia is always on (kithara-decode/symphonia in [dependencies]),
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await))]
 #[cfg_attr(target_os = "android", case::aac_lc_symphonia_product_android("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::default(), aac_fragment().await))]
 #[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await))]
@@ -563,7 +528,7 @@ fn run_packaged_fmp4_decoder_check(
     assert_eq!(chunk.spec().channels, 2);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn embedded_mp3_contains_data(tone_mp3: &'static [u8]) {
     assert!(!tone_mp3.is_empty());
 }
@@ -632,27 +597,27 @@ fn scan_top_level_box_summaries(bytes: &[u8]) -> Vec<BoxSummary> {
     summaries
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn server() -> TestServerHelper {
     TestServerHelper::new().await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn packaged_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn aac_fragment() -> (TestServerHelper, Vec<u8>) {
     fmp4_input(AudioCodec::AacLc).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn he_fragment() -> (TestServerHelper, Vec<u8>) {
     fmp4_input(AudioCodec::AacHeV2).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn flac_fragment() -> (TestServerHelper, Vec<u8>) {
     fmp4_input(AudioCodec::Flac).await
 }

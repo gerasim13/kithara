@@ -59,7 +59,7 @@ fn total_from_range(headers: &Headers) -> Option<u64> {
         .and_then(|s| s.parse::<u64>().ok())
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[ignore = "live HTTP; run with --ignored when KITHARA_DRM_STAGE_AUTH_TOKEN is set"]
 async fn stage_drm_range_get_probe_returns_full_size_map() {
     const TRACK_MASTER: &str =

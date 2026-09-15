@@ -22,7 +22,7 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     )
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn offline_harness_smoke(constant_half: &'static [u8]) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),

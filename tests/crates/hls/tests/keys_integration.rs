@@ -35,12 +35,7 @@ fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
     Ok(Bytes::from_static(b"MODIFIED"))
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::uppercase(uppercase_key, true, b"0123456789ABCDEF")]
 #[case::reverse(reverse_key, true, b"fedcba9876543210")]
 #[case::unmatched(sentinel_key, false, b"0123456789abcdef")]
@@ -67,12 +62,7 @@ async fn key_processor_cases(
     Ok(())
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     let key_store = test_key_store(&assets_fixture, None);
 
@@ -85,12 +75,7 @@ async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     Ok(())
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -108,12 +93,7 @@ async fn key_store_caching_behavior(
     Ok(())
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,

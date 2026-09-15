@@ -51,7 +51,7 @@ pub struct FfiCacheIdentityRule {
 /// Windows device names, and contain neither control bytes nor
 /// `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
 /// case-insensitive. The store rejects invalid output instead of rewriting it.
-#[kithara_test_macros::mock(api = FfiAssetLayoutMock)]
+#[kithara::mock(api = FfiAssetLayoutMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiAssetLayout: Send + Sync {
     fn path(&self, resource: FfiAssetResource) -> String;

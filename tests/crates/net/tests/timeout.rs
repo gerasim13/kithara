@@ -75,7 +75,7 @@ fn make_timeout_mock(should_succeed: bool) -> Unimock {
     .no_verify_in_drop()
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::success_before_timeout(Duration::from_millis(100), Duration::from_millis(200), true)]
 #[case::timeout_before_success(Duration::from_millis(200), Duration::from_millis(100), false)]
 #[case::zero_delay(Duration::from_millis(0), Duration::from_millis(100), true)]
@@ -103,7 +103,7 @@ async fn test_timeout_scenarios(
     assert_bytes_or_timeout(result, should_succeed);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn test_timeout_with_error() {
     let delay = Duration::from_millis(100);
     let timeout = Duration::from_millis(200);
@@ -123,14 +123,14 @@ async fn test_timeout_with_error() {
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn test_all_net_methods_with_timeout() {
     let mock_net = DelayedNet::new(make_timeout_mock(true), Duration::from_millis(100));
     let timeout_net = mock_net.with_timeout(Duration::from_millis(200));
     assert_success_all_net_methods(&timeout_net).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(Duration::from_millis(50))]
 #[case(Duration::from_millis(100))]
 #[case(Duration::from_millis(200))]

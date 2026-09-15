@@ -60,7 +60,6 @@ web-sys = { workspace = true }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
-kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 assert_no_alloc = { workspace = true }

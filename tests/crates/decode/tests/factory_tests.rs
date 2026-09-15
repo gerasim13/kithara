@@ -28,7 +28,7 @@ use kithara_test_fixtures::fixtures::tone_mp3;
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn decoder_config_selects_the_expected_backend() {
     let config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
     #[cfg(target_os = "android")]
@@ -40,7 +40,7 @@ fn decoder_config_selects_the_expected_backend() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn decoder_config_custom_apple_backend_preserves_fields() {
     let handle = Arc::new(AtomicU64::new(1000));
     let mut config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
@@ -52,7 +52,7 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
     assert_eq!(config.hint, Some("mp3".to_string()));
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::without_hint(None, false)]
 #[case::mp3_hint(Some("mp3"), true)]
 fn create_with_probe_uses_hint(
@@ -74,7 +74,7 @@ fn create_with_probe_uses_hint(
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn create_from_media_info_surfaces_error_without_native_probe_fallback(tone_mp3: &'static [u8]) {
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::AacLc))
@@ -118,7 +118,7 @@ fn apple_mp3_decoder(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn apple_fused_src_decodes_at_the_requested_host_rate(tone_mp3: &'static [u8]) {
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Mp3))

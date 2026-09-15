@@ -67,7 +67,7 @@ async fn wait_for_failed(
 /// (`inactivity_timeout` × retries), never park it in `Loading` forever.
 /// Pins the production hang where `Resource::new` blocked indefinitely on
 /// an unbounded playlist body read.
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn stalled_master_playlist_fails_load(
     temp_dir: TestTempDir,
     #[future(awt)] stalled_playlist: (TestServerHelper, Url),
@@ -135,7 +135,7 @@ async fn stalled_master_playlist_fails_load(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn stalled_playlist() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let playlist = b"#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=66005\nindex.m3u8\n";

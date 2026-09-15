@@ -23,12 +23,7 @@ use kithara_integration_tests::{
 use tracing::info;
 use url::Url;
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_session_creation(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
@@ -76,12 +71,7 @@ async fn test_hls_session_creation(
     Ok(())
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::plain(false)]
 #[case::with_init(true)]
 async fn test_hls_stream_creation(
@@ -106,12 +96,7 @@ async fn test_hls_stream_creation(
     Ok(())
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_invalid_url_handling(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {

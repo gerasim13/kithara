@@ -121,7 +121,7 @@ async fn run_drm_seek_resume_cycle(
     drop(audio);
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn encrypted_ladder() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server
@@ -147,7 +147,7 @@ async fn encrypted_ladder() -> (TestServerHelper, Url) {
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(120)),

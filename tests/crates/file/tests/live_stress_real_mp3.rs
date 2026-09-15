@@ -216,7 +216,7 @@ fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_op
     }
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,

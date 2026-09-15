@@ -6,7 +6,7 @@ use kithara::platform::{
 };
 use kithara_integration_tests::kithara;
 
-#[kithara_test_utils::kithara::test(flash(false))]
+#[kithara::test(flash(false))]
 #[should_panic(expected = "[no_block]")]
 async fn blanket_catches_platform_sleep_in_test_body() {
     // These three judge the watcher itself, so they force `panic` mode: the
@@ -15,7 +15,7 @@ async fn blanket_catches_platform_sleep_in_test_body() {
     thread::sleep(Duration::from_millis(1));
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[should_panic(expected = "[no_block]")]
 async fn blanket_catches_bridged_wait_under_flash() {
     let _mode = force_panic_mode();
@@ -35,7 +35,7 @@ async fn blanket_catches_bridged_wait_under_flash() {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 async fn allow_block_bridge_passes() {
     let _mode = force_panic_mode();
     let pair: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(false), Condvar::default()));
@@ -53,7 +53,7 @@ async fn allow_block_bridge_passes() {
 /// at every call site, and which side wins the race with its producer changes
 /// between runs; a detector that reads only the park reports the same code in
 /// one run and stays silent in the next.
-#[kithara_test_utils::kithara::test(flash(false))]
+#[kithara::test(flash(false))]
 #[should_panic(expected = "[no_block]")]
 async fn a_queued_message_does_not_hide_mpsc_recv() {
     let _mode = force_panic_mode();
@@ -64,7 +64,7 @@ async fn a_queued_message_does_not_hide_mpsc_recv() {
 
 /// The deadline form blocks for the same reason and is reported the same way,
 /// whatever the queue holds when it is called.
-#[kithara_test_utils::kithara::test(flash(false))]
+#[kithara::test(flash(false))]
 #[should_panic(expected = "[no_block]")]
 async fn a_queued_message_does_not_hide_mpsc_recv_timeout() {
     let _mode = force_panic_mode();
@@ -73,7 +73,7 @@ async fn a_queued_message_does_not_hide_mpsc_recv_timeout() {
     let _ = rx.recv_timeout(Instant::now());
 }
 
-#[kithara_test_utils::kithara::allow_block]
+#[kithara::allow_block]
 fn sanctioned_bridge(pair: &Arc<(Mutex<bool>, Condvar)>) {
     let (lock, cvar) = pair.as_ref();
     let mut guard = lock.lock();

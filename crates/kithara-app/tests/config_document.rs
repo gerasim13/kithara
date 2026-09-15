@@ -26,7 +26,7 @@ fn write(dir: &TempDir, contents: &str) -> PathBuf {
     path
 }
 
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn the_shipped_document_configures_the_application() {
     let dir = tempdir();
     let path = write(&dir, NEUTRAL_DRM);
@@ -48,7 +48,7 @@ fn the_shipped_document_configures_the_application() {
         .expect("the shipped providers are valid");
 }
 
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn a_file_changes_the_playlist_without_touching_the_rest() {
     let dir = tempdir();
     let path = write(
@@ -66,7 +66,7 @@ fn a_file_changes_the_playlist_without_touching_the_rest() {
     );
 }
 
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn the_app_section_reaches_the_config_patch() {
     let dir = tempdir();
     let path = write(
@@ -90,7 +90,7 @@ fn the_app_section_reaches_the_config_patch() {
 /// `backends:` section, which carries one per compiled engine. Only a build
 /// that compiles a backend has the key at all.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn the_document_reaches_the_stretch_backend_geometry() {
     const WARP_BACKENDS: &str = concat!(
         "player:\n  warp:\n    backends:\n",
@@ -115,7 +115,7 @@ fn the_document_reaches_the_stretch_backend_geometry() {
     assert_eq!(backends.bungee.log2_synthesis_hop_adjust, Some(-2));
 }
 
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn an_unknown_app_knob_is_refused() {
     let dir = tempdir();
     let path = write(&dir, &format!("{NEUTRAL_DRM}app:\n  eq_band: 5\n"));

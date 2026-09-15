@@ -182,6 +182,9 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
+pub use kithara_test_macros::{
+    allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
+};
 #[cfg(all(
     feature = "warp",
     not(target_arch = "wasm32"),

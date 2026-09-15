@@ -56,7 +56,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn transient_failure_does_not_kill_the_track(
     temp_dir: TestTempDir,
     #[future(awt)] transient_sources: (PrivateTestServer, Url, Url),
@@ -231,7 +231,7 @@ async fn transient_failure_does_not_kill_the_track(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn transient_sources(tone_mp3: &'static [u8]) -> (PrivateTestServer, Url, Url) {
     // A private server: the blip below takes every data route down, so sharing
     // one with parallel siblings would fail them instead.

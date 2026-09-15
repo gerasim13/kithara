@@ -1,7 +1,7 @@
 use kithara::bufpool::PoolConfig;
 use kithara_test_utils::bufpool::pools_with;
 
-#[kithara_test_utils::kithara::test(serial)]
+#[kithara::test(serial)]
 fn returned_growth_is_accounted_once() {
     let pools = pools_with(
         1024 * 1024,
@@ -20,7 +20,7 @@ fn returned_growth_is_accounted_once() {
     assert_eq!(pools.stats().allocated_bytes, before);
 }
 
-#[kithara_test_utils::kithara::test(serial)]
+#[kithara::test(serial)]
 fn repeated_reuse_keeps_allocated_bytes_stable() {
     let pools = pools_with(
         1024 * 1024,
@@ -43,7 +43,7 @@ fn repeated_reuse_keeps_allocated_bytes_stable() {
     assert_eq!(pools.stats().allocated_bytes, before);
 }
 
-#[kithara_test_utils::kithara::test(serial)]
+#[kithara::test(serial)]
 fn eager_sample_capacity_makes_shorter_ensure_len_a_noop() {
     let pools = pools_with(
         1024 * 1024,

@@ -175,7 +175,7 @@ async fn run_mixed(
 }
 
 /// Mixed File + HLS instances running concurrently.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,
@@ -193,7 +193,7 @@ async fn concurrent_mixed_instances(
     run_mixed(file_source, concurrent_wav, file_count, hls_count).await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn file_source() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE880_30S);

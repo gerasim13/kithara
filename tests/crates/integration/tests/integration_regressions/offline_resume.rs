@@ -66,7 +66,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn playback_resumes_after_network_returns(
     temp_dir: TestTempDir,
     #[future(awt)] offline_source: (PrivateTestServer, String),
@@ -85,7 +85,7 @@ async fn playback_resumes_after_network_returns(
 /// catches a handful of part-written bodies at once — the case that stranded
 /// the iOS lane, where every one of them was written off permanently and
 /// playback stopped at the first of the gaps they left.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn playback_resumes_after_network_returns_with_paced_segments(
     temp_dir: TestTempDir,
     #[future(awt)] paced_source: (PrivateTestServer, String),
@@ -304,14 +304,14 @@ async fn resumes_after_outage(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn offline_source() -> (PrivateTestServer, String) {
     let server = PrivateTestServer::start().await;
     let url = server.helper().asset("hls/master.m3u8").to_string();
     (server, url)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn paced_source() -> (PrivateTestServer, String) {
     let server = PrivateTestServer::start().await;
     let url = paced_master(&server);

@@ -19,7 +19,7 @@ use url::Url;
 use super::{app_disk_asset_store, app_track_source};
 
 /// The native ticker uses a real timed channel receive, so its lifetime needs a real clock.
-#[kithara_test_utils::kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false))]
 async fn app_fixture_updates_position_without_manual_ticks(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {

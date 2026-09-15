@@ -16,7 +16,7 @@ use crate::gapless_common::{
 
 const TRACK_FRAMES: usize = 48_000;
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip(
     gapless_sine_first: Vec<f32>,
     gapless_sine_second: Vec<f32>,

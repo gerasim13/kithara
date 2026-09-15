@@ -86,7 +86,7 @@ mod tests {
 
     use super::{Rfc6381Ext, audio_codec_supports_fmp4_packaging};
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     #[case::aac_lc_fmp4(AudioCodec::AacLc, ContainerFormat::Fmp4, Some("mp4a.40.2"))]
     #[case::pcm_fmp4(AudioCodec::Pcm, ContainerFormat::Fmp4, None)]
     #[case::mp3_mpeg_audio(AudioCodec::Mp3, ContainerFormat::MpegAudio, Some("mp4a.40.34"))]
@@ -103,18 +103,18 @@ mod tests {
         assert_eq!(info.rfc6381_codec().as_deref(), expected);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn aac_lc_defaults_container_to_fmp4_mapping() {
         let info = MediaInfo::builder().codec(AudioCodec::AacLc).build();
         assert_eq!(info.rfc6381_codec().as_deref(), Some("mp4a.40.2"));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn he_aac_v1_supports_fmp4_packaging() {
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacHe));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn fmp4_packaging_support_matches_supported_audio_codecs() {
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacLc));
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacHeV2));

@@ -223,7 +223,7 @@ async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) 
 
 /// PROD DRM scripted scenario: same `forward → backward → middle`
 /// dance the user runs manually with `cargo run -p kithara-app`.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_scripted() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::scripted_forward_back_end()).await;
 }
@@ -231,7 +231,7 @@ async fn user_sim_prod_drm_scripted() {
 /// PROD DRM "seek after long play" — directly reproduces the user's
 /// manual observation: long playback on a prod DRM track, then drag
 /// the playhead back, expect a hang or false-EOF.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_seek_after_long_play() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK,
@@ -242,7 +242,7 @@ async fn user_sim_prod_drm_seek_after_long_play() {
 
 /// Same scenario on a second prod DRM track so the bug surfaces
 /// independently of one track's particular byte layout.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_seek_after_long_play_alt_track() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK_ALT,
@@ -252,7 +252,7 @@ async fn user_sim_prod_drm_seek_after_long_play_alt_track() {
 }
 
 /// PROD DRM near-end seek pin for Bug #7 on real HE-AAC v2 fragments.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_seek_near_end() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_near_end_repro()).await;
 }
@@ -261,7 +261,7 @@ async fn user_sim_prod_drm_seek_near_end() {
 /// what surfaces Bug #6 on the local fixtures; running it against
 /// the real prod URL pins that we'd catch the same on production
 /// when creds are available.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 async fn user_sim_prod_drm_random_seed_42() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(42, 10)).await;
 }
@@ -270,14 +270,14 @@ async fn user_sim_prod_drm_random_seed_42() {
 /// manual GUI procedure: settle into the track for a real stretch,
 /// then drag the slider back. Symptom user reports: position hangs
 /// or false-EOF auto-advance.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_long_play_then_seek_backward() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_backward()).await;
 }
 
 /// PROD DRM long play (30 s) then forward seek into unbuffered tail.
 /// Bug #5 path with substantial accumulated state.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_long_play_then_seek_forward() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_forward()).await;
 }
@@ -285,14 +285,14 @@ async fn user_sim_prod_drm_long_play_then_seek_forward() {
 /// PROD DRM seek storm — aggressive successive seeks, mimicking a
 /// user dragging the slider repeatedly. Loader has to cancel and
 /// restart fetches under the keyserver-signed flow.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_seek_storm() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_storm()).await;
 }
 
 /// PROD DRM seek backward after natural EOF — pin for Bug #6 silent
 /// hang variant. Walks the track to natural end, then jumps back.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
 async fn user_sim_prod_drm_seek_backward_after_natural_eof() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK,
@@ -303,7 +303,7 @@ async fn user_sim_prod_drm_seek_backward_after_natural_eof() {
 
 /// PROD DRM seeded fuzz, seed 1337 — second seed to surface
 /// trajectory-specific bugs that seed 42 might miss.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 async fn user_sim_prod_drm_random_seed_1337() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(1337, 12)).await;
 }
@@ -314,7 +314,7 @@ async fn user_sim_prod_drm_random_seed_1337() {
 /// commits an `UpSwitch`, then bursts 4 seeks across the track. Per
 /// the user's report each post-switch seek either reaches false-EOF
 /// or hangs. Harness panics on either symptom.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK,
@@ -326,7 +326,7 @@ async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst() {
 /// Same scenario but on a second prod DRM track. Pins that the bug
 /// is not content-specific — same Auto ABR up-switch + seek pattern,
 /// different segments + different mvhd metadata.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_alt() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK_ALT,
@@ -341,17 +341,17 @@ async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_alt() {
 /// before audio kicks in. Every `seek anchor path: SeekOutOfRange`
 /// in `app.log` has `epoch=1` (fresh track, first seek) so the
 /// race must fire on the very first seek attempt.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_seek_immediately_after_loaded() {
     run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.95).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_seek_immediately_after_loaded_mid() {
     run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.50).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
     run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.20).await;
 }
@@ -369,7 +369,7 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 /// the track resource is constructed; in `app` the slider is dead
 /// until that point. After `Loaded` we scrub with no further warmup.
 // flash(false): prod-CDN e2e; raw tokio::spawn ticker + wall-clock scrub/settle windows.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, Some(RENDER_PACE)).await;
@@ -777,7 +777,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 /// for 10s`). Mirrors the user's manual GUI flow with prod DRM tracks
 /// from `app.yaml`. Codec-agnostic: app.log captured the same hang on
 /// `AacLc` and Flac variants on different runs.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
     run_multi_track_select_seek_end_hang(PROD_DRM_PLAYLIST, "prod-drm").await;
 }

@@ -51,7 +51,7 @@ pub fn drm_ascii_alphanumeric_salt() -> String {
 mod tests {
     use super::*;
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn drm_lowercase_hex_salt_returns_8_chars() {
         let salt = drm_lowercase_hex_salt();
         let spec = prod_spec();
@@ -63,7 +63,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn drm_ascii_alphanumeric_salt_returns_16_chars() {
         let salt = drm_ascii_alphanumeric_salt();
         let spec = stage_spec();

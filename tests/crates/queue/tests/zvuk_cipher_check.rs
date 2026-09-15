@@ -25,7 +25,7 @@ const STAGE_ENCRYPTED_WITH_AAAA_SEED: [u8; 16] = [
 /// the cipher implementation in `kithara-drm`; a regression there is a silent
 /// DRM corruption that segment-decode tests can't catch without a live
 /// keyserver.
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn stage_unique_cipher_matches_captured_keyserver_response() {
     let secret = format!(
         "{stage_key}{seed}",

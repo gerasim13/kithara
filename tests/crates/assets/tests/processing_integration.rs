@@ -73,7 +73,7 @@ fn create_xor_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessCtx
     Arc::new(XorProcessor::new(xor_key, call_count))
 }
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -111,7 +111,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
     assert_eq!(buf, expected);
 }
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -153,7 +153,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 }
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -195,7 +195,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -227,7 +227,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
     assert_eq!(n, 0);
 }
 
-#[kithara_test_utils::kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
     let scope = asset_scope(&temp_dir, "no-processing");
 

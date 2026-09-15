@@ -37,7 +37,7 @@ mod tests {
 
     use super::{EqMode, deck_index, deck_letter, eq_band};
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn letters_are_session_positions() {
         assert_eq!(deck_index("a"), Some(0));
         assert_eq!(deck_index("d"), Some(3));
@@ -46,7 +46,7 @@ mod tests {
         assert_eq!(deck_index(""), None);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn positions_and_letters_are_one_mapping() {
         for (letter, index) in [("a", 0), ("d", 3), ("z", 25)] {
             assert_eq!(deck_index(letter), Some(index));
@@ -56,7 +56,7 @@ mod tests {
         assert_eq!(deck_letter(usize::MAX), None);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn eq_controls_only_address_bands_in_the_visible_mode() {
         assert_eq!(eq_band(EqMode::ThreeBand, "mid-3"), Some(1));
         assert_eq!(eq_band(EqMode::ThreeBand, "high-mid-4"), None);

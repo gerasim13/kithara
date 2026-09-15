@@ -79,14 +79,14 @@ enum NotRunningErrorScenario {
     Stop,
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn engine_config_defaults() {
     let engine = make_engine();
     assert_eq!(engine.max_slots(), 4);
     assert_eq!(engine.master_sample_rate(), 44100);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
@@ -107,7 +107,7 @@ fn engine_config_builder() {
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case(EngineInitialScenario::NotRunning)]
 #[case(EngineInitialScenario::SlotState)]
 #[case(EngineInitialScenario::ActiveSlotsEmpty)]
@@ -123,19 +123,19 @@ fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn engine_subscribe_works() {
     let engine = make_engine();
     let _rx = engine.subscribe::<kithara::play::EngineEvent>();
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn engine_master_volume_default() {
     let engine = make_engine();
     assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case(NotRunningErrorScenario::Stop)]
 #[case(NotRunningErrorScenario::AllocateSlot)]
 #[case(NotRunningErrorScenario::ReleaseSlot)]
@@ -149,7 +149,7 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
     assert!(matches!(err, PlayError::EngineNotRunning));
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
@@ -165,7 +165,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn foreign_host_cannot_close_owned_player() {
     let mut owner_host = Host::new(HostConfig::builder().build()).expect("create owner host");
     let mut foreign_host = Host::new(HostConfig::builder().build()).expect("create foreign host");
@@ -186,7 +186,7 @@ fn foreign_host_cannot_close_owned_player() {
     assert!(player.is_closed());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn dropping_host_invalidates_retained_player_control() {
     let player = {
         let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");

@@ -256,7 +256,7 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     .count()
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     multi_thread,
     native,
@@ -330,7 +330,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     multi_thread,
     native,
@@ -394,17 +394,17 @@ async fn rebuild_source(delay_ms: u64) -> (TestServerHelper, CreatedHls) {
     (server, created)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn slow_source() -> (TestServerHelper, CreatedHls) {
     rebuild_source(SLOW_TARGET_SEGMENT_DELAY_MS).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn target_source() -> (TestServerHelper, CreatedHls) {
     rebuild_source(TARGET_SEGMENT_DELAY_MS).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn cold_sources() -> Vec<(TestServerHelper, CreatedHls)> {
     let mut sources = Vec::new();
     for transition in TRANSITIONS {

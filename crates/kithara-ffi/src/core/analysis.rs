@@ -15,7 +15,7 @@ mod tests {
 
     use super::seconds_at;
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_marker_reads_as_its_position_on_the_source_axis() {
         let rate = NonZeroU32::new(44_100).expect("nonzero rate");
 
@@ -24,7 +24,7 @@ mod tests {
         assert!((seconds_at(22_050, rate) - 0.5).abs() < f64::EPSILON);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_axis_is_the_source_rate_the_pass_was_opened_on() {
         let frame = 48_000;
 

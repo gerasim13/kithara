@@ -16,7 +16,7 @@ use kithara_integration_tests::{
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 use kithara_test_fixtures::fixtures::{decoder_wav, seek_decoder_wav, short_decoder_wav, tone_wav};
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
 #[case(None)]
 fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>, decoder_wav: &'static [u8]) {
@@ -41,7 +41,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>, decoder_w
     assert_eq!(decoder.spec().channels, 2);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_next_chunk_returns_data(decoder_wav: &'static [u8]) {
     let wav_data = decoder_wav;
     let cursor = Cursor::new(wav_data);
@@ -65,7 +65,7 @@ fn test_next_chunk_returns_data(decoder_wav: &'static [u8]) {
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_next_chunk_eof(short_decoder_wav: &'static [u8]) {
     let wav_data = short_decoder_wav;
     let cursor = Cursor::new(wav_data);
@@ -86,7 +86,7 @@ fn test_next_chunk_eof(short_decoder_wav: &'static [u8]) {
     assert!(result.is_eof());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_seek_to_beginning(seek_decoder_wav: &'static [u8]) {
     let wav_data = seek_decoder_wav;
     let cursor = Cursor::new(wav_data);
@@ -110,7 +110,7 @@ fn test_seek_to_beginning(seek_decoder_wav: &'static [u8]) {
     assert!(outcome.is_chunk());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_duration_available(tone_wav: &'static [u8]) {
     let wav_data = tone_wav;
     let cursor = Cursor::new(wav_data);
@@ -132,7 +132,7 @@ fn test_duration_available(tone_wav: &'static [u8]) {
     assert!(dur.as_secs_f64() > 0.9 && dur.as_secs_f64() < 1.1);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case(Vec::new())]
 #[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
 fn test_invalid_input_fails(#[case] data: Vec<u8>) {
@@ -149,7 +149,7 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     assert!(result.is_err());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_unsupported_container_returns_error() {
     let data = vec![0u8; 100];
     let cursor = Cursor::new(data);

@@ -220,7 +220,7 @@ async fn run_failure_resilience(
 
 /// Healthy + cancelled HLS instance mixes. Cancelled peers must not harm
 /// healthy ones (which must still reach EOF).
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,

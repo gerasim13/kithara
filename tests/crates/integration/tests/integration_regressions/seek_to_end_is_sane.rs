@@ -249,7 +249,7 @@ async fn run_case(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn seek_to_duration_keeps_time_and_duration_consistent(
     temp_dir: TestTempDir,
     #[future(awt)] end_sources: (TestServerHelper, [CreatedHls; 2]),
@@ -259,7 +259,7 @@ async fn seek_to_duration_keeps_time_and_duration_consistent(
     run_case(&helper, end, &temp_dir, Target::End).await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn end_sources() -> (TestServerHelper, [CreatedHls; 2]) {
     let helper = TestServerHelper::new().await;
     let first = end_source(&helper).await;

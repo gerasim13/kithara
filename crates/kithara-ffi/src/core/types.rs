@@ -1102,14 +1102,14 @@ pub struct FfiPlayerSnapshot {
 mod tests {
     use super::*;
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn duration_to_seconds_roundtrips() {
         let secs = 42.123_456;
         let back = duration_to_seconds(Duration::from_secs_f64(secs));
         assert!((back - secs).abs() < 1e-9);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     #[case::not_ready(PlayError::NotReady, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
     #[case::no_active_slot(PlayError::NoActiveSlot, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
     #[case::item_failed(
@@ -1129,7 +1129,7 @@ mod tests {
         assert!(matches_variant(&ffi));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn player_status_conversion() {
         assert_eq!(
             FfiPlayerStatus::from(PlayerStatus::ReadyToPlay),
@@ -1145,7 +1145,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_status_conversion() {
         assert_eq!(
             FfiItemStatus::from(ItemStatus::ReadyToPlay),
@@ -1153,7 +1153,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn time_control_status_conversion() {
         assert_eq!(
             FfiTimeControlStatus::from(TimeControlStatus::Playing),
@@ -1161,7 +1161,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn advance_reason_conversion_preserves_known_variants() {
         for (source, expected) in [
             (AdvanceReason::NaturalEof, FfiAdvanceReason::NaturalEof),
@@ -1184,7 +1184,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn audio_codec_conversion_preserves_known_variants() {
         for (source, expected) in [
             (AudioCodec::AacLc, FfiAudioCodecKind::AacLc),
@@ -1202,7 +1202,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn container_conversion_preserves_known_variants() {
         for (source, expected) in [
             (ContainerFormat::Mp4, FfiContainerKind::Mp4),
@@ -1220,7 +1220,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn decoder_change_cause_conversion_preserves_known_variants() {
         for (source, expected) in [
             (DecoderChangeCause::Initial, FfiDecoderChangeCause::Initial),
@@ -1249,7 +1249,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn decode_error_kind_conversion_preserves_known_variants() {
         for (source, expected) in [
             (DecodeErrorKind::Io, FfiDecodeErrorKind::Io),
@@ -1297,7 +1297,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn resampler_kind_conversion_preserves_known_variants() {
         for (source, expected) in [
             (ResamplerKind::Rubato, FfiResamplerKind::Rubato),
@@ -1309,7 +1309,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn queue_repeat_mode_round_trips_through_ffi() {
         for expected in [RepeatMode::Off, RepeatMode::One, RepeatMode::All] {
             let ffi = FfiRepeatMode::from(expected);
@@ -1317,7 +1317,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn unknown_ffi_repeat_mode_is_rejected() {
         assert_eq!(
             RepeatMode::try_from(FfiRepeatMode::Unknown),
@@ -1325,7 +1325,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn time_range_conversion() {
         let tr = TimeRange::new(Duration::from_secs(10), Duration::from_secs(5));
         let ffi = FfiTimeRange::from(tr);

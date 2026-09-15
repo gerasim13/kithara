@@ -5,7 +5,7 @@ use kithara_test_fixtures::{
     signal::Pcm,
 };
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers(encoder_saw_aac: Pcm) {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -38,7 +38,7 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers(encod
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn encode_bytes_honors_explicit_bit_rate_across_lossy_range(encoder_second: Pcm) {
     let pcm = encoder_second;
 

@@ -17,7 +17,7 @@ use kithara_integration_tests::{
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     serial,
@@ -100,7 +100,7 @@ async fn aac_he_v2_hls_produces_pcm(
     );
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn he_hls() -> (TestServerHelper, CreatedHls) {
     let server = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()

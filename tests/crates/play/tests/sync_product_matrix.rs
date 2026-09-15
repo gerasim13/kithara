@@ -814,7 +814,7 @@ impl ProductHarness {
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara_test_utils::kithara::test(native, timeout(Duration::from_secs(10)))]
+#[kithara::test(native, timeout(Duration::from_secs(10)))]
 fn offline_renderer_publishes_only_complete_recordings() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
     let frames = 8;
@@ -1082,7 +1082,7 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -1111,7 +1111,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -1142,7 +1142,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider).await;
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -1224,7 +1224,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider).await;
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -1251,80 +1251,80 @@ async fn opt_in_library_product_rows_reach_the_pcm_oracle(
     run(case, library_sources).await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 pub(super) async fn synthetic_sources() -> PreparedSources {
     prepared_sources(Provider::Synthetic).await
 }
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 pub(super) async fn sweep_sources() -> PreparedSources {
     prepared_sources(Provider::Sweep).await
 }
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 pub(super) async fn mixed_sources() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
 }
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 #[cfg(not(target_os = "android"))]
 pub(super) async fn listening_sources() -> PreparedSources {
     prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_mp3_same() -> PreparedSources {
     prepared_sources(Provider::Mp3Same).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_hls_same_drm() -> PreparedSources {
     prepared_sources(Provider::HlsSame(HlsProtection::Drm)).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_synthetic() -> PreparedSources {
     prepared_sources(Provider::Synthetic).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_ambient_trip_hop_provider() -> PreparedSources {
     prepared_sources(AMBIENT_TRIP_HOP_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_downtempo_house_provider() -> PreparedSources {
     prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_techno_breakbeat_provider() -> PreparedSources {
     prepared_sources(TECHNO_BREAKBEAT_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_cross_style_provider() -> PreparedSources {
     prepared_sources(CROSS_STYLE_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_hls_same_plain() -> PreparedSources {
     prepared_sources(Provider::HlsSame(HlsProtection::Plain)).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_mp3_distinct() -> PreparedSources {
     prepared_sources(Provider::Mp3Distinct).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_hls_mp3_plain() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_hls_mp3_drm() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Drm)).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn library_sources() -> PreparedSources {
     prepared_sources(Provider::Library(LIBRARY)).await
 }

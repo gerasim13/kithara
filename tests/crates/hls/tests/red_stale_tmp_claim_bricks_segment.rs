@@ -51,12 +51,7 @@ impl Consts {
     const READ_CHUNK: usize = 8 * 1024;
 }
 
-#[kithara_test_utils::kithara::test(
-    tokio,
-    serial,
-    timeout(Duration::from_secs(15)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
     let fixture = Fixture::new().await;
     let orphan = fixture.tmp_path_of_stale_segment();
@@ -95,12 +90,7 @@ async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
 ///
 /// A directory at the tmp path is the cheapest permanent acquire failure that
 /// needs no fault injection: the claim's `open` can never succeed on it.
-#[kithara_test_utils::kithara::test(
-    tokio,
-    serial,
-    timeout(Duration::from_secs(15)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn a_segment_that_can_never_be_acquired_fails_the_read() {
     let fixture = Fixture::new().await;
     let blocked = fixture.tmp_path_of_stale_segment();

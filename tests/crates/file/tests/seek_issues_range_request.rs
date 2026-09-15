@@ -110,7 +110,7 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
         .expect("ranged response")
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     multi_thread,
     flash(false),

@@ -74,7 +74,7 @@ fn source_frames() -> usize {
 }
 
 /// The plain tone this test measures, with the fixture bound to its budget.
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn source_pcm() -> &'static [u8] {
     let bytes = sine_wav_a440_6s().bytes();
     assert_eq!(
@@ -86,7 +86,7 @@ fn source_pcm() -> &'static [u8] {
 }
 
 /// The same tone carrying the source-time markers `marker_timing` looks for.
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn marked_source_pcm(source_pcm: &'static [u8]) -> &'static [u8] {
     let bytes = marked_sine_wav_a440_6s().bytes();
     assert_eq!(bytes.len(), source_pcm.len());
@@ -175,7 +175,7 @@ impl AudioEffect for BurstLoadEffect {
     /// until the spin ends. Carving the region REAL keeps the deadline on the
     /// host clock, so the contention the load player is here to create stays
     /// contention under flash as well as off it.
-    #[kithara_test_utils::kithara::flash(false)]
+    #[kithara::flash(false)]
     fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
@@ -413,7 +413,7 @@ fn local_wav(source: &[u8]) -> tempfile::NamedTempFile {
 /// virtual speed, draining the ring into zeros and making every PCM oracle a
 /// property of the machine. The burst load stays REAL: `BurstLoadEffect` spins
 /// on the producer thread, whose callstack never enters this guard.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn render_passthrough(
     source: &[u8],
     stretch: Option<(StretchKind, f32)>,
@@ -529,7 +529,7 @@ async fn render_passthrough(
 ///
 /// Carries the clock guard of [`render_passthrough`] for the same reason: the
 /// tick-and-render pair must not outrun the decode worker.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -842,7 +842,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
@@ -858,7 +858,7 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     run_no_sync_passthrough(source_pcm, backend, false).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
@@ -876,7 +876,7 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
     run_active_stretch(source_pcm, marked_source_pcm, shifted_pitch, backend, false).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
@@ -893,7 +893,7 @@ async fn record_no_sync_unity_playback_artifacts(
     run_no_sync_passthrough(source_pcm, backend, true).await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(

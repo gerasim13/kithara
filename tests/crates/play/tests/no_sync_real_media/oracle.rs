@@ -61,7 +61,7 @@ pub(super) struct MatchedMixAudio {
 /// `no_block`: Cochlea analysis of the whole capture is offline measurement,
 /// not a blocking wait; it is seconds of arithmetic per case and the test has
 /// nothing to overlap it with.
-#[kithara_test_utils::kithara::allow_block]
+#[kithara::allow_block]
 pub(super) fn assess_audio(
     label: &str,
     sample_rate: u32,
@@ -233,7 +233,7 @@ pub(super) fn assess_matched_mix(
 
 /// `no_block`: one Cochlea pass per stem, mix and reference. Same reason as
 /// `assess_audio`, and this one runs once per deck.
-#[kithara_test_utils::kithara::allow_block]
+#[kithara::allow_block]
 pub(super) fn measure_audio_level(
     label: &str,
     role: AudioRole,
@@ -462,7 +462,7 @@ mod tests {
     /// The Cochlea oracles are seconds of arithmetic. Unsanctioned they are
     /// measured against the poll budget of whatever async test calls them,
     /// which is what failed the matrix on a loaded CI host.
-    #[kithara_test_utils::kithara::test(flash(false))]
+    #[kithara::test(flash(false))]
     async fn cochlea_oracles_are_sanctioned_offline_work(oracle_stem_a: Vec<f32>) {
         let _mode = force_panic_mode();
         let capture = oracle_stem_a;
@@ -471,14 +471,14 @@ mod tests {
 
     /// A millisecond is far below any Cochlea pass, so the strict tier answers
     /// an unsanctioned call whatever the host's CPU-to-wall ratio says.
-    #[kithara_test_utils::kithara::no_block(budget_ms = 1)]
+    #[kithara::no_block(budget_ms = 1)]
     async fn watched_oracles(capture: &[f32]) {
         let mut failures = Vec::new();
         let _ = assess_audio("no-block-guard", SOURCE_RATE, capture, &mut failures);
         let _ = measure_audio_level("no-block-guard", AudioRole::FinalMix, SOURCE_RATE, capture);
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn matched_mix_rejects_global_attenuation_and_each_missing_deck(
         oracle_stem_a: Vec<f32>,
         oracle_stem_b: Vec<f32>,

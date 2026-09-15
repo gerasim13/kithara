@@ -418,7 +418,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_audio_codec_json_uses_snake_case_strings() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(req.trailing_delay, None);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_audio_sine_signal_json_roundtrips() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -451,7 +451,7 @@ mod tests {
         ));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_audio_start_frame_roundtrips() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(encoded["start_frame"], 123);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_audio_gapless_fields_roundtrip() {
         let value = serde_json::json!({
             "codec": "aac_lc",
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(encoded["trailing_delay"], 960);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn delay_rule_matches_variant_and_segment_gte() {
         let rule = DelayRule {
             variant: Some(0),
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(rule.matches(1, 5), None);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn eval_delay_first_match_wins() {
         let rules = vec![
             DelayRule {
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(eval_delay(&rules, 0, 0), 10);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn generate_segment_has_correct_prefix() {
         let data = generate_segment(1, 2, 100);
         assert!(data.starts_with(b"V1-SEG-2:TEST_SEGMENT_DATA"));
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(data[99], 0xFF);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn wav_init_header_is_44_bytes() {
         let header = signal::header(44100, 2, None);
         assert_eq!(header.len(), 44);

@@ -379,28 +379,28 @@ mod tests {
         AudioPlayerItem::new(config_with_url(url.to_string()))
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn audio_id_is_monotonic_across_new_items() {
         let a = item_for("https://example.com/a.mp3");
         let b = item_for("https://example.com/b.mp3");
         assert!(a.audio_id() < b.audio_id());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn audio_id_is_distinct_for_two_items_of_same_url() {
         let a = item_for("https://example.com/track.mp3");
         let b = item_for("https://example.com/track.mp3");
         assert_ne!(a.audio_id(), b.audio_id());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn uuid_is_distinct_for_two_items_of_same_url() {
         let a = item_for("https://example.com/track.mp3");
         let b = item_for("https://example.com/track.mp3");
         assert_ne!(a.uuid_i64(), b.uuid_i64());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn uuid_i64_matches_uuid_v5_of_url_and_audio_id() {
         let url = "https://example.com/song.mp3";
         let item = item_for(url);
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(item.uuid_i64(), i64::from_be_bytes(buf));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn caller_audio_id_is_exposed_without_becoming_queue_id() {
         let config = FfiItemConfig {
             audio_id: Some(TrackId(42)),
@@ -422,7 +422,7 @@ mod tests {
         assert_ne!(item.track_id(), TrackId(42));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn caller_uuid_i64_is_exposed() {
         let config = FfiItemConfig {
             uuid_i64: Some(123_456),
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(item.uuid_i64(), 123_456);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn audio_id_and_uuid_work_for_local_path() {
         let path = "/Users/me/Music/song.flac";
         let a = item_for(path);
@@ -441,13 +441,13 @@ mod tests {
         assert_ne!(a.uuid_i64(), b.uuid_i64());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn url_preserved() {
         let item = item_for("https://example.com/song.mp3");
         assert_eq!(item.url(), "https://example.com/song.mp3");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn preferred_peak_bitrate_from_config() {
         let config = FfiItemConfig {
             preferred_peak_bitrate: 256_000.0,
@@ -457,13 +457,13 @@ mod tests {
         assert_eq!(item.preferred_peak_bitrate(), 256_000.0);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn inserted_flag_initially_false() {
         let item = item_for("https://example.com/a.mp3");
         assert!(!*item.inserted.lock());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn headers_roundtrip() {
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), "Bearer token".into());
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(returned.get("Authorization"), Some(&"Bearer token".into()));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn uuid_i64_is_stable_for_same_audio_id() {
         let item = item_for("https://example.com/a.mp3");
         let first = item.uuid_i64();
@@ -486,13 +486,13 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn is_live_stream_defaults_false() {
         let item = item_for("https://example.com/song.mp3");
         assert!(!item.is_live_stream());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn is_live_stream_from_config() {
         let config = FfiItemConfig {
             is_live_stream: true,
@@ -502,7 +502,7 @@ mod tests {
         assert!(item.is_live_stream());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn is_playable_live_stream_always_true() {
         let config = FfiItemConfig {
             is_live_stream: true,
@@ -513,14 +513,14 @@ mod tests {
         assert!(item.is_playable(9999.0, vec![]));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_pending_is_not_ready_and_zero_duration() {
         let view = ItemView::new(false);
         assert!(!view.is_ready());
         assert_eq!(view.duration_sec(), 0.0);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_resolve_duration_sets_ready() {
         let mut view = ItemView::new(false);
         view.resolve_duration(42.0);
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(view.duration_sec(), 42.0);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_mark_failed_is_not_ready_and_zero_duration() {
         let mut view = ItemView::new(false);
         view.resolve_duration(42.0);
@@ -540,14 +540,14 @@ mod tests {
     /// Two independent sources settle a failed item — the protocol bridge and
     /// the queue — and each asks the view whether the pair is still its to
     /// emit. Only the transition itself may answer yes.
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_mark_failed_reports_only_the_first_transition() {
         let mut view = ItemView::new(false);
         assert!(view.mark_failed());
         assert!(!view.mark_failed());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_failure_is_sticky_over_resolve_duration() {
         let mut view = ItemView::new(false);
         view.mark_failed();
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(view.duration_sec(), 0.0);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn item_view_live_flag_preserved_across_transitions() {
         let mut view = ItemView::new(true);
         assert!(view.is_live_stream);
@@ -569,7 +569,7 @@ mod tests {
         assert!(view.is_live_stream);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn is_playable_within_ranges() {
         let item = item_for("https://example.com/song.mp3");
         let ranges = vec![FfiTimeRange {

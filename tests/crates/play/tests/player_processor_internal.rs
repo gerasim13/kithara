@@ -97,7 +97,7 @@ fn create_tracking_player_resource(
     )
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
     let (reader, recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
@@ -128,13 +128,13 @@ async fn load_track_propagates_host_sample_rate() {
     assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn processor_renders_silence_when_no_tracks() {
     let (processor, _control) = make_processor();
     assert_eq!(processor.track_count(), 0);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn processor_seek_without_tracks_does_not_panic() {
     let (mut processor, mut control) = make_processor();
     control
@@ -147,7 +147,7 @@ fn processor_seek_without_tracks_does_not_panic() {
     processor.drain_commands();
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn processor_set_paused_updates_playback() {
     let (mut processor, mut control) = make_processor();
 
@@ -160,7 +160,7 @@ fn processor_set_paused_updates_playback() {
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     let (reader, _recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
@@ -213,7 +213,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn fade_in_switches_public_snapshot_without_render() {
     let (mut processor, mut control) = make_processor();
     let first_src: Arc<str> = Arc::from("first.mp3");
@@ -270,7 +270,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn processor_multiple_seek_epochs_only_last_applies() {
     let seek_log = Arc::new(Mutex::new(Vec::new()));
     let resource = create_tracking_player_resource("track1.mp3", seek_log.clone());
@@ -339,7 +339,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     assert_eq!(playback.seek_epoch.load(AtomicOrdering::SeqCst), third);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(TrackCommandScenario::LoadOnly, 1, true)]
 #[case(TrackCommandScenario::DuplicateLoad, 1, true)]
 #[case(TrackCommandScenario::LoadThenUnload, 0, false)]
@@ -399,7 +399,7 @@ async fn processor_track_command_scenarios(
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let item_id = TrackId::allocate();
@@ -433,7 +433,7 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
 
@@ -453,7 +453,7 @@ async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     assert_eq!(processor.track_count(), 0);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let short_id = TrackId::allocate();
@@ -508,7 +508,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn render_audio_handover_promotes_preloading_track_without_silence(
     constant_half: &'static [u8],
 ) {
@@ -568,7 +568,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let short_id = TrackId::allocate();

@@ -557,7 +557,7 @@ mod tests {
         kithara,
     };
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn signal_helper_builds_expected_url() {
         let helper = TestServerHelper::new().await;
         let url = helper.signal(SignalAsset::WAV_SINE440_120MS);
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(url.path(), "/signal/signal_wav_sine440_120ms.wav");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn create_hls_builder_preserves_inline_spec() {
         let spec = HlsFixtureBuilder::new()
             .variant_count(2)
@@ -578,7 +578,7 @@ mod tests {
         assert!(matches!(spec.data_mode, DataMode::TestPattern));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_audio_builder_resets_legacy_inputs() {
         let spec = HlsFixtureBuilder::new()
             .data_mode(DataMode::SawWav {
@@ -597,7 +597,7 @@ mod tests {
         assert!(spec.packaged_audio.is_some());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn legacy_data_overrides_clear_packaged_audio() {
         let spec = HlsFixtureBuilder::new()
             .packaged_audio_aac_lc(44_100, 2)
@@ -608,7 +608,7 @@ mod tests {
         assert!(matches!(spec.data_mode, DataMode::CustomData(_)));
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn created_hls_reuses_single_token_across_urls() {
         let helper = TestServerHelper::new().await;
         let created = helper

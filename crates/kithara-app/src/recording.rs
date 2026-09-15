@@ -113,7 +113,7 @@ mod tests {
 
     struct RecordingArtifact;
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn recording_core_commits_a_readable_wav_to_memory_assets(recording_pcm: Vec<f32>) {
         let pool = pools::build(&pools::PoolsSection::default())
             .unwrap_or_else(|error| panic!("app pools: {error}"));

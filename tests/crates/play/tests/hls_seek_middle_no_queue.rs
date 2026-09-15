@@ -82,10 +82,10 @@ impl SeekScenario {
 /// single virtual tick so the async HLS engine can fetch + decode the
 /// delayed segment; under the flash clock that tick advances virtual
 /// time without burning real wall time. The loop has no internal wall
-/// budget — the `#[kithara_test_utils::kithara::test(... timeout(90s))]` attribute is the
+/// budget — the `#[kithara::test(... timeout(90s))]` attribute is the
 /// only safety bound, so the success path is always the real state
 /// (position) being reached rather than a collapsed timer expiring.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, until_position: f64) {
     const BATCH: u32 = 16;
     const TICK_MS: u64 = 25;
@@ -103,7 +103,7 @@ async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, unti
     }
 }
 
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn render_until_gate_requested(
     player: &mut OfflinePlayer,
     gate: &SegmentGateHandle,
@@ -146,7 +146,7 @@ async fn render_until_gate_requested(
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::no_delay(SeekScenario::NoDelay)]
 #[case::good_4g_500ms(SeekScenario::Gated {
     label: "good_4g_500ms_gate",

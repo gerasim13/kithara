@@ -21,7 +21,7 @@ const PRIMING_SKIP_FRAMES: usize = 4_800;
 const READ_FRAMES: usize = 44_100;
 const READ_BUF_SAMPLES: usize = 4_096;
 
-#[kithara_test_utils::kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(SEGMENTS).await;

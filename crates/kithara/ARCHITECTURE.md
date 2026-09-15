@@ -100,7 +100,7 @@ compatible native software stack.
 
 <tr><td><code>tokio-net</code></td><td>no</td><td>Tokio networking helpers forwarded to <code>kithara-platform</code></td></tr>
 
-<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara_test_utils::kithara::test(..., multi_thread)]</code></td></tr>
+<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara::test(..., multi_thread)]</code></td></tr>
 
 <tr><td><code>full</code></td><td>no</td><td>The former always-present core plus <code>file + hls + offline + record</code>, including with <code>--no-default-features</code></td></tr>
 
@@ -149,8 +149,8 @@ advanced control — multi-slot engine, crossfade, EQ — reach into
 speed-control type `StretchControls` is re-exported even when no stretch backend
 is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.
-The facade re-exports no test macros; tests take them from
-`kithara_test_utils::kithara`.
+The facade re-exports the test attribute macros; their expansions resolve
+through `kithara-test-utils`, which the test crate depends on.
 The `prelude` collects the everyday types.
 
 ## Integration

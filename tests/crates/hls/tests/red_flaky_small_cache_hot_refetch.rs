@@ -37,7 +37,7 @@ impl Consts {
     const SEGMENT_SECS: f64 = 3.0;
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
@@ -130,7 +130,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
     );
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn hot_refetch_hls() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server

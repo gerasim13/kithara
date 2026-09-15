@@ -35,12 +35,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const STARTUP_POSITION_SECS: f64 = 0.05;
 const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
 #[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]
@@ -122,7 +117,7 @@ async fn create_delayed_gapless_hls_resource(
         .expect("open delayed gapless HLS resource")
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn startup_source() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server

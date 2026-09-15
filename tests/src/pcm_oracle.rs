@@ -85,7 +85,7 @@ mod tests {
     use super::*;
     use crate::TestHttpServer;
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn remote_oracle_decodes_submitted_media_and_rejects_invalid_input() {
         let server = TestHttpServer::bind("127.0.0.1:0", router()).await;
         let url = server.base_url().join("oracle/pcm").unwrap();

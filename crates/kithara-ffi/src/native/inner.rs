@@ -661,7 +661,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn shared_store_outlives_each_player() {
         let store = Arc::new(FfiAssetStore::for_test());
         let cancel = store.cancel_token();
@@ -684,7 +684,7 @@ mod tests {
         assert!(cancel.is_cancelled());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn initial_key_rules_keep_policy_order_and_global_header_semantics() {
         let ffi = crate::types::FfiKeyOptions {
             rules: vec![
@@ -724,7 +724,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn runtime_key_rules_append_in_registration_order() {
         let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
@@ -757,7 +757,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {
         let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_network("token-123".to_string());
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(token.as_deref(), Some("token-123"));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn setup_network_clears_auth_token_when_empty() {
         let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_network("token-123".to_string());
@@ -776,7 +776,7 @@ mod tests {
         assert!(!inner.player_headers.contains_key(AUTH_TOKEN_HEADER));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
         let inner = NativeInner::new(FfiPlayerConfig::for_test());
         // Registration must not run the processor: an unstubbed `Unimock`
@@ -802,7 +802,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn update_peak_bitrate_remembers_both_limits() {
         let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
@@ -811,7 +811,7 @@ mod tests {
         assert!((snapshot.cellular_bps - 500_000.0).abs() < f64::EPSILON);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn peak_bitrate_effective_cap_picks_min_non_zero() {
         let pb = PeakBitrate {
             wifi_bps: 2_000_000.0,

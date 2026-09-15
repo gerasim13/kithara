@@ -118,7 +118,7 @@ fn drain_eof_stop_notifications(
     eof_stop_count
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case(TrackStateScenario::StartPreloading, TrackState::Preloading)]
 #[case(TrackStateScenario::FadeIn, TrackState::FadingIn)]
 #[case(TrackStateScenario::FadeOutAfterPlay, TrackState::FadingOut)]
@@ -146,20 +146,20 @@ async fn track_state_transitions(
     assert_eq!(track.state(), expected_state);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn track_src_returns_identifier(constant_half: &'static [u8]) {
     let track = make_track(constant_half);
     assert_eq!(&**track.src(), "test.mp3");
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn track_initial_position_and_duration(constant_half: &'static [u8]) {
     let track = make_track(constant_half);
     assert_eq!(track.position(), 0.0);
     assert!((track.duration() - 60.0).abs() < f64::EPSILON);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn track_seek_position_is_derived_from_the_media_clock(constant_half: &'static [u8]) {
     let mut track = make_track(constant_half);
     let seconds = 9.791_337;
@@ -171,7 +171,7 @@ async fn track_seek_position_is_derived_from_the_media_clock(constant_half: &'st
     assert!((track.position() - expected).abs() < f64::EPSILON);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn eof_playback_stopped_notification_carries_item_id(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 0.01, ITEM);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(8).split();
@@ -260,7 +260,7 @@ fn read_past_the_end(
 /// renders a position the user has already left. Reporting the end there hands
 /// the queue an `ItemDidPlayToEnd` and it auto-advances out from under the seek
 /// the processor is about to apply — the track flips while the seek is settling.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn a_published_seek_holds_the_natural_end_report(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 0.01, ITEM);
     let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
@@ -278,7 +278,7 @@ async fn a_published_seek_holds_the_natural_end_report(constant_half: &'static [
 /// The hold is released by the seek itself, so it costs blocks of silence, not
 /// the end-of-track signal: once the track is re-based onto the published
 /// epoch, the very same drained feeder reports the end.
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn observing_the_seek_epoch_releases_the_held_end(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 0.01, ITEM);
     let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
@@ -297,7 +297,7 @@ async fn observing_the_seek_epoch_releases_the_held_end(constant_half: &'static 
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::playing(ReadOutcomeScenario::Playing)]
 #[case::finished(ReadOutcomeScenario::Finished)]
 async fn read_outcome_matches_track_state(
@@ -339,7 +339,7 @@ async fn read_outcome_matches_track_state(
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let frontier_ns = Arc::new(AtomicU64::new(0));
     let reader = MockReader::live_frontier(Consts::AUDIO_SPEC, Arc::clone(&frontier_ns));
@@ -361,7 +361,7 @@ fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 0.01, ITEM);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
@@ -416,7 +416,7 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
@@ -486,7 +486,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half:
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half: &'static [u8]) {
     let src = Arc::from("misreported.mp3");
     let resource = Resource::from_reader(
@@ -544,7 +544,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
     constant_half: &'static [u8],
 ) {
@@ -596,7 +596,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
     assert_eq!(eof_stop_count, 1);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn handover_is_not_duplicated_at_eof_after_early_trigger(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 5.0, ITEM);
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
@@ -649,7 +649,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger(constant_half: &'
     assert_eq!(eof_stop_count, 1);
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[case::inside_lead_window(10.0, 2.0, Some(8.5))]
 #[case::shorter_than_lead_window(0.5, 5.0, None)]
 async fn prefetch_fires_before_handover(
@@ -700,7 +700,7 @@ async fn prefetch_fires_before_handover(
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
     constant_half: &'static [u8],
 ) {
@@ -764,7 +764,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn prefetch_and_handover_both_fire_when_thresholds_coincide(constant_half: &'static [u8]) {
     let mut track = make_track_with(constant_half, 10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");

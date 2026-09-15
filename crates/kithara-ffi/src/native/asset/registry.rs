@@ -107,7 +107,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn replacement_drops_foreign_layout_after_unlock() {
         let registry = FfiAssetLayoutRegistry::new();
         let dropped = Arc::new(AtomicBool::new(false));

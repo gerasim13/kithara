@@ -201,7 +201,7 @@ fn assert_step_is_ramped(
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, Consts::OBSERVE_BLOCKS).await;
@@ -222,7 +222,7 @@ async fn deck_volume_step_is_ramped() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eq_gain_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(Consts::THREE_BAND),
@@ -251,7 +251,7 @@ async fn eq_gain_step_is_ramped() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eq_layout_switch_is_crossed_over() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(Consts::THREE_BAND),
@@ -280,7 +280,7 @@ async fn eq_layout_switch_is_crossed_over() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eq_layout_change_during_crossover_stays_continuous() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(Consts::THREE_BAND),
@@ -311,7 +311,7 @@ async fn eq_layout_change_during_crossover_stays_continuous() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn queue_append_while_playing_does_not_wait_for_host() {
     let (harness, first_id) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let server = TestServerHelper::new().await;
@@ -329,7 +329,7 @@ async fn queue_append_while_playing_does_not_wait_for_host() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn prepared_deck_preserves_play_pause_order() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let deck = harness.control();
@@ -352,7 +352,7 @@ async fn prepared_deck_preserves_play_pause_order() {
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn failed_deck_preparation_releases_host_membership() {
     let region = pools();
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");

@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(key.rel_path(), Some(path));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn explicit_root_is_applied() {
         let dir = tempdir().expect("temp dir");
         let store = FfiAssetStore::new(
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(store.handle().root_dir(), dir.path());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn platform_default_root_is_preserved() {
         let store = FfiAssetStore::for_test();
         let StorageBackend::Disk { root } = StorageBackend::default() else {
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(store.handle().root_dir(), root);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn shared_cache_capacity_is_installed() {
         let store = FfiAssetStore::build_with_backend(
             StorageBackend::Memory,
@@ -210,7 +210,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn store_snapshots_registry_and_retains_foreign_layout() {
         let registry = FfiAssetLayoutRegistry::new();
         let (first, lifetime) = layout("first");
@@ -235,7 +235,7 @@ mod tests {
         assert!(lifetime.upgrade().is_none());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn targets_are_registered_independently() {
         let registry = FfiAssetLayoutRegistry::new();
         let (file, _) = layout("file");
@@ -248,7 +248,7 @@ mod tests {
         assert_layout::<kithara::hls::Hls<FfiPools>>(&store, "hls-root", "hls/resource.bin");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn repeated_registration_replaces_target_layout() {
         let registry = FfiAssetLayoutRegistry::new();
         let (first, _) = layout("first");
@@ -264,7 +264,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn omitted_layout_uses_default_layout() {
         struct TestProtocol;
 
@@ -275,7 +275,7 @@ mod tests {
         assert_layout::<TestProtocol>(&store, &root, "track/track.mp3");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn query_identity_rules_route_through_the_native_registry() {
         let registry = FfiAssetLayoutRegistry::new();
         let layout = query_identity_layout(vec![FfiCacheIdentityRule {
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(hls_first_root, hls_renewed_root);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn dropping_store_cancels_its_subtree() {
         let store = Arc::new(FfiAssetStore::for_test());
         let cancel = store.cancel_token();

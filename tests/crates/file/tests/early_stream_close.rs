@@ -77,7 +77,7 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver<TestEvent>, within: D
 /// (Range GET from the early-close point) so every byte the seek targets
 /// lands in the partial cache. The seek must succeed and read the correct
 /// bytes at 700KB — proof the on-demand resume path works.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug")
 )]
@@ -227,7 +227,7 @@ async fn file_stream_closes_early_seek_still_works() {
 ///
 /// Phase 1: download 512KB of 1MB, drop stream.
 /// Phase 2: reopen same URL with same cache dir, seek to 700KB → on-demand Range.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug")
 )]

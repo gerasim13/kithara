@@ -20,12 +20,12 @@ fn test_config() -> TestDecoderConfig {
     TestDecoderConfig::builder().pools(pools()).build()
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn wav_media_info() -> MediaInfo {
     MediaInfo::builder().container(ContainerFormat::Wav).build()
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn mp3_media_info() -> MediaInfo {
     MediaInfo::builder()
         .codec(AudioCodec::Mp3)
@@ -33,7 +33,7 @@ fn mp3_media_info() -> MediaInfo {
         .build()
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
 fn decode_with_probe(
@@ -58,7 +58,7 @@ fn decode_with_probe(
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
 fn decode_complete(
@@ -84,7 +84,7 @@ fn decode_complete(
     assert!(chunk_count > 0, "Should have at least one chunk");
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::wav(true)]
 #[case::mp3(false)]
 fn from_media_info(
@@ -130,7 +130,7 @@ fn assert_spec(spec: &AudioSpec, ext: &str) {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::wav("wav")]
 #[case::mp3("mp3")]
 fn spec_properties(#[case] ext: &str, tone_wav: &'static [u8], tone_mp3: &'static [u8]) {
@@ -141,7 +141,7 @@ fn spec_properties(#[case] ext: &str, tone_wav: &'static [u8], tone_mp3: &'stati
     assert_spec(&decoder.spec(), ext);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::invalid(vec![0u8; 100])]
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
@@ -150,7 +150,7 @@ fn invalid_data_fails(#[case] data: Vec<u8>) {
     assert!(result.is_err());
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn truncated_data_handles_gracefully(tone_wav: &'static [u8]) {
     let truncated: Vec<u8> = tone_wav.iter().take(1000).copied().collect();
     let reader = Cursor::new(truncated);
@@ -162,7 +162,7 @@ fn truncated_data_handles_gracefully(tone_wav: &'static [u8]) {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn chunk_has_valid_samples(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 
@@ -192,7 +192,7 @@ fn chunk_has_valid_samples(tone_wav: &'static [u8]) {
     );
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn multiple_chunks_consistent(tone_mp3: &'static [u8]) {
     let reader = Cursor::new(tone_mp3);
 
@@ -228,7 +228,7 @@ fn multiple_chunks_consistent(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn consecutive_chunks_differ(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 

@@ -223,12 +223,12 @@ impl PrivateTestServer {
 
 /// Release one delay gate after `delay_ms` of (virtual under flash) time.
 ///
-/// The `#[kithara_test_utils::kithara::flash]` guard makes the body's `sleep` engine-backed inside an
+/// The `#[kithara::flash]` guard makes the body's `sleep` engine-backed inside an
 /// ambient flash test — it awaits the segment GET's arrival, burns `delay_ms` of
 /// VIRTUAL time, then frees the parked body. Off the `flash` feature or under
 /// `flash(false)` (ambient off) the guard is inert and the `sleep` is a real
 /// `tokio` timer, matching the legacy real-delay behaviour.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn release_after_delay(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
     gate.wait_requested().await;
     trace!(
@@ -245,7 +245,7 @@ async fn release_after_delay(gate: Arc<DelayGate>, delay_ms: u64, variant: usize
 
 /// Spawn the releaser for one delay gate. The test's flash-ambient mode
 /// propagates into the spawned task via the platform async [`spawn`], and the
-/// `#[kithara_test_utils::kithara::flash]` guard on [`release_after_delay`] makes its `sleep`
+/// `#[kithara::flash]` guard on [`release_after_delay`] makes its `sleep`
 /// engine-backed under an ambient flash test (a real `tokio` timer otherwise).
 fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
     drop(spawn(release_after_delay(gate, delay_ms, variant, segment)));
@@ -401,7 +401,7 @@ mod tests {
         test_server_state::{Content, Delivery},
     };
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn two_helpers_share_one_base_url() {
         let a = TestServerHelper::new().await;
         let b = TestServerHelper::new().await;
@@ -412,7 +412,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn behavior_handle_reports_in_process_count() {
         let helper = TestServerHelper::new().await;
         let handle = helper.register_behavior(FixtureBehavior {
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(handle.request_count(), 1);
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn raw_hls_helper_arms_matching_delay_gate_on_creation() {
         const DELAY_MS: u64 = 250;
 

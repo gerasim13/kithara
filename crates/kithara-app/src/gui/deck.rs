@@ -181,7 +181,7 @@ mod tests {
 
     use super::{TEMPO_RANGE, TEMPO_STEP, TimestretchState};
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn speed_is_one_percent_per_tempo_point() {
         let speed = |tempo| TimestretchState { tempo }.speed();
 
@@ -190,7 +190,7 @@ mod tests {
         assert!((speed(-TEMPO_RANGE) - 0.5).abs() < 1e-6);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_whole_travel_is_within_reach_of_a_few_detents() {
         const REACH: f32 = 40.0;
 

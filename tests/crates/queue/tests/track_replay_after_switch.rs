@@ -161,7 +161,7 @@ async fn build_queue_with_tick_cf(
     (queue, downloader, store, tick_handle)
 }
 
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for_loader_done(
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
@@ -195,7 +195,7 @@ async fn wait_for_loader_done(
 /// subscribed *before* the triggering `select(...)` so the event is not
 /// missed. Bounded by a safety deadline so a stuck switch fails fast
 /// instead of hanging.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for_current_track(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
     expected: TrackId,
@@ -216,7 +216,7 @@ async fn wait_for_current_track(
         .unwrap_or_else(|_| panic!("timeout waiting for CurrentTrackChanged({expected:?})"));
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::plain(replay_plain().await)]
 #[case::aes128(replay_encrypted().await)]
 async fn replay_track_after_switch_does_not_hang_loader(
@@ -299,7 +299,7 @@ async fn replay_track_after_switch_does_not_hang_loader(
 /// is written by the audio thread from the track that is *actually
 /// sounding*, so it discriminates "the UI switched but the audio kept
 /// playing the old track".
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for_position(
     queue: &QueueControl<TestPools>,
     deadline: Duration,
@@ -324,7 +324,7 @@ async fn wait_for_position(
 /// switch back to A. The *audio* must switch: the engine position must
 /// restart from A's head instead of continuing along B. The crossfade
 /// case mirrors the GUI Prev button (`Transition::Crossfade`, cf=5 s).
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::cut(0.0, Transition::None)]
 #[case::crossfade(5.0, Transition::Crossfade)]
 async fn switch_back_to_mp3_restarts_audio_not_just_ui(
@@ -431,7 +431,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 }
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for(
     queue: &QueueControl<TestPools>,
     deadline: Duration,
@@ -450,7 +450,7 @@ async fn wait_for(
     }
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn mp3_hls_pair() -> (TestServerHelper, Url, Url) {
     let helper = TestServerHelper::new().await;
     let url_a = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
@@ -470,7 +470,7 @@ async fn mp3_hls_pair() -> (TestServerHelper, Url, Url) {
     (helper, url_a, url_b)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn replay_plain() -> (FixtureMode, TestServerHelper, Url, Url) {
     let helper = TestServerHelper::new().await;
     let url_a = build_hls(&helper, FixtureMode::Plain).await;
@@ -478,7 +478,7 @@ async fn replay_plain() -> (FixtureMode, TestServerHelper, Url, Url) {
     (FixtureMode::Plain, helper, url_a, url_b)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn replay_encrypted() -> (FixtureMode, TestServerHelper, Url, Url) {
     let helper = TestServerHelper::new().await;
     let url_a = build_hls(&helper, FixtureMode::Aes128).await;

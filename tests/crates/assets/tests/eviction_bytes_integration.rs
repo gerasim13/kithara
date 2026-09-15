@@ -32,12 +32,7 @@ fn asset_scope_with_root_and_limit(
         .expect("scope")
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(60, 60, "asset-a", "asset-b", "asset-c")]
 #[case(40, 80, "small-1", "small-2", "small-3")]
 #[case(90, 30, "large-1", "large-2", "large-3")]
@@ -139,7 +134,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     );
 }
 
-#[kithara_test_utils::kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(100, 150)]
 #[case(50, 120)]
 #[case(200, 50)]

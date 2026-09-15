@@ -28,7 +28,7 @@ use url::Url;
 
 use crate::bufpool_ext::pools;
 
-#[kithara_test_utils::kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {

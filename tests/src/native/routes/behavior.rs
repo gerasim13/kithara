@@ -157,7 +157,7 @@ mod tests {
     use super::*;
     use crate::{http_server::TestHttpServer, kithara, test_server_state::*};
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn static_bytes_range_serves_partial_and_counts() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(state.behavior_hits(&token), Some(2));
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn html_error_behavior_serves_html_and_counts() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(state.behavior_hits(&token), Some(1));
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn early_close_advertises_full_length_and_range_still_works() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(part.bytes().await.unwrap().len(), 100);
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn throttle_sends_full_length_and_complete_body() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(resp.bytes().await.unwrap().len(), 50);
     }
 
-    #[kithara_test_utils::kithara::test(tokio)]
+    #[kithara::test(tokio)]
     async fn nested_child_path_dispatches_to_same_behavior() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {

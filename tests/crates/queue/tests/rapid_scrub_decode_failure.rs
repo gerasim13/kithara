@@ -55,7 +55,7 @@ const TRACK_DURATION_S: f64 = SEGMENT_COUNT_U32 as f64 * SEGMENT_DURATION_S;
 const LOAD_BUDGET: Duration = Duration::from_secs(30);
 const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
@@ -104,7 +104,7 @@ enum ScrubOutcome {
 /// Drain `TestEvent::Player` until either the scrub target is reached
 /// (root recovery), `ItemDidFail` fires for the scrubbed src (the
 /// bug), or `budget` elapses.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn observe_scrub_outcome(
     queue: &QueueControl<TestPools>,
     rx: &mut EventReceiver<TestEvent>,
@@ -156,7 +156,7 @@ async fn observe_scrub_outcome(
 /// "play between scrubs so recovery actually runs and real PCM is
 /// rendered". `budget` is a safety deadline that bounds a hang, not a
 /// pacing wait — the function returns the moment progress is observed.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn wait_for_playback_progress(
     rx: &mut EventReceiver<TestEvent>,
     baseline_secs: f64,
@@ -274,7 +274,7 @@ impl Harness {
     /// a stale `decoder.seek` partially read an atom header, the
     /// new epoch arrived mid-atom, and `next_chunk` then saw the
     /// torn cursor as "isomp4: no atom pending read".
-    #[kithara_test_utils::kithara::flash(true)]
+    #[kithara::flash(true)]
     async fn drag(&mut self, final_target: f64, drag_duration: Duration, steps: usize, tag: &str) {
         let start_pos = self.queue.position_seconds().unwrap_or(0.0);
         let steps_u32 = u32::try_from(steps).unwrap_or(u32::MAX);
@@ -350,7 +350,7 @@ fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
 /// `PLAY_BETWEEN_SCRUBS` as a safety deadline — so any post-first-seek
 /// recovery actually runs. Each case asserts no
 /// `PlayerEvent::ItemDidFail` after the final scrub.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::single_mid(0.40, None)]
 #[case::near_end(0.95, None)]
 #[case::fwd_then_back(0.80, Some(0.20))]
@@ -409,7 +409,7 @@ async fn seek_into_cold_range_does_not_fail(
 /// mid-atom from one of the racing earlier seeks — the exact
 /// torn-cursor shape three prod tracks crashed on in `app.log
 /// @ 11:50`.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::drag_mid(0.40)]
 #[case::drag_end(0.95)]
 async fn seek_drag_into_cold_range_does_not_fail(
@@ -440,7 +440,7 @@ async fn seek_drag_into_cold_range_does_not_fail(
     assert_not_failed(outcome, final_target, "drag");
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn scrub_source() -> (TestServerHelper, String) {
     // AES-128 key + IV matching `packaged_encrypted_builder` in
     // `tests/src/hls_server.rs` — every kithara fixture uses these

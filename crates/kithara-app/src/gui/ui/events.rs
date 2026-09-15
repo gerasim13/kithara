@@ -338,7 +338,7 @@ mod tests {
         cache.deck_mut(0).and_then(|deck| deck.view.zoom).unwrap()
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_zoom_buttons_step_the_wave_window_and_stop_at_its_bounds() {
         const PRESSES: usize = 40;
 
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(press_zoom(&mut cache, "zoom-out"), ceiling);
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_layouts_group_applies_the_deck_layout_its_row_names() {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.are_layouts_open());
@@ -389,7 +389,7 @@ mod tests {
         assert!(!cache.menu.are_layouts_open());
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_module_cell_switches_its_own_pane_and_the_group_opens_on_its_head() {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.are_modules_open());
@@ -406,7 +406,7 @@ mod tests {
         assert!(cache.modules.is_on("ov"));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_menu_asks_the_host_for_full_screen_and_for_the_air() {
         let mut cache = ViewCache::default();
 
@@ -420,7 +420,7 @@ mod tests {
         ));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn narrowing_the_layout_drops_a_hover_it_stops_laying_out() {
         let mut cache = ViewCache::default();
         cache.set_hover_deck(1, true);
@@ -438,7 +438,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn widening_the_layout_keeps_a_hover_it_lays_out() {
         let mut cache = ViewCache::default();
         cache.set_hover_deck(0, true);
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(cache.take_drop(), Some((3, 0)));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
         let mut cache = ViewCache::default();
         cache.set_hover_deck(1, true);
@@ -485,7 +485,7 @@ mod tests {
             )
         }
 
-        #[kithara_test_utils::kithara::test(native, flash(false))]
+        #[kithara::test(native, flash(false))]
         fn deck_and_bar_controls_translate_to_their_owned_messages() {
             let mut state = test_fixture::state();
             state.decks.get_mut(DeckId(0)).unwrap().ui.duration = 120.0;
@@ -539,7 +539,7 @@ mod tests {
             assert!(send(&mut state, "unknown/play", ControlAction::Activate).is_none());
         }
 
-        #[kithara_test_utils::kithara::test(native, flash(false))]
+        #[kithara::test(native, flash(false))]
         fn stream_controls_own_the_quality_menu_and_selected_rung() {
             let mut state = test_fixture::state();
             state.decks.get_mut(DeckId(0)).unwrap().ui.abr_variants = vec![AbrVariant {
@@ -577,7 +577,7 @@ mod tests {
             );
         }
 
-        #[kithara_test_utils::kithara::test(native, flash(false))]
+        #[kithara::test(native, flash(false))]
         fn mixer_controls_translate_levels_eq_and_stage_window() {
             let mut state = test_fixture::state();
 
@@ -649,7 +649,7 @@ mod tests {
             assert!(!state.ui.cache.deck_mut(0).unwrap().view.eq_menu_open);
         }
 
-        #[kithara_test_utils::kithara::test(native, flash(false))]
+        #[kithara::test(native, flash(false))]
         fn library_and_host_events_update_view_state_and_keep_row_identity() {
             let mut state = test_fixture::state();
 

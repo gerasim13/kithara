@@ -412,7 +412,7 @@ async fn prepare_player(
 /// ring that mismatch is audible: a loaded host drains the ring and the feeder
 /// hands out zeros, so the length of the silence is a property of the machine
 /// rather than of the pipeline under test.
-#[kithara_test_utils::kithara::flash(true)]
+#[kithara::flash(true)]
 async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> Vec<f32> {
     let block = player.render(frames).await;
     sleep(Duration::from_secs_f64(

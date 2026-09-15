@@ -34,7 +34,7 @@ pub trait ItemLoadCallback: Send + Sync {
 /// [`SALT_HEADER`] — implementations that derive a per-session cipher
 /// from the salt should re-build it on every call. Implementations that
 /// hold a pre-built cipher (legacy behaviour) can ignore the argument.
-#[kithara_test_macros::mock(api = FfiKeyProcessorMock)]
+#[kithara::mock(api = FfiKeyProcessorMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiKeyProcessor: Send + Sync {
     fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
@@ -55,7 +55,7 @@ mod tests {
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn observer_traits_are_send_sync() {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();

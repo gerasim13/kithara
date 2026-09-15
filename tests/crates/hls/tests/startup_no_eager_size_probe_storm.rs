@@ -67,7 +67,7 @@ fn variant_size_probe_count(helper: &TestServerHelper, token: &str, variant: usi
 /// Startup must not issue eager size probes for either file-like WAV or
 /// segment-aware fMP4. Exact sizes are resolved only when a seek/read path
 /// actually needs them.
-#[kithara_test_utils::kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
 #[case::wav_file_like(StartupFixture::WavFileLike, wav_startup().await)]
 #[case::flac_fmp4(StartupFixture::FlacFmp4, flac_startup().await)]
 #[cfg(not(target_arch = "wasm32"))]
@@ -203,12 +203,12 @@ async fn startup(fixture: StartupFixture) -> (TestServerHelper, CreatedHls) {
     (helper, created)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn wav_startup() -> (TestServerHelper, CreatedHls) {
     startup(StartupFixture::WavFileLike).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn flac_startup() -> (TestServerHelper, CreatedHls) {
     startup(StartupFixture::FlacFmp4).await
 }

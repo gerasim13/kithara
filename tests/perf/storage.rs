@@ -54,7 +54,7 @@ enum PerfScenario {
     Writes,
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case("storage_sequential_read", PerfScenario::SequentialReads)]
 #[case("storage_random_read", PerfScenario::RandomReads)]
 #[case("storage_write", PerfScenario::Writes)]

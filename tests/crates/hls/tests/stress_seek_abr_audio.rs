@@ -132,7 +132,7 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) 
     }
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn wav_abr(
     hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
@@ -176,7 +176,7 @@ async fn wav_abr(
     )
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn flac_abr() -> (Url, SizeProbeCounter) {
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
@@ -223,7 +223,7 @@ async fn flac_abr() -> (Url, SizeProbeCounter) {
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
 /// 3. Verify the switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     serial,

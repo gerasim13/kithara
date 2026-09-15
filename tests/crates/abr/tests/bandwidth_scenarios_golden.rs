@@ -32,7 +32,7 @@ fn flat(bps: u64, n: usize) -> Vec<u64> {
     (0..n).map(|_| bps).collect()
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::flat_low_bandwidth_holds_bottom_variant(flat(150_000, 20), 0)]
 #[case::flat_high_bandwidth_reaches_top_variant(flat(20_000_000, 20), 2)]
 #[case::drop_after_peak_down_switches(

@@ -160,7 +160,7 @@ async fn wait_until_loading(
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn hung_loads_must_not_starve_user_selected_track(
     #[future(awt)] lane_sources: (TestServerHelper, Vec<Url>, Url),
 ) {
@@ -243,7 +243,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
     queue.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn lane_sources() -> (TestServerHelper, Vec<Url>, Url) {
     let helper = TestServerHelper::new().await;
     let hung_urls: Vec<Url> = (0..Consts::HUNG_TRACKS)

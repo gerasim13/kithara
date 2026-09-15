@@ -100,7 +100,7 @@ fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> Path
         .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"))
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -135,7 +135,7 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     multi_thread,
@@ -248,32 +248,32 @@ async fn record_sync_listening_wavs(
     );
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_synthetic() -> PreparedSources {
     prepared_sources(Provider::Synthetic).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_sweep() -> PreparedSources {
     prepared_sources(Provider::Sweep).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_ambient_trip_hop_provider() -> PreparedSources {
     prepared_sources(AMBIENT_TRIP_HOP_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_downtempo_house_provider() -> PreparedSources {
     prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_techno_breakbeat_provider() -> PreparedSources {
     prepared_sources(TECHNO_BREAKBEAT_PROVIDER).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn source_cross_style_provider() -> PreparedSources {
     prepared_sources(CROSS_STYLE_PROVIDER).await
 }

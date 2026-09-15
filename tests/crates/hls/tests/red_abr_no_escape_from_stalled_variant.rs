@@ -73,7 +73,7 @@ impl Consts {
     const DRAIN_BUDGET: Duration = Duration::from_secs(10);
 }
 
-#[kithara_test_utils::kithara::test(tokio, native, serial, timeout(Duration::from_secs(40)))]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(40)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -159,7 +159,7 @@ async fn abr_escapes_stalled_initial_variant(
     );
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn stalled_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()

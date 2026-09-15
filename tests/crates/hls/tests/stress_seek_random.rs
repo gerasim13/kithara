@@ -126,7 +126,7 @@ fn read_final_tail(
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches the fixture data
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     serial,

@@ -95,12 +95,7 @@ impl Peer for ImmortalPeer {
 /// After dropping the `PeerHandle`, the registered `Arc<dyn Peer>`
 /// should eventually be released by the Downloader. If it isn't, the
 /// strong count never drops to 1.
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(3)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(3))]
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancelToken::never();
@@ -151,12 +146,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// be released. This test creates many streams against a single
 /// shared Downloader and asserts that the OS thread count does not
 /// grow proportionally.
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)), hang_timeout_secs(10))]
 async fn red_hls_source_drop_leaks_peer(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,

@@ -403,7 +403,7 @@ mod tests {
         waveform::TrackAnalysis,
     };
 
-    #[kithara_test_utils::kithara::test(native, tokio)]
+    #[kithara::test(native, tokio)]
     async fn a_revision_offered_to_an_entry_redraws_the_deck_waveform() {
         let cancel = CancelToken::root();
         let (host, queue) = fixtures::queue_off().await;
@@ -455,7 +455,7 @@ mod tests {
             .build()
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_deck_names_the_run_of_buckets_it_just_wrote() {
         let mut cache = DeckCache::default();
         let quiet = revision(1, wave_of(62));
@@ -473,7 +473,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_deck_cache_follows_the_revision_not_the_bucket_address() {
         let mut cache = DeckCache::default();
         let wave = wave_of(62);
@@ -488,7 +488,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn dropping_the_track_names_the_empty_run() {
         let mut cache = DeckCache::default();
         cache.refresh_wave(Some(&revision(1, wave_of(63))));
@@ -515,7 +515,7 @@ mod tests {
         ]
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn the_cell_marks_the_rung_the_ladder_chose_and_names_the_one_the_user_pinned() {
         let mut ui = UiState::empty();
         ui.abr_variants = ladder();
@@ -529,14 +529,14 @@ mod tests {
         assert_eq!(format_quality(&ui), "128k");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_stream_with_no_rung_yet_still_reports_its_mode() {
         let ui = UiState::empty();
 
         assert_eq!(format_quality(&ui), "AUTO");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_drop_ends_the_drag_and_keeps_the_hover() {
         let mut cache = ViewCache::default();
         cache.set_hover_deck(1, true);
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(cache.take_drop(), Some((7, 1)));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_drop_outside_every_deck_lands_nowhere() {
         let mut cache = ViewCache::default();
         cache.set_hover_deck(0, true);
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(cache.drag, None, "a drop always ends the drag");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_drop_focuses_the_deck_it_landed_on() {
         let mut cache = ViewCache::default();
         assert_eq!(cache.focus_deck(), 0);
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(cache.focus_deck(), 1, "a drop on nothing focuses nothing");
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn a_layout_answers_to_the_deck_count_the_menu_names() {
         for layout in [DeckLayout::Single, DeckLayout::Dual] {
             assert_eq!(DeckLayout::from_decks(layout.decks()), Some(layout));

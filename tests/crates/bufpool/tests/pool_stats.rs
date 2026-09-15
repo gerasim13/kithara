@@ -1,7 +1,7 @@
 use kithara::bufpool::{PoolConfig, PoolError};
 use kithara_test_utils::bufpool::{pools, pools_with};
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn returned_capacity_is_reused() {
     let pools = pools();
     let buffer = pools
@@ -15,7 +15,7 @@ fn returned_capacity_is_reused() {
     assert_eq!(reused.as_ptr(), ptr);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn configured_initial_payload_is_accounted() {
     let pools = pools_with(
         1024 * 1024,
@@ -30,7 +30,7 @@ fn configured_initial_payload_is_accounted() {
     assert_eq!(pools.stats().allocated_bytes, 8 * 4_096 * 4);
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn overall_budget_rejection_is_reported() {
     let pools = pools_with(
         1_024,
@@ -44,7 +44,7 @@ fn overall_budget_rejection_is_reported() {
     assert!(matches!(error, PoolError::OverallBudgetExceeded { .. }));
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn shard_saturation_drops_excess_returns() {
     let pools = pools_with(
         1024 * 1024,

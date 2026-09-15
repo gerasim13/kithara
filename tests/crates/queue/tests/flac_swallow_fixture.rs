@@ -116,7 +116,7 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 /// deadline. Detector: the `committed_ns` `write_playhead` USDT probe emitted by
 /// `PlayheadWrite::advance` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
-#[kithara_test_utils::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -189,7 +189,7 @@ async fn flac_swallow_fixture(
     player.close().await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn flac_source() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let created = helper

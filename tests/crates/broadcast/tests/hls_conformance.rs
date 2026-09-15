@@ -11,7 +11,7 @@ const AU_SLACK: f64 = 1.0;
 const SAMPLES_PER_AU: f64 = 1_024.0;
 const TIMESTAMP_SLACK: u64 = 1;
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn the_live_playlist_obeys_the_reload_rules(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     let listed = u64::try_from(WINDOW).expect("the window fits");
@@ -75,7 +75,7 @@ async fn the_live_playlist_obeys_the_reload_rules(origin_tone: Vec<f32>) {
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     let listed = u64::try_from(WINDOW).expect("the window fits");
@@ -117,7 +117,7 @@ async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise(origin_tone: V
     );
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn every_segment_is_a_packed_audio_segment(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin
@@ -182,7 +182,7 @@ async fn every_segment_is_a_packed_audio_segment(origin_tone: Vec<f32>) {
     }
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn a_stopped_playlist_is_frozen(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
@@ -200,7 +200,7 @@ async fn a_stopped_playlist_is_frozen(origin_tone: Vec<f32>) {
     assert_eq!(first, second, "a finished playlist never changes again");
 }
 
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 async fn the_master_playlist_declares_the_stream(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
 

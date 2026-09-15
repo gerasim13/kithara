@@ -101,7 +101,7 @@ fn measure_leading_silence(
     (idx, value, total)
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     serial,
@@ -147,7 +147,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
 /// Second probe: patch the LAME tag's `enc_delay` field (no re-encoding)
 /// and re-measure leading silence. Distinguishes "decoder reads tag and
 /// trims" from "decoder ignores tag, emits raw encoder priming".
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     serial,
@@ -237,17 +237,17 @@ async fn fetch_saw(asset: SignalAsset) -> (TestServerHelper, Vec<u8>) {
     (server, bytes)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn saw() -> (TestServerHelper, Vec<u8>) {
     fetch_saw(SignalAsset::MP3_SAW_2S).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn saw_320k() -> (TestServerHelper, Vec<u8>) {
     fetch_saw(SignalAsset::MP3_SAW_2S_320K).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn saw_64k() -> (TestServerHelper, Vec<u8>) {
     fetch_saw(SignalAsset::MP3_SAW_2S_64K).await
 }

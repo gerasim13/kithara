@@ -201,7 +201,7 @@ async fn mp3_track_ends_rather_than_fails(
 
 /// Without a crossfade the queue hands over on the render-block grid alone,
 /// which is the tightest a seam ever gets.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -215,7 +215,7 @@ async fn a_streamed_mp3_ends_its_track_without_a_crossfade(
     mp3_track_ends_rather_than_fails(NO_CROSSFADE_SECS, 0, &temp_dir, sources).await;
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
@@ -229,7 +229,7 @@ async fn a_streamed_mp3_ends_its_track_with_a_crossfade(
     mp3_track_ends_rather_than_fails(CROSSFADE_SECS, 1, &temp_dir, sources).await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn mp3_sources() -> (TestServerHelper, Vec<ResourceSrc>) {
     let server = TestServerHelper::new().await;
     let sources = (0..2).map(|_| track_src(&server)).collect();

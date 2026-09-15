@@ -55,7 +55,7 @@ fn read_to_eof_with_progress(stream: &mut Stream<Hls<TestPools>>) -> (Vec<u8>, i
 }
 
 /// Diagnostic version with detailed logging and safety limits
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     native,
     timeout(Duration::from_secs(15)),

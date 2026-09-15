@@ -9,7 +9,7 @@ use kithara_test_fixtures::{
     signal::Pcm,
 };
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn encode_packaged_aac_happy_path_emits_monotonic_access_units(encoder_saw_aac: Pcm) {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -73,7 +73,7 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units(encoder_saw_aac: 
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::he(AudioCodec::AacHe, 64_000, encoder_saw_he())]
 #[case::lc(AudioCodec::AacLc, 128_000, encoder_saw_aac())]
 fn encode_packaged_aac_reuses_injected_pools(

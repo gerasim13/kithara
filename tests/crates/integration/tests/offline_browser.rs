@@ -71,7 +71,7 @@ async fn render_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
     rendered
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,
@@ -104,7 +104,7 @@ async fn offline_render_carries_fixture_signal() {
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,

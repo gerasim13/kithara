@@ -29,7 +29,7 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 /// KITHARA_DRM_STAGE_AUTH_TOKEN=... \
 ///     cargo nextest run -E 'test(zvuk_stage_drm)' --run-ignored=only
 /// ```
-#[kithara_test_utils::kithara::test(tokio)]
+#[kithara::test(tokio)]
 #[ignore = "PARKED 2026-05-20: stage keyserver returns keys that don't decrypt their \
             segments (3/3 tracks tested); waiting on server-team. Re-enable when \
             stage DRM confirmed working — needs KITHARA_DRM_STAGE_* creds + VPN."]

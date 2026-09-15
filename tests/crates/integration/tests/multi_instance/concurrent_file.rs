@@ -93,7 +93,7 @@ async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + `audio_loop`),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     browser,
     serial,
@@ -110,7 +110,7 @@ async fn concurrent_file_instances(
     run_concurrent_file(instances, file_source).await;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn file_source() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE880_30S);

@@ -439,7 +439,7 @@ fn sine_omega() -> f32 {
         / SAMPLE_RATE.to_f32().expect("fixture sample rate fits f32")
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 #[case::positive_rising(0.4, 17)]
 #[case::negative_falling(-0.4, 42)]
 fn quality_switch_oracle_rejects_an_injected_single_sample_click(
@@ -469,7 +469,7 @@ fn quality_switch_oracle_rejects_an_injected_single_sample_click(
 }
 
 /// A clean codec handoff may legitimately follow either rendering at each frame.
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn the_two_baseline_oracle_accepts_a_clean_join(
     quality_control_a: Vec<f32>,
     quality_control_b: Vec<f32>,
@@ -488,7 +488,7 @@ fn the_two_baseline_oracle_accepts_a_clean_join(
 }
 
 /// Offering two baselines must not license a switch to resemble neither rendering.
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     quality_control_a: Vec<f32>,
     quality_control_b: Vec<f32>,
@@ -516,7 +516,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     );
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     multi_thread,
     native,

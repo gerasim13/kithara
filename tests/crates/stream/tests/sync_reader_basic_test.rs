@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read};
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn test_cursor_reads_all_binary_segments() {
     let mut data = Vec::new();
 

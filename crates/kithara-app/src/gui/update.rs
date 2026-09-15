@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(update(state, message).units(), 0);
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn window_edges_keep_their_native_direction() {
         let cases = [
             (WindowEdge::North, Direction::North),
@@ -320,7 +320,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn every_window_command_schedules_host_work() {
         let state = test_fixture::state();
         let commands = [
@@ -337,7 +337,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     async fn update_routes_messages_and_refreshes_their_state() {
         let state = OffThread::spawn("app-host", || Ok::<_, Infallible>(test_fixture::state()))
             .await
@@ -434,7 +434,7 @@ mod tests {
         state.close().await;
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn eq_mode_changes_every_deck_as_one_transaction() {
         let mut state = test_fixture::state();
         let initial = [
@@ -463,7 +463,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn invalid_eq_snapshot_keeps_the_shared_mode_unchanged() {
         let mut state = test_fixture::state();
         state

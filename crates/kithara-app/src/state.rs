@@ -692,7 +692,7 @@ mod tests {
         (state, requests, cancel)
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_observes_a_track_added_to_its_empty_queue() {
         let (host, queue) = queue_off().await;
         let (state, mut requests, cancel) = deck(&queue);
@@ -714,7 +714,7 @@ mod tests {
         host.close().await;
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_a_removed_track() {
         let (host, queue) = queue_off().await;
         let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
@@ -744,7 +744,7 @@ mod tests {
         host.close().await;
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio)]
+    #[kithara::test(native, tokio)]
     async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
         let (host, queue) = queue_off().await;
         let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
@@ -779,7 +779,7 @@ mod tests {
         host.close().await;
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
         let (host, queue) = queue_off().await;
         let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
@@ -802,7 +802,7 @@ mod tests {
         host.close().await;
     }
 
-    #[kithara_test_utils::kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     async fn a_lagged_deck_resyncs_from_its_queue() {
         let (host, queue) = queue_off().await;
         let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
@@ -841,7 +841,7 @@ mod tests {
         )
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_published_tempo_carries_the_confidence_its_grid_reports() {
         let detected = beat(vec![(0, Some(0.4)), (22_050, Some(0.8))]);
         let info = bpm_info_from_state(&detected, 44_100, 1.0).expect("a grid names a tempo");
@@ -854,7 +854,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_tempo_with_nothing_detected_publishes_no_confidence() {
         let guessed = beat(vec![(0, None), (22_050, None)]);
         let info = bpm_info_from_state(&guessed, 44_100, 1.0).expect("a grid names a tempo");
@@ -865,7 +865,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn frames_to_fractions_maps_and_clamps() {
         assert!(frames_to_fractions(&[], 100).is_empty(), "empty input");
         assert!(
@@ -889,14 +889,14 @@ mod tests {
         assert!(clamped[0] < clamped[1], "ascending preserved");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_fully_covered_track_has_no_unready_ranges() {
         let full = covered(&[(0, 1_000)], Some(1_000));
 
         assert!(unready_ranges(&full).is_empty());
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_partly_covered_track_names_the_holes_it_left() {
         let partial = covered(&[(0, 200), (400, 600), (800, 900)], Some(1_000));
 
@@ -912,7 +912,7 @@ mod tests {
         assert_eq!(ranges[2], [0.9, 1.0], "{ranges:?}");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_track_of_unknown_length_claims_nothing_unready() {
         let live = covered(&[(0, 200), (400, 600)], None);
 
@@ -922,7 +922,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn growing_coverage_only_shrinks_the_unready_set() {
         let revisions = [
             &[(0, 200)][..],
@@ -952,7 +952,7 @@ mod tests {
         assert!(ui.unready_ranges.is_empty(), "the last revision covers all");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn codec_label_maps_known_hls_codecs() {
         assert_eq!(codec_label("mp4a.40.2"), Some("AAC"));
         assert_eq!(codec_label("mp4a.40.5"), Some("AAC"));

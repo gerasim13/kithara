@@ -37,7 +37,7 @@ impl Consts {
     const SR: u32 = Shared::SAMPLE_RATE;
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
     const HLS_SEGMENT_COUNT: usize = 3;
     const HLS_SEGMENT_SIZE: usize = 200_000;
@@ -63,7 +63,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
 /// That the render must underrun rather than wait for the missing PCM is a
 /// claim about the audio thread and is pinned in `rt_metrics`, where such a
 /// wait is a hang instead of a slow block.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10),

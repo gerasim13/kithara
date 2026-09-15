@@ -52,7 +52,7 @@ impl Packager for Ready {
     }
 }
 
-#[kithara_test_utils::kithara::test]
+#[kithara::test]
 fn an_ended_stream_is_noticed_by_the_next_poll() {
     let mut broadcaster = Broadcaster::<Ready>::new(());
     let host = AppHost::new(HostConfig::builder().build()).expect("test host");

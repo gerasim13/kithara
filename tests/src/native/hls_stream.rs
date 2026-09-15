@@ -584,7 +584,7 @@ mod tests {
         kithara,
     };
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn builds_master_and_media_playlist() {
         let spec =
             parse_hls_spec_with(&encode_hls_spec(&HlsSpec::default()), |_| unreachable!()).unwrap();
@@ -602,7 +602,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn encrypts_segment_payload() {
         let spec = parse_hls_spec_with(
             &encode_hls_spec(&HlsSpec {
@@ -623,7 +623,7 @@ mod tests {
         assert_ne!(bytes, generate_segment(0, 0, 32));
     }
 
-    #[kithara_test_utils::kithara::test]
+    #[kithara::test]
     fn packaged_segments_can_exceed_requested_segment_count() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)
@@ -645,7 +645,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn packaged_delay_padding_can_extend_playlist_tail() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)

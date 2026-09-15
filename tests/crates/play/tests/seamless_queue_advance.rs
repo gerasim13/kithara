@@ -50,7 +50,7 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 /// eleven thousand extra frames while the second, already prefetched, kept its
 /// normal span - host starvation under load, not a queue-advance defect. The
 /// seam assertion below still pins the gapless property itself.
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -131,12 +131,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     #[future(awt)] crossfade_sources: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -510,7 +505,7 @@ async fn source_url(server: &TestServerHelper, signal: PackagedSignal, start_fra
     created.master_url()
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn gapless_sources() -> (TestServerHelper, [Url; 2]) {
     let server = TestServerHelper::new().await;
     let first = source_url(
@@ -533,7 +528,7 @@ async fn gapless_sources() -> (TestServerHelper, [Url; 2]) {
     (server, [first, second])
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn crossfade_sources() -> (TestServerHelper, [Url; 2]) {
     let server = TestServerHelper::new().await;
     let first = source_url(&server, PackagedSignal::Sine { freq_hz: 440.0 }, 0).await;

@@ -22,7 +22,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 fn response_source() -> PathBuf {
     signal_mp3_sine880_30s()
         .path()
@@ -510,7 +510,7 @@ async fn run_case(
     harness.close().await;
 }
 
-#[kithara_test_utils::kithara::test(
+#[kithara::test(
     tokio,
     multi_thread,
     serial,

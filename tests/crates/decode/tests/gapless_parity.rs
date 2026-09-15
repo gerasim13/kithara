@@ -23,12 +23,7 @@ use crate::gapless_common::{
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths(
     #[future(awt)] gapless_aac: (TestServerHelper, GaplessFixture),
 ) {
@@ -243,12 +238,7 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
         .to_vec()
 }
 
-#[kithara_test_utils::kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case::mp3(SignalAsset::MP3_SINE1K_48K_1S, 48_000, gapless_mp3().await)]
 #[case::flac(SignalAsset::FLAC_SINE1K_48K_1S, 48_000, gapless_flac().await)]
 async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
@@ -291,7 +281,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
     );
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn gapless_aac() -> (TestServerHelper, GaplessFixture) {
     let server = TestServerHelper::new().await;
     let fixture =
@@ -315,12 +305,12 @@ async fn encoded_signal(asset: SignalAsset) -> (TestServerHelper, Vec<u8>) {
     (server, bytes)
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn gapless_mp3() -> (TestServerHelper, Vec<u8>) {
     encoded_signal(SignalAsset::MP3_SINE1K_48K_1S).await
 }
 
-#[kithara_test_utils::kithara::fixture]
+#[kithara::fixture]
 async fn gapless_flac() -> (TestServerHelper, Vec<u8>) {
     encoded_signal(SignalAsset::FLAC_SINE1K_48K_1S).await
 }
