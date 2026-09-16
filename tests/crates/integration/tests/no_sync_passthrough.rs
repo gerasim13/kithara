@@ -7,6 +7,7 @@ use kithara::{
     host::HostConfig,
     platform::{
         CancelToken,
+        flash::real_io,
         sync::{
             Arc,
             atomic::{AtomicU8, Ordering},
@@ -538,29 +539,37 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
         .expect("the queue fixture lives on disk")
         .to_string_lossy()
         .into_owned();
-    let id = harness
-        .run(&queue, move |q| q.append(source))
-        .await
-        .expect("append local queue fixture");
-    assert!(
-        time::timeout(Duration::from_secs(5), async {
-            while let Ok(envelope) = events.recv().await {
-                if matches!(
-                    envelope.event,
-                    QueueEvent::TrackStatusChanged {
-                        id: seen,
-                        status: TrackStatus::Loaded,
-                    } if seen == id
-                ) {
-                    return true;
+    let id = {
+        // WHY: The product loader reads this fixture off disk and the engine does not count that read, so a bare virtual deadline here is
+        // spent at the first quiescence rather than on the load: five seconds collapse into microseconds and the wait reports a load that
+        // is still in flight. The real-I/O bracket paces the clock to host time for this region alone, giving the load the real budget it
+        // had before the render loops went virtual, while those loops keep collapsing.
+        let _real_io = real_io();
+        let id = harness
+            .run(&queue, move |q| q.append(source))
+            .await
+            .expect("append local queue fixture");
+        assert!(
+            time::timeout(Duration::from_secs(5), async {
+                while let Ok(envelope) = events.recv().await {
+                    if matches!(
+                        envelope.event,
+                        QueueEvent::TrackStatusChanged {
+                            id: seen,
+                            status: TrackStatus::Loaded,
+                        } if seen == id
+                    ) {
+                        return true;
+                    }
                 }
-            }
-            false
-        })
-        .await
-        .unwrap_or(false),
-        "local queue fixture must load through the product loader"
-    );
+                false
+            })
+            .await
+            .unwrap_or(false),
+            "local queue fixture must load through the product loader"
+        );
+        id
+    };
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
