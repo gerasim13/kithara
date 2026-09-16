@@ -59,11 +59,35 @@ class PlayerViewModelBase: ObservableObject {
 
     /// Engine instance. Subclasses install event subscriptions during
     /// `bindEvents()` (invoked from `init`).
-    let player = KitharaPlayer(
-        config: KitharaPlayer.Config(
-            store: AssetStore(root: PlayerViewModelBase.defaultCacheDir)
+    let player = PlayerViewModelBase.makePlayer()
+
+    /// Build the demo player. Every DRM rule, the crossfade window and the
+    /// asset store are initial state, so they are declared here once rather
+    /// than mutated after construction.
+    static func makePlayer() -> KitharaPlayer {
+        let rules = bundledDrmProviders().map { provider -> KitharaPlayer.KeyRule in
+            let salt = provider.salt
+            let cipherKey = provider.cipherKey
+            let processor = ClosureKeyProcessor { encryptedKey, _ in
+                let cipher = Cipher(key: cipherKey + salt)
+                return cipher.decrypt(encryptedKey)
+            }
+            return KitharaPlayer.KeyRule(
+                processor: processor,
+                domains: provider.domains,
+                headers: provider.headers,
+                queryParams: nil,
+                salt: salt
+            )
+        }
+        return KitharaPlayer(
+            config: KitharaPlayer.Config(
+                keyRules: rules,
+                store: AssetStore(root: defaultCacheDir),
+                crossfadeDuration: defaultCrossfadeSeconds
+            )
         )
-    )
+    }
 
     /// Self-managed cache directory: `~/Library/Application Support/kithara`.
     ///
@@ -121,25 +145,7 @@ class PlayerViewModelBase: ObservableObject {
         isMuted = player.isMuted
         player.playingRate = selectedRate
         eqGains = Array(repeating: 0, count: player.eqBandCount)
-        player.crossfadeDuration = Self.defaultCrossfadeSeconds
-        crossfadeDuration = Self.defaultCrossfadeSeconds
-
-        for provider in bundledDrmProviders() {
-            let salt = provider.salt
-            let cipherKey = provider.cipherKey
-            let processor = ClosureKeyProcessor { encryptedKey, _ in
-                let cipher = Cipher(key: cipherKey + salt)
-                return cipher.decrypt(encryptedKey)
-            }
-            let rule = KitharaPlayer.KeyRule(
-                processor: processor,
-                domains: provider.domains,
-                headers: provider.headers,
-                queryParams: nil,
-                salt: salt
-            )
-            player.setupHlsAes(rule: rule)
-        }
+        crossfadeDuration = player.crossfadeDuration
 
         bindEvents()
 
@@ -151,7 +157,7 @@ class PlayerViewModelBase: ObservableObject {
     // MARK: - Subclass hooks
 
     /// Attach subscriptions to player-level event streams. Called
-    /// from `init` AFTER DRM setup. Combine subclass attaches a
+    /// from `init`. Combine subclass attaches a
     /// Combine `sink`; Rx subclass attaches RxSwift `subscribe`.
     func bindEvents() {
         fatalError("override in subclass")

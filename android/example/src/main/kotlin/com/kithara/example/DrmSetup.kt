@@ -6,9 +6,9 @@ import com.kithara.ffi.FfiCipher
 /**
  * Read the cipher key for zvuk DRM from the bundled `.env` asset.
  *
- * The salt is supplied per-call by the player (see
- * `KitharaPlayer.setupHlsAes`) — the demo no longer pre-generates a
- * seed; the closure builds the cipher on every decrypt from
+ * The salt is supplied per-call by the configured key rule (see
+ * `KitharaPlayer.KeyRule.wildcard`) — the demo no longer pre-generates a
+ * seed; the processor builds the cipher on every decrypt from
  * `cipherKey + salt`.
  */
 internal fun readZvukCipherKey(context: Context): String =
@@ -19,7 +19,7 @@ internal fun readZvukAuthToken(context: Context): String? =
 
 /**
  * Decrypt `encryptedKey` with a one-shot kithara cipher built from
- * `secret`. Used by the wildcard `setupHlsAes` decryptor closure.
+ * `secret`. Used by the demo's wildcard key-rule processor.
  */
 internal fun kitharaCipherDecrypt(secret: String, encryptedKey: ByteArray): ByteArray {
     val cipher = FfiCipher(secret)

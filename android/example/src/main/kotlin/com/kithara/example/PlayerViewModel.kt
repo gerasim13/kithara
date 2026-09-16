@@ -48,23 +48,24 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         // Only clears on app uninstall.
         val cacheDir = File(application.filesDir, "kithara-cache").apply { mkdirs() }.absolutePath
         val store = AssetStore(root = cacheDir)
-        player = KitharaPlayer(
-            config = KitharaPlayer.Config(store = store),
-        ).apply { playingRate = _uiState.value.selectedRate }
-        // Register a wildcard `"*"` HLS-AES decryptor — the closure
-        // derives the cipher per-call from the player-supplied salt
-        // (`X-Encrypted-Key` header, generated and attached by the
-        // player on every outgoing request).
+        // A wildcard `"*"` HLS-AES rule whose processor derives the cipher
+        // per-call from the rule salt (`X-Encrypted-Key` header, attached by
+        // the player on every outgoing request), the auth token, and the
+        // demo crossfade window are all initial state, so they are declared
+        // in the configuration rather than set after construction.
         val cipherKey = readZvukCipherKey(application)
-        player.setupHlsAes { encryptedKey, salt ->
-            kitharaCipherDecrypt(cipherKey + salt, encryptedKey)
-        }
-        readZvukAuthToken(application)?.let(player::setupNetwork)
-
-        // Force-align Android default with iOS (PlayerViewModel.swift:88) — the
-        // native player initializes to 1.0s but the demo expects 5.0s on a fresh
-        // install, so the Settings tab shows the same value across platforms.
-        player.crossfadeDuration = 5.0f
+        player = KitharaPlayer(
+            config = KitharaPlayer.Config(
+                store = store,
+                keyRules = listOf(
+                    KitharaPlayer.KeyRule.wildcard { encryptedKey, salt ->
+                        kitharaCipherDecrypt(cipherKey + salt, encryptedKey)
+                    }
+                ),
+                authToken = readZvukAuthToken(application).orEmpty(),
+                crossfadeDuration = DEMO_CROSSFADE_SECONDS,
+            ),
+        ).apply { playingRate = _uiState.value.selectedRate }
         _uiState.update {
             it.copy(
                 volume = player.volume,
@@ -82,6 +83,13 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     companion object {
+        /**
+         * Crossfade window the demo starts with, matching the iOS demo
+         * (`PlayerViewModelBase.defaultCrossfadeSeconds`) so the Settings tab
+         * shows the same value on a fresh install on both platforms.
+         */
+        private const val DEMO_CROSSFADE_SECONDS = 5.0f
+
         private val DEFAULT_TRACK_URLS = listOf(
             "https://stream.silvercomet.top/track.mp3",
             "https://stream.silvercomet.top/hls/master.m3u8",

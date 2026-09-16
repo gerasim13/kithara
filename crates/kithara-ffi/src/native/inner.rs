@@ -22,7 +22,6 @@ use kithara::{
     queue::{QueueConfig, QueueError, RepeatMode, Transition},
 };
 
-use super::salt;
 use crate::{
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
@@ -170,11 +169,10 @@ pub(crate) struct NativeInner {
     queue: FfiQueueControl,
     queue_owner: HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
-    /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
-    /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
-    /// insert (snapshot semantics: items already in the queue keep their
-    /// original key registry).
-    key_options: Mutex<KeyOptions>,
+    /// [`KeyOptions`] built once from [`FfiPlayerConfig::key_options`].
+    /// Key rules are initial state: there is no runtime mutator, so every
+    /// item inserted into this player sees the same registry.
+    key_options: KeyOptions,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     /// Bandwidth caps configured via `update_peak_bitrate`. Wifi value
     /// drives the ABR cap unless cellular is tighter; cellular is held
@@ -188,6 +186,8 @@ impl NativeInner {
             key_options,
             store,
             eq_band_count,
+            auth_token,
+            crossfade_duration,
         } = config;
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
@@ -220,19 +220,22 @@ impl NativeInner {
         );
         let (key_options, player_headers) = build_initial_key_state(key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
-        Self {
+        let inner = Self {
             downloader,
             store,
             queue_owner,
             queue,
             shutdown: cancel,
-            key_options: Mutex::new(key_options),
+            key_options,
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
-        }
+        };
+        inner.setup_network(auth_token);
+        inner.set_crossfade_duration(crossfade_duration);
+        inner
     }
 
     pub(crate) fn advance_to_next_item(&self) {
@@ -483,38 +486,6 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
-        let salt = salt::drm_lowercase_hex_salt();
-        let mut rule_headers = HashMap::new();
-        rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
-        let rule = FfiKeyRule {
-            processor,
-            headers: Some(rule_headers),
-            query_params: None,
-            domains: vec!["*".to_string()],
-            salt: Some(salt),
-        };
-        self.setup_hls_aes_with_rule(rule);
-    }
-
-    pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
-        if let Some(headers) = rule.headers.as_ref() {
-            for (k, v) in headers {
-                self.player_headers.insert(k.clone(), v.clone());
-            }
-        }
-        if let Some(salt) = rule.salt.as_ref() {
-            self.player_headers
-                .insert(SALT_HEADER.to_string(), salt.clone());
-        }
-
-        let processor_rule = build_processor_rule(rule);
-        let mut opts = self.key_options.lock();
-        let mut registry = opts.key_registry.take().unwrap_or_default();
-        registry.register(Arc::new(DomainKeyPolicy::new([processor_rule])));
-        *opts = KeyOptions::builder().key_registry(registry).build();
-    }
-
     pub(crate) fn setup_network(&self, auth_token: String) {
         if auth_token.is_empty() {
             self.player_headers.remove(AUTH_TOKEN_HEADER);
@@ -604,7 +575,7 @@ fn build_source_for_item(
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
         .store(inner.store.handle().clone())
-        .keys(inner.key_options.lock().clone())
+        .keys(inner.key_options.clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
     *item.bus.lock() = Some(scoped);
@@ -654,7 +625,7 @@ impl Drop for NativeInner {
 mod tests {
     use unimock::Unimock;
 
-    use super::*;
+    use super::{super::salt, *};
     use crate::observer::FfiKeyProcessor;
 
     struct TaggedProcessor(u8);
@@ -681,8 +652,7 @@ mod tests {
         let cancel = store.cancel_token();
         let config = |store| FfiPlayerConfig {
             store,
-            key_options: crate::types::FfiKeyOptions::default(),
-            eq_band_count: 10,
+            ..FfiPlayerConfig::for_test()
         };
         let first = NativeInner::new(config(Arc::clone(&store)));
         let second = NativeInner::new(config(Arc::clone(&store)));
@@ -739,14 +709,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn runtime_key_rules_append_in_registration_order() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
-        inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
-        inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
+    fn configured_key_rules_apply_in_declaration_order() {
+        let inner = NativeInner::new(FfiPlayerConfig {
+            key_options: crate::types::FfiKeyOptions {
+                rules: vec![
+                    tagged_rule(1, "first-salt", &["keys.example.com"]),
+                    tagged_rule(2, "second-salt", &["*"]),
+                ],
+            },
+            ..FfiPlayerConfig::for_test()
+        });
 
         let registry = inner
             .key_options
-            .lock()
             .key_registry
             .clone()
             .expect("registry populated");
@@ -791,11 +766,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
-        // Registration must not run the processor: an unstubbed `Unimock`
-        // panics if `setup_hls_aes` calls it.
-        inner.setup_hls_aes(Arc::new(Unimock::new(())));
+    fn configured_wildcard_rule_publishes_its_prod_salt_header() {
+        // Construction must not run the processor: an unstubbed `Unimock`
+        // panics if the player calls it.
+        let rule = FfiKeyRule {
+            processor: Arc::new(Unimock::new(())),
+            headers: None,
+            query_params: None,
+            domains: vec!["*".to_string()],
+            salt: Some(salt::drm_lowercase_hex_salt()),
+        };
+        let inner = NativeInner::new(FfiPlayerConfig {
+            key_options: crate::types::FfiKeyOptions { rules: vec![rule] },
+            ..FfiPlayerConfig::for_test()
+        });
 
         let salt = inner
             .player_headers
@@ -809,10 +793,40 @@ mod tests {
             "prod auto-salt must be lowercase hex, got {salt:?}"
         );
 
-        let key_options = inner.key_options.lock().clone();
         assert!(
-            key_options.key_registry.is_some(),
+            inner.key_options.key_registry.is_some(),
             "registry must hold the wildcard rule"
+        );
+    }
+
+    #[kithara::test]
+    fn configured_auth_token_lands_in_player_headers_at_construction() {
+        let inner = NativeInner::new(FfiPlayerConfig {
+            auth_token: "token-from-config".to_string(),
+            ..FfiPlayerConfig::for_test()
+        });
+
+        assert_eq!(
+            inner
+                .player_headers
+                .get(AUTH_TOKEN_HEADER)
+                .map(|header| header.value().clone())
+                .as_deref(),
+            Some("token-from-config")
+        );
+    }
+
+    #[kithara::test]
+    fn configured_crossfade_duration_applies_at_construction() {
+        let inner = NativeInner::new(FfiPlayerConfig {
+            crossfade_duration: 3.5,
+            ..FfiPlayerConfig::for_test()
+        });
+
+        assert!(
+            (inner.crossfade_duration() - 3.5).abs() < f32::EPSILON,
+            "configured crossfade must reach the engine, got {}",
+            inner.crossfade_duration()
         );
     }
 

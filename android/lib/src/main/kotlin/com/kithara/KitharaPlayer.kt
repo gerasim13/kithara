@@ -12,6 +12,8 @@ import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
+import com.kithara.ffi.defaultCrossfadeDuration
+import com.kithara.ffi.drmLowercaseHexSalt
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -47,7 +49,19 @@ class KitharaPlayer(config: Config = Config()) {
         val headers: Map<String, String>? = null,
         val queryParams: Map<String, String>? = null,
         val salt: String? = null,
-    )
+    ) {
+        companion object {
+            /**
+             * The common "one processor for every host" rule: a match-any
+             * domain pattern carrying a freshly generated lowercase-hex salt,
+             * mirrored into the player-wide `X-Encrypted-Key` header. A pure
+             * constructor — put the result into [Config.keyRules].
+             */
+            @JvmStatic
+            fun wildcard(processor: KeyProcessor): KeyRule =
+                KeyRule(processor = processor, domains = listOf("*"), salt = drmLowercaseHexSalt())
+        }
+    }
 
     /** Configuration for [KitharaPlayer] creation. */
     data class Config(
@@ -55,6 +69,16 @@ class KitharaPlayer(config: Config = Config()) {
         val keyRules: List<KeyRule> = emptyList(),
         /** Shared asset store used by every item created by this player. */
         val store: AssetStore = Kithara.defaultStore,
+        /**
+         * Auth token sent on every player HTTP request. Empty means no token;
+         * replace it later with [setupNetwork].
+         */
+        val authToken: String = "",
+        /**
+         * Crossfade window in seconds applied from construction. Replace it
+         * later through [crossfadeDuration].
+         */
+        val crossfadeDuration: Float = defaultCrossfadeDuration(),
     )
 
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
@@ -218,8 +242,8 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Configure the auth token sent on every player HTTP request. Pass
-     * an empty string to clear.
+     * Replace the auth token sent on every player HTTP request. Pass an
+     * empty string to clear. The initial value belongs in [Config.authToken].
      */
     fun setupNetwork(authToken: String) {
         inner.setupNetwork(authToken)
@@ -231,32 +255,6 @@ class KitharaPlayer(config: Config = Config()) {
      */
     fun updatePeakBitrate(wifi: Double, cellular: Double) {
         inner.updatePeakBitrate(wifi, cellular)
-    }
-
-    /**
-     * Register a runtime DRM key decryptor on every host (default
-     * `"*"` wildcard). The lambda receives the encrypted key bytes
-     * plus the player-generated salt that was attached to outgoing
-     * requests under `X-Encrypted-Key`. Returning `null` preserves
-     * the input ciphertext unchanged.
-     */
-    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
-        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
-    }
-
-    /**
-     * Register a runtime DRM key processor with explicit rule control.
-     */
-    fun setupHlsAes(rule: KeyRule) {
-        inner.setupHlsAesWithRule(
-            FfiKeyRule(
-                processor = KeyProcessorBridge(rule.processor),
-                headers = rule.headers,
-                queryParams = rule.queryParams,
-                domains = rule.domains,
-                salt = rule.salt,
-            )
-        )
     }
 
     /**
@@ -455,13 +453,6 @@ private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyPr
         processor.processKey(key, salt)
 }
 
-private class ClosureKeyProcessorBridge(
-    private val decrypt: (ByteArray, String) -> ByteArray?,
-) : FfiKeyProcessor {
-    override fun processKey(key: ByteArray, salt: String): ByteArray =
-        decrypt(key, salt) ?: key
-}
-
 internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     val ffiRules = keyRules.map { rule ->
         FfiKeyRule(
@@ -476,6 +467,8 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
+        authToken = authToken,
+        crossfadeDuration = crossfadeDuration,
     )
 }
 
