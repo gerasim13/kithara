@@ -435,7 +435,7 @@ mod tests {
     use kithara_events::EventReceiver;
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-    use kithara_stream::{PlayheadState, SeekState, WorkerWake};
+    use kithara_stream::{PlayheadState, SeekState, mock::NoopWorkerWake};
     use kithara_test_fixtures::unit_fixtures::trim_silence;
     use kithara_test_utils::kithara;
 
@@ -445,14 +445,6 @@ mod tests {
         audio::{Fetch, Outlet, ThreadWake, connect, ring::RingParts},
         test_pools::pools,
     };
-
-    struct TestWorkerWake;
-
-    impl WorkerWake for TestWorkerWake {
-        fn defer(&self) {}
-
-        fn wake(&self) {}
-    }
 
     struct AudioFixture {
         emit: Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
@@ -494,7 +486,7 @@ mod tests {
                     emit: Arc::clone(&emit),
                     runtime: AudioRuntime {
                         cancel: CancelScope::new(None).token(),
-                        wake: Arc::new(TestWorkerWake),
+                        wake: Arc::new(NoopWorkerWake),
                     },
                     session: Session {
                         playhead,

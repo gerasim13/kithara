@@ -12,7 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = ["symphonia", "resample-rubato", "client-reqwest", "tls-rustls"]
 usdt = ["kithara-test-utils/usdt"]
-mock = ["dep:unimock"]
+mock = ["dep:unimock", "kithara-stream/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-stream/client-reqwest", "kithara-abr/client-reqwest", "kithara-decode/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq", "kithara-abr/client-wreq", "kithara-decode/client-wreq"]

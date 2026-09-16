@@ -9,8 +9,9 @@ use super::{AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate};
 use crate::{
     AnalysisProgress, AnalyzerBuilder,
     analyzer::{Detector, Extent, Ingest, TrackAnalyzers},
-    beat::{BeatDetectError, BeatDetector, BeatMark, GridParams, RawBeats},
+    beat::GridParams,
     test_pools::{Pools, TestPools, pools, sample_buffer},
+    tests::fixtures::beat_detector,
 };
 
 const CHANNELS: u16 = 2;
@@ -18,21 +19,10 @@ const CHUNK_FRAMES: u64 = 128;
 const EXTENT: u64 = 4 * CHUNK_FRAMES;
 const SAMPLE_RATE: u32 = 64;
 
-struct FixtureDetector;
-
-impl BeatDetector for FixtureDetector {
-    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
-        Ok(RawBeats {
-            beats: vec![BeatMark::at(0.25)],
-            downbeats: vec![BeatMark::at(0.25)],
-        })
-    }
-}
-
 fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
     let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
         .with_waveform(8)
-        .with_beat_detector(Box::new(FixtureDetector), GridParams::default());
+        .with_beat_detector(beat_detector(), GridParams::default());
     let detector = builder
         .take_detector()
         .expect("fixture detector is configured");
