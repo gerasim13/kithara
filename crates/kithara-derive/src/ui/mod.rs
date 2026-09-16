@@ -1,12 +1,12 @@
-#[cfg(feature = "ui")]
+#[cfg(feature = "control")]
 pub(crate) mod control;
-#[cfg(feature = "ui")]
+#[cfg(feature = "node-control")]
 pub(crate) mod node;
-#[cfg(feature = "ui")]
+#[cfg(feature = "control-painter")]
 pub(crate) mod painter;
-#[cfg(feature = "ui")]
+#[cfg(feature = "retained")]
 pub(crate) mod retained;
 #[cfg(feature = "skin-walk")]
 pub(crate) mod skin;
-#[cfg(feature = "ui")]
+#[cfg(feature = "view-control")]
 pub(crate) mod view;

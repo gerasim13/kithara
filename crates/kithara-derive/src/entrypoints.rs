@@ -1,31 +1,35 @@
-#[cfg(feature = "ui")]
 macro_rules! ui_derives {
     () => {
         /// Implements the immediate UI host path shared by draw-only controls.
+        #[cfg(feature = "view-control")]
         #[proc_macro_derive(ViewControl)]
         pub fn view_control(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ui::view::expand(input)
         }
 
         /// Implements the document-owned size contract for a built-in UI control.
+        #[cfg(feature = "control")]
         #[proc_macro_derive(Control, attributes(control))]
         pub fn control(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ui::control::expand(input)
         }
 
         /// Implements a draw-only UI painter by forwarding structural arguments.
+        #[cfg(feature = "control-painter")]
         #[proc_macro_derive(ControlPainter, attributes(control_painter))]
         pub fn control_painter(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ui::painter::expand(input)
         }
 
         /// Implements retained-host updates through the existing structural setters.
+        #[cfg(feature = "retained")]
         #[proc_macro_derive(Retained, attributes(retained))]
         pub fn retained(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ui::retained::expand(input)
         }
 
         /// Implements the retained UI host path shared by painted controls.
+        #[cfg(feature = "node-control")]
         #[proc_macro_derive(NodeControl)]
         pub fn node_control(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ui::node::expand(input)

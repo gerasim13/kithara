@@ -28,7 +28,13 @@ pub fn patch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     config::expand(input)
 }
 
-#[cfg(feature = "ui")]
+#[cfg(any(
+    feature = "control",
+    feature = "control-painter",
+    feature = "node-control",
+    feature = "retained",
+    feature = "view-control"
+))]
 ui_derives!();
 
 /// Implements ordered traversal of frame and text-role fields in a skin structure.

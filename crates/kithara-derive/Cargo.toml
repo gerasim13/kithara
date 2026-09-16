@@ -16,16 +16,20 @@ proc-macro = true
 
 [features]
 built-default = []
+control = []
+control-painter = []
 default = []
 event = []
 enum-str = []
 mirror = []
+node-control = []
 patch = []
 phase = []
 ranged = []
+retained = []
 skin-walk = []
-ui = []
 variants = []
+view-control = []
 
 [dependencies]
 proc-macro2 = { workspace = true }
