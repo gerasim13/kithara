@@ -490,7 +490,12 @@ mod tests {
     #[kithara::test(native)]
     fn local_path_sources_are_keyable() {
         let store = memory_store();
-        let target = AnalysisTarget::for_config(&config(&store, "/tmp/song.mp3", None));
+        let song = std::env::temp_dir().join("song.mp3");
+        let target = AnalysisTarget::for_config(&config(
+            &store,
+            song.to_str().expect("utf-8 temp dir"),
+            None,
+        ));
         assert!(target.is_ok(), "local files must cache their analysis");
     }
 

@@ -124,10 +124,6 @@ impl<D: DriverIo> ResourceCore<D> {
             .map(|gap| gap.start..gap.end.min(upper))
     }
 
-    pub(super) fn path_inner(&self) -> Option<&Path> {
-        self.inner.driver.path()
-    }
-
     pub(super) fn reactivate_inner(&self) -> StorageResult<()> {
         if self.inner.cancel.is_cancelled() {
             return Err(crate::StorageError::Cancelled);
@@ -180,6 +176,16 @@ impl<D: DriverIo> ResourceCore<D> {
             ResourceStatus::Cancelled
         } else {
             ResourceStatus::Active
+        }
+    }
+
+    delegate::delegate! {
+        to self.inner.driver {
+            #[call(path)]
+            pub(super) fn path_inner(&self) -> Option<&Path>;
+            /// Drop the driver's handles on its path — see [`DriverIo::release_backing`].
+            #[call(release_backing)]
+            pub(super) fn release_backing_inner(&self) -> StorageResult<()>;
         }
     }
 }
