@@ -329,11 +329,7 @@ mod tests {
         let pools = crate::test_pools::pools();
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(
-            path,
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        )
+        PinsIndex::with_persist_at(path, crate::test_pools::byte_buffer(&pools))
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
@@ -354,11 +350,7 @@ mod tests {
         if !path.exists() {
             return HashSet::new();
         }
-        let idx = PinsIndex::with_persist_at(
-            path,
-            CancelToken::never(),
-            crate::test_pools::byte_buffer(&pools),
-        );
+        let idx = PinsIndex::with_persist_at(path, crate::test_pools::byte_buffer(&pools));
         idx.snapshot()
     }
 

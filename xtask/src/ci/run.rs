@@ -400,7 +400,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
+    let outcome = execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
         Lane::ReleaseXcframework => {
             super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
         }
@@ -423,7 +423,9 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &swiftpm_cache,
             &ext.ci.lanes,
         ),
-    })
+    });
+    let settled = environment.settle_lane_build(outcome.is_ok());
+    outcome.and(settled)
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
@@ -653,6 +655,29 @@ mod tests {
         assert!(ci.contains("uses: ./.github/workflows/android.yml"));
         assert!(gitlab.contains("- just ci run android-test"));
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
+    }
+
+    /// A called workflow inherits no environment from its caller, so the three
+    /// that run a lane outside `lane.yml` must each name the build directory
+    /// themselves. Left unset, a lane builds in the checkout - which
+    /// `actions/checkout` wipes every run - and recompiles the workspace from
+    /// source, which is most of what these lanes cost.
+    #[test]
+    fn a_workflow_that_runs_a_lane_names_the_build_directory_it_keeps() {
+        for (workflow, target) in [
+            (
+                "android.yml",
+                "CARGO_TARGET_DIR: /cache/lanes/lane-android-test",
+            ),
+            ("ui.yml", "CARGO_TARGET_DIR: /cache/lanes/lane-deep-ui"),
+            ("windows.yml", r"CARGO_TARGET_DIR: C:\kithara-ci\target"),
+        ] {
+            let text = fs::read_to_string(repo().join(".github/workflows").join(workflow)).unwrap();
+            assert!(
+                text.contains(target),
+                "{workflow} builds in the checkout, which every run wipes"
+            );
+        }
     }
 
     #[test]
@@ -1067,7 +1092,6 @@ mod tests {
                 ".ci-artifacts/junit/apple-test-flash-off.xml",
                 ".ci-artifacts/junit/apple-test.xml",
                 ".ci-artifacts/junit/linux-test-simulated-clock.xml",
-                "target/nextest/ci/junit.xml",
                 "target/nextest/ci/junit.xml",
                 "target/xcresult/ios-test.junit.xml",
                 "target/xcresult/swift-test.junit.xml",

@@ -152,7 +152,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroUsize, path::Path};
+    use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
     use kithara_audio::{
@@ -219,13 +219,21 @@ mod tests {
     }
 
     #[kithara::test(native)]
-    #[case("/tmp/song.mp3", "/tmp/song.mp3")]
-    #[case("file:///tmp/song.mp3", "/tmp/song.mp3")]
-    fn config_source_parsing_file_path(#[case] input: &str, #[case] expected: &str) {
-        let config = test_config(input).unwrap();
+    #[case(false)]
+    #[case(true)]
+    fn config_source_parsing_file_path(#[case] as_file_url: bool) {
+        let expected = std::env::temp_dir().join("song.mp3");
+        let input = if as_file_url {
+            Url::from_file_path(&expected)
+                .expect("temp dir is absolute")
+                .to_string()
+        } else {
+            expected.to_str().expect("utf-8 temp dir").to_string()
+        };
+        let config = test_config(&input).unwrap();
         assert!(matches!(
             &config.src,
-            ResourceSrc::Path(path) if path == Path::new(expected)
+            ResourceSrc::Path(path) if *path == expected
         ));
     }
 

@@ -209,6 +209,13 @@ impl<D: DriverIo> Resource<Active, D> {
             /// Mark failed without consuming, for a decorator that owns the writer.
             #[call(fail_inner)]
             pub(crate) fn fail_in_place(&self, reason: String);
+            /// Drop the driver's handles on its path, for a decorator that is
+            /// about to replace the file underneath it.
+            ///
+            /// # Errors
+            /// Returns error if pending bytes cannot be flushed first.
+            #[call(release_backing_inner)]
+            pub(crate) fn release_backing_in_place(&self) -> StorageResult<()>;
             /// Reactivate without consuming, for a decorator that rewrites in place.
             ///
             /// # Errors

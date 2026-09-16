@@ -371,7 +371,7 @@ humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
-iced = { version = "0.14", default-features = false, features = ["tokio", "svg", "canvas", "image", "advanced", "wgpu", "tiny-skia"] }
+iced = { version = "0.14", default-features = false, features = ["tokio", "svg", "canvas", "image", "advanced", "wgpu", "tiny-skia", "x11", "wayland"] }
 iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"
@@ -495,7 +495,7 @@ wasm-bindgen = "=0.2.120"
 wasm-bindgen-futures = "=0.4.70"
 wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
-web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
+web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageChannel", "MessageEvent", "MessagePort", "Window"] }
 web-time = "1.1"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
 # already builds this exact version, so it costs no extra compilation.

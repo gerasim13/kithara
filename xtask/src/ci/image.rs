@@ -140,6 +140,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("AST_GREP_VERSION", "ast-grep"),
         ("CARGO_CRAP_VERSION", "cargo-crap"),
         ("CARGO_DENY_VERSION", "cargo-deny"),
+        ("CARGO_FUZZ_VERSION", "cargo-fuzz"),
         ("CARGO_GEIGER_VERSION", "cargo-geiger"),
         ("CARGO_HACK_VERSION", "cargo-hack"),
         ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),

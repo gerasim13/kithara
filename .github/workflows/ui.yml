@@ -9,6 +9,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # As in the shared lane workflow: a called workflow inherits no environment,
+  # so this one names the fleet's build root and caches itself. Without them the
+  # lane builds in the checkout, which `actions/checkout` wipes on every run.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  CARGO_TARGET_DIR: /cache/lanes/lane-deep-ui
 
 concurrency:
   group: ui-${{ github.ref }}
