@@ -93,6 +93,7 @@ fn source_expression(expression: &Expr) -> bool {
         Expr::Call(call) => {
             matches!(&*call.func, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Some"))
                 && call.args.len() == 1
+                && matches!(call.args.first(), Some(Expr::Path(_)))
         }
         Expr::Path(path) => path.path.is_ident("None"),
         Expr::Paren(paren) => source_expression(&paren.expr),
@@ -118,6 +119,12 @@ mod tests {
     #[test]
     fn ignores_computed_source() {
         let source = "impl Error for Routed { fn source(&self) -> Option<&(dyn Error + 'static)> { self.lookup_source() } }";
+        assert!(check_source(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_source_that_unwraps_an_arc() {
+        let source = "impl Error for CleanupError { fn source(&self) -> Option<&(dyn Error + 'static)> { Some(self.source.as_ref()) } }";
         assert!(check_source(source).is_empty());
     }
 }
