@@ -3,20 +3,30 @@
 //! `lib.rs` holds only the `#[proc_macro_derive]` entry points Rust requires in
 //! a crate root and delegates to the module that owns each expansion.
 
+#[cfg(feature = "patch")]
+mod config;
+#[cfg(any(feature = "event", feature = "event-set"))]
 mod event;
-mod event_set;
-mod patch;
+#[cfg(feature = "ranged")]
 mod ranged;
 
+#[cfg(any(
+    feature = "event",
+    feature = "event-set",
+    feature = "patch",
+    feature = "ranged"
+))]
 use proc_macro::TokenStream;
+#[cfg(any(feature = "event", feature = "event-set"))]
 use syn::{DeriveInput, Error, parse_macro_input};
 
 /// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
 /// document may say about a configuration struct, and the `apply` that merges
 /// one onto the other.
+#[cfg(feature = "patch")]
 #[proc_macro_derive(Patch, attributes(patch))]
 pub fn patch(input: TokenStream) -> TokenStream {
-    patch::expand(input)
+    config::expand(input)
 }
 
 /// Declares a bounded numeric newtype.
@@ -37,12 +47,14 @@ pub fn patch(input: TokenStream) -> TokenStream {
 /// struct Tempo(f64);
 /// let tempo = Tempo::default();
 /// ```
+#[cfg(feature = "ranged")]
 #[proc_macro_derive(Ranged, attributes(ranged))]
 pub fn ranged(input: TokenStream) -> TokenStream {
     ranged::expand(input)
 }
 
 /// Implements the marker trait for a concrete event struct or enum.
+#[cfg(feature = "event")]
 #[proc_macro_derive(Event)]
 pub fn event(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -52,10 +64,11 @@ pub fn event(input: TokenStream) -> TokenStream {
 }
 
 /// Implements a consumer set of concrete event types.
+#[cfg(feature = "event-set")]
 #[proc_macro_derive(EventSet)]
 pub fn event_set(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    event_set::derive(&input)
+    event::derive_set(&input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }

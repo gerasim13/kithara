@@ -8,8 +8,18 @@ description = "kithara derive macros for configuration documents, bounded scalar
 keywords = ["audio", "config", "serde", "macros", "kithara"]
 categories = ["config", "development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 proc-macro = true
+
+[features]
+default = []
+event = []
+event-set = []
+patch = []
+ranged = []
 
 [dependencies]
 proc-macro2 = { workspace = true }
@@ -29,3 +39,7 @@ kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "ranged"
+required-features = ["ranged"]

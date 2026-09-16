@@ -13,7 +13,7 @@ categories = ["memory-management", "concurrency"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 

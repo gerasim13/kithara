@@ -26,7 +26,7 @@ tls-rustls = []
 tls-native = []
 
 [dependencies]
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true }
