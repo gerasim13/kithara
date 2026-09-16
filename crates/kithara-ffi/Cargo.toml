@@ -30,11 +30,24 @@ required-features = ["uniffi-bindgen-cli"]
 # Device builds compile with `--no-default-features` (see `xtask apple`/
 # `xtask android`), so `symphonia` is never pulled into apple/android — the
 # hardware backend is the sole decoder there.
-default = ["uniffi", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = ["uniffi", "symphonia", "standard", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
+standard = ["stretch-signalsmith"]
 apple = ["kithara/apple-fused-src", "kithara/apple-net", "stretch-signalsmith"]
 android = ["kithara/android", "stretch-signalsmith"]
+analysis = ["analysis-waveform", "beat-dsp"]
+analysis-beat = ["kithara/analysis-beat"]
+analysis-waveform = ["kithara/analysis-waveform"]
+beat-dsp = ["kithara/beat-dsp"]
+beat-nn = ["kithara/beat-nn"]
+beat-nn-small = ["kithara/beat-nn-small"]
+beat-nn-full = ["kithara/beat-nn-full"]
+beat-nn-full-int8 = ["kithara/beat-nn-full-int8"]
+ui = ["kithara/ui"]
+ui-capture = ["kithara/ui-capture"]
+ui-iced = ["kithara/ui-iced"]
+ui-masonry = ["kithara/ui-masonry"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side
 # uniffi-bindgen build, where neither the apple nor the android
@@ -122,9 +135,7 @@ uuid = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "download",
-    "analysis-waveform",
     "audio",
-    "beat-dsp",
     "hls",
     "host",
     "resample-rubato",
