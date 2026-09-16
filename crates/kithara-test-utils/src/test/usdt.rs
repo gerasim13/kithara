@@ -26,7 +26,7 @@ const MAX_FIELDS: usize = 5;
 /// while the other probes keep recording. The latest firing of each probe
 /// stays readable either way. The history is bounded by this cap times the
 /// probe call sites the process compiled.
-pub const MAX_EVENTS: usize = 1 << 16;
+pub const MAX_EVENTS: usize = 1 << 19;
 
 /// One recorded firing. Every string is `'static`, so recording a firing
 /// allocates nothing beyond the history itself.
