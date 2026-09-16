@@ -21,7 +21,8 @@ the other. A crate keeps a single configuration struct; the patch beside it is
 generated, never written.
 
 The crate has no default features. Enable each derive explicitly with its
-matching feature: `patch`, `ranged`, `event`, or `event-set`.
+matching feature: `patch`, `ranged`, or `event`. The `event` feature exports
+both `Event` and `EventSet`.
 
 ## Usage
 

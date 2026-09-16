@@ -17,7 +17,6 @@ proc-macro = true
 [features]
 default = []
 event = []
-event-set = []
 patch = []
 ranged = []
 

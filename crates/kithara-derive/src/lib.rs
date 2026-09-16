@@ -5,19 +5,14 @@
 
 #[cfg(feature = "patch")]
 mod config;
-#[cfg(any(feature = "event", feature = "event-set"))]
+#[cfg(feature = "event")]
 mod event;
 #[cfg(feature = "ranged")]
 mod ranged;
 
-#[cfg(any(
-    feature = "event",
-    feature = "event-set",
-    feature = "patch",
-    feature = "ranged"
-))]
+#[cfg(any(feature = "event", feature = "patch", feature = "ranged"))]
 use proc_macro::TokenStream;
-#[cfg(any(feature = "event", feature = "event-set"))]
+#[cfg(feature = "event")]
 use syn::{DeriveInput, Error, parse_macro_input};
 
 /// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
@@ -64,7 +59,7 @@ pub fn event(input: TokenStream) -> TokenStream {
 }
 
 /// Implements a consumer set of concrete event types.
-#[cfg(feature = "event-set")]
+#[cfg(feature = "event")]
 #[proc_macro_derive(EventSet)]
 pub fn event_set(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
