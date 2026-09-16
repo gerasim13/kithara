@@ -3,7 +3,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
-        thread::{JoinHandle, sleep, spawn},
+        thread::{JoinHandle, paced_backoff, spawn},
         time::Duration,
         tokio,
         tokio::sync::broadcast,
@@ -351,7 +351,7 @@ impl EventBridge {
             let mut last_buffered: Option<f64> = None;
 
             while !cancel.is_cancelled() {
-                sleep(interval);
+                paced_backoff(interval);
                 let _ = queue.tick();
                 queue.process_notifications();
                 let view = queue.playback_view();
@@ -908,37 +908,17 @@ mod tests {
         status: TrackStatus,
         timeout_ms: u64,
     ) -> bool {
-        wait_for_status_seen(events, id, status, timeout_ms, &mut Vec::new()).await
-    }
-
-    /// Waits like [`wait_for_status`] and records every event received on the
-    /// way, so a failing wait can name what the bus delivered instead.
-    async fn wait_for_status_seen(
-        events: &mut EventReceiver<QueueBusEvent>,
-        id: TrackId,
-        status: TrackStatus,
-        timeout_ms: u64,
-        seen: &mut Vec<String>,
-    ) -> bool {
         let wait = async {
-            loop {
-                let event = match events.recv().await {
-                    Ok(Envelope { event, .. }) => event,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        seen.push(format!("lagged {skipped}"));
-                        continue;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return false,
-                };
-                seen.push(format!("{event:?}"));
+            while let Ok(Envelope { event, .. }) = events.recv().await {
                 if matches!(
                     event,
-                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen_id, status: ref seen_status })
-                        if seen_id == id && *seen_status == status
+                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                        if seen == id && *seen_status == status
                 ) {
                     return true;
                 }
             }
+            false
         };
         kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
             .await
@@ -998,9 +978,7 @@ mod tests {
             cancel.clone(),
         );
 
-        let mut seen = Vec::new();
-        let reload_started =
-            wait_for_status_seen(&mut events, id, TrackStatus::Pending, 2000, &mut seen).await;
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
@@ -1015,7 +993,7 @@ mod tests {
 
         assert!(
             reload_started,
-            "tick after EOF must restart the consumed repeat-one track; status: {status:?}; events: {seen:#?}"
+            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
         );
         assert!(
             joined.is_ok(),

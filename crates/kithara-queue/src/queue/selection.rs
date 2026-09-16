@@ -62,13 +62,7 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        // WHY: a natural end has already played the current entry out, whatever
-        // `is_playing` still reports while the render thread cleans up. Repeat-one
-        // re-selects that entry at EOF and must reload it, never skip it.
-        if reason != AdvanceReason::NaturalEof
-            && self.player.current_index() == index
-            && self.player.is_playing()
-        {
+        if self.player.current_index() == index && self.player.is_playing() {
             self.cancel_stale_pending(id);
             return Ok(());
         }
