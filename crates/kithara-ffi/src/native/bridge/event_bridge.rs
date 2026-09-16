@@ -954,8 +954,6 @@ mod tests {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
         let pools = pools::build().expect("valid FFI pool policy");
         let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let mut host = FfiHost::new(HostConfig::offline(pools).sample_rate(sample_rate).build())
-            .expect("offline Host allocates its root identity");
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(sample_rate)
@@ -965,19 +963,28 @@ mod tests {
                 .build(),
         );
         let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
-        let owner = host
-            .insert(queue)
-            .expect("INVARIANT: the offline Host accepts its allocated Queue");
-        let queue = owner.control().clone();
-        queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
-        let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_10_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = queue
-            .append(track.to_string_lossy().into_owned())
-            .expect("open queue accepts a local track");
+        let (mut host, owner, mut events, id) = spawn_blocking(move || {
+            let mut host =
+                FfiHost::new(HostConfig::offline(pools).sample_rate(sample_rate).build())
+                    .expect("offline Host allocates its root identity");
+            let owner = host
+                .insert(queue)
+                .expect("INVARIANT: the offline Host accepts its allocated Queue");
+            let queue = owner.control();
+            queue.set_repeat(kithara::queue::RepeatMode::One);
+            queue.set_rate(1.0);
+            let events = queue.subscribe();
+            let id = queue
+                .append(track.to_string_lossy().into_owned())
+                .expect("open queue accepts a local track");
+            (host, owner, events, id)
+        })
+        .await
+        .expect("host setup task completes");
+        let queue = owner.control().clone();
         assert!(
             wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
             "real local track must load before playback"
@@ -1018,12 +1025,14 @@ mod tests {
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let mut host = renderer.await.expect("render task completes");
-        let joined = spawn_blocking(move || thread.join())
-            .await
-            .expect("teardown task completes");
-        host.remove(&owner)
-            .expect("INVARIANT: the test Queue detaches from its Host");
-        drop(owner);
+        let joined = spawn_blocking(move || {
+            let joined = thread.join();
+            host.remove(&owner)
+                .expect("INVARIANT: the test Queue detaches from its Host");
+            joined
+        })
+        .await
+        .expect("teardown task completes");
 
         assert!(
             reload_started,
