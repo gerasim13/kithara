@@ -88,7 +88,6 @@ pub struct AudioArtifactTap {
     channels: u16,
     timeline: ArtifactTimeline,
     source_grids: BTreeMap<u64, BeatGridSnapshot>,
-    probes: usdt_trace::Scope,
     evidence: BTreeMap<String, Value>,
     pcm: Vec<f32>,
     host_beats: BTreeMap<u64, bool>,
@@ -121,7 +120,6 @@ impl AudioArtifactTap {
             channels,
             timeline: ArtifactTimeline::default(),
             source_grids: BTreeMap::new(),
-            probes: usdt_trace::scope(),
             evidence: BTreeMap::new(),
             pcm: Vec::new(),
             host_beats: BTreeMap::new(),
@@ -188,7 +186,7 @@ impl AudioArtifactTap {
     /// instead of through a bare counter.
     #[must_use]
     pub fn underrun_ledger(&self) -> UnderrunLedger {
-        UnderrunLedger::from_probes(&self.probes.events())
+        UnderrunLedger::from_probes(&usdt_trace::events())
     }
 
     /// Mark a Host beat at an output frame for the published metronome.
@@ -273,7 +271,7 @@ impl Drop for AudioArtifactTap {
                 clipped,
             )
         };
-        let probes = self.probes.events();
+        let probes = usdt_trace::events();
         let underruns = UnderrunLedger::from_probes(&probes);
         self.timeline.record_probes(&probes);
         self.timeline.record_underruns(&underruns);

@@ -33,8 +33,8 @@ use kithara::{
         AlignmentSource, AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, BeatGridState, LoadGeneration, MapPoint, MapPosition, Meter,
         PresentationFrontier, SegmentSet, SessionFrame, StretchControls, SyncAdmission, SyncGroup,
-        SyncIntent, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyStamp, WarpConfig,
-        WarpMapRevision,
+        SyncIntent, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyStamp, TransportRevision,
+        WarpConfig, WarpMapRevision,
     },
 };
 #[cfg(not(target_os = "android"))]
@@ -550,8 +550,6 @@ pub(super) struct ProductHarness {
     pub(super) block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
     pub(super) rendered_frames: u64,
-    /// Records the render commits this harness reads back through USDT.
-    _trace: usdt_trace::Scope,
     /// Host session frame minus captured frame; moves when a stream restart
     /// rescales the Host clock to the new rate.
     session_offset: i64,
@@ -559,6 +557,10 @@ pub(super) struct ProductHarness {
     sync_requested: bool,
     sync_activation: Option<u64>,
     tap: AudioArtifactTap,
+    /// Holds the probe recording open for the whole case: the wire keeps one
+    /// recording per process, and every reader here reads that one. Declared
+    /// after every reader so its drop cannot clear the recording first.
+    _trace: usdt_trace::Scope,
     server: Option<TestServerHelper>,
     paced: bool,
 }
@@ -968,7 +970,7 @@ impl ProductHarness {
         self.tick_all(case).await;
         self.rendered_frames = end;
         if self.host_grid.is_some() {
-            let _ = self.transport_revision(case).await;
+            self.refresh_host_grid().await;
         }
         self.record_host_grid(start, end);
         self.tap.timeline().span(
@@ -1244,14 +1246,8 @@ impl ProductHarness {
         }
     }
 
-    async fn transport_revision(&mut self, case: SyncCase) -> kithara::warp::TransportRevision {
-        let (revision, grid) = self
-            .host
-            .transport_revision_and_grid()
-            .await
-            .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id));
-        self.host_grid = Some(grid);
-        revision
+    async fn refresh_host_grid(&mut self) {
+        self.host_grid = Some(self.host.session_grid().await);
     }
 
     pub(super) async fn request_sync(&mut self, case: SyncCase) {
@@ -1265,7 +1261,7 @@ impl ProductHarness {
         intent: SyncIntent,
     ) -> Vec<SyncAdmission> {
         self.mark(&format!("request_sync-{intent:?}"));
-        let transport = self.transport_revision(case).await;
+        self.refresh_host_grid().await;
         let mut admissions = Vec::with_capacity(self.decks.len());
         for index in 0..self.decks.len() {
             {
@@ -1311,7 +1307,7 @@ impl ProductHarness {
                         host.transact(SyncOperation::Sync {
                             target,
                             load: LoadGeneration::first(),
-                            transport,
+                            transport: TransportRevision::first(),
                             source,
                             activation,
                             intent,
@@ -1444,7 +1440,7 @@ impl ProductHarness {
                 .push(format!("{}: restart host output rate: {error}", case.id));
         }
         self.settle(case, 4).await;
-        let _ = self.transport_revision(case).await;
+        self.refresh_host_grid().await;
     }
 
     async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
@@ -1945,7 +1941,6 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
     const EXPECTED_WARP_MAP_REVISION: u64 = 2;
 
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(control.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
         .hold(124.0);
@@ -2053,8 +2048,7 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     let expected_target_rate_bits =
         ((next_source_frame - selected_source_frame) as f64 / continuous_host_beat_frames) as f32;
     let expected_target_rate_bits = expected_target_rate_bits.to_bits();
-    let probe_events = trace
-        .events()
+    let probe_events = usdt_trace::events()
         .into_iter()
         .filter(|event| {
             matches!(
@@ -2065,7 +2059,7 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
                     | "prepared_launch_readiness_checked"
                     | "prepared_render_revision_selected"
                     | "decoder_seek_epoch_observed"
-                    | "producer_pcm_admitted"
+                    | "chunk_admitted"
                     | "scheduled_seek_activated"
                     | "pcm_consumed"
                     | "pcm_underrun"
@@ -2182,8 +2176,8 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     let admitted_pcm = probe_events
         .iter()
         .find(|event| {
-            event["probe"] == "producer_pcm_admitted"
-                && event["fields"]["seek_epoch"].as_u64() == Some(launch_epoch)
+            event["probe"] == "chunk_admitted"
+                && event["fields"]["epoch"].as_u64() == Some(launch_epoch)
                 && event["fields"]["source_start"].as_u64() == Some(control.selected_source_frame)
                 && event["fields"]["render_revision"].as_u64()
                     == selected_render["fields"]["render_revision"].as_u64()
@@ -2268,7 +2262,6 @@ struct TrackStartPickup {
 #[case::house_124_seek_ten(TrackStartPickup { id: "track-start-pickup-124-seek-ten", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: Some(10.0), expected_source_frame: 487_746, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
 #[case::downtempo_96_seek_ten(TrackStartPickup { id: "track-start-pickup-96-seek-ten", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: Some(10.0), expected_source_frame: 510_000, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
 async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: TrackStartPickup) {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(pickup.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
         .hold(124.0);
@@ -2322,13 +2315,13 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
             .all(|(expected, actual)| expected.to_bits() == actual.to_bits())
     });
     let underruns = harness.underrun_failures();
-    let events = trace.events();
+    let events = usdt_trace::events();
     let pcm_flow: Vec<_> = events
         .iter()
         .filter(|event| {
             matches!(
                 event.probe,
-                "producer_pcm_admitted" | "pcm_reader_admitted" | "pcm_consumed" | "pcm_underrun"
+                "chunk_admitted" | "pcm_reader_admitted" | "pcm_consumed" | "pcm_underrun"
             )
         })
         .map(|event| {
@@ -2381,7 +2374,6 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination() {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "host-seek-plan-destination",
         1,
@@ -2395,7 +2387,7 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
     prepare_fixture_grids(&mut harness, case, &sources).await;
     harness.request_sync(case).await;
     let _ = harness.render(case, harness.block_frames * 2).await;
-    let baseline = trace.events();
+    let baseline = usdt_trace::events();
     let baseline_map = baseline
         .iter()
         .filter(|event| event.probe == "warp_plan_published")
@@ -2417,7 +2409,7 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
     };
     let destination_source =
         (destination.as_secs_f64() * f64::from(case.sample_rate)).round() as u64;
-    let post = &trace.events()[baseline.len()..];
+    let post = &usdt_trace::events()[baseline.len()..];
     let plan = post
         .iter()
         .find(|event| event.probe == "warp_plan_published")
@@ -2434,7 +2426,7 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
         .expect("Host seek plan has an exact activation");
     harness.play_all().await;
     harness.render_through(case, activation).await;
-    let events = trace.events();
+    let events = usdt_trace::events();
     let adopted = events
         .iter()
         .skip(baseline.len())
@@ -2444,8 +2436,8 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
         .expect("Host seek decoder epoch is adopted");
     let epoch = adopted.field("current_epoch").expect("adopted epoch");
     assert!(events.iter().skip(baseline.len()).any(|event| {
-        event.probe == "producer_pcm_admitted"
-            && event.field("seek_epoch") == Some(epoch)
+        event.probe == "chunk_admitted"
+            && event.field("epoch") == Some(epoch)
             && event.field("source_start") == Some(destination_source)
     }));
 }
@@ -2470,7 +2462,6 @@ async fn directed_sync_toggle_matrix(
     #[case] expected_mode: SyncMode,
     #[case] expected_rate: f32,
 ) {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "directed-sync-toggle",
         1,
@@ -2502,7 +2493,7 @@ async fn directed_sync_toggle_matrix(
     let _ = harness
         .capture_frames(case, harness.block_frames * 4, harness.block_frames)
         .await;
-    let baseline = trace.events();
+    let baseline = usdt_trace::events();
     let baseline_map = baseline
         .iter()
         .filter(|event| event.probe == "warp_plan_published")
@@ -2517,7 +2508,7 @@ async fn directed_sync_toggle_matrix(
         .await
         .pop()
         .expect("one-deck toggle returns one typed admission");
-    let post = &trace.events()[baseline.len()..];
+    let post = &usdt_trace::events()[baseline.len()..];
     match expected_mode {
         SyncMode::Off => {
             let SyncAdmission::Preparing {
@@ -2538,7 +2529,7 @@ async fn directed_sync_toggle_matrix(
             let status = harness
                 .render_until_free_off(case, operation, topology, warp_map)
                 .await;
-            let events = trace.events();
+            let events = usdt_trace::events();
             let post = &events[baseline.len()..];
             assert!(
                 matches!(status, SyncStatusSnapshot::Off { .. }),
@@ -2650,7 +2641,7 @@ async fn directed_sync_toggle_matrix(
                     .any(|event| event.probe == "decoder_seek_epoch_observed"),
                 "Free retains the resident decoder without a seek"
             );
-            let events = trace.events();
+            let events = usdt_trace::events();
             let (reader_index, reader_source) = events
                 .iter()
                 .enumerate()
@@ -2681,7 +2672,7 @@ async fn directed_sync_toggle_matrix(
             let mut run = None;
             let mut target_consumed_index = None;
             for _ in 0..callbacks {
-                let current = trace.events();
+                let current = usdt_trace::events();
                 for (index, event) in current.iter().enumerate().skip(event_cursor) {
                     if event.probe != "pcm_consumed"
                         || event
@@ -2765,7 +2756,7 @@ async fn directed_sync_toggle_matrix(
                 .expect("planned map has an output activation");
             harness.render_through(case, activation).await;
             harness.settle(case, 4).await;
-            let events = trace.events();
+            let events = usdt_trace::events();
             let adopted = events
                 .iter()
                 .skip(baseline.len())
@@ -2796,7 +2787,7 @@ async fn directed_sync_toggle_matrix(
         "{start:?} -> {expected_mode:?} must not add a PCM underrun"
     );
     if expected_mode != SyncMode::Off {
-        let events = trace.events();
+        let events = usdt_trace::events();
         let consumed = events
             .iter()
             .skip(baseline.len())
@@ -2823,7 +2814,6 @@ async fn directed_sync_toggle_matrix(
 #[case::grid_before_play(true)]
 #[case::grid_after_play(false)]
 async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "late-grid-track-start-124",
         1,
@@ -2860,8 +2850,7 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
         .iter()
         .position(|sample| *sample != 0.0)
         .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits"));
-    let probe_events = trace
-        .events()
+    let probe_events = usdt_trace::events()
         .into_iter()
         .filter(|event| {
             matches!(
@@ -2871,7 +2860,7 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
                     | "prepared_launch_seek_begun"
                     | "prepared_launch_readiness_checked"
                     | "decoder_seek_epoch_observed"
-                    | "producer_pcm_admitted"
+                    | "chunk_admitted"
                     | "scheduled_seek_activated"
                     | "pcm_consumed"
                     | "pcm_underrun"
@@ -2897,7 +2886,6 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "disable-paused-late-grid",
         1,
@@ -2937,8 +2925,7 @@ async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
             .any(|sample| *sample != 0.0)
     );
     assert!(
-        !trace
-            .events()
+        !usdt_trace::events()
             .iter()
             .any(|event| event.probe == "prepared_launch_seek_begun")
     );
@@ -2946,7 +2933,6 @@ async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "disable-admitted-late-grid",
         1,
@@ -2967,8 +2953,7 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
         Ok(SyncAdmission::Prepared { .. })
     ));
     let _ = harness.render(case, harness.block_frames).await;
-    let admitted = trace
-        .events()
+    let admitted = usdt_trace::events()
         .into_iter()
         .find(|event| {
             event.probe == "prepared_launch_command_admitted" && event.field("armed") == Some(1)
@@ -2977,7 +2962,7 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
     let old_epoch = admitted
         .field("seek_epoch")
         .expect("the admitted launch names its seek epoch");
-    let events_before_disable = trace.events().len();
+    let events_before_disable = usdt_trace::events().len();
     let served_target = harness.player_controls[0]
         .position_seconds()
         .expect("active track exposes its served-media position before Disable");
@@ -2992,7 +2977,7 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
             .iter()
             .any(|sample| *sample != 0.0)
     );
-    let after_disable = &trace.events()[events_before_disable..];
+    let after_disable = &usdt_trace::events()[events_before_disable..];
     assert!(after_disable.iter().any(|event| {
         event.probe == "prepared_launch_cancelled"
             && event.field("item_id") == Some(harness.ids[0][0].as_u64())
@@ -3017,9 +3002,9 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
     assert!(!after_disable.iter().any(|event| {
         event.probe == "scheduled_seek_activated" && event.field("seek_epoch") == Some(old_epoch)
     }));
-    let events = trace.events();
+    let events = usdt_trace::events();
     assert!(events.iter().any(|event| {
-        event.probe == "producer_pcm_admitted" && event.field("seek_epoch") == Some(old_epoch)
+        event.probe == "chunk_admitted" && event.field("epoch") == Some(old_epoch)
     }));
     assert!(!events.iter().any(|event| {
         event.probe == "pcm_reader_admitted" && event.field("seek_epoch") == Some(old_epoch)
@@ -3118,7 +3103,6 @@ async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "normal-pause-resume",
         1,
@@ -3167,8 +3151,7 @@ async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
         .capture_frames(case, 8_000, harness.block_frames)
         .await;
     assert!(lane_samples(&after, 0).iter().any(|sample| *sample != 0.0));
-    let consumed = trace
-        .events()
+    let consumed = usdt_trace::events()
         .into_iter()
         .filter(|event| event.probe == "pcm_consumed")
         .map(|event| {
@@ -3437,7 +3420,6 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
     const NEXT_OUTPUT_FRAME: u64 = 116_129;
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
 
-    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "scenario-1-single-deck-prepared-launch",
         1,
@@ -3549,8 +3531,7 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
         .count();
     let (markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
     let underruns = harness.underrun_failures();
-    let probe_events = trace
-        .events()
+    let probe_events = usdt_trace::events()
         .into_iter()
         .filter(|event| {
             matches!(
@@ -3561,8 +3542,16 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
                     | "prepared_launch_readiness_checked"
                     | "decoder_seek_epoch_observed"
                     | "decoder_seek_epoch_backpressured"
-                    | "producer_pcm_admitted"
+                    | "scheduled_seek_activation_ready"
                     | "scheduled_seek_activated"
+                    | "region_plan_reader_refreshed"
+                    | "prime_activation"
+                    | "rate_applied"
+                    | "prepared_render_revision_selected"
+                    | "render_revision_floor"
+                    | "chunk_admitted"
+                    | "pcm_reader_admitted"
+                    | "pcm_revision_discarded"
                     | "pcm_consumed"
                     | "pcm_underrun"
             )

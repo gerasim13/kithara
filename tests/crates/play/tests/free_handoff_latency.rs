@@ -24,7 +24,6 @@ fn target_revision(event: &ProbeEvent, warp_map: u64) -> Option<u64> {
 }
 
 async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
-    let trace = usdt_trace::scope();
     let case = SEQUENTIAL_SYNC;
     let sources = prepared_sources(Provider::Synthetic).await;
     let mut harness = ProductHarness::new_for_block(case, &sources, 0, CALLBACK_FRAMES).await;
@@ -45,7 +44,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
         let _ = harness.render(case, CALLBACK_FRAMES).await;
     }
 
-    let baseline = trace.events().len();
+    let baseline = usdt_trace::events().len();
     let baseline_underruns = harness.player_controls[0]
         .rt_metrics()
         .map_or(0, |metrics| metrics.underruns());
@@ -59,7 +58,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
     let warp_map = u64::from(warp_map);
 
     for _ in 0..16 {
-        let events = trace.events();
+        let events = usdt_trace::events();
         let post = &events[baseline..];
         if post.iter().any(|event| {
             event.probe == "prepared_sync_acknowledged"
@@ -69,7 +68,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
             for _ in 0..4 {
                 let _ = harness.render(case, CALLBACK_FRAMES).await;
             }
-            let events = trace.events();
+            let events = usdt_trace::events();
             let post = &events[baseline..];
             let current_underruns = harness.player_controls[0]
                 .rt_metrics()
@@ -83,7 +82,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
                             event.probe,
                                 "free_adoption_installed"
                                     | "free_adoption_activation"
-                                    | "producer_pcm_admitted"
+                                    | "chunk_admitted"
                                     | "pcm_reader_admitted"
                                     | "pcm_consumed"
                                     | "pcm_underrun"
@@ -136,7 +135,7 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > installed && event.probe == "producer_pcm_admitted")
+            (index > installed && event.probe == "chunk_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })
@@ -253,7 +252,7 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > installed && event.probe == "producer_pcm_admitted")
+            (index > installed && event.probe == "chunk_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })

@@ -351,12 +351,9 @@ where
             .await
     }
 
-    pub async fn transport_revision_and_grid(
-        &self,
-    ) -> Result<(TransportRevision, BeatGridSnapshot), PlayError> {
-        let revision = self.transport_revision().await?;
-        let grid = self.off.call(|state| state.host.snapshot()).await;
-        Ok((revision, grid))
+    /// The session grid the Host publishes as its own beat grid.
+    pub async fn session_grid(&self) -> BeatGridSnapshot {
+        self.off.call(|state| state.host.snapshot()).await
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {

@@ -226,7 +226,6 @@ fn stretch_to(bpm: f64, original: f64) -> f32 {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_rate_persists_into_next_track() {
-    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_RATE_PERSISTS,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -243,9 +242,9 @@ async fn seam_rate_persists_into_next_track() {
             block as usize,
         )
         .await;
-    let spans = spans(&trace.events());
+    let spans = spans(&usdt_trace::events());
     let rate_bits = u64::from(Fixture::RATE.to_bits());
-    let events = trace.events();
+    let events = usdt_trace::events();
     let smoothed: Vec<_> = events
         .iter()
         .filter(|event| event.probe == "rate_smoothed")
@@ -311,7 +310,6 @@ async fn seam_rate_persists_into_next_track() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
-    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_OFF,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -327,7 +325,7 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
             block as usize,
         )
         .await;
-    let spans = spans(&trace.events());
+    let spans = spans(&usdt_trace::events());
     let b = spans[&harness.ids[0][1].as_u64()];
     let b_first = b.first - origin;
     let played = usize::try_from((b.last - origin) * i64::from(Fixture::CHANNELS))
@@ -356,7 +354,6 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_honours_the_configured_crossfade_length() {
-    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_FADE_LENGTH,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -371,7 +368,7 @@ async fn seam_honours_the_configured_crossfade_length() {
             block as usize,
         )
         .await;
-    let spans = spans(&trace.events());
+    let spans = spans(&usdt_trace::events());
     let (a, b) = (
         spans[&harness.ids[0][0].as_u64()],
         spans[&harness.ids[0][1].as_u64()],
