@@ -1,10 +1,6 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::size::SizeSpec;
 
 /// A region that moves the window rather than drawing anything.
+#[derive(kithara_derive::Control)]
+#[control(size = SizeSpec::FILL)]
 pub(crate) struct Drag;
-
-impl Control for Drag {
-    fn size(&self, _skin: &SkinDoc) -> SizeSpec {
-        SizeSpec::FILL
-    }
-}

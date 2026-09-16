@@ -21,6 +21,8 @@ pub(crate) mod branch_chains;
 pub(crate) mod const_group_enum_shape;
 pub(crate) mod derivable_built_default;
 pub(crate) mod derivable_clone;
+pub(crate) mod derivable_control;
+pub(crate) mod derivable_control_painter;
 pub(crate) mod derivable_debug;
 pub(crate) mod derivable_delegation;
 pub(crate) mod derivable_deref;
@@ -29,9 +31,11 @@ pub(crate) mod derivable_error;
 pub(crate) mod derivable_event;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
+pub(crate) mod derivable_node_control;
 pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
 pub(crate) mod derivable_ranged;
+pub(crate) mod derivable_retained;
 mod derivable_support;
 pub(crate) mod derivable_view_control;
 pub(crate) mod fat_loop_body;
@@ -70,10 +74,13 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(guard_cascade::GuardCascade),
         Box::new(derivable_delegation::DerivableDelegation),
         Box::new(derivable_clone::DerivableClone),
+        Box::new(derivable_control::DerivableControl),
+        Box::new(derivable_control_painter::DerivableControlPainter),
         Box::new(derivable_built_default::DerivableBuiltDefault),
         Box::new(derivable_debug::DerivableDebug),
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
+        Box::new(derivable_retained::DerivableRetained),
         Box::new(derivable_patch::DerivablePatch),
         Box::new(derivable_phase::DerivablePhase),
         Box::new(derivable_view_control::DerivableViewControl),
@@ -82,6 +89,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_error::DerivableError),
         Box::new(derivable_event::DerivableEvent),
         Box::new(derivable_getter::DerivableGetter),
+        Box::new(derivable_node_control::DerivableNodeControl),
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),

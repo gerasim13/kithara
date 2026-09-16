@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// The track's waveform, zoomed and scrubbed.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::NodeControl)]
 pub(crate) struct Wave<'a> {
     pub(crate) badge: Option<InternId>,
     pub(crate) zoom: Option<&'a Binding>,

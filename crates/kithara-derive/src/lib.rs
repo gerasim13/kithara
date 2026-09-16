@@ -18,9 +18,6 @@ use proc_macro::TokenStream;
 pub fn built_default(input: TokenStream) -> TokenStream {
     config::built::expand(input)
 }
-#[cfg(feature = "event")]
-use syn::{DeriveInput, Error, parse_macro_input};
-
 /// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
 /// document may say about a configuration struct, and the `apply` that merges
 /// one onto the other.
@@ -30,12 +27,43 @@ pub fn patch(input: TokenStream) -> TokenStream {
     config::expand(input)
 }
 
-/// Implements the immediate UI host path shared by draw-only controls.
 #[cfg(feature = "ui")]
-#[proc_macro_derive(ViewControl)]
-pub fn view_control(input: TokenStream) -> TokenStream {
-    ui::view::expand(input)
+macro_rules! ui_derives {
+    () => {
+        /// Implements the immediate UI host path shared by draw-only controls.
+        #[proc_macro_derive(ViewControl)]
+        pub fn view_control(input: TokenStream) -> TokenStream {
+            ui::view::expand(input)
+        }
+
+        /// Implements the document-owned size contract for a built-in UI control.
+        #[proc_macro_derive(Control, attributes(control))]
+        pub fn control(input: TokenStream) -> TokenStream {
+            ui::control::expand(input)
+        }
+
+        /// Implements a draw-only UI painter by forwarding structural arguments.
+        #[proc_macro_derive(ControlPainter, attributes(control_painter))]
+        pub fn control_painter(input: TokenStream) -> TokenStream {
+            ui::painter::expand(input)
+        }
+
+        /// Implements retained-host updates through the existing structural setters.
+        #[proc_macro_derive(Retained, attributes(retained))]
+        pub fn retained(input: TokenStream) -> TokenStream {
+            ui::retained::expand(input)
+        }
+
+        /// Implements the retained UI host path shared by painted controls.
+        #[proc_macro_derive(NodeControl)]
+        pub fn node_control(input: TokenStream) -> TokenStream {
+            ui::node::expand(input)
+        }
+    };
 }
+
+#[cfg(feature = "ui")]
+ui_derives!();
 
 /// Implements one of Kithara's closed typestate phase traits.
 #[cfg(feature = "phase")]
@@ -72,9 +100,9 @@ pub fn ranged(input: TokenStream) -> TokenStream {
 #[cfg(feature = "event")]
 #[proc_macro_derive(Event)]
 pub fn event(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
     event::derive(&input)
-        .unwrap_or_else(Error::into_compile_error)
+        .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
@@ -82,8 +110,8 @@ pub fn event(input: TokenStream) -> TokenStream {
 #[cfg(feature = "event")]
 #[proc_macro_derive(EventSet)]
 pub fn event_set(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
     event::derive_set(&input)
-        .unwrap_or_else(Error::into_compile_error)
+        .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

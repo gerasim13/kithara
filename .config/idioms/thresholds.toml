@@ -100,6 +100,22 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
+[derivable_control]
+enabled = true
+severity = "deny"
+
+[derivable_control_painter]
+enabled = true
+severity = "deny"
+
+[derivable_retained]
+enabled = true
+severity = "deny"
+
+[derivable_node_control]
+enabled = true
+severity = "deny"
+
 [derivable_clone]
 enabled = true
 severity = "deny"

@@ -4,7 +4,13 @@ use crate::{
 };
 
 /// A horizontal bar filled from the left to show one fraction.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = f32,
+    draw = self.paint(list, *data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_scalar)]
 pub(crate) struct Meter {
     background: Rgba,
     border: Rgba,

@@ -1,10 +1,4 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// The visualiser surface.
+#[derive(kithara_derive::Control)]
+#[control(size = skin.vis.size)]
 pub(crate) struct Vis;
-
-impl Control for Vis {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.vis.size
-    }
-}

@@ -14,7 +14,11 @@ const SEPARATOR: &str = "\u{203a}";
 
 /// The strip under the tree: what is in view, and — when the document offers
 /// more than one — which scope it is in view of.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = Viewed,
+    draw = self.paint(list, text, data, bounds)
+)]
 pub(crate) struct Context {
     icon: Option<Mark>,
     picker: Picker,
