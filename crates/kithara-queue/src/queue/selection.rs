@@ -62,6 +62,13 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
+        eprintln!(
+            "DIAG select id={} index={index} cur={:?} playing={} has_res={} status={status:?} reason={reason:?}",
+            id.as_u64(),
+            self.player.current_index(),
+            self.player.is_playing(),
+            self.player.item_has_resource(index)
+        );
         if self.player.current_index() == index && self.player.is_playing() {
             self.cancel_stale_pending(id);
             return Ok(());

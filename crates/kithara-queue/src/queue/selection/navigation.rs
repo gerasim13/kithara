@@ -35,6 +35,7 @@ where
         reason: AdvanceReason,
     ) -> Result<Option<TrackId>, QueueError> {
         let Some(next) = self.next_selectable_entry() else {
+            eprintln!("DIAG advance no_next");
             self.lock_navigation_mut().finish();
             self.bus.publish(QueueEvent::QueueEnded);
             return Ok(None);
