@@ -24,6 +24,7 @@ pub(crate) mod derivable_debug;
 pub(crate) mod derivable_delegation;
 pub(crate) mod derivable_deref;
 pub(crate) mod derivable_display;
+pub(crate) mod derivable_error;
 pub(crate) mod derivable_event;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
@@ -70,6 +71,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_deref::DerivableDeref),
         Box::new(derivable_display::DerivableDisplay),
+        Box::new(derivable_error::DerivableError),
         Box::new(derivable_event::DerivableEvent),
         Box::new(derivable_getter::DerivableGetter),
         Box::new(accumulator_loops::AccumulatorLoops),

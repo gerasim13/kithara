@@ -1,8 +1,8 @@
-use std::error::Error as StdError;
-
 /// Checked signal-shape and conversion failures.
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub enum SignalError {
     /// An operation requires at least one channel.
     #[display("audio channel count must be non-zero")]
@@ -62,5 +62,3 @@ pub enum SignalError {
         sample_rate: u32,
     },
 }
-
-impl StdError for SignalError {}

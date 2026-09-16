@@ -1,5 +1,5 @@
 use std::{
-    fmt, fs, io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -57,46 +57,34 @@ pub struct Config {
 }
 
 /// Why a document could not be turned into a configuration.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[error(ignore)]
 #[non_exhaustive]
 pub enum LoadError {
     /// A path the operator named does not exist.
+    #[display("configuration file not found: {}", _0.display())]
     Missing(PathBuf),
     /// A document could not be read from disk.
-    Read { path: PathBuf, source: io::Error },
+    #[display("cannot read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[error(source)]
+        source: io::Error,
+    },
     /// A document's text is not YAML.
+    #[display("cannot parse {}: {source}", path.display())]
     Parse {
         path: PathBuf,
+        #[error(source)]
         source: serde_yaml_ng::Error,
     },
     /// A document does not match the schema -- either the merged tree, or an
     /// overlay whose root is not a mapping, refused before any merge.
+    #[display("cannot parse {resource}: {detail}")]
     Schema { resource: String, detail: String },
     /// A reference the document names resolved nowhere.
-    Env(MissingEnv),
-}
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Missing(path) => write!(f, "configuration file not found: {}", path.display()),
-            Self::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
-            Self::Parse { path, source } => write!(f, "cannot parse {}: {source}", path.display()),
-            Self::Schema { resource, detail } => write!(f, "cannot parse {resource}: {detail}"),
-            Self::Env(missing) => write!(f, "{missing}"),
-        }
-    }
-}
-
-impl std::error::Error for LoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Read { source, .. } => Some(source),
-            Self::Parse { source, .. } => Some(source),
-            Self::Env(missing) => Some(missing),
-            Self::Schema { .. } | Self::Missing(_) => None,
-        }
-    }
+    #[display("{_0}")]
+    Env(#[error(source)] MissingEnv),
 }
 
 impl Config {

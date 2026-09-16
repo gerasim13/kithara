@@ -21,6 +21,7 @@ impl Check for DerivableFrom {
             ctx,
             Kind::From,
             ctx.config.thresholds.derivable_from.enabled,
+            crate::idioms::config::DerivableSeverity::Warn,
         )
     }
 }

@@ -1,18 +1,9 @@
-use std::fmt;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, derive_more::Display, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Severity {
+    #[display("WARN")]
     Warn,
+    #[display("DENY")]
     Deny,
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Warn => f.write_str("WARN"),
-            Self::Deny => f.write_str("DENY"),
-        }
-    }
 }
 
 #[derive(Clone, Debug, fieldwork::Fieldwork)]

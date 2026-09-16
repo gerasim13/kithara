@@ -17,12 +17,15 @@ use syn::{
 };
 
 use super::Context;
-use crate::common::{
-    exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
-    fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
-    parse::{collect_scopes, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+use crate::{
+    common::{
+        exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
+        fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
+        parse::{collect_scopes, self_ty_name},
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files_scoped},
+    },
+    idioms::config::DerivableSeverity,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,7 +116,12 @@ struct Replacement {
     text: String,
 }
 
-pub(super) fn run(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<Vec<Violation>> {
+pub(super) fn run(
+    ctx: &Context<'_>,
+    kind: Kind,
+    enabled: bool,
+    severity: DerivableSeverity,
+) -> Result<Vec<Violation>> {
     if !enabled {
         return Ok(Vec::new());
     }
@@ -144,11 +152,11 @@ pub(super) fn run(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<Vec<Vi
                     )
                 },
             );
-            out.push(Violation::warn(
-                kind.id(),
-                format!("{rel}:{}:0", candidate.line),
-                detail,
-            ));
+            let key = format!("{rel}:{}:0", candidate.line);
+            out.push(match severity {
+                DerivableSeverity::Deny => Violation::deny(kind.id(), key, detail),
+                DerivableSeverity::Warn => Violation::warn(kind.id(), key, detail),
+            });
         }
     }
     out.sort_by(|a, b| a.key.cmp(&b.key));

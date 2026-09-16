@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     fmt, fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -383,7 +382,8 @@ impl CiHost {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Error)]
+#[error(ignore)]
 pub(crate) struct BuildCacheSizeError {
     value: String,
 }
@@ -397,8 +397,6 @@ impl fmt::Display for BuildCacheSizeError {
         )
     }
 }
-
-impl Error for BuildCacheSizeError {}
 
 /// Budget a profile inherits when it predates the field, and a floor rather
 /// than a fleet's working set: it is one ceiling for every target directory

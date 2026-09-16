@@ -50,12 +50,12 @@ impl VariantIndex {
 /// A variant index out of range against a known variant count.
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
 #[display("variant index {requested} out of bounds (available: {available})")]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct BoundsError {
     pub available: usize,
     pub requested: usize,
 }
-
-impl std::error::Error for BoundsError {}
 
 /// ABR mode selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

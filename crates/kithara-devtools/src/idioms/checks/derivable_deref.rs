@@ -21,6 +21,7 @@ impl Check for DerivableDeref {
             ctx,
             Kind::Deref,
             ctx.config.thresholds.derivable_deref.enabled,
+            crate::idioms::config::DerivableSeverity::Warn,
         )
     }
 }

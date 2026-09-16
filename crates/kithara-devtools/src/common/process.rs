@@ -24,33 +24,13 @@ const SECRET_ENV_KEYS: &[&str] = &[
     "OPENAI_API_KEY",
 ];
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[error(ignore)]
 pub(crate) enum ProcessError {
+    #[display("Quality Lab executable `{_0}` is not installed")]
     MissingExecutable(String),
-    Io(io::Error),
-}
-
-impl std::fmt::Display for ProcessError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingExecutable(program) => {
-                write!(
-                    formatter,
-                    "Quality Lab executable `{program}` is not installed"
-                )
-            }
-            Self::Io(error) => write!(formatter, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for ProcessError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::MissingExecutable(_) => None,
-            Self::Io(error) => Some(error),
-        }
-    }
+    #[display("{_0}")]
+    Io(#[error(source)] io::Error),
 }
 
 #[derive(Debug)]

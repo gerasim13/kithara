@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error as StdError, io::Error as IoError};
+use std::io::Error as IoError;
 
 use kithara_platform::sync::Arc;
 use kithara_storage::StorageError;
@@ -14,10 +14,11 @@ use crate::{
 pub(crate) type RemoveResource = Arc<dyn Fn(&ResourceKey) -> AssetsResult<()> + Send + Sync>;
 
 /// Typed source retained when a pending acquisition cannot remove its resource.
-#[derive(Clone, Debug, derive_more::Display)]
+#[derive(Clone, Debug, derive_more::Display, derive_more::Error)]
 #[doc(hidden)]
 #[display("pending resource cleanup failed for {key:?}: {source}")]
 pub struct PendingResourceCleanupError {
+    #[error(source)]
     source: Arc<AssetsError>,
     key: ResourceKey,
 }
@@ -40,12 +41,6 @@ impl PendingResourceCleanupError {
 impl From<&PendingResourceCleanupError> for AssetsError {
     fn from(error: &PendingResourceCleanupError) -> Self {
         Self::Storage(StorageError::Io(IoError::other(error.clone())))
-    }
-}
-
-impl StdError for PendingResourceCleanupError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
     }
 }
 

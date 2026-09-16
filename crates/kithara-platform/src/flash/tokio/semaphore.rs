@@ -23,9 +23,9 @@ use crate::{
 /// surface matches the real `tokio` Semaphore the native/wasm backends expose.
 #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
 #[display("semaphore closed")]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct AcquireError;
-
-impl std::error::Error for AcquireError {}
 
 struct Inner {
     /// Real-wake slots for acquirers parked on permits (off the flash path);

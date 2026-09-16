@@ -47,6 +47,11 @@ enabled = true
 
 [derivable_display]
 enabled = true
+severity = "deny"
+
+[derivable_error]
+enabled = true
+severity = "deny"
 
 [derivable_getter]
 enabled = true
