@@ -1,11 +1,11 @@
-use std::{cell::RefCell, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Date, Promise};
 use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::EventBus,
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
@@ -246,88 +246,6 @@ async fn read_with_yield(
     read_with_yield_limit(audio, buf, 500).await
 }
 
-thread_local! {
-    static PENDING: RefCell<[u64; 3]> = const { RefCell::new([0; 3]) };
-}
-
-thread_local! {
-    static STAGES: RefCell<[u64; 4]> = const { RefCell::new([0; 4]) };
-}
-
-thread_local! {
-    static STAGE_MARK: RefCell<[f64; 4]> = const { RefCell::new([0.0; 4]) };
-}
-
-thread_local! {
-    static STAGE_SPAN: RefCell<[f64; 3]> = const { RefCell::new([0.0; 3]) };
-}
-
-/// Drain the bus into per-stage counters, so a stalled seek says how far it
-/// got: a request that never reaches `SeekApplied` is stuck before the
-/// decoder, one that never reaches `OutputCommitted` is stuck after it.
-fn drain_stages(rx: &mut kithara::events::EventReceiver<TestEvent>) {
-    while let Ok(envelope) = rx.try_recv() {
-        if let TestEvent::Audio(AudioEvent::SeekLifecycle { stage, .. }) = envelope.event {
-            let slot = match stage {
-                SeekLifecycleStage::SeekRequest => 0,
-                SeekLifecycleStage::SeekApplied => 1,
-                SeekLifecycleStage::DecodeStarted => 2,
-                SeekLifecycleStage::OutputCommitted => 3,
-                _ => continue,
-            };
-            STAGES.with(|s| s.borrow_mut()[slot] += 1);
-            let now = Date::now();
-            STAGE_MARK.with(|m| {
-                let mut m = m.borrow_mut();
-                m[slot] = now;
-                if slot > 0 && m[slot - 1] > 0.0 {
-                    STAGE_SPAN.with(|d| d.borrow_mut()[slot - 1] += now - m[slot - 1]);
-                }
-            });
-        }
-    }
-}
-
-fn stage_line(label: &str) {
-    STAGES.with(|s| {
-        let mut s = s.borrow_mut();
-        warn!(
-            label,
-            seek_request = s[0],
-            seek_applied = s[1],
-            decode_started = s[2],
-            output_committed = s[3],
-            "STAGES"
-        );
-        *s = [0; 4];
-    });
-    STAGE_SPAN.with(|d| {
-        let mut d = d.borrow_mut();
-        warn!(
-            label,
-            request_to_applied_ms = d[0],
-            applied_to_decode_ms = d[1],
-            decode_to_output_ms = d[2],
-            "SPANS"
-        );
-        *d = [0.0; 3];
-    });
-}
-
-fn pending_line(label: &str) {
-    PENDING.with(|p| {
-        let mut p = p.borrow_mut();
-        warn!(
-            label,
-            buffering = p[0],
-            seek_in_progress = p[1],
-            stream_backpressure = p[2],
-            "PENDING"
-        );
-        *p = [0; 3];
-    });
-}
-
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
@@ -341,15 +259,7 @@ async fn read_with_yield_limit(
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
             Ok(ReadOutcome::Eof { .. }) => return None,
-            Ok(ReadOutcome::Pending { reason, .. }) => PENDING.with(|p| {
-                let slot = match reason {
-                    PendingReason::Buffering => 0,
-                    PendingReason::SeekInProgress => 1,
-                    PendingReason::StreamBackpressure => 2,
-                    _ => 2,
-                };
-                p.borrow_mut()[slot] += 1;
-            }),
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(error) => {
                 warn!(%error, "read failed");
                 return None;
@@ -626,19 +536,12 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 /// - After each seek: read_with_yield must produce >0 samples (not stuck)
 /// - All samples must be finite and in [-1.0, 1.0]
 /// - Tolerate at most 1% dead seeks (pipeline restart race)
-#[kithara::test(
-    wasm,
-    serial,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1),
-    tracing("kithara_hls::wait=debug")
-)]
+#[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
 
     let mut audio = create_pipeline_with_url(url).await;
-    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     info!(
         channels = spec.channels,
@@ -694,11 +597,6 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         }
 
         let read = read_with_yield_limit(&mut audio, &mut buf, 200).await;
-        drain_stages(&mut events_rx);
-        if i % 100 == 99 {
-            pending_line("rapid");
-            stage_line("rapid");
-        }
         let n = read.unwrap_or(0);
         if n == 0 && read.is_some() {
             dead_seeks += 1;
