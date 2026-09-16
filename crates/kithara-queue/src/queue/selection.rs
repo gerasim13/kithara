@@ -62,7 +62,16 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        if self.player.current_index() == index && self.player.is_playing() {
+        // WHY: `is_playing` outlives the item: the render thread reports a natural
+        // end and only drops the flag when it cleans up finished tracks a block
+        // later. Re-selecting the current entry in that window is exactly what
+        // repeat-one does at EOF, and treating it as "already playing" left the
+        // track `Consumed` with nothing reloading it. A slot that no longer holds
+        // its resource has been played out, whatever the flag still says.
+        if self.player.current_index() == index
+            && self.player.is_playing()
+            && self.player.item_has_resource(index)
+        {
             self.cancel_stale_pending(id);
             return Ok(());
         }
