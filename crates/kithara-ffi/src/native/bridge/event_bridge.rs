@@ -394,6 +394,7 @@ mod tests {
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
+        signal::AudioSpec,
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
