@@ -165,15 +165,6 @@ audio-artifacts OUTPUT:
         --run-ignored=only \
         -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
 
-# All three lanes require a real output device.
-[positional-arguments]
-e2e-resamplers *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just test run --lane=e2e "$@"
-    just test run --lane=e2e-fused "$@"
-    just test run --lane=e2e-glide "$@"
-
 # Every UI test target, followed by both hosts drawing the same gallery and
 # shipped studio pages, and the gallery built the other way it ships. This is
 # the UI pipeline's single entrypoint; the general workspace lane deliberately
