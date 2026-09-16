@@ -352,7 +352,6 @@ fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
-getrandom = "0.4.2"
 firewheel = { version = "0.10.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
 firewheel-core = { version = "0.10.1", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
@@ -361,6 +360,7 @@ futures = "0.3.32"
 
 # proc macros
 futures-lite = "2"
+getrandom = "0.4.2"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 
