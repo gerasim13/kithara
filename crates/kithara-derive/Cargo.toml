@@ -21,6 +21,7 @@ event = []
 patch = []
 phase = []
 ranged = []
+skin-walk = []
 ui = []
 
 [dependencies]

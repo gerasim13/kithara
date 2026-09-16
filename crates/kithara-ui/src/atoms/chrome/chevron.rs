@@ -86,6 +86,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
+        shaping::TextContext,
     };
 
     /// A header the whole width of a module, and the cell the chevron sits in

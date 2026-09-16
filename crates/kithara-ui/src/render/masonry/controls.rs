@@ -340,9 +340,9 @@ mod dragged {
 
     use kithara_test_utils::kithara;
 
-    use super::{HostAction, Knob, MasonryControl, Painted};
+    use super::{HostAction, MasonryControl, Painted};
     use crate::{
-        atoms::painter::Captioned,
+        atoms::{knob::Knob, painter::Captioned},
         builtin,
         draw::{Pt, Rect},
         interact::{Hit, Input, PointerPhase, mouse},

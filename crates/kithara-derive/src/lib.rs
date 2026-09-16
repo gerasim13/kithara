@@ -27,7 +27,6 @@ pub fn patch(input: TokenStream) -> TokenStream {
     config::expand(input)
 }
 
-#[cfg(feature = "ui")]
 macro_rules! ui_derives {
     () => {
         /// Implements the immediate UI host path shared by draw-only controls.
@@ -64,6 +63,13 @@ macro_rules! ui_derives {
 
 #[cfg(feature = "ui")]
 ui_derives!();
+
+/// Implements ordered traversal of frame and text-role fields in a skin structure.
+#[cfg(feature = "skin-walk")]
+#[proc_macro_derive(SkinWalk, attributes(skin))]
+pub fn skin_walk(input: TokenStream) -> TokenStream {
+    ui::skin::expand(input)
+}
 
 /// Implements one of Kithara's closed typestate phase traits.
 #[cfg(feature = "phase")]

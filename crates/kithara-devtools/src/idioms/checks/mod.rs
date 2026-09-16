@@ -37,6 +37,7 @@ pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
 pub(crate) mod derivable_ranged;
 pub(crate) mod derivable_retained;
+pub(crate) mod derivable_skin_walk;
 mod derivable_support;
 pub(crate) mod derivable_view_control;
 pub(crate) mod fat_loop_body;
@@ -82,6 +83,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_retained::DerivableRetained),
+        Box::new(derivable_skin_walk::DerivableSkinWalk),
         Box::new(derivable_patch::DerivablePatch),
         Box::new(derivable_phase::DerivablePhase),
         Box::new(derivable_view_control::DerivableViewControl),
