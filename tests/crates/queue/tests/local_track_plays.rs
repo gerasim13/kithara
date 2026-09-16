@@ -320,6 +320,7 @@ async fn local_track_plays_end_to_end(
         .run(move |q| q.select(track_id, Transition::None))
         .await
         .expect("select");
+    queue.run(QueueControl::play).await;
     wait_for_position_event(&mut rx, &queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail [{label}]: {e}"));
@@ -514,6 +515,7 @@ async fn local_queue_playlist_behavior(
         })
         .await
         .expect("select first");
+    queue.run(QueueControl::play).await;
     wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));

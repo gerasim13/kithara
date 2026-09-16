@@ -220,6 +220,7 @@ async fn run_one_attempt(
             error: format!("queue.select failed: {e}"),
         };
     }
+    queue.run(QueueControl::play).await;
 
     if let Err(e) =
         wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
