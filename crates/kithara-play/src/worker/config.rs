@@ -38,22 +38,22 @@ pub struct PlayWorkerConfig<S> {
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
     #[builder(default = Consts::BACKPRESSURE_POLL_INTERVAL)]
     #[field(get, copy)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no playback task expects progress.
     #[builder(default = Duration::from_millis(100))]
     #[field(get, copy)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow playback tick.
     #[builder(default = Duration::from_millis(10))]
     #[field(get, copy)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while live playback tasks are waiting.
     #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
     #[field(get, copy)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
     #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]

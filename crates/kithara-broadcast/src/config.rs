@@ -41,23 +41,23 @@ pub struct BroadcastConfig<S> {
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
     #[builder(default = Duration::from_millis(100))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
     #[builder(default = Duration::from_secs(4))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
     #[builder(default = Duration::from_secs(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
     #[builder(default = Duration::from_millis(2))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
     #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]

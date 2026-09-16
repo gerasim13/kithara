@@ -30,6 +30,7 @@ pub struct RatioGlide {
 #[builder(const, state_mod(vis = "pub"))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct ResamplerOptions {
     #[builder(default = 8.0)]
     pub max_ratio_adjustment: f64,
@@ -37,12 +38,6 @@ pub struct ResamplerOptions {
     pub passthrough_tolerance: f64,
     #[builder(default = 4_096)]
     pub chunk_size: usize,
-}
-
-impl Default for ResamplerOptions {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 #[derive(Builder)]

@@ -15,6 +15,7 @@ all-features = true
 proc-macro = true
 
 [features]
+built-default = []
 default = []
 event = []
 patch = []

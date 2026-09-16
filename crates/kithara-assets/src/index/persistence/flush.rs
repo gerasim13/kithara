@@ -53,11 +53,11 @@ pub struct FlushPolicy {
     /// long before draining dirty sources, so a burst of mutations
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub debounce: Duration,
     /// Cancel-token poll interval. The worker wakes from `cv.wait_for`
     /// at least this often to check for shutdown.
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub poll_interval: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes

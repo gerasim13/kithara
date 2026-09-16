@@ -3,15 +3,26 @@
 //! `lib.rs` holds only the `#[proc_macro_derive]` entry points Rust requires in
 //! a crate root and delegates to the module that owns each expansion.
 
-#[cfg(feature = "patch")]
 mod config;
 #[cfg(feature = "event")]
 mod event;
 #[cfg(feature = "ranged")]
 mod ranged;
 
-#[cfg(any(feature = "event", feature = "patch", feature = "ranged"))]
+#[cfg(any(
+    feature = "built-default",
+    feature = "event",
+    feature = "patch",
+    feature = "ranged"
+))]
 use proc_macro::TokenStream;
+
+/// Implements `Default` by calling the type's existing no-input builder.
+#[cfg(feature = "built-default")]
+#[proc_macro_derive(BuiltDefault)]
+pub fn built_default(input: TokenStream) -> TokenStream {
+    config::built::expand(input)
+}
 #[cfg(feature = "event")]
 use syn::{DeriveInput, Error, parse_macro_input};
 

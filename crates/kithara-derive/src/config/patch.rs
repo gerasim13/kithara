@@ -480,10 +480,12 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
                 let content;
                 parenthesized!(content in meta.input);
                 added.push(content.parse()?);
+            } else if meta.path.is_ident("humantime") {
+                added.push(quote! { serde(with = "humantime_serde::option") });
             } else {
                 return Err(meta.error(
-                    "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
-                     `attribute(...)`",
+                    "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>`, \
+                     `humantime` or `attribute(...)`",
                 ));
             }
             Ok(())
@@ -698,11 +700,24 @@ mod tests {
 
         assert!(
             error.to_string().contains(
-                "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
-                 `attribute(...)`"
+                "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>`, \
+                 `humantime` or `attribute(...)`"
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn humantime_is_the_supported_duration_shorthand() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[patch(humantime)]
+                timeout: Duration,
+            }
+        };
+
+        let expanded = expansion(&input);
+        assert!(expanded.contains("serde (with = \"humantime_serde::option\")"));
     }
 
     #[test]

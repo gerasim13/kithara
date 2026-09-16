@@ -84,6 +84,14 @@ exempt_files = [
 enabled = true
 severity = "deny"
 
+[derivable_built_default]
+enabled = true
+severity = "deny"
+
+[derivable_patch]
+enabled = true
+severity = "deny"
+
 [derivable_clone]
 enabled = true
 severity = "deny"

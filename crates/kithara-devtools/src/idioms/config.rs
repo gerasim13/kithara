@@ -36,6 +36,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_clone: DerivableRangedConfig,
     #[serde(default)]
+    pub(crate) derivable_built_default: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_debug: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_display: DerivableRangedConfig,
@@ -47,6 +49,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_patch: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]

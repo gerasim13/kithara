@@ -36,6 +36,7 @@ where
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get, copy)]
@@ -89,11 +90,5 @@ impl<B> AudioDecoderConfig<B> {
             #[call(as_ref)]
             pub const fn resampler(&self) -> Option<&DecoderResamplerSettings<B>>;
         }
-    }
-}
-
-impl<B> Default for AudioDecoderConfig<B> {
-    fn default() -> Self {
-        Self::builder().build()
     }
 }

@@ -44,7 +44,7 @@ where
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]

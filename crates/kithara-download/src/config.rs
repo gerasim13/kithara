@@ -23,7 +23,7 @@ pub struct DownloaderConfig {
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
     #[builder(default = Duration::ZERO)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
@@ -31,7 +31,7 @@ pub struct DownloaderConfig {
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
     #[builder(default = Duration::from_secs(2))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The

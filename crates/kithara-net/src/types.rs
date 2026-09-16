@@ -152,21 +152,16 @@ impl fmt::Display for RangeSpec {
 
 #[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct RetryPolicy {
     #[builder(default = Duration::from_millis(100))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub base_delay: Duration,
     #[builder(default = Duration::from_secs(5))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub max_delay: Duration,
     #[builder(default = 3)]
     pub max_retries: u32,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 impl RetryPolicy {
@@ -194,6 +189,7 @@ impl RetryPolicy {
 
 #[derive(Clone, Debug, Builder, Patch)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
@@ -217,7 +213,7 @@ pub struct NetOptions {
     /// contract is "wait for the segment, regardless of connection
     /// speed", and a 10s cap raced real fixtures.
     #[builder(default = Duration::from_secs(30))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
@@ -227,7 +223,7 @@ pub struct NetOptions {
     /// sockets open. Ignored by the Apple backend, whose `URLSession`
     /// configuration exposes no idle-pool timeout.
     #[builder(default = Duration::from_secs(5))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
@@ -295,12 +291,6 @@ impl NetOptions {
             .pool_max_idle_per_host(pool_max_idle_per_host)
             .pool_idle_timeout(pool_idle_timeout)
             .build()
-    }
-}
-
-impl Default for NetOptions {
-    fn default() -> Self {
-        Self::builder().build()
     }
 }
 
