@@ -62,7 +62,15 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        if self.player.current_index() == index && self.player.is_playing() {
+        // WHY: `is_playing` is a session flag, not a verdict on this item. The render thread queues the natural end while rendering a block
+        // and only clears the flag at the top of the next `process`, so for one whole block the item that just ended still reads as playing.
+        // Repeat-one advances onto that very item, so the early return fires and leaves it `Consumed` with nothing to reload it. The caller
+        // answering an end owns that fact; `item_has_resource` cannot stand in for it, because loading empties the slot for the whole of
+        // normal playback and the conjunct would kill the early return for live tracks too.
+        if !matches!(reason, AdvanceReason::NaturalEof)
+            && self.player.current_index() == index
+            && self.player.is_playing()
+        {
             self.cancel_stale_pending(id);
             return Ok(());
         }

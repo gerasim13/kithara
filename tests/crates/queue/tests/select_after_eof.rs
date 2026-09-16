@@ -3,7 +3,7 @@
 use kithara::{
     self,
     platform::sync::Arc,
-    queue::{QueueControl, TrackStatus, Transition},
+    queue::{QueueControl, RepeatMode, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
@@ -246,6 +246,39 @@ async fn reselect_playing_track_cancels_pending_switch() {
     assert!(
         first_onset_frame(&after_pcm, 0.005).is_some(),
         "track A must keep playing uninterrupted"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+/// Repeat-one advances onto the very item that just ended, so the reload runs
+/// while the render thread still reports the session as playing: it clears
+/// that flag only at the top of the block after it queued the end. The
+/// restart must not depend on the flag, and a prefetch reload is not a
+/// substitute — it re-loads the resource without stashing a select, so
+/// nothing would sound again.
+#[kithara::test(tokio, flash(false))]
+async fn repeat_one_restarts_the_track_its_own_eof_ended() {
+    const FIRST_PASS_BLOCKS: usize = 64;
+
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let source = assets::constant_wav_three_0_4s();
+    let id = append_loaded(&harness, &queue, &source).await;
+    queue.set_repeat(RepeatMode::One);
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
+        .expect("select the only track");
+
+    let pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
+    let first_pass = FIRST_PASS_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS);
+    assert!(
+        first_onset_frame(&pcm[..first_pass], 0.005).is_some(),
+        "the track must play once before repeat-one is judged"
+    );
+    assert!(
+        first_onset_frame(&pcm[first_pass..], 0.005).is_some(),
+        "repeat-one must restart the track its own EOF ended"
     );
     drop(queue);
     harness.close().await;
