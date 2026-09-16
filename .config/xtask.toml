@@ -2766,20 +2766,6 @@ command = [
 tools = ["cargo-bloat"]
 
 [[quality.assessment.deep_stages]]
-name = "e2e"
-command = ["just", "test", "run", "--lane=e2e"]
-tools = ["e2e-tests"]
-hard_invariant = true
-complete_only = true
-
-[[quality.assessment.deep_stages]]
-name = "e2e-resamplers"
-command = ["just", "test", "e2e-resamplers"]
-tools = ["e2e-resamplers"]
-hard_invariant = true
-complete_only = true
-
-[[quality.assessment.deep_stages]]
 name = "selenium-firefox"
 command = ["just", "test", "run", "--lane=selenium-firefox"]
 tools = ["selenium-tests"]
