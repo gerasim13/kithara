@@ -452,6 +452,37 @@ where
     }
 }
 
+/// Publishes the session grid and anchor the rendered transport last observed.
+///
+/// A session tick runs this so the Host grid follows the rendered transport
+/// without waiting for the next transport command.
+pub(crate) fn publish_rendered_session<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+) -> Result<(), SessionError> {
+    if state.reserved_session_grid.is_some() {
+        return Ok(());
+    }
+    let Some(control) = state.transport_control.as_mut() else {
+        return Ok(());
+    };
+    let observation = control.observation();
+    publish_observed_session(state, observation)
+}
+
+fn publish_observed_session<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    observation: TransportObservation,
+) -> Result<(), SessionError> {
+    if let Some(snapshot) = observation.snapshot() {
+        if state.root.snapshot().stamp() != snapshot.session_grid_stamp() {
+            state.root.publish_grid(snapshot.session_grid())?;
+            state.publish_root();
+        }
+        deliver_session_anchor(state, snapshot.anchor());
+    }
+    Ok(())
+}
+
 fn refresh_observation<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
 ) -> Result<TransportObservation, SessionError> {
@@ -463,13 +494,7 @@ fn refresh_observation<B: AudioBackend, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    if let Some(snapshot) = observation.snapshot() {
-        if state.root.snapshot().stamp() != snapshot.session_grid_stamp() {
-            state.root.publish_grid(snapshot.session_grid())?;
-            state.publish_root();
-        }
-        deliver_session_anchor(state, snapshot.anchor());
-    }
+    publish_observed_session(state, observation)?;
     acknowledge_prepared_decks(state);
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
