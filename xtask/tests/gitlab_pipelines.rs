@@ -619,7 +619,6 @@ fn verdict_downloads_every_judged_apple_report() {
 fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     let config = GitlabConfig::load(workspace_root());
     let expected_jobs = BTreeSet::from([
-        "apple:e2e",
         "apple:ios",
         "apple:ios-test",
         "apple:lint",
@@ -642,7 +641,6 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
         ("apple:ios-test", ".rules-integration-and-review", true),
-        ("apple:e2e", ".rules-review-or-nightly", false),
     ] {
         assert_active_review_job(&config, job, owner, judged);
     }
@@ -787,12 +785,7 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
         );
     }
     let config = GitlabConfig::load(workspace_root());
-    for job in [
-        "apple:test",
-        "apple:test-flash-off",
-        "apple:ios-test",
-        "apple:e2e",
-    ] {
+    for job in ["apple:test", "apple:test-flash-off", "apple:ios-test"] {
         assert_eq!(
             config
                 .effective_value(job, "resource_group")

@@ -163,6 +163,7 @@ targets:
       - target: KitharaDemo_iOS
     settings:
       base:
+        PRODUCT_NAME: KitharaDemoUnitTests
         PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.unittests
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
