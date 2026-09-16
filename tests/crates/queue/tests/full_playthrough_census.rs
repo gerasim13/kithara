@@ -319,15 +319,12 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     }
 }
 
-/// Pace each block so the decode worker runs between them; without the yield
-/// the worker never refills the ring and the queue starves mid-track.
+/// Pace each block by its own duration so the decode worker runs between
+/// them; without the yield the worker never refills the ring and the queue
+/// starves mid-track.
 fn render_block_duration() -> Duration {
-    if cfg!(feature = "flash") {
-        let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(SAMPLE_RATE))
-    } else {
-        Duration::from_millis(1)
-    }
+    let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
+    Duration::from_secs_f64(f64::from(frames) / f64::from(SAMPLE_RATE))
 }
 
 #[derive(Default)]

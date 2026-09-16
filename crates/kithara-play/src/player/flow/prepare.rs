@@ -261,8 +261,8 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::small_block(32, 128, 8, 9)]
-    #[case::daw_default_block(64, 512, 16, 17)]
+    #[case::small_block(32, 128, 4, 5)]
+    #[case::daw_default_block(64, 512, 8, 9)]
     fn prepare_config_derives_playback_buffering(
         #[case] quantum: usize,
         #[case] output_buffer: u32,

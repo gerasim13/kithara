@@ -105,10 +105,9 @@ pub struct StreamShape {
 impl StreamShape {
     /// Compute decoder buffer depths from the output block.
     ///
-    /// The preload spans two output blocks and the ring holds one chunk more,
-    /// so a replacement can cover the rest of one callback and the next one.
-    /// Depth does not delay a control change: rate and tempo changes replace
-    /// queued PCM instead of draining it.
+    /// The preload spans one output block and the ring holds one chunk more.
+    /// A live rate change drains queued PCM rather than replacing it, so every
+    /// chunk deeper delays the change by one quantum.
     ///
     /// # Errors
     /// Returns an error when the geometry overflows.
@@ -118,10 +117,7 @@ impl StreamShape {
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let preload = output_frames
-            .div_ceil(quantum.get())
-            .checked_mul(2)
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let preload = output_frames.div_ceil(quantum.get());
         let ring = preload
             .checked_add(1)
             .ok_or(SessionError::ResponseGeometryOverflow)?;
