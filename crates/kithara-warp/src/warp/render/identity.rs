@@ -59,6 +59,11 @@ where
         ScheduledActivationProgress::AwaitingActivation
     }
 
+    /// Identity targets install no Warp map, so no chunk waits for a context.
+    pub const fn awaits_render_context(&mut self, _frame: u64) -> bool {
+        false
+    }
+
     /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(
         &mut self,

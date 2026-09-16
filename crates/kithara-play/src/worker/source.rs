@@ -1,5 +1,6 @@
 use kithara_audio::{
     AudioSource, Fetch, ScheduledSeekPreparation, SourceDiscontinuity, SourceEnd, TrackStep,
+    WaitingReason,
 };
 use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
@@ -73,6 +74,9 @@ pub(crate) struct WarpSource<T, S> {
     free_adoption_generation: u64,
     region_plan: Arc<RegionPlanSlot>,
     quantum_failed: bool,
+    /// Whether the staged span waits for the callback to publish a render
+    /// context before Warp can install its activation map.
+    awaits_render_context: bool,
 }
 
 impl<T, S> WarpSource<T, S>
@@ -111,6 +115,7 @@ where
             render_input: None,
             retired_input: None,
             quantum_failed: false,
+            awaits_render_context: false,
             free_adoption,
             free_adoption_generation: 0,
             region_plan,
@@ -135,6 +140,7 @@ where
         self.retire_pending_input();
         self.clear_staging();
         self.quantum_failed = false;
+        self.awaits_render_context = false;
     }
 
     fn prepare_staging(&mut self) {
@@ -156,6 +162,10 @@ where
         }) else {
             return;
         };
+        self.awaits_render_context = self.warp.awaits_render_context(meta.frame_offset);
+        if self.awaits_render_context {
+            return;
+        }
         let Some(frames) = self.warp.prepare_quantum(meta, remaining) else {
             self.quantum_failed = true;
             return;
@@ -696,6 +706,9 @@ where
         }
         if self.pending_input.is_some() {
             if self.prepared_frames.is_none() {
+                if self.awaits_render_context {
+                    return TrackStep::Blocked(WaitingReason::Waiting);
+                }
                 return TrackStep::StateChanged;
             }
             self.stage_pending();
@@ -711,6 +724,7 @@ where
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
+                    && !self.warp.awaits_render_context(data.meta.frame_offset)
                     && self
                         .warp
                         .prepare_quantum(data.meta, data.frames())

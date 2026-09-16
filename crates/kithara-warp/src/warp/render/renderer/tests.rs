@@ -589,6 +589,46 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
 }
 
 #[kithara::test]
+fn the_activation_source_awaits_a_published_render_context() {
+    let controls = StretchControls::new(1.0);
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let mut renderer = warp.renderer(spec(), pools());
+    let cue = 30_000;
+    let revision =
+        WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
+    warp.region_plan().install(Some(Arc::new(
+        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("fixture plan")
+            .with_activation(WarpMap::identity(revision).reanchor(
+                cue,
+                SessionFrame::new(92_903),
+                SessionBeat::default(),
+            )),
+    )));
+    renderer.reset();
+    renderer.prepare(spec());
+
+    assert!(renderer.awaits_render_context(cue));
+    assert!(!renderer.awaits_render_context(cue - 128));
+
+    let output = SessionFrame::new(1_000)..SessionFrame::new(1_128);
+    let context = RenderContext::new(
+        output.clone(),
+        spec().sample_rate,
+        Some(host_beats(output)),
+        SessionEpoch::new(1),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context")
+    .with_rate(SyncMode::HostSync, controls.rate_target());
+    publisher.publish_preparation(&context);
+
+    assert!(!renderer.awaits_render_context(cue));
+}
+
+#[kithara::test]
 fn post_seek_pcm_passing_the_activation_source_keeps_its_own_output_frontier() {
     let controls = StretchControls::new(1.0);
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();

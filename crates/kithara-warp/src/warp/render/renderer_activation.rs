@@ -39,6 +39,26 @@ where
         }
     }
 
+    /// Whether the source chunk that lands on the pending activation arrived
+    /// before the callback published a render context to prepare it against.
+    ///
+    /// Refreshes the live region plan first. That chunk is the only one that
+    /// can install the Warp map; rendering it without a context emits PCM of
+    /// the replaced map and consumes the discontinuity.
+    pub fn awaits_render_context(&mut self, frame: u64) -> bool {
+        if !self.discontinuity_pending {
+            return false;
+        }
+        self.sync_plan(frame);
+        self.plan
+            .as_ref()
+            .and_then(|plan| plan.activation())
+            .is_some_and(|activation| {
+                activation.source() == frame && self.applied_warp_map != Some(activation.revision())
+            })
+            && self.context.load_state().is_none()
+    }
+
     pub(super) fn activate_prepared_quantum(
         &mut self,
         chunk: &mut AudioChunk,
