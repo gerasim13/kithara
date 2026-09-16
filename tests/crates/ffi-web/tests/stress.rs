@@ -252,6 +252,7 @@ fn drain_stages(rx: &mut kithara::events::EventReceiver<TestEvent>) {
                 SeekLifecycleStage::SeekApplied => 1,
                 SeekLifecycleStage::DecodeStarted => 2,
                 SeekLifecycleStage::OutputCommitted => 3,
+                _ => continue,
             };
             STAGES.with(|s| s.borrow_mut()[slot] += 1);
         }
