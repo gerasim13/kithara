@@ -6,11 +6,18 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_os = "android"))]
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
+#[cfg(not(target_arch = "wasm32"))]
+mod loader_fixture;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use loader_fixture::append_loaded;
+pub(crate) use loader_fixture::wait_loaded;
 
 mod advance_boundary_provenance;
 mod app_fixture_ticks;
@@ -25,7 +32,6 @@ mod flac_swallow_fixture;
 mod full_playthrough_census;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
-mod hls_variant_playlists_concurrent;
 mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;

@@ -12,7 +12,6 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_signal::AudioSpec;
-use kithara_test_utils::kithara;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake};
 use ringbuf::{
     HeapProd, HeapRb,
@@ -317,8 +316,8 @@ impl BroadcastHandle {
 
     /// Finish handed-over audio and keep serving the resulting VOD tail.
     /// Repeated calls have no effect.
-    /// `no_block`: bounded synchronous bridge used from blocking app tasks.
-    #[kithara::allow_block]
+    /// This waits for the encoder to drain; call it from a blocking task,
+    /// never from an audio callback or an async runtime worker.
     pub fn stop(&self) {
         self.control.finish();
         self.wake.wake();
@@ -365,11 +364,13 @@ impl Drop for BroadcastHandle {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_output::LiveOutput;
     use kithara_platform::time::Duration;
     use kithara_stream::{AudioCodec, ContainerFormat};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::*;

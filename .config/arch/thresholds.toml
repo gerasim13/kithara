@@ -171,15 +171,23 @@ exempt_crates = [
 # Files where minting a fresh cancel root is sanctioned: consumer-crate owner
 # tops (App / FFI), FFI bridges that outlive the player, `CancelScope`'s
 # standalone root, and the dedicated never-cancelled sentinel / latch sites
-# (`kithara-stream` batch placeholder, `kithara-hls` peer `wake_signal`).
+# (`kithara-download` batch placeholder, `kithara-hls` peer `wake_signal`).
 allowed_files = [
   "crates/kithara-app/src/main.rs",
   "crates/kithara-ffi/src/native/inner.rs",
   "crates/kithara-ffi/src/core/item.rs",
   "crates/kithara-platform/src/common/cancel/scope.rs",
-  "crates/kithara-stream/src/dl/batch.rs",
+  "crates/kithara-download/src/batch.rs",
   "crates/kithara-hls/src/peer.rs",
 ]
+
+[smoothing_primitive_sites]
+# Parameter smoothing has one primitive (firewheel `SmoothedParam`, composed
+# as `MixDSP` for A-to-B transitions). A hand-rolled one-pole or a direct
+# `SmoothingFilter` is sanctioned only in the biquad gain bank.
+patterns = ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+allowed_files = ["crates/kithara-play/src/effects/eq/gain.rs"]
+exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]
 
 [tokio_dep_quarantine]
 # Crates whose direct tokio dependency is never flagged. `kithara-platform` is

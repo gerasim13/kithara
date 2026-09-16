@@ -2346,7 +2346,7 @@ public func FfiConverterTypeFfiAssetStore_lower(_ value: FfiAssetStore) -> UInt6
 /**
  * Position-dependent symmetric cipher for DRM key decryption.
  *
- * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
+ * Wraps `kithara::drm::UniqueBinaryCipher` for use from Swift/Kotlin.
  * Also implements `FfiKeyProcessor` so it can be passed directly
  * to `AudioPlayer.setKeyProcessor()`.
  */
@@ -2363,7 +2363,7 @@ public protocol FfiCipherProtocol: AnyObject, Sendable {
 /**
  * Position-dependent symmetric cipher for DRM key decryption.
  *
- * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
+ * Wraps `kithara::drm::UniqueBinaryCipher` for use from Swift/Kotlin.
  * Also implements `FfiKeyProcessor` so it can be passed directly
  * to `AudioPlayer.setKeyProcessor()`.
  */
@@ -7800,7 +7800,7 @@ public func FfiConverterTypeFfiTrackStatus_lower(_ value: FfiTrackStatus) -> Rus
 /**
  * Transition style for a track switch.
  *
- * Mirrors [`kithara_queue::Transition`]. Use [`FfiTransition::None`]
+ * Mirrors [`kithara::queue::Transition`]. Use [`FfiTransition::None`]
  * for immediate cuts (`AVQueuePlayer` user-initiated-selection idiom),
  * [`FfiTransition::Crossfade`] to use the player's configured
  * duration (typical for auto-advance and Next/Prev buttons), or

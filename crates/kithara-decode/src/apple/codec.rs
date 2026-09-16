@@ -281,6 +281,33 @@ impl AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
+    fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
+        let input_frames = if let Some(packets) =
+            super::audio_file_demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
+                .checked_div(self.input_bytes_per_packet)
+        {
+            packets
+                .max(1)
+                .checked_mul(self.frames_per_packet.max(1))
+                .ok_or(DecodeError::InvalidData {
+                    detail: "Apple PCM packet frame count overflows",
+                })?
+        } else {
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
+        };
+        let frames = output_frame_capacity(
+            input_frames,
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        )?
+        .max(self.eof_flush_frame_capacity()?);
+        out.ensure_len(output_sample_capacity(
+            frames,
+            usize::from(self.spec.channels),
+        )?)?;
+        Ok(())
+    }
+
     fn decode_frame(
         &mut self,
         frame_data: &[u8],

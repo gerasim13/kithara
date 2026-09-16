@@ -6,7 +6,6 @@ use std::{
 
 use kithara_assets::WriterEpoch;
 use kithara_bufpool::HasPool;
-use kithara_events::{FileError, FileEvent, TotalBytesSource};
 use kithara_net::{Headers, NetError, Retryability};
 use kithara_platform::{
     CancelToken,
@@ -14,7 +13,7 @@ use kithara_platform::{
 };
 use kithara_stream::MediaInfo;
 
-use crate::session::inner::FileInner;
+use crate::{FileError, FileEvent, TotalBytesSource, session::inner::FileInner};
 
 pub(super) struct FetchWriter<S>
 where

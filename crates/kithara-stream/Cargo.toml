@@ -10,26 +10,22 @@ keywords = ["audio", "streaming", "hls", "io", "seek"]
 categories = ["multimedia::audio", "asynchronous"]
 
 [package.metadata.cargo-machete]
-# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
-# `::serde::Deserialize`; no source line in this crate spells the crate out.
-ignored = ["serde", "unimock"]
+ignored = ["unimock"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = ["kithara-net/client-reqwest", "kithara-events/client-reqwest", "kithara-abr/client-reqwest"]
-client-wreq = ["kithara-net/client-wreq", "kithara-events/client-wreq", "kithara-abr/client-wreq"]
+client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
+client-wreq = ["kithara-net/client-wreq", "kithara-abr/client-wreq"]
 client-apple = ["kithara-net/client-apple"]
-tls-rustls = ["kithara-net/tls-rustls", "kithara-events/tls-rustls", "kithara-abr/tls-rustls"]
-tls-native = ["kithara-net/tls-native", "kithara-events/tls-native", "kithara-abr/tls-native"]
+tls-rustls = ["kithara-net/tls-rustls", "kithara-abr/tls-rustls"]
+tls-native = ["kithara-net/tls-native", "kithara-abr/tls-native"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
-kithara-derive = { workspace = true }
-kithara-events = { workspace = true, features = ["abr", "downloader"] }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -37,18 +33,12 @@ kithara-test-utils = { workspace = true }
 
 bitflags = { workspace = true }
 bon = { workspace = true }
-bytes = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-futures = { workspace = true }
-humantime-serde = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
-thunderdome = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
-url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -57,25 +47,15 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 hotpath = { workspace = true, optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = { workspace = true }
-wasm_safe_thread = { workspace = true }
-
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-stream = { path = ".", default-features = false, features = ["usdt"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
-dashmap = { workspace = true }
-serde_yaml_ng = { workspace = true }
-tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-platform = { workspace = true, features = ["tokio-net"] }
-
-axum = { workspace = true }
 
 [lints]
 workspace = true

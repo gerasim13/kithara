@@ -34,13 +34,11 @@ impl SharedEq {
         self.gains.store(Arc::new(band_array(gains)));
     }
 
-    pub(crate) fn reset(&self) {
-        for gain in self.gains.load().iter() {
-            gain.store(unity(), Ordering::Relaxed);
-        }
-    }
-
-    pub(crate) fn set_gain(&self, band: usize, gain_db: GainDb) -> Result<(), PlayError> {
+    /// Set a gain on the registered deck's control plane.
+    ///
+    /// # Errors
+    /// Returns an error when the band is outside the current layout.
+    pub fn set_gain(&self, band: usize, gain_db: GainDb) -> Result<(), PlayError> {
         let gains = self.gains.load();
         let Some(current) = gains.get(band) else {
             return Err(PlayError::EqBandOutOfRange {

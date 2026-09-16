@@ -1,5 +1,8 @@
 //! Hostile custom layout output must be rejected at the scope/key boundary.
 
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 #[path = "support/pools.rs"]
 mod support;
 
@@ -7,9 +10,8 @@ use kithara_assets::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetsError,
     StorageBackend,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use tempfile::tempdir;
 use url::Url;
 

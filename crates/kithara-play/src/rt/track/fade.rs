@@ -1,14 +1,12 @@
-use std::ops::Range;
+use std::{num::NonZeroU32, ops::Range};
 
-#[rustfmt::skip]
-use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;
-#[rustfmt::skip]
-use firewheel::param::smoother::SmootherConfig;
-use std::num::NonZeroU32;
-
-use firewheel::dsp::{
-    fade::FadeCurve,
-    mix::{Mix, MixDSP},
+use firewheel::{
+    dsp::{
+        fade::FadeCurve,
+        filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
+        mix::{Mix, MixDSP},
+    },
+    param::smoother::SmootherConfig,
 };
 
 #[derive(fieldwork::Fieldwork)]
@@ -18,6 +16,7 @@ pub(super) struct TrackFade {
     mix: MixDSP,
     #[field(get, vis = "pub(super)")]
     duration: f32,
+    next_duration: f32,
 }
 
 impl TrackFade {
@@ -25,6 +24,7 @@ impl TrackFade {
         Self {
             curve,
             duration,
+            next_duration: duration,
             mix: MixDSP::new(
                 Mix::FULLY_WET,
                 curve,
@@ -34,16 +34,18 @@ impl TrackFade {
         }
     }
 
-    pub(super) fn fade_in(&mut self) {
+    pub(super) fn fade_in(&mut self, sample_rate: NonZeroU32) {
+        if self.mix.has_settled() {
+            self.rebuild_if_latched(Mix::FULLY_WET, sample_rate);
+        }
         self.mix.set_mix(Mix::FULLY_DRY, self.curve);
     }
 
-    pub(super) fn fade_out(&mut self) {
+    pub(super) fn fade_out(&mut self, sample_rate: NonZeroU32) {
+        if self.mix.has_settled() {
+            self.rebuild_if_latched(Mix::FULLY_DRY, sample_rate);
+        }
         self.mix.set_mix(Mix::FULLY_WET, self.curve);
-    }
-
-    pub(super) fn has_settled(&self) -> bool {
-        self.mix.has_settled()
     }
 
     pub(super) fn mix_range(
@@ -71,8 +73,11 @@ impl TrackFade {
         );
     }
 
-    pub(super) fn play(&mut self) {
+    pub(super) fn play(&mut self, sample_rate: NonZeroU32) {
         let settled = self.mix.has_settled();
+        if settled {
+            self.rebuild_if_latched(Mix::FULLY_DRY, sample_rate);
+        }
         self.mix.set_mix(Mix::FULLY_DRY, self.curve);
         if settled {
             self.mix.reset_to_target();
@@ -86,33 +91,36 @@ impl TrackFade {
         }
     }
 
-    pub(super) fn stop(&mut self) {
+    pub(super) fn stop(&mut self, sample_rate: NonZeroU32) {
+        if self.mix.has_settled() {
+            self.rebuild_if_latched(Mix::FULLY_WET, sample_rate);
+        }
         self.mix.set_mix(Mix::FULLY_WET, self.curve);
         self.mix.reset_to_target();
     }
 
-    pub(super) fn update_duration(
-        &mut self,
-        duration: f32,
-        sample_rate: NonZeroU32,
-        leading: bool,
-    ) {
-        if (duration - self.duration).abs() < f32::EPSILON {
-            self.mix.update_sample_rate(sample_rate);
+    /// The next fade uses `duration`; a running fade keeps its own.
+    pub(super) fn set_next_duration(&mut self, duration: f32) {
+        self.next_duration = duration;
+    }
+
+    fn rebuild_if_latched(&mut self, target: Mix, sample_rate: NonZeroU32) {
+        if (self.next_duration - self.duration).abs() < f32::EPSILON {
             return;
         }
-
-        let target_mix = if leading {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
+        self.duration = self.next_duration;
         self.mix = MixDSP::new(
-            target_mix,
+            target,
             self.curve,
-            Self::smoother_config(duration),
+            Self::smoother_config(self.duration),
             sample_rate,
         );
-        self.duration = duration;
+    }
+
+    delegate::delegate! {
+        to self.mix {
+            pub(super) fn has_settled(&self) -> bool;
+            pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32);
+        }
     }
 }

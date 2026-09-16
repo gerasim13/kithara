@@ -4,20 +4,23 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    abr::AbrMode,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver},
+    download::{Downloader, DownloaderConfig},
+    events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant, timeout},
+        CancelToken, time,
+        time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     offline::{OfflinePlayer, WindowStats, rms},
     temp_dir,
 };
@@ -72,7 +75,7 @@ impl Consts {
 /// caller, unchanged.
 async fn render_and_collect(
     player: &mut OfflinePlayer,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     blocks: u32,
     samples_out: &mut Vec<f32>,
     deadline: Instant,
@@ -122,7 +125,7 @@ async fn render_and_collect(
 /// Drain pending bus events without blocking. Keeps the bounded broadcast bus
 /// from lagging while the render loop parks on the virtual clock; a lagged
 /// receiver would otherwise wedge later `try_recv` reads.
-fn drain_events(events: &mut EventReceiver) {
+fn drain_events(events: &mut EventReceiver<TestEvent>) {
     loop {
         match events.try_recv().map(|env| env.event) {
             Ok(_) => continue,
@@ -150,7 +153,7 @@ fn drain_events(events: &mut EventReceiver) {
 /// real backstop).
 async fn render_until_audio(
     player: &mut OfflinePlayer,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     min_position_secs: f64,
     deadline: Instant,
     stage: &str,
@@ -166,7 +169,7 @@ async fn render_until_audio(
         let mut advanced = false;
         loop {
             match events.try_recv().map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if u128::from(position_ms) > min_position_ms {
                         advanced = true;
                     }
@@ -223,9 +226,26 @@ async fn build_resource(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::symphonia_locked_low_product_android(DecoderBackend::default(), AbrMode::manual(0))
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::symphonia_locked_high_product_android(DecoderBackend::default(), AbrMode::manual(2))
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
@@ -282,7 +302,7 @@ async fn local_seek_middle_hang_iters(
         let mut events = resource.subscribe();
         player.load_and_fadein(resource).await;
 
-        // Event-driven warmup: drive the render pull until the worker has
+        // TestEvent-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),
         // instead of burning a fixed number of blocks that — under flash —
         // can finish before the worker primes the pipeline. Parks the body on

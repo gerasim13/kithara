@@ -7,7 +7,7 @@ use std::{
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_derive::Patch;
-use kithara_events::{AbrEvent, AbrMode, EventBus};
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
@@ -17,6 +17,7 @@ use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
 use super::peer::PeerEntry;
 use crate::{
+    AbrEvent, AbrMode,
     abr::Abr,
     estimator::{Estimator, ThroughputEstimator},
     handle::AbrHandle,

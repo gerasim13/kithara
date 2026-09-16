@@ -3,9 +3,10 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    abr::{AbrMode, VariantInfo},
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, VariantInfo},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -14,7 +15,6 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, Resource},
     queue::TrackSource,
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},

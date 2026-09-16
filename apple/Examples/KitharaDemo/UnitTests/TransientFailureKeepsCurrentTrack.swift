@@ -31,18 +31,16 @@ extension IntegrationRegressionsIOS {
         let currentCancellable = player.currentItem.sink { item in
             observation.recordCurrent(item)
         }
-        let stallCancellable = target.didStall.sink {
-            observation.recordStall()
-        }
-        let errorCancellable = target.error.sink { error in
-            observation.recordFailure(error)
+        let eventCancellable = target.eventPublisher.sink { event in
+            if case let .downloadFirstByte(_, _, status, _) = event, status == 503 {
+                observation.recordUnavailableFetch()
+            }
         }
         defer {
             player.stop()
             try? FileManager.default.removeItem(at: cacheURL)
             _ = currentCancellable
-            _ = stallCancellable
-            _ = errorCancellable
+            _ = eventCancellable
         }
 
         try player.insert(target)
@@ -62,29 +60,19 @@ extension IntegrationRegressionsIOS {
 
         let failureBeganAt = player.currentTime
         try await TestServerFixture.setNetwork(online: false)
-        let failureFact = await observeTransientFailure(
-            player,
-            observation: observation,
-            fallback: fallback
-        )
+        try await waitForTransientFailureFact("the offline HLS fetch to report HTTP 503") {
+            observation.receivedUnavailableFetch
+        }
         let positionAtRestore = player.currentTime
         try await TestServerFixture.setNetwork(online: true)
 
-        try #require(
-            failureFact != nil,
-            """
-            precondition: the brief outage produced no observable \
-            stall, failure, skip, or stopped playback; it began at \
-            \(failureBeganAt)s
-            """
-        )
         #expect(
             observation.matches(target),
             """
-            the transient failure permanently failed the HLS target \
-            and moved the queue to item \
+            the HLS target received HTTP 503 after the outage began at \
+            \(failureBeganAt)s, but the queue moved to item \
             \(observation.currentID.map(String.init) ?? "nil"); \
-            fallback=\(fallback.id), signal=\(failureFact?.description ?? "none")
+            fallback=\(fallback.id)
             """
         )
         guard observation.matches(target) else {
@@ -101,7 +89,7 @@ extension IntegrationRegressionsIOS {
             """
             the HLS target remained selected after the transient \
             failure but never advanced from \(positionAtRestore)s to \
-            \(recoveryTarget)s; signal=\(failureFact?.description ?? "none")
+            \(recoveryTarget)s after its HTTP 503 response
             """
         )
         #expect(
@@ -111,39 +99,6 @@ extension IntegrationRegressionsIOS {
             \(observation.currentID.map(String.init) ?? "nil") during recovery
             """
         )
-    }
-
-    private func observeTransientFailure(
-        _ player: KitharaPlayer,
-        observation: TransientFailureObservation,
-        fallback: KitharaPlayerItem
-    ) async -> TransientFailureFact? {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(45))
-        var lastPosition = player.currentTime
-        var stableSince = clock.now
-
-        while clock.now < deadline {
-            if observation.matches(fallback) {
-                return .autoSkipped
-            }
-            if let failure = observation.failure {
-                return .failed(failure)
-            }
-            if observation.didStall {
-                return .stalled
-            }
-
-            let position = player.currentTime
-            if position > lastPosition + 0.02 {
-                lastPosition = position
-                stableSince = clock.now
-            } else if stableSince.duration(to: clock.now) >= .seconds(2) {
-                return .stoppedAdvancing(position)
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        return nil
     }
 
     private func reachedTransientFailureFact(
@@ -176,31 +131,10 @@ extension IntegrationRegressionsIOS {
     }
 }
 
-private enum TransientFailureFact: CustomStringConvertible {
-    case autoSkipped
-    case failed(String)
-    case stalled
-    case stoppedAdvancing(TimeInterval)
-
-    var description: String {
-        switch self {
-        case .autoSkipped:
-            "auto-skipped"
-        case .failed(let error):
-            "failed: \(error)"
-        case .stalled:
-            "didStall"
-        case .stoppedAdvancing(let position):
-            "stopped at \(position)s"
-        }
-    }
-}
-
 private final class TransientFailureObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var itemID: Int64?
-    private var stalled = false
-    private var failureDescription: String?
+    private var unavailableFetch = false
 
     var currentID: Int64? {
         lock.lock()
@@ -208,16 +142,10 @@ private final class TransientFailureObservation: @unchecked Sendable {
         return itemID
     }
 
-    var didStall: Bool {
+    var receivedUnavailableFetch: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return stalled
-    }
-
-    var failure: String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return failureDescription
+        return unavailableFetch
     }
 
     func recordCurrent(_ item: KitharaPlayerItem?) {
@@ -226,16 +154,10 @@ private final class TransientFailureObservation: @unchecked Sendable {
         itemID = item?.id
     }
 
-    func recordStall() {
+    func recordUnavailableFetch() {
         lock.lock()
         defer { lock.unlock() }
-        stalled = true
-    }
-
-    func recordFailure(_ error: Error) {
-        lock.lock()
-        defer { lock.unlock() }
-        failureDescription = String(describing: error)
+        unavailableFetch = true
     }
 
     func matches(_ item: KitharaPlayerItem) -> Bool {

@@ -85,6 +85,12 @@ async fn offline_render_carries_fixture_signal() {
 
     assert_eq!(measured.len(), MEASURE_BLOCKS * BLOCK_FRAMES * CHANNELS);
     let level = rms(&measured);
+    let metrics = worker.call(async |player| player.metrics()).await;
+    assert_eq!(
+        metrics.underruns(),
+        0,
+        "offline rendering must not exhaust decoded audio"
+    );
     assert!(
         (MIN_RMS..=MAX_RMS).contains(&level),
         "full-scale sine renders at RMS {level:.4}, outside {MIN_RMS}..={MAX_RMS}"

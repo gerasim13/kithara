@@ -4,16 +4,14 @@
 //! downloader, a [`trait@Abr`] trait implemented by peers that want variant
 //! switching, and an [`AbrHandle`] returned on registration.
 //!
-//! Shared event vocabulary (`AbrMode`, `AbrReason`, `VariantInfo`,
-//! `BandwidthSource`, `AbrProgressSnapshot`, `VariantDuration`) comes from
-//! `kithara-events`; controller/state-owned types (`AbrSettings`,
-//! `AbrDecision`, `AbrPeerId`) are defined here and re-exported for convenience.
+//! Shared event vocabulary and controller state are defined here.
 
 #![forbid(unsafe_code)]
 
 mod abr;
 mod controller;
 mod estimator;
+mod event;
 mod handle;
 mod state;
 mod types;
@@ -25,10 +23,13 @@ pub use controller::AbrController;
 #[cfg(test)]
 pub use estimator::EstimatorMock;
 pub use estimator::{Estimator, ThroughputEstimator};
+pub use event::{
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError,
+    VariantDuration, VariantIndex, VariantInfo,
+};
 pub use handle::AbrHandle;
 pub use state::{AbrError, AbrPublisher, AbrState, AbrView};
 pub use types::{
-    AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrSettingsPatch,
-    AbrTicket, BandwidthSource, BoundsError, PendingAbrClaim, PendingAbrDecision, VariantDuration,
-    VariantIndex, VariantInfo,
+    AbrDecision, AbrPeerId, AbrSettings, AbrSettingsPatch, AbrTicket, PendingAbrClaim,
+    PendingAbrDecision,
 };

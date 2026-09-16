@@ -17,6 +17,9 @@ pub struct SemverArgs {
     /// baseline is a revision here rather than a crates.io release.
     #[arg(long, default_value = "HEAD~1")]
     pub baseline: String,
+    /// Features needed only to compile the selected baseline revision.
+    #[arg(long = "baseline-feature")]
+    pub baseline_features: Vec<String>,
 }
 
 /// Runs the configured public-surface comparison against a revision.
@@ -51,7 +54,11 @@ pub(crate) fn run(args: &SemverArgs, ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
     let status = Command::new("cargo")
-        .args(semver_args(&args.baseline, &packages))
+        .args(semver_args(
+            &args.baseline,
+            &packages,
+            &args.baseline_features,
+        ))
         .status()?;
     if !status.success() {
         return Err(NotClean::reported("semver-checks"));
@@ -77,10 +84,17 @@ fn packages_to_compare<'a>(
 /// `compile_error!`, and one of the three needs bytes that are quantized on a
 /// developer machine. The surface this stage is about is the one a consumer
 /// gets from a plain dependency, and that is the default set.
-fn semver_args<'a>(baseline: &'a str, packages: &[&'a str]) -> Vec<&'a str> {
+fn semver_args<'a>(
+    baseline: &'a str,
+    packages: &[&'a str],
+    baseline_features: &'a [String],
+) -> Vec<&'a str> {
     let mut args = vec!["semver-checks", "check-release", "--default-features"];
     for package in packages {
         args.extend(["--package", *package]);
+    }
+    for feature in baseline_features {
+        args.extend(["--baseline-features", feature]);
     }
     args.extend(["--baseline-rev", baseline, "--release-type", "minor"]);
     args
@@ -188,7 +202,7 @@ source = "git+https://github.com/example/firewheel#0000000"
 
     #[test]
     fn semver_command_compares_only_named_packages_as_a_minor_release() {
-        let args = semver_args("origin/main", &["kithara", "kithara-ffi"]);
+        let args = semver_args("origin/main", &["kithara", "kithara-ffi"], &[]);
 
         assert!(args.windows(2).any(|pair| pair == ["--package", "kithara"]));
         assert!(
@@ -207,8 +221,21 @@ source = "git+https://github.com/example/firewheel#0000000"
     /// models at once and a build that cannot resolve its own model bytes.
     #[test]
     fn semver_command_pins_the_default_feature_set() {
-        let args = semver_args("origin/main", &["kithara"]);
+        let args = semver_args("origin/main", &["kithara"], &[]);
 
         assert!(args.contains(&"--default-features"), "{args:?}");
+    }
+
+    #[test]
+    fn semver_command_can_repair_only_the_baseline_feature_closure() {
+        let features = vec!["backend-cpal".to_owned()];
+        let args = semver_args("origin/main", &["kithara"], &features);
+
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--baseline-features", "backend-cpal"]),
+            "{args:?}"
+        );
+        assert!(!args.contains(&"--features"), "{args:?}");
     }
 }

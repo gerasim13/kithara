@@ -1,3 +1,9 @@
+use std::num::NonZeroU32;
+
+use firewheel_core::dsp::{
+    fade::FadeCurve,
+    mix::{Mix, MixDSP},
+};
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
@@ -7,9 +13,10 @@ use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::Gain
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
+    bypass: MixDSP,
+    silence: MixDSP,
     filters: CrossoverFilters,
     gains: GainBank,
-    was_in_fastpath: bool,
 }
 
 impl IsolatorEq {
@@ -21,6 +28,18 @@ impl IsolatorEq {
     where
         S: HasPool<f32>,
     {
+        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        let bypass = if bands.iter().all(|band| band.gain_db() == GainDb::default()) {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        let silence = if !bands.is_empty() && bands.iter().all(|band| band.gain_db() == GainDb::MIN)
+        {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
         let sample_rate: f32 = sample_rate.as_();
         let crossover_count = bands.len().saturating_sub(1);
         let mut crossover_freqs = config.pools().get_with_len::<f32>(crossover_count)?;
@@ -28,45 +47,69 @@ impl IsolatorEq {
             *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
         }
         Ok(Self {
+            bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
+            silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
             filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
-            gains: GainBank::new(bands.iter().map(EqBandConfig::gain_db), sample_rate),
-            was_in_fastpath: false,
+            gains: GainBank::new(
+                bands.iter().map(EqBandConfig::gain_db),
+                sample_rate,
+                config.smoothing(),
+            ),
         })
     }
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        // WHY: Guarding the input covers the bypass and silence paths too.
         let input = sanitize_sample(input);
         self.gains.tick();
-        if self.gains.silence_active() {
-            self.filters.record(input);
-            self.was_in_fastpath = true;
-            return 0.0;
-        }
-        if self.gains.bypass_active() {
-            self.filters.record(input);
-            self.was_in_fastpath = true;
-            return input;
-        }
-        if self.was_in_fastpath {
-            self.was_in_fastpath = false;
-            self.filters.rehydrate();
-        }
-        match self.gains.len() {
+        let mut output = [match self.gains.len() {
             0 => input,
             1 => sanitize_sample(input * self.gains.linear(0)),
             _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
-        }
+        }];
+        self.bypass.mix_dry_into_wet_mono(&[input], &mut output, 1);
+        self.silence.mix_dry_into_wet_mono(&[0.0], &mut output, 1);
+        sanitize_sample(output[0])
     }
 
     pub fn reset(&mut self) {
         self.gains.reset();
         self.filters.reset();
-        self.was_in_fastpath = false;
+        self.update_mix();
+        self.bypass.reset_to_target();
+        self.silence.reset_to_target();
+    }
+
+    pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
+        self.gains.set(band, gain_db);
+        self.update_mix();
+    }
+
+    fn update_mix(&mut self) {
+        let all =
+            |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));
+        self.bypass.set_mix(
+            if all(GainDb::default()) {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            FadeCurve::Linear,
+        );
+        self.silence.set_mix(
+            if self.gains.len() > 0 && all(GainDb::MIN) {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            FadeCurve::Linear,
+        );
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
+        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.bypass.update_sample_rate(rate);
+        self.silence.update_sample_rate(rate);
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
@@ -81,16 +124,7 @@ impl IsolatorEq {
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
             #[cfg(test)]
-            pub(crate) fn bypass_active(&self) -> bool;
-            #[cfg(test)]
             pub(crate) fn is_smoothing(&self) -> bool;
-            #[call(set)]
-            pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
-            #[cfg(test)]
-            #[call(settle)]
-            pub(crate) fn settle_gain(&mut self, band: usize);
-            #[cfg(test)]
-            pub(crate) fn silence_active(&self) -> bool;
         }
     }
 }
@@ -124,6 +158,39 @@ mod tests {
             .count();
 
         assert_eq!(denormals, 0, "impulse tail leaked {denormals} denormals");
+    }
+
+    /// A gain move from unity is a ramp at the sample rate: no output sample
+    /// steps by more than the tone's own slope plus the smoother's per-sample share.
+    #[kithara::test]
+    fn a_gain_move_from_unity_never_steps() {
+        const SAMPLE_RATE: u32 = 48_000;
+        const TONE_HZ: f32 = 440.0;
+        const CHANGE_AT: usize = 480;
+        let bands = super::super::band::generate_log_spaced_bands(3);
+        let config = EqConfig::builder(pools()).build();
+        let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
+            .unwrap_or_else(|error| panic!("test isolator: {error}"));
+        let tone =
+            |n: usize| (n as f32 * TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32).sin();
+        let mut previous = eq.process_sample(tone(0));
+        let mut max_step = 0.0_f32;
+        for n in 1..SAMPLE_RATE as usize {
+            if n == CHANGE_AT {
+                eq.set_gain(1, GainDb::MIN);
+            }
+            let out = eq.process_sample(tone(n));
+            if n >= CHANGE_AT / 2 {
+                max_step = max_step.max((out - previous).abs());
+            }
+            previous = out;
+        }
+        let slope = TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32;
+        let ramp = 1.0 / (config.smoothing().smooth_seconds * SAMPLE_RATE as f32);
+        assert!(
+            max_step <= slope + ramp,
+            "a gain move stepped the output: {max_step} > {slope} + {ramp}"
+        );
     }
 
     #[kithara::test]

@@ -9,6 +9,7 @@ use kithara::{
         BeatState, Coverage, FrameRange, Waveform,
     },
     assets::StorageBackend,
+    download::{Downloader, DownloaderConfig},
     events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -24,7 +25,6 @@ use kithara::{
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::QueueConfig,
-    stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
@@ -122,7 +122,8 @@ pub(crate) fn revision_held(rx: &watch::Receiver<Option<AnalysisProgress>>) -> O
 
 pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
-    let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    let mut host =
+        AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)

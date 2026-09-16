@@ -3,22 +3,24 @@ use std::num::NonZeroU32;
 use arc_swap::ArcSwap;
 use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
-    node::NodeID, nodes::volume::VolumeNode,
+    node::NodeID, nodes::volume::VolumeNode, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{
+    GroupState, SessionSampleRate, StreamShape, player::PlayerMember, session::RegisteredPlayer,
+};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncStatusSnapshot,
 };
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::{restart_stream, trace_stream_info},
-    graph::{ducking_gain, tap},
+    dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
+    graph::tap,
     protocol::{PlayerId, SessionError, StartStreamFn},
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
 };
@@ -48,6 +50,7 @@ pub(super) struct Deck<S> {
     pub(super) pools: PoolRegion<S>,
     pub(super) shared_eq: SharedEq,
     pub(super) eq_layout: Vec<EqBandConfig>,
+    pub(super) gate_smoothing: SmootherConfig,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
     pub(super) master_volume: f32,
@@ -62,6 +65,7 @@ impl<S> Deck<S> {
         eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
         master_volume: f32,
+        gate_smoothing: SmootherConfig,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -70,6 +74,7 @@ impl<S> Deck<S> {
         Self {
             bus,
             eq_layout,
+            gate_smoothing,
             pools,
             player_id,
             grid_id,
@@ -151,7 +156,9 @@ pub(super) enum MixTap {
 }
 
 struct RootSnapshot {
-    grid: kithara_warp::BeatGridSnapshot,
+    sample_rate: SessionSampleRate,
+    stream_shape: Option<StreamShape>,
+    grid: BeatGridSnapshot,
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
 }
@@ -160,32 +167,49 @@ struct RootSnapshot {
 pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>) -> Self {
+    pub(crate) fn new(root: &GroupState<PlayerMember>, sample_rate: NonZeroU32) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
             grid: root.snapshot(),
+            stream_shape: None,
+            sample_rate: SessionSampleRate::new(None, sample_rate.get()),
             status: root.status(),
             topology: root.topology(),
         })))
     }
 
-    pub(crate) fn grid(&self) -> kithara_warp::BeatGridSnapshot {
-        self.0.load().grid.clone()
-    }
-
-    fn publish(&self, root: &GroupState<PlayerMember>) {
+    fn publish(
+        &self,
+        root: &GroupState<PlayerMember>,
+        stream_shape: Option<StreamShape>,
+        sample_rate: SessionSampleRate,
+    ) {
         self.0.store(Arc::new(RootSnapshot {
+            stream_shape,
+            sample_rate,
             grid: root.snapshot(),
             status: root.status(),
             topology: root.topology(),
         }));
     }
 
-    pub(crate) fn status(&self) -> SyncStatusSnapshot {
-        self.0.load().status
-    }
-
-    pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.0.load().topology.clone()
+    delegate::delegate! {
+        to self.0 {
+            #[call(load)]
+            #[expr($.grid.clone())]
+            pub(crate) fn grid(&self) -> BeatGridSnapshot;
+            #[call(load)]
+            #[expr($.sample_rate)]
+            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
+            #[call(load)]
+            #[expr($.stream_shape)]
+            pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
+            #[call(load)]
+            #[expr($.status)]
+            pub(crate) fn status(&self) -> SyncStatusSnapshot;
+            #[call(load)]
+            #[expr($.topology.clone())]
+            pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
+        }
     }
 }
 
@@ -197,12 +221,12 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
+    pub(super) session_ducking: SessionDuckingMode,
     pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
-    pub(super) session_ducking: SessionDuckingMode,
     pub(super) transport: SessionTransportState,
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) stream_needs_restart: bool,
@@ -210,7 +234,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
 }
 
 impl<B: AudioBackend, S> SessionState<B, S> {
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology.
@@ -228,7 +252,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
-        Self {
+        let state = Self {
             requested_max_block_frames,
             root,
             root_view,
@@ -246,11 +270,14 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
             graph: GraphRegistry::default(),
-        }
+        };
+        state.publish_root();
+        state
     }
 
     pub(super) fn publish_root(&self) {
-        self.root_view.publish(&self.root);
+        self.root_view
+            .publish(&self.root, stream_shape(self), sample_rate(self));
     }
 }
 
@@ -261,7 +288,8 @@ pub(super) fn register_player<B: AudioBackend, S>(
     eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
     sample_rate: u32,
-) -> Result<PlayerId, SessionError> {
+    gate_smoothing: SmootherConfig,
+) -> Result<RegisteredPlayer, SessionError> {
     NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
     let next_player_id = player_id
@@ -281,7 +309,19 @@ pub(super) fn register_player<B: AudioBackend, S>(
             level: master_volume,
         });
     }
-    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, master_volume);
+    let deck = Deck::new(
+        player_id,
+        grid_id,
+        bus,
+        eq_layout,
+        pools,
+        master_volume,
+        gate_smoothing,
+    );
+    let registration = RegisteredPlayer {
+        id: player_id,
+        eq: deck.shared_eq.clone(),
+    };
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(
@@ -289,7 +329,7 @@ pub(super) fn register_player<B: AudioBackend, S>(
         players = state.graph.len(),
         "[KITHARA-ROUTE] session player registered"
     );
-    Ok(player_id)
+    Ok(registration)
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend, S>(
@@ -348,6 +388,7 @@ fn create_firewheel_context<B: AudioBackend, S>(
     state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
+    state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");
     Ok(())
@@ -370,7 +411,7 @@ fn create_session_output<B: AudioBackend, S>(
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_node = VolumeNode::from_linear(ducking_gain(state.session_ducking));
+    let session_node = VolumeNode::from_linear(state.session_ducking.gain());
     let session_memo = Memo::new(session_node);
     let session_id = fw_ctx.add_node(session_node, None);
     let limiter_id = fw_ctx.add_node(LimiterNode, None);

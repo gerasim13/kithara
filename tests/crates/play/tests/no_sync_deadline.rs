@@ -61,7 +61,15 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(block_frames, "block frames"),
     };
-    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    (
+        PlayerNodeProcessor::new(
+            inputs,
+            shape,
+            &pools(),
+            kithara::play::DEFAULT_GATE_SMOOTHING,
+        ),
+        control,
+    )
 }
 
 fn send(control: &mut SlotControl, cmd: PlayerCmd) {

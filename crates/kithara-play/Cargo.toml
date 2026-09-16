@@ -17,42 +17,42 @@ default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwes
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
+    "kithara-download/client-reqwest",
     "kithara-stream/client-reqwest",
     "kithara-file/client-reqwest",
     "kithara-hls/client-reqwest",
     "kithara-audio/client-reqwest",
     "kithara-decode/client-reqwest",
-    "kithara-events/client-reqwest",
     "kithara-abr/client-reqwest",
 ]
 client-wreq = [
     "kithara-net/client-wreq",
+    "kithara-download/client-wreq",
     "kithara-stream/client-wreq",
     "kithara-file/client-wreq",
     "kithara-hls/client-wreq",
     "kithara-audio/client-wreq",
     "kithara-decode/client-wreq",
-    "kithara-events/client-wreq",
     "kithara-abr/client-wreq",
 ]
 tls-rustls = [
     "kithara-net/tls-rustls",
+    "kithara-download/tls-rustls",
     "kithara-stream/tls-rustls",
     "kithara-file/tls-rustls",
     "kithara-hls/tls-rustls",
     "kithara-audio/tls-rustls",
     "kithara-decode/tls-rustls",
-    "kithara-events/tls-rustls",
     "kithara-abr/tls-rustls",
 ]
 tls-native = [
     "kithara-net/tls-native",
+    "kithara-download/tls-native",
     "kithara-stream/tls-native",
     "kithara-file/tls-native",
     "kithara-hls/tls-native",
     "kithara-audio/tls-native",
     "kithara-decode/tls-native",
-    "kithara-events/tls-native",
     "kithara-abr/tls-native",
 ]
 apple = ["kithara-audio/apple", "kithara-decode/apple"]
@@ -68,9 +68,7 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
-# Re-export of testing helpers (engine module + macro mocks).
-# Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
-probe = ["kithara-test-utils/probe", "kithara-warp/probe", "kithara-worker/probe"]
+usdt = ["kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
 mock = ["dep:unimock"]
 perf = [
     "dep:hotpath",
@@ -89,6 +87,7 @@ kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true }
+kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
@@ -138,17 +137,21 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-audio = { workspace = true, features = ["mock", "probe"] }
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-play = { path = ".", default-features = false, features = ["mock", "probe"] }
-kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-audio = { workspace = true, features = ["usdt", "mock"] }
+kithara-bufpool = { workspace = true }
+kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,7 +1,9 @@
 use kithara::{
     self,
-    abr::{AbrController, AbrMode, AbrState, ThroughputEstimator},
-    events::{BandwidthSource, VariantIndex, VariantInfo},
+    abr::{
+        AbrController, AbrMode, AbrState, BandwidthSource, ThroughputEstimator, VariantIndex,
+        VariantInfo,
+    },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
 

@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -10,7 +11,6 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     PackagedTestServer,

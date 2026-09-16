@@ -9,11 +9,12 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
-    hls::{Hls, HlsConfig},
+    download::{DownloaderEvent, RequestId},
+    hls::{Hls, HlsConfig, HlsEvent},
     platform::{
         sync::Arc,
         time::Duration,
@@ -27,6 +28,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,
     bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
     mixed_encrypted, mixed_plain, temp_dir,
 };
 use tracing::info;
@@ -233,7 +235,7 @@ fn spawn_live_stats_task(
             };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
                         locked.initial_variant = Some(initial.get());
                     }
@@ -241,24 +243,24 @@ fn spawn_live_stats_task(
                         locked.current_variant = Some(initial.get());
                     }
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                     locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) => {
                     if let Some(key) = parse_segment_url(url.as_str()) {
                         locked.pending_requests.insert(request_id, key);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(key) = locked.pending_requests.remove(&request_id) {
                         let entry = locked.network_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
@@ -401,18 +403,24 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(Consts::browser_timeout(30, 120)),
+    timeout(if cfg!(target_os = "android") {
+        Duration::from_secs(120)
+    } else {
+        Consts::browser_timeout(30, 120)
+    }),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
-#[case::hls_sw("HLS", DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_sw("HLS", DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_android("HLS", DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_hw("HLS", DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_sw("DRM", DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_sw("DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_android("DRM", DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_hw("DRM", DecoderBackend::Apple, mixed_encrypted().await)
@@ -464,7 +472,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
                         locked.initial_variant = Some(initial.get());
                     }
@@ -472,24 +480,24 @@ async fn live_ephemeral_revisit_sequence_regression(
                         locked.current_variant = Some(initial.get());
                     }
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                     locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) => {
                     if let Some(key) = parse_segment_url(url.as_str()) {
                         locked.pending_requests.insert(request_id, key);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(key) = locked.pending_requests.remove(&request_id) {
                         let entry = locked.network_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
@@ -865,7 +873,7 @@ async fn live_stress_real_stream_seek_read_cache(
                 };
                 let mut locked = stats_bg.lock().expect("stats lock poisoned");
                 match event {
-                    Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                    TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                         if locked.initial_variant.is_none() {
                             locked.initial_variant = Some(initial.get());
                         }
@@ -873,24 +881,28 @@ async fn live_stress_real_stream_seek_read_cache(
                             locked.current_variant = Some(initial.get());
                         }
                     }
-                    Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                         locked.current_variant = Some(to.get());
                         locked.variant_switches = locked.variant_switches.saturating_add(1);
                     }
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
+                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id,
+                        url,
+                        ..
                     }) => {
                         if let Some(key) = parse_segment_url(url.as_str()) {
                             locked.pending_requests.insert(request_id, key);
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                        request_id, ..
+                    }) => {
                         if let Some(key) = locked.pending_requests.remove(&request_id) {
                             let entry = locked.network_hits.entry(key).or_insert(0);
                             *entry = entry.saturating_add(1);
                         }
                     }
-                    Event::Hls(HlsEvent::SegmentReadStart {
+                    TestEvent::Hls(HlsEvent::SegmentReadStart {
                         variant,
                         segment_index,
                         ..
@@ -1229,12 +1241,14 @@ async fn live_ephemeral_small_cache_playback(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_hw(false, "HLS", DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_sw(true, "DRM", DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_sw(true, "DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_android(true, "DRM", DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_hw(true, "DRM", DecoderBackend::Apple, mixed_encrypted().await)

@@ -3,10 +3,11 @@
 use std::{collections::HashSet, fmt, path::Path};
 
 use dashmap::DashSet;
-use kithara_events::{AssetEvent, EventBus, EvictReason};
+use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::{
+    AssetEvent, EvictReason,
     backend::AssetDeleter,
     decorator::{Assets, Capabilities},
     error::AssetsResult,

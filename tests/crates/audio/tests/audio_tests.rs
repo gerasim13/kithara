@@ -1,23 +1,25 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, num::NonZeroU32};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    decode::{GaplessMode, SilenceTrimParams},
-    events::{
-        AudioEvent, DecoderBackend, DecoderChangeCause, DecoderEvent, Event, EventBus,
-        EventReceiver, SeekEpoch, SeekLifecycleStage,
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderBackend,
+        DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
     },
+    decode::{GaplessMode, SilenceTrimParams},
+    events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
-    stream::{ContainerFormat, MediaInfo},
+    signal::AudioSpec,
+    stream::{ContainerFormat, MediaInfo, SeekEpoch},
 };
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     reads::blocking_audio,
 };
@@ -44,11 +46,14 @@ async fn wait_for_frames<R: AudioRead>(audio: &mut R, budget: Duration) -> usize
 }
 
 /// Drains events until a `SeekLifecycle::SeekRequest` arrives, returning its epoch.
-async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) -> SeekEpoch {
+async fn await_seek_request_epoch(
+    events: &mut EventReceiver<TestEvent>,
+    budget: Duration,
+) -> SeekEpoch {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
@@ -99,29 +104,38 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let _audio = worker.open(config).await.unwrap();
 }
 
+/// The decoder topic opens with the initial `DecoderChanged`.
+///
+/// The receiver takes that one topic on purpose. A multi-member set polls its
+/// members in declaration order, so a worker that already enqueued
+/// `AudioEvent::FormatDetected` on its first pass would preempt this event on
+/// a shared receiver no matter which was published first.
 #[kithara::test(tokio)]
 async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let bus = EventBus::new(16);
-    let mut events = bus.subscribe();
+    let mut events: EventReceiver<DecoderEvent> = bus.subscribe();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(config.stream().clone())
         .maybe_hint(config.hint().map(str::to_owned))
         .events(bus)
         .build();
 
     let audio = worker.open(config).await.unwrap();
+    #[cfg(target_os = "android")]
+    let expected_backend = DecoderBackend::Android;
+    #[cfg(not(target_os = "android"))]
     let expected_backend = DecoderBackend::Symphonia;
 
     match events.try_recv().map(|env| env.event) {
-        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+        Ok(DecoderEvent::DecoderChanged {
             backend,
             sample_rate,
             channels,
             cause,
             ..
-        })) => {
+        }) => {
             assert_eq!(backend, expected_backend);
             assert_eq!(sample_rate, audio.spec().sample_rate.get());
             assert_eq!(channels, audio.spec().channels);
@@ -129,6 +143,33 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
         }
         other => panic!("expected initial DecoderChanged event, got {other:?}"),
     }
+}
+
+/// A receiver over several topics reports no order between them.
+///
+/// It polls its members in declaration order and yields the first that holds
+/// an event, so `TestEvent`'s `Audio` preempts a `Decoder` event published
+/// before it. Publication order survives only inside one topic.
+#[kithara::test]
+fn a_shared_receiver_prefers_its_earlier_declared_topic() {
+    let bus = EventBus::new(16);
+    let mut shared: EventReceiver<TestEvent> = bus.subscribe();
+    let mut decoder: EventReceiver<DecoderEvent> = bus.subscribe();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+
+    bus.publish(DecoderEvent::TransitionHold {
+        source_exhausted: false,
+    });
+    bus.publish(AudioEvent::FormatDetected { spec });
+
+    assert!(matches!(
+        shared.try_recv().map(|env| env.event),
+        Ok(TestEvent::Audio(AudioEvent::FormatDetected { .. }))
+    ));
+    assert!(matches!(
+        decoder.try_recv().map(|env| env.event),
+        Ok(DecoderEvent::TransitionHold { .. })
+    ));
 }
 
 #[kithara::test]
@@ -286,7 +327,7 @@ async fn test_audio_playback_progress_uses_output_commit(wav_1024: NamedTempFile
     let mut saw_progress = false;
     let deadline = Instant::now() + Duration::from_millis(300);
     while Instant::now() < deadline {
-        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
             position_ms,
             total_ms,
             seek_epoch,
@@ -325,7 +366,7 @@ async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut matched_epoch = None;
     while Instant::now() < deadline {
-        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
             time::timeout(Duration::from_millis(40), events.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
@@ -354,7 +395,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv().map(|env| env.event) {
-        if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
+        if matches!(event, TestEvent::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
         }
@@ -382,7 +423,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,
                 ..
@@ -390,7 +431,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_output_committed = true;
             }
-            Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_seek_complete = true;
                 break;

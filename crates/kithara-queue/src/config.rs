@@ -52,16 +52,6 @@ where
     #[patch(skip)]
     pub player: PlayerImpl<S>,
 
-    /// Whether the queue auto-starts playback once the first registered track
-    /// finishes loading. A document cannot name this: the field is read only
-    /// under `cfg(any(test, feature = "probe"))` (`queue/lifecycle.rs`), and
-    /// `kithara-app` ships without `probe`, so a document key would configure
-    /// nothing in the binary. It carries `#[patch(skip)]` for that reason, and
-    /// naming it is refused rather than silently dropped.
-    #[builder(default = true)]
-    #[patch(skip)]
-    pub should_autoplay: bool,
-
     /// Lead time in seconds before EOF at which the next queued track
     /// is preloaded into the audio processor. Default: 3.5. Stays `f32`
     /// seconds rather than the campaign's `humantime` duration convention:
@@ -70,6 +60,14 @@ where
     /// formatting preference.
     #[builder(default = DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
+
+    /// Whether the queue starts playback by itself once the first track
+    /// appended to a queue with nothing selected finishes loading. Off by
+    /// default: the embedding decides when playback starts. A document cannot
+    /// name it, because starting playback is the embedding's choice.
+    #[builder(default = false)]
+    #[patch(skip)]
+    pub should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
@@ -86,6 +84,7 @@ where
         f.debug_struct("QueueConfig")
             .field("max_concurrent_loads", &self.max_concurrent_loads)
             .field("prefetch_duration", &self.prefetch_duration)
+            .field("should_autoplay", &self.should_autoplay)
             .field("max_history_size", &self.max_history_size)
             .finish_non_exhaustive()
     }
@@ -156,17 +155,5 @@ mod document_tests {
             .expect_err("a typo must not be silently ignored");
 
         assert!(error.to_string().contains("concurrent_load_cap"), "{error}");
-    }
-
-    /// `should_autoplay` is read only under `cfg(any(test, feature = "probe"))`
-    /// and `kithara-app` ships without `probe`, so a document key would
-    /// configure nothing in the binary. Naming it is refused rather than
-    /// silently dropped.
-    #[kithara::test(native, flash(false))]
-    fn the_probe_only_autoplay_flag_is_not_a_document_key() {
-        let error = serde_yaml_ng::from_str::<QueueConfigPatch>("should_autoplay: false\n")
-            .expect_err("a flag the shipped binary never reads must not be document-settable");
-
-        assert!(error.to_string().contains("should_autoplay"), "{error}");
     }
 }

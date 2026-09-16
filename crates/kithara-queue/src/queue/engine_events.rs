@@ -1,16 +1,19 @@
 use std::sync::PoisonError;
 
+use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
-use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
-    TrackId, TrackStatus,
-};
+use kithara_events::{Envelope, EventSet, TrackId};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+use kithara_play::{ItemRole, PlayerEvent};
 use tracing::debug;
 
 use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
+};
+use crate::{
+    attempts::LoadClass,
+    event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus},
 };
 
 impl<S> QueueControl<S>
@@ -35,6 +38,20 @@ where
         if self.player.current_index() != before_index {
             self.write_armed_for(CrossfadeArm::armed(current_id));
         }
+    }
+
+    fn handle_prefetch_requested(&self) {
+        let Some(next) = self.next_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Consumed) {
+            return;
+        }
+        let Some(source) = self.tracks.source(next.id) else {
+            return;
+        };
+        self.set_status(next.id, TrackStatus::Pending);
+        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
     }
 
     /// If an advance was already armed from `tick()`, consume it and
@@ -170,24 +187,27 @@ where
         let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
     }
 
-    pub(super) fn process_player_event(&self, ev: &Event) {
+    pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                 self.handle_item_did_play_to_end(item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidFail { item }) => {
                 self.handle_item_did_fail(item);
             }
-            Event::Player(PlayerEvent::CurrentItemChanged) => {
+            PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
             }
-            Event::Player(PlayerEvent::HandoverRequested { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::PrefetchRequested) => {
+                self.handle_prefetch_requested();
+            }
+            PlayerBusEvent::Player(PlayerEvent::HandoverRequested { item }) => {
                 self.handle_handover_requested(item);
             }
-            Event::Audio(AudioEvent::UnderrunStarted { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunStarted { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackStalled);
             }
-            Event::Audio(AudioEvent::UnderrunEnded { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunEnded { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp);
             }
             _ => {}
@@ -197,15 +217,86 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, PlayerEvent, QueueEvent};
+    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
+    use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        QueueControl,
+        event::{QueueEvent, TrackStatus},
+        queue::state::tests::{make_queue, wait_for_queue_event},
+        test_pools::TestPools,
+    };
+
+    fn selected_second(queue: &QueueControl<TestPools>) -> (TrackId, TrackId) {
+        let first = queue
+            .append("https://example.com/repeated.mp3")
+            .expect("open queue accepts first repeated source");
+        let second = queue
+            .append("https://example.com/repeated.mp3")
+            .expect("open queue accepts second repeated source");
+        queue.lock_navigation_mut().select(1);
+        queue.player.set_rate(1.0);
+        (first, second)
+    }
+
+    #[kithara::test(tokio)]
+    async fn leading_failure_marks_the_played_entry_when_sources_repeat() {
+        let queue = make_queue();
+        let (first, second) = selected_second(&queue);
+
+        queue.handle_item_did_fail(&ItemRole::Leading(TrackRef::new(
+            second,
+            SlotId::new(0),
+            Arc::from("https://example.com/repeated.mp3"),
+        )));
+
+        assert!(
+            !matches!(
+                queue.track(first).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "an event for the second repeated source must not fail the first entry"
+        );
+        assert!(
+            matches!(
+                queue.track(second).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "the entry named by the player event must be failed"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn background_end_and_failure_leave_the_current_entry_untouched() {
+        let queue = make_queue();
+        let (background, current) = selected_second(&queue);
+        let item = ItemRole::Background(TrackRef::new(
+            background,
+            SlotId::new(1),
+            Arc::from("https://example.com/repeated.mp3"),
+        ));
+
+        queue.handle_item_did_play_to_end(&item);
+        queue.handle_item_did_fail(&item);
+
+        assert_eq!(queue.current().map(|entry| entry.id), Some(current));
+        assert!(
+            !matches!(
+                queue.track(background).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "a background failure must not fail its queue entry"
+        );
+    }
 
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
         let queue = make_queue();
-        let id = queue.probe_register();
+        let id = queue
+            .append("https://example.com/lagged-events.mp3")
+            .expect("open queue accepts a track");
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue
@@ -237,4 +328,11 @@ mod tests {
             "lag recovery should re-announce the current track"
         );
     }
+}
+
+#[derive(Clone, Debug, EventSet)]
+#[non_exhaustive]
+pub(crate) enum PlayerBusEvent {
+    Player(PlayerEvent),
+    Audio(AudioEvent),
 }

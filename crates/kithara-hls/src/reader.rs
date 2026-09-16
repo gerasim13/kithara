@@ -2,14 +2,17 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::HasPool;
 #[cfg(test)]
-use kithara_events::{AbrMode, VariantIndex};
-use kithara_events::{DeferredBus, HlsEvent};
+use kithara_abr::{AbrMode, VariantIndex};
+use kithara_bufpool::HasPool;
+use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
-use crate::stream::{HlsCoord, HlsSession};
+use crate::{
+    HlsEvent,
+    stream::{HlsCoord, HlsSession},
+};
 
 enum HlsReaderRoute<S>
 where
@@ -256,7 +259,7 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{Event, EventBus};
+    use kithara_events::EventBus;
     use kithara_platform::{
         CancelToken,
         sync::{Arc, ThreadGate},
@@ -410,27 +413,27 @@ mod tests {
 
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadStart {
+            Ok(HlsEvent::SegmentReadStart {
                 variant: 0,
                 segment_index: 0,
                 byte_offset: 0,
-            }))
+            })
         ));
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadComplete {
+            Ok(HlsEvent::SegmentReadComplete {
                 variant: 0,
                 segment_index: 0,
                 bytes_read: 100,
-            }))
+            })
         ));
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadStart {
+            Ok(HlsEvent::SegmentReadStart {
                 variant: 0,
                 segment_index: 1,
                 byte_offset: 100,
-            }))
+            })
         ));
     }
 }

@@ -13,18 +13,18 @@ fn remote_capture_metadata_publishes_opened() {
     assert!(matches!(
         rx.try_recv(),
         Ok(Envelope {
-            event: Event::File(FileEvent::TotalBytesResolved { .. }),
+            event: FileEvent::TotalBytesResolved { .. },
             ..
         })
     ));
     assert!(matches!(
         rx.try_recv(),
         Ok(Envelope {
-            event: Event::File(FileEvent::Opened {
+            event: FileEvent::Opened {
                 cached: false,
                 total_bytes: Some(12),
                 ..
-            }),
+            },
             ..
         })
     ));
@@ -54,7 +54,7 @@ fn marking_complete_publishes_cache_complete_once() {
     assert!(matches!(
         rx.try_recv(),
         Ok(Envelope {
-            event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
+            event: FileEvent::CacheComplete { total_bytes: 12 },
             ..
         })
     ));

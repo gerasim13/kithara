@@ -75,5 +75,8 @@ deps:features:
 deps:semver:
   extends: .deps-job
   timeout: 60 minutes
+  rules:
+    - !reference [.rules-weekly, rules]
+    - if: $KITHARA_PIPELINE_KIND == "release"
   script:
     - just ci run deps-semver

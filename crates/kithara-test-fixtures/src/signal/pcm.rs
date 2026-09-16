@@ -78,7 +78,7 @@ impl From<Pcm> for Vec<u8> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 impl kithara_encode::PcmSource for Pcm {
     fn channels(&self) -> u16 {
         self.channels
@@ -102,7 +102,7 @@ impl kithara_encode::PcmSource for Pcm {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_encode::PcmSource;
     use kithara_test_utils::kithara;

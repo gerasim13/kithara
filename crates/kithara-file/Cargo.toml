@@ -20,40 +20,37 @@ perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
+    "kithara-download/client-reqwest",
     "kithara-stream/client-reqwest",
-    "kithara-events/client-reqwest",
     "kithara-abr/client-reqwest",
 ]
 client-wreq = [
     "kithara-net/client-wreq",
+    "kithara-download/client-wreq",
     "kithara-stream/client-wreq",
-    "kithara-events/client-wreq",
     "kithara-abr/client-wreq",
 ]
 tls-rustls = [
     "kithara-net/tls-rustls",
+    "kithara-download/tls-rustls",
     "kithara-stream/tls-rustls",
-    "kithara-events/tls-rustls",
     "kithara-abr/tls-rustls",
 ]
 tls-native = [
     "kithara-net/tls-native",
+    "kithara-download/tls-native",
     "kithara-stream/tls-native",
-    "kithara-events/tls-native",
     "kithara-abr/tls-native",
 ]
-# No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
-# `unexpected_cfgs` warnings on this crate. No production code is
-# gated by this feature; the probe arg is observed via USDT in test
-# builds only.
-probe = []
+# Enables the crate's USDT probe points.
+usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
@@ -80,8 +77,9 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-bufpool = { workspace = true }
+kithara-file = { path = ".", default-features = false, features = ["usdt"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

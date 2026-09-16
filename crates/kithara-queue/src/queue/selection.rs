@@ -1,14 +1,16 @@
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
+use kithara_events::TrackId;
 use kithara_play::SelectTransition;
 
-#[cfg(test)]
-use super::types::SelectPhase;
 use super::{
     QueueControl,
     types::{PendingSelect, Transition},
 };
-use crate::{attempts::LoadClass, error::QueueError};
+use crate::{
+    attempts::LoadClass,
+    error::QueueError,
+    event::{AdvanceReason, QueueEvent, TrackStatus},
+};
 
 mod apply;
 mod navigation;
@@ -41,6 +43,15 @@ where
         // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
         // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let _apply = self.lock_select_apply();
+        self.select_with_reason_locked(id, transition, reason)
+    }
+
+    pub(super) fn select_with_reason_locked(
+        &self,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+    ) -> Result<(), QueueError> {
         let (index, status) = {
             let guard = self.lock_tracks();
             guard
@@ -51,7 +62,16 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        if self.player.current_index() == index && self.player.is_playing() {
+        // WHY: `is_playing` outlives the item: the render thread reports a natural
+        // end and only drops the flag when it cleans up finished tracks a block
+        // later. Re-selecting the current entry in that window is exactly what
+        // repeat-one does at EOF, and treating it as "already playing" left the
+        // track `Consumed` with nothing reloading it. A slot that no longer holds
+        // its resource has been played out, whatever the flag still says.
+        if self.player.current_index() == index
+            && self.player.is_playing()
+            && self.player.item_has_resource(index)
+        {
             self.cancel_stale_pending(id);
             return Ok(());
         }
@@ -59,26 +79,7 @@ where
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                let was_playing = self.player.is_playing();
-                let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-                if was_playing && crossfade > 0.0 {
-                    self.bus.publish(QueueEvent::CrossfadeStarted {
-                        duration_seconds: crossfade,
-                    });
-                }
-                self.player.select_item_with_crossfade(
-                    index,
-                    SelectTransition {
-                        autoplay: true,
-                        crossfade_seconds: crossfade,
-                    },
-                )?;
-                self.lock_navigation_mut().select(index);
-                self.bus.publish(QueueEvent::CurrentTrackAdvance {
-                    reason,
-                    id: Some(id),
-                });
-                self.set_status(id, TrackStatus::Consumed);
+                self.select_loaded_item(index, id, transition, reason)?;
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
@@ -87,27 +88,55 @@ where
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
-                if let Some(result) = self.try_replant_test_resource(id, index, transition) {
-                    return result;
-                }
                 let source = self.tracks.source(id).ok_or(QueueError::NotReady(id))?;
                 self.override_pending_select(PendingSelect { id, transition });
                 self.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
             }
-            _ => Err(QueueError::NotReady(id)),
         }
+    }
+
+    pub(in crate::queue) fn select_loaded_item(
+        &self,
+        index: usize,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+    ) -> Result<(), QueueError> {
+        let was_playing = self.player.is_playing();
+        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+        if was_playing && crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
+        }
+        self.player.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: crossfade,
+            },
+        )?;
+        self.lock_navigation_mut().select(index);
+        self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            reason,
+            id: Some(id),
+        });
+        self.set_status(id, TrackStatus::Consumed);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::QueueEvent;
     use kithara_test_utils::kithara;
 
-    use super::*;
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use super::{super::types::SelectPhase, *};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue

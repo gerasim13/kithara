@@ -8,20 +8,18 @@ use std::{
 
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
 use kithara_bufpool::HasPool;
-use kithara_events::{
-    AudioCodecKind, ContainerKind, EventBus, FileError, FileEvent, TotalBytesSource,
-};
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Weak},
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, WorkerWake};
+use kithara_stream::{AudioCodec, MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
-use crate::coord::FileCoord;
+use crate::{FileError, FileEvent, TotalBytesSource, coord::FileCoord};
 
 const CODEC_SNIFF_BYTES: usize = 16;
 
@@ -241,7 +239,7 @@ where
         let (codec, container) = self
             .content_type_info
             .get()
-            .map_or((None, None), map_media_info);
+            .map_or((None, None), |info| (info.codec, info.container));
         self.source.bus.publish(FileEvent::Opened {
             codec,
             container,
@@ -349,41 +347,4 @@ where
     let mut buf = [0u8; CODEC_SNIFF_BYTES];
     let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()
-}
-
-fn map_media_info(info: &MediaInfo) -> (Option<AudioCodecKind>, Option<ContainerKind>) {
-    (
-        info.codec.map(map_audio_codec),
-        info.container.map(map_container),
-    )
-}
-
-const fn map_audio_codec(codec: AudioCodec) -> AudioCodecKind {
-    match codec {
-        AudioCodec::AacLc => AudioCodecKind::AacLc,
-        AudioCodec::AacHe => AudioCodecKind::AacHe,
-        AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
-        AudioCodec::Mp3 => AudioCodecKind::Mp3,
-        AudioCodec::Flac => AudioCodecKind::Flac,
-        AudioCodec::Vorbis => AudioCodecKind::Vorbis,
-        AudioCodec::Opus => AudioCodecKind::Opus,
-        AudioCodec::Alac => AudioCodecKind::Alac,
-        AudioCodec::Pcm => AudioCodecKind::Pcm,
-        AudioCodec::Adpcm => AudioCodecKind::Adpcm,
-    }
-}
-
-const fn map_container(container: ContainerFormat) -> ContainerKind {
-    match container {
-        ContainerFormat::Mp4 => ContainerKind::Mp4,
-        ContainerFormat::Fmp4 => ContainerKind::Fmp4,
-        ContainerFormat::MpegTs => ContainerKind::MpegTs,
-        ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
-        ContainerFormat::Adts => ContainerKind::Adts,
-        ContainerFormat::Flac => ContainerKind::Flac,
-        ContainerFormat::Wav => ContainerKind::Wav,
-        ContainerFormat::Ogg => ContainerKind::Ogg,
-        ContainerFormat::Caf => ContainerKind::Caf,
-        ContainerFormat::Mkv => ContainerKind::Mkv,
-    }
 }

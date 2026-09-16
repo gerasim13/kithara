@@ -11,11 +11,12 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
-    LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
-    config::CiConfig, run::CacheGroup,
+    LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, SCCACHE_SLOT_CACHE_NAMESPACE,
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -27,6 +28,7 @@ impl Consts {
     /// fixtures than the 256 descriptor soft limit a macOS session starts
     /// with. The lane raises its own ceiling so every executor gets the same
     /// budget.
+    #[cfg(unix)]
     const OPEN_FILES: u64 = 65536;
     /// How often the gate re-asks a volume it is waiting on. What it waits for
     /// is a neighbouring job ending, so it re-asks on the scale a job finishes
@@ -75,8 +77,9 @@ impl SccacheSlot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CacheTrust {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CacheTrust {
     Quarantine,
     Review,
     Trusted,
@@ -87,7 +90,7 @@ impl CacheTrust {
     /// root covers everything that can appear in it.
     pub(super) const ALL: [Self; 3] = [Self::Quarantine, Self::Review, Self::Trusted];
 
-    fn from_environment() -> Result<Self> {
+    pub(super) fn from_environment() -> Result<Self> {
         match env::var("KITHARA_CACHE_TRUST")
             .unwrap_or_else(|_| "review".into())
             .as_str()
@@ -99,7 +102,7 @@ impl CacheTrust {
         }
     }
 
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Quarantine => "quarantine",
             Self::Review => "review",
@@ -262,7 +265,13 @@ pub(crate) struct CiEnvironment {
 }
 
 impl CiEnvironment {
-    pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, cache_group: CacheGroup) -> Result<Self> {
+    pub(crate) fn prepare(
+        ctx: &Ctx,
+        config: &CiConfig,
+        cache_group: CacheGroup,
+        isolated_target: bool,
+        lane: Option<&str>,
+    ) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
         let project_root =
@@ -271,26 +280,20 @@ impl CiEnvironment {
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .context("HOME or USERPROFILE must be set")?;
-        let shared_root = shared_root(config, cache_group);
-        let shared_root = if shared_root.is_dir() {
-            shared_root
-        } else if is_ci() {
-            bail!(
-                "shared CI cache is not mounted at {}",
-                shared_root.display()
-            );
-        } else {
-            home.join(".cache/kithara-ci")
-        };
-        fs::create_dir_all(&shared_root)
-            .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
+        let shared_root = prepare_shared_root(config, cache_group, &home)?;
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let target_scope = format!("{}-{platform}", trust.as_str());
         let cache_root = shared_root.join(trust.as_str()).join(&platform);
-        let (target, target_lease) =
-            prepare_build_target(&project_root, &shared_root, &target_scope, config)?;
+        let (target, target_lease) = prepare_build_target(
+            &project_root,
+            &shared_root,
+            &target_scope,
+            config,
+            isolated_target,
+            lane,
+        )?;
 
         ensure_room_for_a_job(config, &shared_root)?;
 
@@ -382,6 +385,7 @@ impl CiEnvironment {
             insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
             insert(&mut vars, "SCCACHE_CACHE_SIZE", &sccache.paths.cache_size);
             insert(&mut vars, "SCCACHE_DIR", &sccache.paths.directory);
+            insert(&mut vars, "SCCACHE_IDLE_TIMEOUT", SCCACHE_IDLE_TIMEOUT);
             if let Some(server_uds) = &sccache.paths.server_uds {
                 insert(&mut vars, "SCCACHE_SERVER_UDS", server_uds);
             }
@@ -497,26 +501,79 @@ fn shared_root(config: &CiConfig, cache_group: CacheGroup) -> PathBuf {
     }
 }
 
+fn prepare_shared_root(config: &CiConfig, cache_group: CacheGroup, home: &Path) -> Result<PathBuf> {
+    let configured = shared_root(config, cache_group);
+    let root = if configured.is_dir() {
+        configured
+    } else if is_ci() {
+        bail!("shared CI cache is not mounted at {}", configured.display());
+    } else {
+        home.join(".cache/kithara-ci")
+    };
+    fs::create_dir_all(&root)
+        .with_context(|| format!("creating CI cache root {}", root.display()))?;
+    Ok(root)
+}
+
 fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
+}
+
+enum TargetOwner {
+    Checkout,
+    Job(String),
+    Slot(String, usize),
+    /// The fleet's build root and the lane that builds in it.
+    Lane(PathBuf, String),
+}
+
+/// Where a runner mounts the build root every lane claims a directory under.
+/// Absent on an executor that builds in its checkout.
+const TARGET_ROOT_ENV: &str = "KITHARA_CI_TARGET_ROOT";
+
+fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result<TargetOwner> {
+    if !is_gitlab() || cfg!(windows) {
+        // A runner that mounts the fleet's build root lets the lane own its
+        // build directory: the same lane asks for the same features, profile
+        // and toolchain every run, so it finds that build warm on whichever
+        // runner picked the job up.
+        if let (Some(root), Some(lane)) = (env::var_os(TARGET_ROOT_ENV), lane) {
+            return Ok(TargetOwner::Lane(PathBuf::from(root), lane.to_owned()));
+        }
+        return Ok(TargetOwner::Checkout);
+    }
+    if isolated {
+        return Ok(TargetOwner::Job(
+            env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?,
+        ));
+    }
+    Ok(TargetOwner::Slot(
+        env::var("CI_CONCURRENT_ID")
+            .context("CI_CONCURRENT_ID must identify the disposable runner slot")?,
+        config.host.job_concurrency,
+    ))
 }
 
 fn build_target_dir(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    target_is_windows: bool,
-    gitlab: bool,
-    concurrent_id: Option<&str>,
-    slots: usize,
+    owner: TargetOwner,
 ) -> Result<PathBuf> {
-    if gitlab && !target_is_windows {
-        let slot = disposable_slot(concurrent_id, slots)?;
-        return Ok(shared_root
-            .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
-            .join(format!("{target_scope}-slot-{slot}")));
-    }
-    Ok(project_root.join("target"))
+    let owner = match owner {
+        TargetOwner::Checkout => return Ok(project_root.join("target")),
+        TargetOwner::Lane(root, lane) => return Ok(root.join(format!("lane-{lane}"))),
+        TargetOwner::Job(job_id) => {
+            format!("job-{}", parse_decimal_id("CI_JOB_ID", &job_id)?)
+        }
+        TargetOwner::Slot(concurrent_id, slots) => {
+            format!("slot-{}", disposable_slot(Some(&concurrent_id), slots)?)
+        }
+    };
+    Ok(shared_root
+        .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+        .join(format!("{target_scope}-{owner}"))
+        .join("cargo"))
 }
 
 fn prepare_build_target(
@@ -524,23 +581,65 @@ fn prepare_build_target(
     shared_root: &Path,
     target_scope: &str,
     config: &CiConfig,
+    isolated_target: bool,
+    lane: Option<&str>,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
-    let target = build_target_dir(
-        project_root,
-        shared_root,
-        target_scope,
-        cfg!(windows),
-        is_gitlab(),
-        concurrent_id.as_deref(),
-        config.host.job_concurrency,
-    )?;
-    fs::create_dir_all(&target)
-        .with_context(|| format!("creating CI build cache {}", target.display()))?;
+    let owner = target_owner(config, isolated_target, lane)?;
+    let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
+    fs::create_dir_all(&backing)
+        .with_context(|| format!("creating CI build cache {}", backing.display()))?;
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
-    let lease = lease::hold(&target);
+    let lease = lease::hold(&backing);
+    let target = expose_build_target(project_root, &backing, is_gitlab(), cfg!(windows))?;
     Ok((target, lease))
+}
+
+fn expose_build_target(
+    project_root: &Path,
+    backing: &Path,
+    gitlab: bool,
+    target_is_windows: bool,
+) -> Result<PathBuf> {
+    if !gitlab || target_is_windows {
+        return Ok(backing.to_path_buf());
+    }
+
+    let target = project_root.join("target");
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(&target)
+                .with_context(|| format!("replacing stale CI target link {}", target.display()))?;
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir_all(&target)
+                .with_context(|| format!("removing legacy checkout target {}", target.display()))?;
+        }
+        Ok(_) => bail!("CI target path is not a directory: {}", target.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading CI target link {}", target.display()));
+        }
+    }
+    create_target_link(backing, &target)?;
+    Ok(target)
+}
+
+#[cfg(unix)]
+fn create_target_link(backing: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(backing, target).with_context(|| {
+        format!(
+            "linking stable CI target {} to {}",
+            target.display(),
+            backing.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
+    unreachable!("Windows keeps its build target in the checkout")
 }
 
 /// Refuse a job only once there is nothing left to reclaim and nothing left to
@@ -689,6 +788,7 @@ fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiCon
     let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
+            config.host.host_root.join("toolchains/shared-bin"),
             config.host.android_home.join("cmdline-tools/latest/bin"),
             config.host.android_home.join("emulator"),
             config.host.android_home.join("platform-tools"),
@@ -757,6 +857,21 @@ mod tests {
                 .unwrap()
                 .index(),
             0
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_jobs_can_resolve_provisioned_shared_tools() {
+        let config = super::super::config::fixture();
+        let mut vars = BTreeMap::new();
+
+        set_path(&mut vars, Path::new("/ci-home"), &config).unwrap();
+
+        let paths = env::split_paths(vars.get(OsStr::new("PATH")).unwrap()).collect::<Vec<_>>();
+        assert!(
+            paths.contains(&config.host.host_root.join("toolchains/shared-bin")),
+            "CI PATH omits provisioned shared tools: {paths:?}"
         );
     }
 
@@ -873,10 +988,11 @@ mod tests {
             let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
             let project = root.join("project");
             fs::create_dir_all(&project).unwrap();
-            let ctx = Ctx::new(project, ProjectConfig::default());
+            let ctx = Ctx::new(project.clone(), ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let environment = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos).unwrap();
+            let environment =
+                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, None).unwrap();
             let vars = environment.vars();
             assert_eq!(
                 vars.get(OsStr::new("KITHARA_FIXTURE_CACHE"))
@@ -886,11 +1002,34 @@ mod tests {
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            assert_eq!(
+                fs::canonicalize(
+                    vars.get(OsStr::new("CARGO_TARGET_DIR"))
+                        .expect("prepared environment names its Cargo target")
+                )
+                .unwrap(),
+                fs::canonicalize(
+                    root.join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+                        .join(format!(
+                            "review-{}-{}-slot-1",
+                            env::consts::OS,
+                            env::consts::ARCH
+                        ))
+                        .join("cargo")
+                )
+                .unwrap()
+            );
 
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
                 Some(cache_root.join("sccache-slots/slot-0").as_os_str())
             );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_BASEDIRS"))
+                    .map(OsString::as_os_str),
+                Some(project.as_os_str())
+            );
+            assert!(vars.get(OsStr::new("SCCACHE_BASEDIR")).is_none());
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_SERVER_UDS"))
                     .map(OsString::as_os_str),
@@ -900,6 +1039,11 @@ mod tests {
                 vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
                     .map(OsString::as_os_str),
                 Some(config.host.sccache_slot_size().unwrap().as_str().as_ref())
+            );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_IDLE_TIMEOUT"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new(SCCACHE_IDLE_TIMEOUT))
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
@@ -933,6 +1077,7 @@ mod tests {
             .env("CI_JOB_ID", "29")
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
@@ -954,7 +1099,8 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos) else {
+            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, None)
+            else {
                 panic!("prepare unexpectedly succeeded");
             };
             assert!(error.to_string().contains("joining CI PATH"));
@@ -978,6 +1124,7 @@ mod tests {
             .env("CI_JOB_ID", "30")
             .env("HOME", directory.path().join("invalid:home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
@@ -1086,41 +1233,108 @@ mod tests {
         assert_eq!(reclaimed_from, 0);
     }
 
+    /// The runner that mounts the fleet's build root hands reuse to the lane:
+    /// the same lane asks for the same features, profile and toolchain every
+    /// run, so its directory is warm on whichever runner picked the job up. A
+    /// runner-owned directory made a moved lane compile the workspace again.
     #[test]
-    fn gitlab_targets_live_in_the_persistent_runner_slot() {
+    fn a_lane_builds_in_its_own_directory_under_the_shared_root() {
         let target = build_target_dir(
-            Path::new("/builds/disrupt/kithara"),
+            Path::new("/runner/_work/kithara/kithara"),
             Path::new("/cache"),
-            "review-linux-aarch64",
-            false,
-            true,
-            Some("1"),
-            3,
+            "review-linux-x86_64",
+            TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-test".to_owned()),
         )
         .unwrap();
 
-        assert_eq!(
+        assert_eq!(target, Path::new("/cache/target/lane-linux-test"));
+        assert_ne!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-slot-1")
+            build_target_dir(
+                Path::new("/runner/_work/kithara/kithara"),
+                Path::new("/cache"),
+                "review-linux-x86_64",
+                TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-lint".to_owned()),
+            )
+            .unwrap()
         );
     }
 
     #[test]
-    fn macos_gitlab_targets_live_in_the_persistent_runner_slot() {
+    fn gitlab_targets_are_persistent_and_private_to_one_slot() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
-            "review-macos-aarch64",
-            false,
-            true,
-            Some("1"),
-            3,
+            "review-linux-aarch64",
+            TargetOwner::Slot("0".to_owned(), 2),
         )
         .unwrap();
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-macos-aarch64-slot-1")
+            Path::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
+        );
+        assert_ne!(
+            target,
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                TargetOwner::Slot("1".to_owned(), 2),
+            )
+            .unwrap()
+        );
+        assert!(
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                TargetOwner::Slot("../trusted".to_owned(), 2),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                TargetOwner::Job("4711".to_owned()),
+            )
+            .unwrap(),
+            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitlab_jobs_keep_one_cargo_visible_target_over_private_backings() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        let first = root.path().join("cache/job-4711/cargo");
+        let second = root.path().join("cache/job-4712/cargo");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "[workspace]").unwrap();
+        fs::create_dir_all(project.join("target/xtask-self-cache")).unwrap();
+        fs::write(project.join("target/stale"), "legacy checkout target").unwrap();
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        let visible = expose_build_target(&project, &first, true, false).unwrap();
+        fs::write(visible.join("first"), "owned by the first job").unwrap();
+        let same_visible = expose_build_target(&project, &second, true, false).unwrap();
+        fs::write(same_visible.join("second"), "owned by the second job").unwrap();
+
+        assert_eq!(visible, project.join("target"));
+        assert_eq!(same_visible, visible);
+        assert!(!first.join("stale").exists());
+        assert!(first.join("first").is_file());
+        assert!(!first.join("second").exists());
+        assert!(second.join("second").is_file());
+        assert!(!second.join("first").exists());
+        assert!(
+            build_cache::persistent_target_dirs(&project)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -1130,10 +1344,7 @@ mod tests {
             Path::new("/work/kithara"),
             Path::new("/cache"),
             "review-macos-aarch64",
-            false,
-            false,
-            None,
-            3,
+            TargetOwner::Checkout,
         )
         .unwrap();
 

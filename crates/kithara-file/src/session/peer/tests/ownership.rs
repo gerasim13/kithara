@@ -209,7 +209,7 @@ fn late_cancelled_epoch_cannot_poison_successor() {
         WriterOutcome::Current(Ok(()))
     ));
     let first_bus = EventBus::new(16);
-    let mut first_events = first_bus.subscribe();
+    let mut first_events = first_bus.subscribe::<FileEvent>();
     let first = make_inner(first_reader, first_lease, first_coord, first_bus);
 
     let successor_coord = make_coord();
@@ -251,7 +251,7 @@ fn late_cancelled_epoch_cannot_poison_successor() {
     assert_ready_bytes(&store, &key, b"oldnew");
 
     while let Ok(event) = successor_events.try_recv() {
-        assert!(!matches!(event.event, Event::File(FileEvent::Error { .. })));
+        assert!(!matches!(event.event, FileEvent::Error { .. }));
     }
     drop(successor_writer);
     drop(first_writer);

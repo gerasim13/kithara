@@ -146,6 +146,11 @@ impl RunnerManager<'_> {
             ],
             vec!["wasm-pack".to_owned(), "--version".to_owned()],
             vec!["sccache".to_owned(), "--version".to_owned()],
+            vec!["ld.lld".to_owned(), "--version".to_owned()],
+            vec!["mold".to_owned(), "--version".to_owned()],
+            vec!["ninja".to_owned(), "--version".to_owned()],
+            vec!["mc".to_owned(), "--version".to_owned()],
+            vec!["zstd".to_owned(), "--version".to_owned()],
             vec!["firefox".to_owned(), "--version".to_owned()],
             vec!["chromium".to_owned(), "--version".to_owned()],
         ];

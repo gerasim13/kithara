@@ -18,6 +18,21 @@ lanes:loom:
   script:
     - just ci run linux-loom
 
+lanes:fixtures:
+  extends: .lane-job
+  script:
+    - just ci run linux-fixtures
+
+lanes:tooling:
+  extends: .lane-job
+  script:
+    - just ci run linux-tooling
+
+lanes:harness:
+  extends: .lane-job
+  script:
+    - just ci run linux-harness
+
 # Live HLS packaging. It reports rather than judges: `allow_failure`, and out of
 # `verdict`'s `needs`, because the feature ships to nobody yet.
 #
@@ -35,6 +50,18 @@ lanes:integration-regressions:
   extends: .lane-job
   script:
     - just ci run linux-integration-regressions
+
+lanes:usdt:
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-integration, rules]
+  stage: lanes
+  timeout: 180 minutes
+  needs: []
+  script:
+    - just ci run linux-usdt
 
 # Linux CI runs in containers with no output device, so `apple:e2e` serves the
 # hardware-dependent e2e lanes.

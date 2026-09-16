@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::atomic::Ordering};
+use std::{
+    collections::VecDeque,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::atomic::Ordering,
+};
 
 use bon::Builder;
 use firewheel::{
@@ -9,6 +13,7 @@ use firewheel::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
         ProcessStatus,
     },
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
@@ -25,6 +30,7 @@ use crate::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    session::SessionError,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -97,6 +103,40 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
+    /// Compute decoder buffer depths within the output response budget.
+    ///
+    /// # Errors
+    /// Returns an error when the geometry overflows or exceeds the budget.
+    pub fn playback_buffers(
+        self,
+        quantum: NonZeroUsize,
+        budget: NonZeroUsize,
+    ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+        let output_frames = usize::try_from(self.max_block_frames.get())
+            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
+        let preload = output_frames.div_ceil(quantum.get());
+        let ring = preload
+            .checked_add(1)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let required_frames = ring
+            .checked_add(1)
+            .and_then(|chunks| chunks.checked_mul(quantum.get()))
+            .and_then(|frames| frames.checked_sub(1))
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        if required_frames > budget.get() {
+            return Err(SessionError::ResponseBudgetExceeded {
+                required_frames,
+                max_block_frames: self.max_block_frames.get(),
+                render_quantum_frames: quantum.get(),
+                budget_frames: budget.get(),
+            });
+        }
+        Ok((
+            NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
+            NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
+        ))
+    }
+
     #[must_use]
     pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
         Self {
@@ -115,11 +155,22 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new<S>(inputs: NodeInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
+    pub fn new<S>(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+        gate_smoothing: SmootherConfig,
+    ) -> Self
     where
         S: HasPool<f32>,
     {
-        Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
+        Self::with_context_requirement(
+            inputs,
+            shape,
+            pools,
+            gate_smoothing,
+            ContextRequirement::Standalone,
+        )
     }
 
     /// Clean up finished tracks, dropping `playing` once none is audible.
@@ -269,7 +320,7 @@ impl PlayerNodeProcessor {
 
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
-            .iter()
+            .iter_mut()
             .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
@@ -338,6 +389,7 @@ impl PlayerNodeProcessor {
         inputs: NodeInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
+        gate_smoothing: SmootherConfig,
         context_requirement: ContextRequirement,
     ) -> Self
     where
@@ -352,7 +404,7 @@ impl PlayerNodeProcessor {
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pools, shape),
+            render: RenderPass::new(pools, shape, gate_smoothing),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
@@ -444,7 +496,10 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+        (
+            PlayerNodeProcessor::new(inputs, shape, &pools(), crate::DEFAULT_GATE_SMOOTHING),
+            control,
+        )
     }
 
     fn session_processor() -> PlayerNodeProcessor {
@@ -457,6 +512,7 @@ mod tests {
             inputs,
             shape,
             &pools(),
+            crate::DEFAULT_GATE_SMOOTHING,
             ContextRequirement::Session,
         )
     }

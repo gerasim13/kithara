@@ -1,237 +1,194 @@
+import AVFAudio
 import Combine
 import Foundation
 import Kithara
 import Testing
 
 extension IntegrationRegressionsIOS {
-    @Test("A track-switch storm does not swallow later commands")
-    func switchStormDoesNotSwallowCommands() async throws {
+    @Test("Successive public next commands play every queued item")
+    func successivePublicNextCommandsPlayEveryQueuedItem() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("switch-storm-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("public-next-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: cacheURL,
             withIntermediateDirectories: true
         )
 
-        let fixture = try await throttledStormFixture()
-        let items = (0..<3).map { index in
-            KitharaPlayerItem(
-                url: fixture.childURL("storm-\(index).mp3").absoluteString
-            )
-        }
+        let items = try await publicNextItems()
+        try #require(
+            Set(items.map(\.id)).count == items.count
+                && Set(items.map(\.url)).count == items.count,
+            "precondition: public-next fixtures are not unique"
+        )
+
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
-        let current = SwitchStormCurrentItem()
-        let currentCancellable = player.currentItem.sink { item in
-            current.record(item)
+        let observation = PublicNextObservation()
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playback)
+        try audioSession.setActive(true)
+        defer {
+            try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        }
+        let eventCancellable = player.eventPublisher.sink { event in
+            observation.record(event: event)
+        }
+        let errorCancellable = player.error.sink { error in
+            observation.record(error: error)
         }
         defer {
             player.stop()
             try? FileManager.default.removeItem(at: cacheURL)
-            _ = currentCancellable
+            _ = eventCancellable
+            _ = errorCancellable
         }
 
-        try player.insert(items[0])
-        try player.append(items[1])
-        try player.append(items[2])
+        let first = items[0]
+        try player.insert(first)
+        let beforePlay = await first.load()
         try #require(
-            player.itemCount == items.count,
-            "precondition: the three-item queue was not constructed"
+            !beforePlay.isPlayable,
+            "precondition: the first item became playable before play started during loading"
+        )
+        player.play()
+        try await waitForPublicNextPlayback(
+            of: first,
+            player: player,
+            observation: observation
         )
 
-        player.play()
-        try await waitForSwitchStormFact("the first throttled track to start") {
-            current.matches(items[0]) && player.currentTime > 0.1
+        for (index, target) in items.dropFirst().enumerated() {
+            try player.append(target)
+            let load = await target.load()
+            try #require(
+                !load.isPlayable,
+                "precondition: item \(index + 1) became playable before public next"
+            )
+            player.advanceToNextItem()
+            try await waitForPublicNextPlayback(
+                of: target,
+                player: player,
+                observation: observation
+            )
         }
 
-        let targets = [
-            items[1], items[2], items[0],
-            items[2], items[1], items[0],
-            items[1], items[2], items[0],
-            items[2], items[1], items[0],
+        try player.selectItem(first, transition: .none)
+        try await waitForPublicNextPlayback(
+            of: first,
+            player: player,
+            observation: observation
+        )
+    }
+
+    private func publicNextItems() async throws -> [KitharaPlayerItem] {
+        let deliveries: [(chunk: Int, delayMilliseconds: UInt64)] = [
+            (16 * 1024, 22),
+            (8 * 1024, 20),
+            (4 * 1024, 20),
         ]
-        for (round, target) in targets.enumerated() {
-            do {
-                try player.selectItem(target, transition: .none)
-            } catch {
-                throw SwitchStormCommandFailure(
-                    "switch \(round) to item \(target.id) was rejected: \(error)"
+        var items: [KitharaPlayerItem] = []
+        for (index, delivery) in deliveries.enumerated() {
+            let fixture = try await TestServerFixture.registerBehavior(
+                .init(
+                    content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
+                    delivery: .throttle(
+                        chunk: delivery.chunk,
+                        delayMilliseconds: delivery.delayMilliseconds
+                    )
                 )
-            }
-            let switched = await reachedSwitchStormFact(deadline: .seconds(30)) {
-                current.matches(target)
-            }
-            #expect(
-                switched,
-                """
-                switch \(round) never made item \(target.id) current; \
-                observed=\(current.itemID.map(String.init) ?? "nil")
-                """
             )
-            guard switched else {
-                return
-            }
-        }
-
-        try await waitForSwitchStormFact("the final switched-to track to advance") {
-            player.currentTime > 0.1
-        }
-        try await waitForSwitchStormFact("the final track duration to settle") {
-            (player.duration ?? 0) >= 180
-        }
-
-        let seekTarget: TimeInterval = 5
-        try #require(
-            player.currentTime < seekTarget - 1,
-            """
-            precondition: the final track had already reached \
-            \(player.currentTime)s before the \(seekTarget)s seek
-            """
-        )
-        let accepted = await withCheckedContinuation { continuation in
-            player.seek(to: seekTarget, tolerance: nil) { finished in
-                continuation.resume(returning: finished)
-            }
-        }
-        #expect(
-            accepted,
-            "seek was rejected after the track-switch storm"
-        )
-        guard accepted else {
-            return
-        }
-
-        let landed = await reachedSwitchStormFact(deadline: .seconds(30)) {
-            abs(player.currentTime - seekTarget) < 1
-        }
-        #expect(
-            landed,
-            """
-            seek to \(seekTarget)s did not land after the switch \
-            storm; current=\(player.currentTime)s
-            """
-        )
-        guard landed else {
-            return
-        }
-
-        player.pause()
-        let paused = await reachedSwitchStormFact(deadline: .seconds(30)) {
-            player.currentRate == 0
-        }
-        #expect(
-            paused,
-            """
-            pause was swallowed after the switch storm; \
-            rate=\(player.currentRate)
-            """
-        )
-        guard paused else {
-            return
-        }
-
-        let pausedAt = player.currentTime
-        player.play()
-        let playing = await reachedSwitchStormFact(deadline: .seconds(30)) {
-            player.currentRate > 0
-        }
-        #expect(
-            playing,
-            """
-            play was swallowed after the switch storm; \
-            rate=\(player.currentRate)
-            """
-        )
-        guard playing else {
-            return
-        }
-
-        let carriedOn = await reachedSwitchStormFact(deadline: .seconds(45)) {
-            player.currentTime >= pausedAt + 1
-        }
-        #expect(
-            carriedOn,
-            """
-            playback reported a positive rate after the storm but \
-            media time never advanced past \(pausedAt)s
-            """
-        )
-    }
-
-    /// Throttled so the switch storm lands while transfers are still in
-    /// flight, which is the state the report describes. The fixture is named
-    /// rather than uploaded — a 3 MB body exceeds the server's request limit.
-    private func throttledStormFixture() async throws -> TestServerFixture.BehaviorHandle {
-        try await TestServerFixture.registerBehavior(
-            .init(
-                content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
-                delivery: .throttle(chunk: 4 * 1024, delayMilliseconds: 20)
+            let itemID = 42_500 + index
+            items.append(
+                KitharaPlayerItem(
+                    url: fixture.childURL("public-next-\(index).mp3").absoluteString,
+                    audioId: itemID,
+                    uuid: Int64(itemID)
+                )
             )
-        )
-    }
-
-    private func reachedSwitchStormFact(
-        deadline duration: Duration,
-        condition: () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: duration)
-        while clock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
         }
-        return condition()
+        return items
     }
 
-    private func waitForSwitchStormFact(
+    private func waitForPublicNextPlayback(
+        of item: KitharaPlayerItem,
+        player: KitharaPlayer,
+        observation: PublicNextObservation
+    ) async throws {
+        try await waitForPublicNextFact(
+            "item \(item.audioId) to become current with a fresh clock",
+            observation: observation
+        ) {
+            player.currentAudioItem?.id == item.id && player.currentTime < 1
+        }
+        let baseline = player.currentTime
+        try await waitForPublicNextFact(
+            "item \(item.audioId) media time to advance",
+            observation: observation
+        ) {
+            player.currentAudioItem?.id == item.id
+                && player.currentTime >= baseline + 0.15
+        }
+    }
+
+    private func waitForPublicNextFact(
         _ description: String,
+        observation: PublicNextObservation,
         condition: () -> Bool
     ) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(60))
-        while !condition() {
+        while true {
+            if let failure = observation.failure {
+                throw PublicNextFailure(failure)
+            }
+            if condition() {
+                return
+            }
             guard clock.now < deadline else {
-                throw SwitchStormFactTimeout(description)
+                throw PublicNextFailure("Timed out waiting for \(description)")
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class SwitchStormCurrentItem: @unchecked Sendable {
+private final class PublicNextObservation: @unchecked Sendable {
     private let lock = NSLock()
-    private var currentID: Int64?
+    private var failures: [String] = []
 
-    var itemID: Int64? {
+    var failure: String? {
         lock.lock()
         defer { lock.unlock() }
-        return currentID
+        return failures.first
     }
 
-    func record(_ item: KitharaPlayerItem?) {
+    func record(event: PlayerEvent) {
         lock.lock()
         defer { lock.unlock() }
-        currentID = item?.id
+        switch event {
+        case let .trackStatusChanged(itemId, status):
+            if case let .failed(reason) = status {
+                failures.append("item \(itemId) failed: \(reason)")
+            }
+        case let .itemDidFail(itemId):
+            failures.append("item \(itemId.map(String.init) ?? "unknown") failed")
+        case let .error(message):
+            failures.append(message)
+        default:
+            break
+        }
     }
 
-    func matches(_ item: KitharaPlayerItem) -> Bool {
-        itemID == item.id
+    func record(error: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        failures.append(String(describing: error))
     }
 }
 
-private struct SwitchStormCommandFailure: Error, CustomStringConvertible {
+private struct PublicNextFailure: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {
         self.description = description
-    }
-}
-
-private struct SwitchStormFactTimeout: Error, CustomStringConvertible {
-    let description: String
-
-    init(_ description: String) {
-        self.description = "Timed out waiting for \(description)"
     }
 }

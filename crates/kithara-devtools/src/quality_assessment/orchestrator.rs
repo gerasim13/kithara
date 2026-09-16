@@ -158,10 +158,8 @@ fn health_plan(ctx: &Ctx) -> StagePlan {
             "style-lint",
             "idioms-lint",
             "cargo-modules-orphans",
-            "cargo-workspace-unused-pub",
             "cargo-deny",
             "cargo-machete",
-            "cargo-shear",
             "cargo-hack",
             "cargo-semver-checks",
             "cargo-geiger",
@@ -207,13 +205,6 @@ fn standard_plans(ctx: &Ctx) -> Vec<StagePlan> {
     ];
     stages.extend(supplemental_plans(ctx, true));
     stages.extend([
-        direct_plan(
-            "workspace-unused-pub",
-            &["cargo", "workspace-unused-pub"],
-            &["cargo-workspace-unused-pub"],
-            &[],
-            true,
-        ),
         direct_plan(
             "workspace-tests",
             &["cargo", "xtask", "test", "--lane=workspace"],
@@ -758,6 +749,25 @@ complete_only = true
         );
         assert!(similarity.command.iter().any(|part| part == "demo/src"));
         assert!(!similarity.hard_invariant);
+    }
+
+    #[test]
+    fn assessment_omits_dependency_scanners_without_a_workspace_verdict() {
+        let (_temp, ctx) = context("");
+        let standard = standard_plans(&ctx);
+        let health = health_plan(&ctx);
+
+        assert!(
+            !standard
+                .iter()
+                .any(|stage| stage.name == "workspace-unused-pub")
+        );
+        assert!(
+            !health
+                .tools
+                .iter()
+                .any(|tool| matches!(tool.as_str(), "cargo-shear" | "cargo-workspace-unused-pub"))
+        );
     }
 
     #[test]

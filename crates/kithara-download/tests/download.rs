@@ -1,0 +1,1702 @@
+use std::{
+    convert::Infallible,
+    net::SocketAddr,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    task::{Context, Poll},
+};
+
+use axum::{
+    Router,
+    body::Body,
+    http::StatusCode,
+    routing::{get, head},
+};
+use bytes::Bytes;
+use futures::StreamExt;
+use kithara_abr::{
+    Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
+    VariantInfo,
+};
+use kithara_events::{Envelope, EventBus};
+use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex, Notify},
+    time::{self, Duration, Instant},
+    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+};
+use kithara_test_utils::{bufpool::pools as test_pools, kithara};
+use url::Url;
+
+use super::{
+    DemandFn, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority,
+    cmd::{FetchCmdBuilder, fetch_cmd_builder},
+};
+use crate::DownloaderEvent;
+
+const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
+const FLOOD_BATCH_SIZE: usize = 10;
+const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
+const SLOW_DEADLINE_SECS: u64 = 5;
+
+struct MockPeer {
+    cancel: CancelToken,
+}
+
+impl MockPeer {
+    fn new() -> Self {
+        Self {
+            cancel: CancelToken::never(),
+        }
+    }
+}
+
+impl Abr for MockPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
+impl Peer for MockPeer {}
+
+struct ScheduledAbrPeer {
+    state: Arc<AbrState>,
+    wake: Arc<Notify>,
+    cancel: CancelToken,
+}
+
+impl Abr for ScheduledAbrPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn variants(&self) -> Vec<VariantInfo> {
+        [66_000_u64, 134_000, 270_000, 900_000]
+            .into_iter()
+            .enumerate()
+            .map(|(index, bandwidth_bps)| VariantInfo {
+                variant_index: VariantIndex::new(index),
+                bandwidth_bps: Some(bandwidth_bps),
+                duration: VariantDuration::Unknown,
+                name: None,
+                codecs: None,
+                container: None,
+            })
+            .collect()
+    }
+
+    fn wake(&self) {
+        self.wake.notify_one();
+    }
+}
+
+impl Peer for ScheduledAbrPeer {}
+
+fn test_client() -> HttpClient {
+    test_client_with_options(NetOptions::default())
+}
+
+fn test_client_with_options(options: NetOptions) -> HttpClient {
+    HttpClient::new(options, test_pools(), CancelToken::never())
+}
+
+fn test_config() -> DownloaderConfig {
+    DownloaderConfig::for_client(test_client()).build()
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
+    /// Anti-oscillation window the scenario needs still open when the loop
+    /// takes its first tick: the gate is what arms the deadline this test is
+    /// about, and a session that ages past it switches on the spot instead,
+    /// leaving nothing for the deadline to drive. `reevaluate` only marks the
+    /// peer and wakes the loop, so the window has to outlast a task wakeup on
+    /// a loaded runner — at 20 ms it closed twice in 300 attempts of run
+    /// 33910610734, both on hosts at load1 45 to 80. The deadline wait then
+    /// costs the same window in real time, so a quarter of the harness
+    /// timeout is what the pair can spend.
+    const MIN_SWITCH_INTERVAL: Duration = Duration::from_millis(250);
+
+    let settings = AbrSettings::builder()
+        .min_switch_interval(MIN_SWITCH_INTERVAL)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer = Arc::new(ScheduledAbrPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let bus = EventBus::default();
+    let mut events = bus.subscribe();
+    let handle = downloader.register(peer).with_bus(bus);
+
+    handle.abr().reevaluate();
+    wake.notified().await;
+
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
+    let saw_interval_gate = std::iter::from_fn(|| events.try_recv().ok()).any(|envelope| {
+        matches!(
+            envelope.event,
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        )
+    });
+    assert!(
+        saw_interval_gate,
+        "the downloader loop must observe MinInterval before its deadline tick"
+    );
+}
+
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
+    let settings = AbrSettings::builder()
+        .min_switch_interval(INTERVAL)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_bus = EventBus::default();
+    let mut first_events = first_bus.subscribe();
+    let first_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: first_state,
+            wake: Arc::new(Notify::default()),
+        }))
+        .with_bus(first_bus);
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_wake = Arc::new(Notify::default());
+
+    first_handle.abr().reevaluate();
+    loop {
+        let envelope = first_events
+            .recv()
+            .await
+            .expect("the first peer event bus remains open");
+        if matches!(
+            envelope.event,
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+    drop(first_handle);
+    time::sleep(INTERVAL.saturating_mul(2)).await;
+
+    let second_handle = downloader.register(Arc::new(ScheduledAbrPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&second_state),
+        wake: Arc::clone(&second_wake),
+    }));
+
+    second_handle.abr().reevaluate();
+    second_wake.notified().await;
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
+    const INTERVAL: Duration = Duration::from_millis(500);
+    const STAGGER: Duration = Duration::from_millis(50);
+
+    let settings = AbrSettings::builder()
+        .min_switch_interval(INTERVAL)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let first_started = Instant::now();
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_bus = EventBus::default();
+    let mut first_events = first_bus.subscribe();
+    let first_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: Arc::clone(&first_state),
+            wake: Arc::new(Notify::default()),
+        }))
+        .with_bus(first_bus);
+
+    first_handle.abr().reevaluate();
+    loop {
+        let envelope = first_events
+            .recv()
+            .await
+            .expect("the first peer event bus remains open");
+        if matches!(
+            envelope.event,
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+
+    time::sleep(STAGGER).await;
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_wake = Arc::new(Notify::default());
+    let second_bus = EventBus::default();
+    let mut second_events = second_bus.subscribe();
+    let second_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: Arc::clone(&second_state),
+            wake: Arc::clone(&second_wake),
+        }))
+        .with_bus(second_bus);
+    second_handle.abr().reevaluate();
+    loop {
+        let envelope = second_events
+            .recv()
+            .await
+            .expect("the second peer event bus remains open");
+        if matches!(
+            envelope.event,
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+
+    assert_eq!(first_state.pending_target(), None);
+    assert!(
+        Instant::now().saturating_duration_since(first_started) < INTERVAL,
+        "the first ABR deadline must still be pending before cancellation"
+    );
+    drop(first_handle);
+    second_wake.notified().await;
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+/// TestEvent-driven completion barrier. Each finished fetch calls
+/// [`complete`](Self::complete); the `target`-th completion signals the
+/// waiter parked in [`wait`](Self::wait).
+///
+/// This replaces the `sleep(poll)` + wall-clock-deadline busy loops these
+/// tests used to drive: the waiter parks on the completion *event*, not on
+/// a virtual-clock deadline. Under flash a virtual deadline would race the
+/// clock past in-flight real socket bytes and false-trip; parking on the
+/// event lets the clock advance through the (virtual) server delays while
+/// the REAL fetch round-trips drive the count. The harness `timeout(...)`
+/// (REAL wall time) is the only backstop.
+struct CompletionGate {
+    done: AtomicUsize,
+    ready: Notify,
+    target: usize,
+}
+
+impl CompletionGate {
+    fn new(target: usize) -> Arc<Self> {
+        Arc::new(Self {
+            target,
+            done: AtomicUsize::new(0),
+            ready: Notify::default(),
+        })
+    }
+
+    /// Record one completion and signal the waiter on the `target`-th.
+    /// Returns the pre-increment count (the completion order).
+    fn complete(&self) -> usize {
+        let order = self.done.fetch_add(1, Ordering::SeqCst);
+        if order + 1 == self.target {
+            self.ready.notify_one();
+        }
+        order
+    }
+
+    /// Park until `target` completions are recorded. No wall-clock deadline:
+    /// the per-test harness `timeout(...)` is the real-time backstop.
+    async fn wait(&self) {
+        loop {
+            let notified = self.ready.notified();
+            if self.done.load(Ordering::SeqCst) >= self.target {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+type CompletionErrors = Arc<Mutex<Vec<Option<FetchError>>>>;
+
+fn cancellation_cmd(url: &Url, gate: &Arc<CompletionGate>, errors: &CompletionErrors) -> FetchCmd {
+    let gate = Arc::clone(gate);
+    let errors = Arc::clone(errors);
+    FetchCmd::head(url.clone())
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, error| {
+            errors.lock().push(error.cloned());
+            gate.complete();
+        }))
+        .build()
+}
+
+struct QueuedPeer {
+    cancel: CancelToken,
+    cmds: Mutex<Option<Vec<FetchCmd>>>,
+    yielded: Notify,
+}
+
+impl Abr for QueuedPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
+impl Peer for QueuedPeer {
+    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        let Some(cmds) = self.cmds.lock().take() else {
+            return Poll::Pending;
+        };
+        self.yielded.notify_one();
+        Poll::Ready(Some(cmds))
+    }
+
+    fn priority(&self) -> RequestPriority {
+        RequestPriority::High
+    }
+}
+
+/// `max_concurrent: 0` parks the peer's batch in the priority slots without
+/// ever spawning a fetch, so cancelling the downloader leaves `Downloader::run`
+/// with the queue full — the shape that used to strand every claim those
+/// commands carried.
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn downloader_shutdown_cancels_queued_commands() {
+    const COMMANDS: usize = 2;
+
+    let url = Url::parse("http://example.test/cancelled").expect("valid test URL");
+    let cancel = CancelToken::never();
+    let gate = CompletionGate::new(COMMANDS);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(
+            (0..COMMANDS)
+                .map(|_| cancellation_cmd(&url, &gate, &errors))
+                .collect(),
+        )),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(DownloaderConfig {
+        cancel: Some(cancel.clone()),
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let _handle = dl.register(peer.clone());
+
+    peer.yielded.notified().await;
+    cancel.cancel();
+    gate.wait().await;
+
+    assert_eq!(gate.done.load(Ordering::SeqCst), COMMANDS);
+    let errors = errors.lock();
+    assert_eq!(errors.len(), COMMANDS);
+    for error in errors.iter() {
+        assert!(matches!(error, Some(FetchError::Cancelled)));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn streaming_without_writer_still_completes() {
+    let app = Router::new().route("/data", get(|| async { "body" }));
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    let url = Url::parse(&format!("http://{addr}/data")).expect("url");
+    let gate = CompletionGate::new(1);
+    let completion = Arc::new(Mutex::new(None));
+    let completion_cb = Arc::clone(&completion);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(url)
+        .on_complete(Box::new(
+            move |bytes, headers: Option<&ResponseHeaders>, error: Option<&FetchError>| {
+                *completion_cb.lock() = Some((bytes, headers.is_some(), error.is_none()));
+                gate_cb.complete();
+            },
+        ))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer);
+
+    gate.wait().await;
+
+    let completion = completion.lock();
+    let (bytes, has_headers, has_no_error) = completion.expect("completion must be recorded");
+    assert_eq!(bytes, 0);
+    assert!(has_headers);
+    assert!(has_no_error);
+    drop(handle);
+}
+
+#[kithara::test(tokio)]
+async fn peer_handle_cancel_scoped_to_peer() {
+    let dl = Downloader::new(test_config());
+    let peer_a = dl.register(Arc::new(MockPeer::new()));
+    let peer_b = dl.register(Arc::new(MockPeer::new()));
+
+    peer_a.cancel().cancel();
+
+    assert!(
+        !peer_b.cancel().is_cancelled(),
+        "peer B cancel should not fire when A cancels"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn peer_handle_cancel_fires_on_last_clone_drop() {
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(Arc::new(MockPeer::new()));
+    let cancel = handle.cancel();
+    let clone = handle.clone();
+
+    drop(handle);
+    assert!(
+        !cancel.is_cancelled(),
+        "cancel should NOT fire while a clone is alive"
+    );
+
+    drop(clone);
+    assert!(
+        cancel.is_cancelled(),
+        "cancel should fire when the last clone is dropped"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn peer_handle_execute_returns_error_on_unreachable() {
+    const POLL_MS: u64 = 50;
+    const REQUEST_TIMEOUT_SECS: u64 = 60;
+    const CANCEL_GUARD_SECS: u64 = 2;
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build();
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let handle = dl.register(Arc::new(MockPeer::new()));
+
+    let h2 = handle.clone();
+    let task = tokio_spawn(async move {
+        let start = Instant::now();
+        let result = h2
+            .execute(FetchCmd::get(Url::parse("http://192.0.2.1:1/").expect("valid url")).build())
+            .await;
+        (Instant::now().saturating_duration_since(start), result)
+    });
+
+    time::sleep(Duration::from_millis(POLL_MS)).await;
+    handle.cancel().cancel();
+
+    let (elapsed, result) = time::timeout(Duration::from_secs(CANCEL_GUARD_SECS), task)
+        .await
+        .expect("task should complete within CANCEL_GUARD_SECS")
+        .expect("task should not panic");
+
+    assert!(
+        elapsed < Duration::from_secs(CANCEL_GUARD_SECS),
+        "execute should return promptly after cancel, took {elapsed:?}"
+    );
+    assert!(result.is_err(), "expected Err after peer cancel");
+}
+
+#[kithara::test(tokio)]
+async fn peer_handle_downloader_cancel_cascades() {
+    let cancel = CancelToken::never();
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client())
+            .cancel(cancel.clone())
+            .build(),
+    );
+    let handle = dl.register(Arc::new(MockPeer::new()));
+
+    cancel.cancel();
+    assert!(
+        handle.cancel().is_cancelled(),
+        "peer cancel should fire when downloader cancels"
+    );
+}
+
+/// Verify that the Downloader never exceeds `max_concurrent` in-flight
+/// HTTP connections, even when many commands are submitted at once.
+#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+async fn max_concurrent_limits_inflight_connections() {
+    const MAX_CONCURRENT: usize = 5;
+    const TOTAL_REQUESTS: usize = 1000;
+    const HANDLER_DELAY_MS: u64 = 5;
+
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+
+    let concurrent_c = Arc::clone(&concurrent);
+    let peak_c = Arc::clone(&peak);
+
+    let app = Router::new().route(
+        "/slow",
+        get(move || {
+            let concurrent = Arc::clone(&concurrent_c);
+            let peak = Arc::clone(&peak_c);
+            async move {
+                let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                loop {
+                    let old = peak.load(Ordering::SeqCst);
+                    if current <= old
+                        || peak
+                            .compare_exchange(old, current, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        break;
+                    }
+                }
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                concurrent.fetch_sub(1, Ordering::SeqCst);
+                "ok"
+            }
+        }),
+    );
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+
+    let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..test_config()
+    };
+    let dl = Downloader::new(config);
+    let handle = dl.register(Arc::new(MockPeer::new()));
+
+    let cmds: Vec<FetchCmd> = (0..TOTAL_REQUESTS)
+        .map(|_| FetchCmd::head(url.clone()).build())
+        .collect();
+    let results = handle.batch(cmds).await;
+
+    assert_eq!(results.len(), TOTAL_REQUESTS, "all requests must complete");
+    let ok_count = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(ok_count, TOTAL_REQUESTS, "all requests must succeed");
+
+    let observed_peak = peak.load(Ordering::SeqCst);
+    assert!(
+        observed_peak <= MAX_CONCURRENT,
+        "peak concurrent {observed_peak} exceeded max_concurrent {MAX_CONCURRENT}"
+    );
+    assert!(observed_peak > 0, "peak must be at least 1 (sanity check)");
+}
+
+/// Simulate many concurrent Downloaders (like parallel test execution).
+/// Each submits a batch of HEAD requests. Global peak must stay bounded.
+#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+async fn many_downloaders_global_peak_stays_bounded() {
+    const NUM_DOWNLOADERS: usize = 20;
+    const REQUESTS_PER_DL: usize = 30;
+    const MAX_CONCURRENT_PER_DL: usize = 3;
+    const HANDLER_DELAY_MS: u64 = 20;
+    const GLOBAL_PEAK_LIMIT: usize = NUM_DOWNLOADERS * MAX_CONCURRENT_PER_DL;
+
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+
+    let concurrent_c = Arc::clone(&concurrent);
+    let peak_c = Arc::clone(&peak);
+
+    let app = Router::new().route(
+        "/slow",
+        get(move || {
+            let concurrent = Arc::clone(&concurrent_c);
+            let peak = Arc::clone(&peak_c);
+            async move {
+                let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                loop {
+                    let old = peak.load(Ordering::SeqCst);
+                    if current <= old
+                        || peak
+                            .compare_exchange(old, current, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        break;
+                    }
+                }
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                concurrent.fetch_sub(1, Ordering::SeqCst);
+                "ok"
+            }
+        }),
+    );
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+
+    let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
+
+    let mut tasks = Vec::new();
+    for _ in 0..NUM_DOWNLOADERS {
+        let url = url.clone();
+        tasks.push(tokio_spawn(async move {
+            let config = DownloaderConfig {
+                max_concurrent: MAX_CONCURRENT_PER_DL,
+                ..test_config()
+            };
+            let dl = Downloader::new(config);
+            let handle = dl.register(Arc::new(MockPeer::new()));
+            let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
+                .map(|_| FetchCmd::head(url.clone()).build())
+                .collect();
+            let results = handle.batch(cmds).await;
+            results.into_iter().filter(Result::is_ok).count()
+        }));
+    }
+
+    let mut total_ok = 0;
+    for task in tasks {
+        total_ok += task.await.expect("task should not panic");
+    }
+
+    assert_eq!(
+        total_ok,
+        NUM_DOWNLOADERS * REQUESTS_PER_DL,
+        "all requests must succeed"
+    );
+
+    let observed_peak = peak.load(Ordering::SeqCst);
+    assert!(
+        observed_peak <= GLOBAL_PEAK_LIMIT,
+        "global peak {observed_peak} exceeded limit {GLOBAL_PEAK_LIMIT} \
+         ({NUM_DOWNLOADERS} downloaders × {MAX_CONCURRENT_PER_DL} max_concurrent)"
+    );
+}
+
+/// Verify that `poll_next` (streaming path) also respects `max_concurrent`.
+/// A Peer produces 1000 HEAD commands via `poll_next`. Peak must stay ≤ `max_concurrent`.
+#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+async fn poll_next_respects_max_concurrent() {
+    const MAX_CONCURRENT: usize = 5;
+    const TOTAL_CMDS: usize = 1000;
+    const HANDLER_DELAY_MS: u64 = 5;
+
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+
+    let concurrent_c = Arc::clone(&concurrent);
+    let peak_c = Arc::clone(&peak);
+
+    let app = Router::new().route(
+        "/slow",
+        get(move || {
+            let concurrent = Arc::clone(&concurrent_c);
+            let peak = Arc::clone(&peak_c);
+            async move {
+                let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                loop {
+                    let old = peak.load(Ordering::SeqCst);
+                    if current <= old
+                        || peak
+                            .compare_exchange(old, current, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        break;
+                    }
+                }
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                concurrent.fetch_sub(1, Ordering::SeqCst);
+                "ok"
+            }
+        }),
+    );
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+
+    let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
+
+    /// Peer that produces `remaining` HEAD commands via `poll_next`,
+    /// counting each completion into a shared [`CompletionGate`].
+    struct FloodPeer {
+        cancel: CancelToken,
+        url: Url,
+        remaining: Mutex<usize>,
+        gate: Arc<CompletionGate>,
+    }
+
+    impl Abr for FloodPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
+    impl Peer for FloodPeer {
+        fn priority(&self) -> RequestPriority {
+            RequestPriority::Low
+        }
+
+        fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+            let (batch_size, more) = {
+                let mut rem = self.remaining.lock();
+                if *rem == 0 {
+                    return Poll::Ready(None);
+                }
+                let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
+                *rem -= batch_size;
+                (batch_size, *rem > 0)
+            };
+            let cmds: Vec<FetchCmd> = (0..batch_size)
+                .map(|_| {
+                    let gate = Arc::clone(&self.gate);
+                    // A no-op writer keeps this concurrency test on the ordinary
+                    // streaming body path; `on_complete` is guaranteed with or
+                    // without a writer.
+                    FetchCmd::head(self.url.clone())
+                        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+                        .on_complete(Box::new(
+                            move |_bytes,
+                                  _headers: Option<&kithara_net::Headers>,
+                                  _err: Option<&kithara_net::NetError>| {
+                                gate.complete();
+                            },
+                        ))
+                        .build()
+                })
+                .collect();
+            if more {
+                cx.waker().wake_by_ref();
+            }
+            Poll::Ready(Some(cmds))
+        }
+    }
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..test_config()
+    };
+    let dl = Downloader::new(config);
+    let gate = CompletionGate::new(TOTAL_CMDS);
+    let handle = dl.register(Arc::new(FloodPeer {
+        url,
+        cancel: CancelToken::never(),
+        remaining: Mutex::new(TOTAL_CMDS),
+        gate: Arc::clone(&gate),
+    }));
+
+    // Wait on the completion event: every HEAD has replied. The server
+    // decrements `concurrent` before sending each reply, so once the last
+    // completion fires `concurrent` is already 0 (asserted below).
+    gate.wait().await;
+
+    drop(handle);
+
+    assert_eq!(
+        concurrent.load(Ordering::SeqCst),
+        0,
+        "all in-flight HEADs must have drained once every completion fired"
+    );
+
+    let observed_peak = peak.load(Ordering::SeqCst);
+    assert!(
+        observed_peak <= MAX_CONCURRENT,
+        "poll_next peak concurrent {observed_peak} exceeded max_concurrent {MAX_CONCURRENT}"
+    );
+    assert!(observed_peak > 0, "sanity: at least one request ran");
+}
+
+/// Verify that Downloaders sharing a single [`HttpClient`] reuse the same
+/// keep-alive pool across **successive** Downloader lifetimes: tracks come and
+/// go, ABR `switch_variant` rebuilds Downloaders, and the queue advances.
+///
+/// Contract:
+/// - The caller builds one [`HttpClient`] and hands a clone to every
+///   Downloader via [`DownloaderConfig::client`]. `reqwest::Client` is
+///   internally `Arc`'d so all clones share one connection pool.
+/// - When a Downloader is dropped, its keep-alive connections stay in the
+///   shared pool's idle list and are picked up by the next Downloader.
+/// - With `WAVES` rounds x `PARALLEL_DLS` parallel Downloaders, the
+///   client-observed opened connection count stays close to a small number of
+///   waves, independent of total request count.
+///
+/// A regression that reverts to a per-Downloader client multiplies the opened
+/// connection count by `WAVES`, immediately tripping the assertion.
+#[kithara::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
+async fn shared_client_keepalive_bounds_connection_count() {
+    const PARALLEL_DLS: usize = 8;
+    const WAVES: usize = 25;
+    const REQUESTS_PER_DL: usize = 114;
+    const MAX_CONCURRENT: usize = 5;
+    /// Client-observed opened connections are a churn sentinel. Correct
+    /// shared-pool behavior stays close to a few waves; per-Downloader pools
+    /// produce `WAVES * PARALLEL_DLS * MAX_CONCURRENT` ≈ 1000 connections.
+    const MAX_CLIENT_CONNECTIONS: usize = PARALLEL_DLS * MAX_CONCURRENT * 5;
+
+    let total_served = Arc::new(AtomicUsize::new(0));
+    let total_served_c = Arc::clone(&total_served);
+
+    let app = Router::new().route(
+        "/head",
+        head(move || {
+            total_served_c.fetch_add(1, Ordering::Relaxed);
+            async { "" }
+        }),
+    );
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let url = Url::parse(&format!("http://{addr}/head")).expect("url");
+    let shared_client = test_client_with_options(
+        NetOptions::builder()
+            .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
+            .build(),
+    );
+
+    let mut total_ok = 0;
+    let mut all_failures: Vec<String> = Vec::new();
+    let mut connection_history: Vec<String> = Vec::with_capacity(WAVES);
+    let total_dls = WAVES * PARALLEL_DLS;
+    for wave in 0..WAVES {
+        let mut tasks = Vec::with_capacity(PARALLEL_DLS);
+        for slot in 0..PARALLEL_DLS {
+            let url = url.clone();
+            let client = shared_client.clone();
+            let dl_idx = wave * PARALLEL_DLS + slot;
+            tasks.push(tokio_spawn(async move {
+                let config = DownloaderConfig {
+                    client,
+                    max_concurrent: MAX_CONCURRENT,
+                    ..test_config()
+                };
+                let dl = Downloader::new(config);
+                let handle = dl.register(Arc::new(MockPeer::new()));
+                let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
+                    .map(|_| FetchCmd::head(url.clone()).build())
+                    .collect();
+                let results = handle.batch(cmds).await;
+                let failures: Vec<String> = results
+                    .iter()
+                    .filter_map(|r| r.as_ref().err().map(|e| format!("{e}")))
+                    .collect();
+                (dl_idx, results.len(), failures)
+            }));
+        }
+        for task in tasks {
+            let (dl_idx, count, failures) = task.await.expect("task should not panic");
+            total_ok += count - failures.len();
+            if !failures.is_empty() {
+                all_failures.push(format!(
+                    "dl[{dl_idx}]: {}/{count} failed, first: {}",
+                    failures.len(),
+                    failures[0]
+                ));
+            }
+        }
+        connection_history.push(format!(
+            "wave {wave}: client_connections={}, served={}, ok={total_ok}",
+            shared_client.connection_count(),
+            total_served.load(Ordering::SeqCst)
+        ));
+    }
+
+    let expected = total_dls * REQUESTS_PER_DL;
+    let connection_count = shared_client.connection_count();
+    assert!(
+        all_failures.is_empty(),
+        "shared client should not produce HTTP failures: {total_ok}/{expected} ok, \
+         {} downloaders had failures (client_connections={connection_count}):\n{}",
+        all_failures.len(),
+        all_failures.join("\n")
+    );
+    assert!(
+        connection_count <= MAX_CLIENT_CONNECTIONS,
+        "shared keep-alive regression: client opened {connection_count} connections \
+         for {expected} requests \
+         across {WAVES} waves of {PARALLEL_DLS} downloaders \
+         (expected ≤ {MAX_CLIENT_CONNECTIONS}). Successive Downloaders should reuse sockets \
+         from the shared pool; this many indicates per-Downloader clients or severe churn. \
+         Per-wave opened-connection history:\n{}",
+        connection_history.join("\n")
+    );
+}
+
+/// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
+/// on the peer's bus, and a subscriber on that bus (as
+/// `kithara_queue::Loader` would set up) receives it.
+#[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
+async fn soft_timeout_publishes_load_slow_on_peer_bus() {
+    const SLOW_SERVER_DELAY_MS: u64 = 500;
+    const SOFT_TIMEOUT_MS: u64 = 50;
+    const EVENT_BUS_CAPACITY: usize = 64;
+    const SLOW_POLL_TIMEOUT_MS: u64 = 200;
+    // Real server delay via the free fn (NOT flash-rewritten), so the slow
+    // response outlasts the REAL soft_timeout. An inline handler would have
+    // its `time::sleep` rewritten to a virtual sleep that collapses to ~0 wall
+    // time under flash — the real soft_timeout would then never fire and no
+    // LoadSlow would be published.
+    let url = spawn_slow_server(SLOW_SERVER_DELAY_MS).await;
+
+    let config = DownloaderConfig::for_client(test_client())
+        .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
+        .build();
+    let dl = Downloader::new(config);
+
+    let root = EventBus::new(EVENT_BUS_CAPACITY);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+
+    let handle = dl
+        .register(Arc::new(MockPeer::new()))
+        .with_bus(scoped.clone());
+    let _ = handle.execute(FetchCmd::get(url).build()).await;
+
+    let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
+    let mut seen_slow = false;
+    while Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
+                seen_slow = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(
+        seen_slow,
+        "peer bus subscriber must receive DownloaderEvent::LoadSlow"
+    );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
+async fn soft_timeout_covers_response_body() {
+    const SLOW_BODY_DELAY_MS: u64 = 500;
+    const SOFT_TIMEOUT_MS: u64 = 50;
+    const EVENT_BUS_CAPACITY: usize = 64;
+    const SLOW_POLL_TIMEOUT_MS: u64 = 200;
+
+    let url = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
+    let config = DownloaderConfig::for_client(test_client())
+        .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
+        .build();
+    let dl = Downloader::new(config);
+    let root = EventBus::new(EVENT_BUS_CAPACITY);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+    let response = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect("fetch slow body");
+    let body = response.body.collect().await.expect("collect slow body");
+    assert_eq!(body.as_ref(), b"ok");
+
+    let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
+    let mut seen_slow = false;
+    while Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
+                seen_slow = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(seen_slow, "body-only stall must publish LoadSlow");
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PeerTag {
+    Active,
+    Preload,
+}
+
+type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
+
+/// Peer that emits `total_cmds` GET commands and stamps each with its
+/// tag when the response arrives. `priority()` reads the shared
+/// activity flag so a mid-stream priority change is observable.
+struct TaggedPriorityPeer {
+    gate: Arc<CompletionGate>,
+    active: Arc<AtomicBool>,
+    cancel: CancelToken,
+    completion_log: CompletionLog,
+    remaining: Mutex<usize>,
+    tag: PeerTag,
+    url: Url,
+}
+
+impl TaggedPriorityPeer {
+    fn new(
+        tag: PeerTag,
+        active: Arc<AtomicBool>,
+        url: Url,
+        cmds: usize,
+        gate: &Arc<CompletionGate>,
+        completion_log: &CompletionLog,
+    ) -> Self {
+        Self {
+            tag,
+            active,
+            url,
+            cancel: CancelToken::never(),
+            remaining: Mutex::new(cmds),
+            gate: Arc::clone(gate),
+            completion_log: Arc::clone(completion_log),
+        }
+    }
+}
+
+impl Abr for TaggedPriorityPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
+impl Peer for TaggedPriorityPeer {
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        let (take, more) = {
+            let mut rem = self.remaining.lock();
+            if *rem == 0 {
+                return Poll::Pending;
+            }
+            let take = (*rem).min(FLOOD_BATCH_SIZE);
+            *rem -= take;
+            (take, *rem > 0)
+        };
+        let cmds: Vec<FetchCmd> = (0..take)
+            .map(|_| {
+                let tag = self.tag;
+                let log = Arc::clone(&self.completion_log);
+                let gate = Arc::clone(&self.gate);
+                FetchCmd::get(self.url.clone())
+                    .writer(Box::new(|_chunk: &[u8]| Ok(())))
+                    .on_complete(Box::new(
+                        move |_bytes,
+                              _headers: Option<&kithara_net::Headers>,
+                              _err: Option<&kithara_net::NetError>| {
+                            let order = gate.complete();
+                            log.lock().push((tag, order));
+                        },
+                    ))
+                    .build()
+            })
+            .collect();
+        if more {
+            cx.waker().wake_by_ref();
+        }
+        Poll::Ready(Some(cmds))
+    }
+
+    fn priority(&self) -> RequestPriority {
+        if self.active.load(Ordering::Acquire) {
+            RequestPriority::High
+        } else {
+            RequestPriority::Low
+        }
+    }
+}
+
+async fn spawn_slow_server(delay_ms: u64) -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(move || async move {
+            time::sleep(Duration::from_millis(delay_ms)).await;
+            "ok"
+        }),
+    );
+    spawn_server(app).await
+}
+
+async fn spawn_slow_body_server(delay_ms: u64) -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(move || async move {
+            Body::from_stream(futures::stream::once(async move {
+                time::sleep(Duration::from_millis(delay_ms)).await;
+                Ok::<_, Infallible>(Bytes::from_static(b"ok"))
+            }))
+        }),
+    );
+    spawn_server(app).await
+}
+
+async fn spawn_server(app: Router) -> Url {
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+async fn spawn_flaky_retry_server() -> Url {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/data",
+        get({
+            let attempts = Arc::clone(&attempts);
+            move || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "retry me")
+                    } else {
+                        (StatusCode::OK, "ok")
+                    }
+                }
+            }
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+async fn spawn_stalled_body_server() -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(|| async {
+            let first = futures::stream::iter([Ok::<_, Infallible>(Bytes::from_static(b"xx"))]);
+            Body::from_stream(first.chain(futures::stream::pending()))
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+/// flash(false): this assertion depends on real localhost request progress and
+/// retries, not on virtual scheduler time.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+async fn retry_and_first_byte_publish_on_peer_bus() {
+    let url = spawn_flaky_retry_server().await;
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(100))
+        .retry_policy(
+            kithara_net::RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+        .build();
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let root = EventBus::new(64);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+
+    let response = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect("retry should recover");
+    let body = response.body.collect().await.expect("collect");
+    assert_eq!(body.as_ref(), b"ok");
+
+    let mut saw_retry = false;
+    let mut saw_first_byte = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !(saw_retry && saw_first_byte) {
+        match time::timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event:
+                    TestEvent::Downloader(DownloaderEvent::RequestRetrying {
+                        attempt,
+                        max_retries,
+                        ..
+                    }),
+                ..
+            })) => {
+                saw_retry = attempt == 1 && max_retries == 2;
+            }
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::FirstByte { .. }),
+                ..
+            })) => saw_first_byte = true,
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    assert!(saw_retry, "peer bus must receive RequestRetrying");
+    assert!(saw_first_byte, "peer bus must receive FirstByte");
+}
+
+/// flash(false): the stalled-body fixture is a real loopback socket that must
+/// deliver headers before body inactivity is measured.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+async fn stalled_body_publishes_resume_and_exhaustion_events() {
+    let url = spawn_stalled_body_server().await;
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(120))
+        .retry_policy(
+            kithara_net::RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+        .build();
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let root = EventBus::new(64);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+
+    // dl `execute` drives the whole fetch through the peer writer, so a
+    // permanently stalled body surfaces as the terminal establish error.
+    let error = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect_err("stalled body must exhaust resume retries");
+    assert!(
+        matches!(error, kithara_net::NetError::RetryExhausted { .. }),
+        "expected RetryExhausted, got {error:?}"
+    );
+
+    let mut saw_stalled = false;
+    let mut saw_resumed = false;
+    let mut saw_exhausted = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !(saw_stalled && saw_resumed && saw_exhausted) {
+        match time::timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::BodyStalled { consumed, .. }),
+                ..
+            })) => saw_stalled = consumed >= 2,
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::BodyResumed { resume_number, .. }),
+                ..
+            })) => saw_resumed = resume_number >= 1,
+            Ok(Ok(Envelope {
+                event: TestEvent::Downloader(DownloaderEvent::RetryExhausted { consumed, .. }),
+                ..
+            })) => saw_exhausted = consumed >= 2,
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    assert!(saw_stalled, "peer bus must receive BodyStalled");
+    assert!(saw_resumed, "peer bus must receive BodyResumed");
+    assert!(saw_exhausted, "peer bus must receive RetryExhausted");
+}
+
+/// Active peer (PLAYING=true from the start) must finish its batch
+/// ahead of a preload peer (PLAYING=false) when both share the same
+/// limited `max_concurrent` pool.
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn active_peer_completes_before_preload_under_contention() {
+    const CMDS_PER_PEER: usize = 20;
+    const MAX_CONCURRENT: usize = 2;
+    const PER_REQUEST_DELAY_MS: u64 = 30;
+
+    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..test_config()
+    };
+    let dl = Downloader::new(config);
+
+    let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
+    let total = CMDS_PER_PEER * 2;
+    let gate = CompletionGate::new(total);
+
+    let active_active = Arc::new(AtomicBool::new(false));
+    active_active.store(true, Ordering::Release);
+    let active = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Active,
+        active_active,
+        url.clone(),
+        CMDS_PER_PEER,
+        &gate,
+        &completion_log,
+    ));
+
+    let active_preload = Arc::new(AtomicBool::new(false));
+    let preload = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Preload,
+        active_preload,
+        url,
+        CMDS_PER_PEER,
+        &gate,
+        &completion_log,
+    ));
+
+    let active_handle = dl.register(active.clone());
+    let preload_handle = dl.register(preload.clone());
+
+    // Park until every cmd from both peers has completed (event-driven; the
+    // harness timeout(30s) is the real-time backstop).
+    gate.wait().await;
+
+    drop(active_handle);
+    drop(preload_handle);
+
+    let log = completion_log.lock().clone();
+    assert_eq!(log.len(), total, "every cmd must complete exactly once");
+
+    let mut active_orders: Vec<usize> = log
+        .iter()
+        .filter_map(|(tag, ord)| (*tag == PeerTag::Active).then_some(*ord))
+        .collect();
+    let mut preload_orders: Vec<usize> = log
+        .iter()
+        .filter_map(|(tag, ord)| (*tag == PeerTag::Preload).then_some(*ord))
+        .collect();
+    active_orders.sort_unstable();
+    preload_orders.sort_unstable();
+    let active_median = active_orders[active_orders.len() / 2];
+    let preload_median = preload_orders[preload_orders.len() / 2];
+    assert!(
+        active_median < preload_median,
+        "active peer median completion order {active_median} must precede \
+         preload peer median {preload_median} — priority routing is broken"
+    );
+
+    let first_quarter = &log[..log.len() / 4];
+    let active_in_first_quarter = first_quarter
+        .iter()
+        .filter(|(tag, _)| *tag == PeerTag::Active)
+        .count();
+    assert!(
+        active_in_first_quarter > first_quarter.len() / 2,
+        "active peer must dominate the first quarter of completions: \
+         got {active_in_first_quarter}/{}",
+        first_quarter.len()
+    );
+}
+
+type NamedLog = Arc<Mutex<Vec<&'static str>>>;
+
+/// A command whose completion appends `name` to the log and releases the gate.
+fn logged_cmd(
+    url: &Url,
+    log: &NamedLog,
+    gate: &Arc<CompletionGate>,
+    name: &'static str,
+) -> FetchCmdBuilder<
+    fetch_cmd_builder::SetOnComplete<fetch_cmd_builder::SetWriter<fetch_cmd_builder::SetMethod>>,
+> {
+    let log = Arc::clone(log);
+    let gate = Arc::clone(gate);
+    FetchCmd::get(url.clone())
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(
+            move |_bytes, _headers: Option<&ResponseHeaders>, _err: Option<&FetchError>| {
+                log.lock().push(name);
+                gate.complete();
+            },
+        ))
+}
+
+fn demand_probe(flag: &Arc<AtomicBool>) -> DemandFn {
+    let probe = Arc::clone(flag);
+    Box::new(move || probe.load(Ordering::Acquire))
+}
+
+/// One fetch in flight at a time over a slow-body server: the lead
+/// command's `on_response` fires before the queue moves again, so a
+/// flag it flips is what the next scheduler pass sees.
+async fn one_slot_downloader() -> (Downloader, Url) {
+    const PER_REQUEST_BODY_DELAY_MS: u64 = 100;
+
+    let url = spawn_slow_body_server(PER_REQUEST_BODY_DELAY_MS).await;
+    let config = DownloaderConfig {
+        max_concurrent: 1,
+        ..test_config()
+    };
+    (Downloader::new(config), url)
+}
+
+/// Emits one pre-built batch, then stays quiet so the queue order alone
+/// decides completion order.
+async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<FetchCmd>) {
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(batch)),
+        yielded: Notify::default(),
+    });
+    let handle = dl.register(peer as Arc<dyn Peer>);
+    gate.wait().await;
+    drop(handle);
+}
+
+/// A prefetch is stamped `Low` against the reader position at emit time;
+/// when the reader then parks on its bytes, the live demand probe must
+/// walk it past urgent work stamped after it — otherwise the audible
+/// track starves behind an entire construction window (the
+/// UrgentDownSwitch hang: v0's demanded bytes queued behind all of v1).
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
+    let (dl, url) = one_slot_downloader().await;
+    let gate = CompletionGate::new(5);
+    let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
+    let demand = Arc::new(AtomicBool::new(false));
+    let arm = Arc::clone(&demand);
+
+    run_one_batch(
+        &dl,
+        &gate,
+        vec![
+            logged_cmd(&url, &log, &gate, "lead")
+                .on_response(Box::new(move |_headers: &ResponseHeaders| {
+                    arm.store(true, Ordering::Release);
+                }))
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "prefetch")
+                .demand(demand_probe(&demand))
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-1")
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-2")
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-3")
+                .priority(RequestPriority::High)
+                .build(),
+        ],
+    )
+    .await;
+
+    let order = log.lock().clone();
+    assert_eq!(order.len(), 5, "every cmd must complete exactly once");
+    assert_eq!(order[0], "lead", "the in-flight fetch finishes first");
+    assert_eq!(
+        order[1], "prefetch",
+        "the demanded prefetch must overtake urgent work stamped after it: {order:?}"
+    );
+}
+
+/// One scheduler pass can demote and escalate through the same slot. The
+/// command whose demand dropped yields to the queue, and the newly
+/// demanded one takes the front — neither may be confused for the other.
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
+    let (dl, url) = one_slot_downloader().await;
+    let gate = CompletionGate::new(5);
+    let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
+    let stale = Arc::new(AtomicBool::new(true));
+    let fresh = Arc::new(AtomicBool::new(false));
+    let (drop_stale, arm_fresh) = (Arc::clone(&stale), Arc::clone(&fresh));
+
+    run_one_batch(
+        &dl,
+        &gate,
+        vec![
+            logged_cmd(&url, &log, &gate, "lead")
+                .on_response(Box::new(move |_headers: &ResponseHeaders| {
+                    drop_stale.store(false, Ordering::Release);
+                    arm_fresh.store(true, Ordering::Release);
+                }))
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "stale")
+                .demand(demand_probe(&stale))
+                .build(),
+            logged_cmd(&url, &log, &gate, "filler-1").build(),
+            logged_cmd(&url, &log, &gate, "filler-2").build(),
+            logged_cmd(&url, &log, &gate, "fresh")
+                .demand(demand_probe(&fresh))
+                .build(),
+        ],
+    )
+    .await;
+
+    let order = log.lock().clone();
+    assert_eq!(order.len(), 5, "every cmd must complete exactly once");
+    assert_eq!(
+        order[1], "fresh",
+        "the newly demanded command takes the front: {order:?}"
+    );
+    assert_eq!(
+        order[4], "stale",
+        "the command whose demand dropped yields to the queue: {order:?}"
+    );
+}
+
+/// Negative case: when both peers are idle (PLAYING=false), the
+/// Downloader is free to service them in any order. The test asserts
+/// only liveness — every cmd eventually completes — so we do not lock
+/// in FIFO behaviour that the Registry is not required to uphold.
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn both_peers_idle_no_priority_ordering_asserted() {
+    const CMDS_PER_PEER: usize = 10;
+    const MAX_CONCURRENT: usize = 2;
+    const PER_REQUEST_DELAY_MS: u64 = 10;
+
+    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+
+    let config = DownloaderConfig {
+        max_concurrent: MAX_CONCURRENT,
+        ..test_config()
+    };
+    let dl = Downloader::new(config);
+
+    let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
+    let total = CMDS_PER_PEER * 2;
+    let gate = CompletionGate::new(total);
+
+    let a = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Active,
+        Arc::new(AtomicBool::new(false)),
+        url.clone(),
+        CMDS_PER_PEER,
+        &gate,
+        &completion_log,
+    ));
+    let b = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Preload,
+        Arc::new(AtomicBool::new(false)),
+        url,
+        CMDS_PER_PEER,
+        &gate,
+        &completion_log,
+    ));
+
+    let handle_a = dl.register(a);
+    let handle_b = dl.register(b);
+
+    // Park until every cmd from both idle peers has drained (event-driven;
+    // the harness timeout(30s) is the real-time backstop).
+    gate.wait().await;
+
+    drop(handle_a);
+    drop(handle_b);
+
+    let log = completion_log.lock().clone();
+    assert_eq!(
+        log.len(),
+        total,
+        "idle peers must still drain every cmd to completion"
+    );
+}
+
+/// Deterministic Registry-level routing test. Drives a stub `Peer`
+/// whose `priority()` the test flips between High and Low, then
+/// submits a command through the public `PeerHandle::execute` path and
+/// confirms the response still flows — proving that the Registry
+/// accepts priority-tagged commands from peers with either priority.
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn peer_handle_execute_respects_either_peer_priority() {
+    struct FlippablePeer {
+        cancel: CancelToken,
+        active: Arc<AtomicBool>,
+    }
+    impl Abr for FlippablePeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
+    impl Peer for FlippablePeer {
+        fn priority(&self) -> RequestPriority {
+            if self.active.load(Ordering::Acquire) {
+                RequestPriority::High
+            } else {
+                RequestPriority::Low
+            }
+        }
+    }
+
+    let dl = Downloader::new(test_config());
+    let active = Arc::new(AtomicBool::new(false));
+    let peer = Arc::new(FlippablePeer {
+        cancel: CancelToken::never(),
+        active: Arc::clone(&active),
+    });
+    let handle = dl.register(peer);
+
+    let url = spawn_slow_server(1).await;
+
+    assert_eq!(
+        peer_priority_from_handle(&handle, &active),
+        RequestPriority::Low
+    );
+    let low_resp = handle.execute(FetchCmd::get(url.clone()).build()).await;
+    assert!(low_resp.is_ok(), "execute must succeed while Low");
+
+    active.store(true, Ordering::Release);
+    assert_eq!(
+        peer_priority_from_handle(&handle, &active),
+        RequestPriority::High
+    );
+    let high_resp = handle.execute(FetchCmd::get(url).build()).await;
+    assert!(high_resp.is_ok(), "execute must succeed while High");
+}
+
+/// Helper for the deterministic routing test: reads the effective
+/// peer priority from the same `AtomicBool` activity the peer observes.
+fn peer_priority_from_handle(_handle: &super::PeerHandle, active: &AtomicBool) -> RequestPriority {
+    if active.load(Ordering::Acquire) {
+        RequestPriority::High
+    } else {
+        RequestPriority::Low
+    }
+}
+
+#[derive(Clone, Debug, kithara_events::EventSet)]
+enum TestEvent {
+    Abr(AbrEvent),
+    Downloader(DownloaderEvent),
+}

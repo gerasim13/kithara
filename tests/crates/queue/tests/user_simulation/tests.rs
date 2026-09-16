@@ -4,23 +4,21 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::{
-        AudioCodec,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -149,7 +147,7 @@ async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
 }
 
 async fn run_single(kind: PreparedTrack, abr: AbrMode, actions: Vec<Action>) {
-    run_single_backend(kind, abr, DecoderBackend::Symphonia, actions).await;
+    run_single_backend(kind, abr, DecoderBackend::default(), actions).await;
 }
 
 async fn run_single_backend(
@@ -170,7 +168,7 @@ async fn run_multi(kinds: PreparedTracks, actions: Vec<Action>) {
     let (_helper, urls) = kinds;
     let specs = urls
         .into_iter()
-        .map(|url| build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia))
+        .map(|url| build_spec(url, AbrMode::Auto(None), DecoderBackend::default()))
         .collect();
     run_scenario(specs, actions).await;
 }
@@ -196,7 +194,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: PreparedTrack, #[c
     run_single(kind, abr, scenarios::seek_forward_unbuffered_repro()).await;
 }
 
-/// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
+/// Bug #6 — backward seek causes silent hang. `RenderFor` watchdog in
 /// the harness panics on stuck position.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
@@ -356,7 +354,7 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: PreparedTrack, #[cas
 #[case::mp3_streamhq(track_mp3_stream_hq().await, 0.50)]
 async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[case] ratio: f64) {
     let (_helper, url) = kind;
-    let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia);
+    let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::default());
     let temp = temp_dir();
     let pools = pools();
     let downloader = Downloader::new(
@@ -377,23 +375,22 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .store(store)
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
-            .backend(DecoderBackend::Symphonia)
+            .backend(DecoderBackend::default())
             .build(),
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let session_config = HostConfig::offline(pools)
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session_config = HostConfig::offline(pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session_config.sample_rate())
             .worker(worker)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -521,17 +518,17 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: PreparedTracks)
 async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
     // Walk all three with seeks: 0 → seek mid → 1 → seek mid → 2 → seek mid.
     let actions = vec![
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(1),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(2),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
     ];
     run_multi(kinds, actions).await;
 }
@@ -543,7 +540,7 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
 mod apple_backend {
     use super::*;
 
-    #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+    #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
     #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
     #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
     async fn user_sim_seek_storm_apple(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
@@ -551,7 +548,7 @@ mod apple_backend {
         run_single_backend(kind, abr, DecoderBackend::Apple, scenarios::seek_storm()).await;
     }
 
-    #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+    #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
     #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
     #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
     async fn user_sim_long_play_then_seek_backward_apple(

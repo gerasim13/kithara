@@ -1,15 +1,18 @@
 use kithara_decode::DecoderSeekOutcome;
-use kithara_events::{AudioEvent, DeferredBus, Event, SeekLifecycleStage, SegmentLocation};
+use kithara_events::DeferredBus;
 use kithara_platform::time::Duration;
 use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
 use num_traits::cast::ToPrimitive;
 
-use crate::pipeline::{
-    decode::{DecoderGeneration, core::ActiveDecode},
-    rebuild::{RecreateNext, RecreateState},
-    seek::SeekEngine,
-    stream::shared::SharedStream,
-    track::{CurrentFsm, WaitContext},
+use crate::{
+    AudioEvent, AudioLaneEvent, SeekLifecycleStage, SegmentLocation,
+    pipeline::{
+        decode::{DecoderGeneration, core::ActiveDecode},
+        rebuild::{RecreateNext, RecreateState},
+        seek::SeekEngine,
+        stream::shared::SharedStream,
+        track::{CurrentFsm, WaitContext},
+    },
 };
 
 pub(crate) fn commit_outcome<T: StreamType>(
@@ -108,20 +111,17 @@ pub(crate) fn location<T: StreamType>(stream: &SharedStream<T>) -> SegmentLocati
 }
 
 pub(crate) fn emit(
-    bus: Option<&DeferredBus<Event>>,
+    bus: Option<&DeferredBus<AudioLaneEvent>>,
     stage: SeekLifecycleStage,
     epoch: u64,
     location: SegmentLocation,
 ) {
     if let Some(bus) = bus {
-        bus.enqueue(
-            AudioEvent::SeekLifecycle {
-                stage,
-                location,
-                seek_epoch: epoch,
-            }
-            .into(),
-        );
+        bus.enqueue(AudioEvent::SeekLifecycle {
+            stage,
+            location,
+            seek_epoch: epoch,
+        });
     }
 }
 

@@ -9,15 +9,16 @@ use kithara_assets::{
     AcquisitionResult, AssetReader, AssetResource, AssetResourceState, AssetSource, AssetStore,
     ResourceKey, ResourceLease, StorageBackend, WriterHandle, WriterOutcome,
 };
-use kithara_events::{Envelope, Event, EventBus, FileEvent};
+use kithara_download::Peer;
+use kithara_events::{Envelope, EventBus};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
-use kithara_stream::{PlayheadState, SeekState, WorkerWake, dl::Peer};
+use kithara_stream::{PlayheadState, SeekState, WorkerWake};
 use kithara_test_utils::kithara;
 use url::Url;
 
 use super::*;
 use crate::{
-    File,
+    File, FileEvent,
     coord::FileCoord,
     session::{FileSource, inner::FileSourceCtx},
     test_pools::{TestPools, pools},

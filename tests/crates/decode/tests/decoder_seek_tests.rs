@@ -1,8 +1,8 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioEvent, AudioRead, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AudioEvent, Event, EventBus},
+    events::EventBus,
     file::{File, FileConfig},
     platform::time::{self, Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -85,7 +86,7 @@ async fn decoder_file_reads_samples(
     temp_dir: TestTempDir,
 ) {
     let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 }
@@ -104,7 +105,7 @@ async fn decoder_file_single_seek(
     #[case] target: Duration,
 ) {
     let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
@@ -127,7 +128,7 @@ async fn decoder_file_seek_backward(
     temp_dir: TestTempDir,
 ) {
     let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -142,7 +143,8 @@ async fn decoder_file_seek_backward(
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::default()))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw(DecoderBackend::Apple)
@@ -176,7 +178,7 @@ async fn decoder_file_seek_emits_events(
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, Some(bus)).await;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), Some(bus)).await;
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();
@@ -188,10 +190,10 @@ async fn decoder_file_seek_emits_events(
     loop {
         while let Ok(ev) = events_rx.try_recv().map(|env| env.event) {
             match ev {
-                Event::Audio(AudioEvent::FormatDetected { .. }) => {
+                TestEvent::Audio(AudioEvent::FormatDetected { .. }) => {
                     got_format = true;
                 }
-                Event::Audio(AudioEvent::SeekComplete { .. }) => {
+                TestEvent::Audio(AudioEvent::SeekComplete { .. }) => {
                     got_seek = true;
                 }
                 _ => {}

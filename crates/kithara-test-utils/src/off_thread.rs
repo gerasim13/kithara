@@ -1,6 +1,7 @@
 use kithara_platform::{
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, mpsc::RecvTimeoutError},
     thread::spawn_named,
+    time::{Duration, Instant},
     tokio::{runtime::Handle, sync::oneshot},
 };
 
@@ -30,6 +31,55 @@ impl<T: 'static> OffThread<T> {
         E: Send + 'static,
         I: FnOnce() -> Result<T, E> + Send + 'static,
     {
+        Self::serving(name, init, |receiver, value| {
+            while let Ok(job) = receiver.recv() {
+                job(value);
+            }
+        })
+        .await
+    }
+
+    /// Like [`Self::spawn`], plus `tick` on every `interval` the owner spends
+    /// idle — the shape a device-free session uses to advance itself when no
+    /// command is pending. `tick` is serialized with the calls, so it never
+    /// observes a half-applied one.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever `init` failed with, after the owner thread has exited.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the owner thread dies before it reports readiness.
+    pub async fn spawn_paced<E, I, P>(
+        name: &'static str,
+        init: I,
+        interval: Duration,
+        mut tick: P,
+    ) -> Result<Self, E>
+    where
+        E: Send + 'static,
+        I: FnOnce() -> Result<T, E> + Send + 'static,
+        P: FnMut(&mut T) + Send + 'static,
+    {
+        Self::serving(name, init, move |receiver, value| {
+            loop {
+                match receiver.recv_timeout(Instant::now() + interval) {
+                    Ok(job) => job(value),
+                    Err(RecvTimeoutError::Timeout) => tick(value),
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .await
+    }
+
+    async fn serving<E, I, F>(name: &'static str, init: I, serve: F) -> Result<Self, E>
+    where
+        E: Send + 'static,
+        I: FnOnce() -> Result<T, E> + Send + 'static,
+        F: FnOnce(&mpsc::Receiver<Job<T>>, &mut T) + Send + 'static,
+    {
         let (jobs, receiver) = mpsc::channel::<Job<T>>();
         let (ready, ready_receiver) = oneshot::channel();
         let (done, done_receiver) = oneshot::channel();
@@ -47,9 +97,7 @@ impl<T: 'static> OffThread<T> {
             if ready.send(Ok(())).is_err() {
                 return;
             }
-            while let Ok(job) = receiver.recv() {
-                job(&mut value);
-            }
+            serve(&receiver, &mut value);
             drop(value);
             let _ = done.send(());
         }));

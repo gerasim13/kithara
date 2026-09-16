@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantIndex};
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant},
@@ -13,7 +12,10 @@ use super::{
     peer::PeerEntry,
     throttle::{ThrottleSample, bytes_per_second},
 };
-use crate::state::{AbrDecision, AbrView};
+use crate::{
+    AbrEvent, AbrReason, BandwidthSource, VariantIndex,
+    state::{AbrDecision, AbrView},
+};
 
 impl AbrController {
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader

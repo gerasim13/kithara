@@ -961,3 +961,11 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
     );
     assert!(observed.snapshot().is_some());
 }
+
+#[kithara::test]
+fn transport_event_is_owned_by_kithara_host() {
+    assert_eq!(
+        ::core::any::type_name::<crate::TransportEvent>(),
+        "kithara_host::session::transport::event::TransportEvent"
+    );
+}

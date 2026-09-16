@@ -3,7 +3,7 @@ use std::{cell::Cell, num::NonZeroU32};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -27,6 +27,7 @@ enum SessionHost<S> {
 }
 
 pub(crate) struct SessionClient<S> {
+    root_view: RootView,
     host: SessionHost<S>,
 }
 
@@ -76,6 +77,15 @@ impl<S> SessionDispatcher<S> for SessionClient<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
+        }
+    }
+
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
@@ -117,13 +127,14 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     })?;
     let state = Arc::new(Mutex::new(Some(SessionState::new(
         root,
-        root_view,
+        root_view.clone(),
         sample_rate,
         None,
         start_stream_web_audio,
     ))));
     init_bridge_state();
     let client = Arc::new(SessionClient {
+        root_view,
         host: SessionHost::Local {
             state: Arc::clone(&state),
         },
@@ -133,8 +144,10 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
     tx: mpsc::Sender<HostCmdMsg<S>>,
+    root_view: RootView,
 ) -> Arc<dyn HostDispatcher<S>> {
     Arc::new(SessionClient {
+        root_view,
         host: SessionHost::Remote { tx },
     })
 }

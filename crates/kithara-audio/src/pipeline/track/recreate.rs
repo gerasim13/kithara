@@ -1,4 +1,3 @@
-use kithara_events::{AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation};
 use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
@@ -8,19 +7,22 @@ use super::{
     TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
-use crate::pipeline::{
-    decode::{
-        event::{GenerationInstalled, enqueue_generation_installed},
-        format::{FormatDecision, detect},
-        gate::recreate_phase,
+use crate::{
+    AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation,
+    pipeline::{
+        decode::{
+            event::{GenerationInstalled, enqueue_generation_installed},
+            format::{FormatDecision, detect},
+            gate::recreate_phase,
+        },
+        rebuild::{
+            DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState,
+            policy::{classify, observed_seek, superseded},
+        },
+        seek::{ResumeState, SeekRequest, engine::SeekTransition},
+        source::StreamAudioSource,
     },
-    rebuild::{
-        DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-        RecreateState,
-        policy::{classify, observed_seek, superseded},
-    },
-    seek::{ResumeState, SeekRequest, engine::SeekTransition},
-    source::StreamAudioSource,
 };
 
 const fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
@@ -263,21 +265,18 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
             src.seek_engine
                 .record_resume_target(request.seek.epoch, request.seek.target);
             if let Some(ref emit) = src.emit {
-                emit.enqueue(
-                    AudioEvent::SeekLifecycle {
-                        stage: SeekLifecycleStage::SeekApplied,
-                        seek_epoch: request.seek.epoch,
-                        location: SegmentLocation::new(
-                            src.shared_stream
-                                .abr_handle()
-                                .and_then(|handle| handle.current_variant_index()),
-                            None,
-                            None,
-                            None,
-                        ),
-                    }
-                    .into(),
-                );
+                emit.enqueue(AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekApplied,
+                    seek_epoch: request.seek.epoch,
+                    location: SegmentLocation::new(
+                        src.shared_stream
+                            .abr_handle()
+                            .and_then(|handle| handle.current_variant_index()),
+                        None,
+                        None,
+                        None,
+                    ),
+                });
             }
             apply_seek_transition(
                 src,

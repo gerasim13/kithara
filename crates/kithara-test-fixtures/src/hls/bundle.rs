@@ -68,9 +68,8 @@ impl TryFrom<&Asset> for HlsBundle {
     type Error = HlsBundleError;
 
     fn try_from(asset: &Asset) -> Result<Self, Self::Error> {
-        let root = asset
-            .path()
-            .and_then(Path::parent)
+        let relative_root = Path::new(asset.entry().path)
+            .parent()
             .ok_or(HlsBundleError::NoStore)?;
         let manifest: Manifest = toml::from_str(std::str::from_utf8(asset.try_bytes()?)?)?;
         let mut resources = BTreeMap::new();
@@ -95,7 +94,8 @@ impl TryFrom<&Asset> for HlsBundle {
                 route.clone(),
                 HlsResource {
                     content_type: resource.content_type,
-                    path: root.join(file),
+                    path: crate::store::file(&relative_root.join(file))
+                        .map_err(AssetError::Store)?,
                 },
             );
             if previous.is_some() {
@@ -155,7 +155,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn resolves_manifest_files_under_the_asset_store() {
         static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        let temp = TempDir::new().expect("temporary store");
+        let root = crate::store::runtime_root().expect("fixture store root");
+        let temp = TempDir::new_in(root).expect("temporary store");
         let body = temp.path().join("master.m3u8");
         std::fs::write(&body, b"#EXTM3U\n").expect("write master");
         let manifest_path = temp.path().join("bundle.toml");
@@ -174,6 +175,8 @@ mod tests {
         .expect("write manifest");
         let path = Box::leak(
             manifest_path
+                .strip_prefix(root)
+                .expect("manifest is inside the store")
                 .to_string_lossy()
                 .into_owned()
                 .into_boxed_str(),

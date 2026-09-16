@@ -14,7 +14,7 @@
 
 # kithara-file
 
-Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV ...). Implements `kithara_stream::StreamType` for use with `Stream<File<S>>`. Backed by a pull-driven peer registered with the shared `kithara_stream::dl::Downloader`, a `kithara-assets` `AssetStore<S>` for disk caching, and the same application-owned `PoolRegion<S>`. Supports both remote HTTP sources and direct local-file playback.
+Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV ...). Implements `kithara_stream::StreamType` for use with `Stream<File<S>>`. Backed by a pull-driven peer registered with the shared `kithara_download::Downloader`, a `kithara-assets` `AssetStore<S>` for disk caching, and the same application-owned `PoolRegion<S>`. Supports both remote HTTP sources and direct local-file playback.
 
 ## Usage
 
@@ -94,6 +94,6 @@ Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all net
 
 ## Integration
 
-Depends on `kithara-stream` (Peer/Downloader, Source, byte-map/playhead types), `kithara-net` (HTTP), `kithara-assets` (disk cache via `AssetStore<S>`), `kithara-storage` (`StorageResource`), `kithara-events` (`FileEvent` via the shared `EventBus`). Composes with `kithara-audio` as `Audio<Stream<File<S>>>` inside the decode pipeline.
+Depends on `kithara-download` (Peer/Downloader), `kithara-stream` (Source, byte-map/playhead types), `kithara-net` (HTTP), `kithara-assets` (disk cache via `AssetStore<S>`), `kithara-storage` (`StorageResource`), `kithara-events` (`FileEvent` via the shared `EventBus`). Composes with `kithara-audio` as `Audio<Stream<File<S>>>` inside the decode pipeline.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-file) for detailed contracts, invariants, and internals.

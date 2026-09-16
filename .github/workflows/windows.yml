@@ -9,6 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Where the encoded fixtures are built and reused. It is read when the
+  # fixture crate is compiled, not when a test runs, so a lane that leaves it
+  # unset fails to build rather than to find a file. The guest keeps it beside
+  # the rest of the CI state it owns.
+  KITHARA_FIXTURE_CACHE: C:\kithara-ci\fixtures
 
 concurrency:
   group: windows-${{ github.ref }}
@@ -23,9 +28,24 @@ jobs:
     runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
     timeout-minutes: 180
 
+    # What the guest carries and where it put it. Both are properties of the
+    # machine, so the machine's variables say them, the way its labels do.
+    # Without the first, `ffmpeg-sys-next` falls through to vcpkg and then
+    # pkg-config and finds neither; without the second, `bindgen` cannot load
+    # libclang. Either way the workspace never compiles.
+    env:
+      FFMPEG_DIR: ${{ vars.KITHARA_WINDOWS_FFMPEG_DIR }}
+      LIBCLANG_PATH: ${{ vars.KITHARA_WINDOWS_LIBCLANG_PATH }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # FFmpeg is a shared build, so a test that loads the crate needs its
+      # DLLs beside the binary or on the search path.
+      - name: Put the FFmpeg libraries on the search path
+        shell: powershell
+        run: Add-Content $env:GITHUB_PATH "$env:FFMPEG_DIR\bin"
 
       # The guest carries the toolchain, so this installs nothing either.
       - name: Check the workspace

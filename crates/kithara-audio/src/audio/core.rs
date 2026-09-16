@@ -14,8 +14,8 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, PendingReason, PreloadGate,
-    PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
+    AudioControl, AudioLaneEvent, AudioRead, AudioSession, ChunkOutcome, DecodeError,
+    PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
@@ -67,7 +67,7 @@ impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
 }
 
 pub(super) struct AudioParts<S> {
-    pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
+    pub(super) emit: Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
     pub(super) runtime: AudioRuntime,
     pub(super) cursor: ChunkCursor,
     pub(super) controls: Controls,
@@ -126,7 +126,7 @@ impl<S> Audio<S> {
 
     #[must_use]
     /// Returns metadata for the currently selected adaptive variant.
-    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+    pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
@@ -432,7 +432,7 @@ mod tests {
         sync::atomic::{AtomicU32, AtomicU64},
     };
 
-    use kithara_events::{AudioEvent, Event, EventReceiver};
+    use kithara_events::EventReceiver;
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{PlayheadState, SeekState, WorkerWake};
@@ -441,7 +441,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        AudioEvent, ConsumerWakeMode,
         audio::{Fetch, Outlet, ThreadWake, connect, ring::RingParts},
         test_pools::pools,
     };
@@ -455,7 +455,7 @@ mod tests {
     }
 
     struct AudioFixture {
-        emit: Arc<kithara_events::DeferredBus<Event>>,
+        emit: Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
         audio: Audio<()>,
         data_tx: Outlet<Fetch<AudioChunk>>,
     }
@@ -547,14 +547,12 @@ mod tests {
         )
     }
 
-    fn drain_seek_completions(receiver: &mut EventReceiver) -> Vec<u64> {
+    fn drain_seek_completions(receiver: &mut EventReceiver<AudioEvent>) -> Vec<u64> {
         let mut completions = Vec::new();
         loop {
             match receiver.try_recv() {
                 Ok(envelope) => {
-                    if let Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) =
-                        envelope.event
-                    {
+                    if let AudioEvent::SeekComplete { seek_epoch, .. } = envelope.event {
                         completions.push(seek_epoch);
                     }
                 }

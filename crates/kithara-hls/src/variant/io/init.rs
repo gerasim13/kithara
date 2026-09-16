@@ -4,9 +4,10 @@ use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
+use kithara_download::FetchCmd;
 use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
+use kithara_stream::{StreamResult, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{

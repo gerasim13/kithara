@@ -115,8 +115,19 @@ pub enum PlayError {
     SessionGone { reason: &'static str },
 
     #[error(transparent)]
-    Session(#[from] SessionError),
+    Session(SessionError),
 
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<SessionError> for PlayError {
+    fn from(error: SessionError) -> Self {
+        match error {
+            SessionError::EqBandOutOfRange { band, bands } => {
+                Self::EqBandOutOfRange { band, bands }
+            }
+            error => Self::Session(error),
+        }
+    }
 }

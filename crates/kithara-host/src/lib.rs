@@ -18,5 +18,4 @@ pub use api::{CrossfaderBus, HostLevel, crossfader_gain};
 pub use error::PlayError;
 pub use host::{Host, HostConfig, HostOwned};
 pub use kithara_play::SessionSampleRate;
-#[cfg(any(test, feature = "probe"))]
-pub use session::testing;
+pub use session::TransportEvent;

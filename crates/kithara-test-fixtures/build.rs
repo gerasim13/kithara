@@ -3,34 +3,46 @@
 //!
 //! `src/defs/` and `src/registry.rs` compile only here — the library never sees
 //! them, which is what keeps encoding itself out of the target build.
-//! `src/signal/` and `src/store.rs` are shared: the same sources, reached from
-//! two roots.
+//! `src/signal/` and `src/store/disk.rs` are shared: the same sources, reached
+//! from two roots.
 
+#[cfg(feature = "native-fixtures")]
 #[path = "src/context.rs"]
 mod context;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/defs/mod.rs"]
 mod defs;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/registry.rs"]
 mod registry;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/remote_file.rs"]
 mod remote_file;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/variant_input.rs"]
 pub mod variant_input;
 // `fmp4`, `signal`, and `store` keep the visibility they have in the library:
 // the same source files, reached from two roots.
+#[cfg(feature = "native-fixtures")]
 #[path = "src/fmp4/mod.rs"]
 pub mod fmp4;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/graph.rs"]
 mod graph;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/hls/hydrate.rs"]
 mod hls_hydrate;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/hls/manifest.rs"]
 mod hls_manifest;
+#[cfg(feature = "native-fixtures")]
 #[path = "src/signal/mod.rs"]
 pub mod signal;
-#[path = "src/store.rs"]
+#[cfg(feature = "native-fixtures")]
+#[path = "src/store/disk.rs"]
 pub mod store;
 
+#[cfg(feature = "native-fixtures")]
 use std::{
     collections::{HashMap, HashSet},
     fmt::Write as _,
@@ -40,13 +52,17 @@ use std::{
     thread,
 };
 
+#[cfg(feature = "native-fixtures")]
 use registry::{AssetBuild, AssetDef};
 
+#[cfg(feature = "native-fixtures")]
 use self::context::BuildContext;
 
+#[cfg(feature = "native-fixtures")]
 const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
 
 /// Rejects two cases that would produce one accessor, before either is written.
+#[cfg(feature = "native-fixtures")]
 fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef)> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut resolved = Vec::with_capacity(defs.len());
@@ -59,9 +75,11 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
         let id = store::asset_id(def.func, def.case);
         resolved.push((name, id, *def));
     }
+    resolved.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
     resolved
 }
 
+#[cfg(feature = "native-fixtures")]
 fn materialize(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -100,6 +118,7 @@ fn materialize(
     unavailable
 }
 
+#[cfg(feature = "native-fixtures")]
 fn materialize_one(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -161,10 +180,6 @@ fn materialize_one(
         AssetBuild::Ready(bytes) => bytes,
         AssetBuild::Unavailable(reason) if def.optional => {
             println!("cargo:warning=optional fixture `{name}` unavailable: {reason}");
-            println!(
-                "cargo:rerun-if-changed={}",
-                store::entry_path(namespace, id, def.ext).display()
-            );
             return Some((name.clone(), reason));
         }
         AssetBuild::Unavailable(reason) => {
@@ -180,10 +195,12 @@ fn materialize_one(
     None
 }
 
+#[cfg(feature = "native-fixtures")]
 fn codegen(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
     unavailable: &HashMap<String, String>,
+    embed_assets: bool,
 ) -> String {
     let mut out = String::new();
     let mut manifest = String::new();
@@ -194,14 +211,14 @@ fn codegen(
         let path = path.to_str().unwrap_or_else(|| {
             panic!("kithara-test-fixtures: the store path for `{name}` is not valid UTF-8")
         });
+        let relative_path = format!("{}/{id}.{}", store::CACHE_VERSION.trim(), def.ext);
         let content_type = def.content_type;
         let unavailable = unavailable
             .get(name)
             .map_or_else(|| "None".to_owned(), |reason| format!("Some({reason:?})"));
-        // rustc records an `include_bytes!` path in dep-info, so cargo tracks
-        // the store entry an embedded accessor was built from. An on-disk
-        // accessor reads the file at run time, which wasm has no way to do.
-        let (cfg, body) = if def.embed {
+        // Filesystem-free wasm accessors need compile-time bytes. Native
+        // accessors keep only store metadata and read the entry at run time.
+        let (cfg, body) = if def.embed && embed_assets {
             (
                 "",
                 format!("    crate::asset::Asset::embedded(&{entry}, include_bytes!({path:?}))"),
@@ -219,7 +236,7 @@ fn codegen(
         let _ = write!(
             out,
             "static {entry}: crate::asset::AssetEntry = crate::asset::AssetEntry {{\n    \
-             name: {name:?},\n    id: {id:?},\n    path: {path:?},\n    \
+             name: {name:?},\n    id: {id:?},\n    path: {relative_path:?},\n    \
              content_type: {content_type:?},\n    unavailable: {unavailable},\n}};\n\n\
              {cfg}#[must_use]\n\
              pub fn {name}() -> crate::asset::Asset {{\n{body}\n}}\n\n",
@@ -246,6 +263,7 @@ fn codegen(
     out
 }
 
+#[cfg(feature = "native-fixtures")]
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
     println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
@@ -266,10 +284,15 @@ fn main() {
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
     let unavailable = materialize(&namespace, &resolved);
+    for (_, id, def) in &resolved {
+        println!(
+            "cargo:rerun-if-changed={}",
+            store::entry_path(&namespace, id, def.ext).display()
+        );
+    }
 
-    // Written once per namespace so its mtime stays put on a no-op rerun; a
-    // wiped store makes the declared path missing, which cargo reads as
-    // changed and reruns this script.
+    // Written once per namespace so its mtime stays put on a no-op rerun. The
+    // stamp tracks namespace removal; the declarations above track entries.
     let stamp = namespace.join(".stamp");
     if fs::read(&stamp).ok().as_deref() != Some(fingerprint.as_bytes()) {
         fs::write(&stamp, fingerprint.as_bytes())
@@ -279,9 +302,14 @@ fn main() {
 
     let out_dir =
         PathBuf::from(std::env::var_os("OUT_DIR").expect("invariant: cargo always sets OUT_DIR"));
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
+        .unwrap_or_else(|_| panic!("invariant: cargo always sets CARGO_CFG_TARGET_ARCH"));
     fs::write(
         out_dir.join("assets.rs"),
-        codegen(&namespace, &resolved, &unavailable),
+        codegen(&namespace, &resolved, &unavailable, target_arch == "wasm32"),
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: write assets.rs: {error}"));
 }
+
+#[cfg(not(feature = "native-fixtures"))]
+fn main() {}

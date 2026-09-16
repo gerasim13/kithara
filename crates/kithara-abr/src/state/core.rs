@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use bitflags::bitflags;
-use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -14,6 +13,7 @@ use super::{
     publisher::AbrPublisher,
     view::AbrView,
 };
+use crate::{AbrMode, AbrReason, VariantIndex};
 
 bitflags! {
     /// Composable boolean control-state for [`AbrState`], orthogonal to the

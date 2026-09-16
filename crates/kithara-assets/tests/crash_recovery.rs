@@ -1,5 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use std::{fs, path::Path};
@@ -8,9 +11,8 @@ use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, FlushHub, FlushPolicy, ResourceKey, StorageBackend,
     WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{CancelToken, time::Duration};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 use tempfile::tempdir;
 

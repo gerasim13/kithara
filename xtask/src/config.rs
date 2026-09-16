@@ -45,7 +45,12 @@ pub(crate) struct CiLaneConfig {
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
     pub(crate) label: String,
-    pub(crate) os: Option<String>,
+    /// Every operating system the lane runs on. The shared GitHub fan-out
+    /// reaches a lane that names Linux alone; one that also names another
+    /// machine needs a device the shared pool lacks and runs from a workflow
+    /// naming a pool of its own.
+    #[serde(deserialize_with = "one_or_many")]
+    pub(crate) os: Vec<String>,
     pub(crate) tools: Vec<String>,
     /// Tools whose reported version has to match a reviewed pin before the lane
     /// spends a runner on a build it would have to throw away.
@@ -75,6 +80,11 @@ pub(crate) struct CiLaneConfig {
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
     pub(crate) github_runner: Option<String>,
+    /// The protected GitHub runner label used by this lane on `main`.
+    pub(crate) github_runner_main: Option<String>,
+    /// Immutable trusted Cargo target snapshot this lane restores before it
+    /// builds. The key names a compatible Cargo invocation, not a revision.
+    pub(crate) target_snapshot: Option<String>,
     pub(crate) timeout_minutes: u32,
     /// Checkout depth. Zero is full history, which a lane comparing against a
     /// base revision needs and a shallow clone does not carry.
@@ -85,6 +95,29 @@ pub(crate) struct CiLaneConfig {
     /// Lanes whose artifacts this one consumes. A lane with needs runs after
     /// them and only when at least one of them was selected.
     pub(crate) needs: Vec<String>,
+}
+
+impl CiLaneConfig {
+    /// Whether the shared Linux fan-out can carry the lane.
+    pub(crate) fn runs_only_on_linux(&self) -> bool {
+        matches!(self.os.as_slice(), [os] if os == "linux")
+    }
+}
+
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(os) => vec![os],
+        OneOrMany::Many(os) => os,
+    })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -199,10 +232,14 @@ impl CiProjectConfig {
             // runner pool and it is Linux, so a lane that named none would be
             // scheduled onto it by omission rather than by declaration, and run
             // an emulator recipe with no emulator under it.
-            let Some(os) = lane.os.as_deref() else {
+            if lane.os.is_empty() {
                 bail!("ext.ci.lanes.{name} must name the operating system it runs on");
-            };
-            if !matches!(os, "linux" | "macos" | "windows") {
+            }
+            if let Some(os) = lane
+                .os
+                .iter()
+                .find(|os| !matches!(os.as_str(), "linux" | "macos" | "windows"))
+            {
                 bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
             }
             // `kinds_github` is a statement that GitHub schedules this lane, and
@@ -210,13 +247,35 @@ impl CiProjectConfig {
             // would be refused at selection and never run, which is a lane
             // declared into a schedule it cannot reach - the failure this
             // catalog exists to make impossible, not one to restate quietly.
-            if !lane.kinds_github.is_empty() && os != "linux" {
+            if !lane.kinds_github.is_empty() && !lane.runs_only_on_linux() {
                 bail!(
-                    "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
+                    "ext.ci.lanes.{name}.kinds_github schedules a `{}` lane, and the GitHub fleet is Linux",
+                    lane.os.join(" or ")
                 );
             }
             if lane.github_runner.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.github_runner must not be empty");
+            }
+            if lane
+                .github_runner_main
+                .as_deref()
+                .is_some_and(str::is_empty)
+            {
+                bail!("ext.ci.lanes.{name}.github_runner_main must not be empty");
+            }
+            if lane.target_snapshot.as_deref().is_some_and(str::is_empty) {
+                bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
+            }
+            if lane.target_snapshot.is_some()
+                && lane.steps.iter().any(|step| {
+                    step.env
+                        .get("CARGO_TARGET_DIR")
+                        .is_some_and(|target| target != TARGET_PLACEHOLDER)
+                })
+            {
+                bail!(
+                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}"
+                );
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
@@ -491,6 +550,7 @@ pub(crate) struct HookRoute {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct AndroidConfig {
+    pub(crate) test_lane: String,
     /// Cargo package compiled into the Android JNI libraries.
     pub(crate) ffi_crate: String,
     /// AAR artifacts the Gradle export is expected to produce.
@@ -543,12 +603,10 @@ pub(crate) struct ReleaseConfig {
     /// Additional required CI-built artifacts published with the Apple
     /// frameworks, such as Android AARs.
     pub(crate) platform_assets: Vec<String>,
-    /// Documentation channel: zip name for the DocC archive uploaded as a
-    /// release asset. Empty disables the docs channel.
-    pub(crate) docs_asset: String,
-    /// Workspace-relative DocC archive dir zipped into [`Self::docs_asset`]
-    /// (the `just platform apple doc` output).
-    pub(crate) docs_archive: String,
+    /// Documentation channels, keyed by the platform that renders them. Each
+    /// names the directory a `doc` recipe writes and the zip it is published
+    /// as. An empty map disables the docs channel.
+    pub(crate) docs: BTreeMap<String, DocsChannel>,
     /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
     /// GitHub Pages classic. Empty disables the wasm channel.
     pub(crate) wasm_asset: String,
@@ -575,6 +633,20 @@ impl ReleaseConfig {
             .with_context(|| format!("ext.release.packages.{name} is not defined"))
     }
 
+    pub(crate) fn docs_channel(&self, name: &str) -> Result<&DocsChannel> {
+        self.docs
+            .get(name)
+            .with_context(|| format!("ext.release.docs.{name} is not defined"))
+    }
+
+    /// Every published documentation zip, in a stable order.
+    pub(crate) fn docs_assets(&self) -> impl Iterator<Item = &str> {
+        self.docs
+            .values()
+            .map(|channel| channel.asset.as_str())
+            .filter(|name| !name.is_empty())
+    }
+
     pub(crate) fn channel(&self, name: &str) -> Result<&ChannelProfile> {
         self.channels
             .get(name)
@@ -585,10 +657,20 @@ impl ReleaseConfig {
         match key {
             AssetKey::Core => &self.core_asset,
             AssetKey::Merged => &self.merged_asset,
-            AssetKey::Docs => &self.docs_asset,
             AssetKey::Wasm => &self.wasm_asset,
         }
     }
+}
+
+/// One rendered documentation set: the directory a `doc` recipe writes and the
+/// zip that directory is published as.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct DocsChannel {
+    /// Zip name uploaded as a release asset.
+    pub(crate) asset: String,
+    /// Workspace-relative directory zipped into [`Self::asset`].
+    pub(crate) archive: String,
 }
 
 /// One packaged artifact, named by what it carries rather than by file.
@@ -597,7 +679,6 @@ impl ReleaseConfig {
 pub(crate) enum AssetKey {
     Core,
     Merged,
-    Docs,
     Wasm,
 }
 
@@ -834,6 +915,63 @@ timeout_minutes = 30
     }
 
     #[test]
+    fn a_lane_may_name_every_operating_system_it_runs_on() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.device]
+cache_group = "host"
+label = "Android"
+os = ["macos", "linux"]
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 30
+"#,
+        );
+
+        let ci = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci;
+        ci.validate().expect("a lane may run on two machines");
+        assert_eq!(ci.lanes["device"].os, ["macos", "linux"]);
+        assert!(!ci.lanes["device"].runs_only_on_linux());
+    }
+
+    #[test]
+    fn a_target_snapshot_lane_may_not_move_cargo_after_restore() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.snapshot]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+target_snapshot = "linux-test-release"
+steps = [{ args = ["test"], label = "suite", env = { CARGO_TARGET_DIR = "{target}/other" } }]
+role = "gate"
+timeout_minutes = 30
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("a snapshot must restore where Cargo will build");
+        assert!(
+            error.to_string().contains("must keep CARGO_TARGET_DIR"),
+            "the error must explain the snapshot/Cargo target contract: {error}"
+        );
+    }
+
+    #[test]
     fn an_unknown_publish_step_fails_the_config() {
         let ctx = ctx_from_config(
             r#"
@@ -930,6 +1068,7 @@ upload_timeout_secs = 600
 
 [ext.android]
 ffi_crate = "kithara-ffi"
+test_lane = "android"
 aars = ["kithara.aar"]
 default_avd = "Pixel_6"
 demo_package = "com.kithara.example"
@@ -955,6 +1094,7 @@ apple_proof_needles = ["AppleCodec"]
         assert_eq!(ext.release.title, "Kithara");
         assert_eq!(ext.release.http_timeout_secs, Some(60));
         assert_eq!(ext.release.upload_timeout_secs, Some(600));
+        assert_eq!(ext.android.test_lane, "android");
         assert_eq!(ext.android.default_avd, "Pixel_6");
         assert_eq!(ext.android.boot_wait_attempts, Some(120));
         assert_eq!(ext.android.boot_poll_interval_secs, Some(1));

@@ -1,3 +1,4 @@
+use kithara::platform::tokio::task::spawn_blocking;
 use kithara_integration_tests::packed_audio::{PackedSegment, TIMESTAMP_BITS};
 use kithara_test_fixtures::integration_fixtures::origin_tone;
 
@@ -185,7 +186,12 @@ async fn every_segment_is_a_packed_audio_segment(origin_tone: Vec<f32>) {
 async fn a_stopped_playlist_is_frozen(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
-    origin.handle.stop();
+    let origin = spawn_blocking(move || {
+        origin.handle.stop();
+        origin
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     let first = origin.media_playlist().await;
     let second = origin.media_playlist().await;

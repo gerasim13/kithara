@@ -5,7 +5,7 @@
 mod error;
 mod guard;
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 
 pub mod api;
 pub mod bridge;
@@ -26,10 +26,11 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
-    PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionDuckingMode, SessionEvent,
-    SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo, TempoError, TimeControlStatus,
-    TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason,
+    BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
+    PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
+    RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
+    SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
+    TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
@@ -38,9 +39,7 @@ pub use bridge::{
     TrackTransition,
 };
 pub use effects::eq::EqBandConfig;
-#[cfg(any(test, feature = "probe"))]
-pub use engine::apply_mix;
-pub use engine::{EngineConfig, EngineImpl};
+pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;

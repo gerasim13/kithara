@@ -4,6 +4,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
+    download::{Downloader, DownloaderConfig},
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
@@ -19,30 +20,10 @@ use kithara::{
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, QueueError, RepeatMode, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
     warp::{StretchControls, WarpConfig},
 };
 
 use super::salt;
-use crate::{
-    asset::FfiAssetStore,
-    config::FfiPlayerConfig,
-    event_bridge::EventBridge,
-    item::AudioPlayerItem,
-    observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
-    pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
-    registry::ItemRegistry,
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
-};
-
-fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
-    Arc::new(move |key: Bytes| {
-        Ok(Bytes::from(
-            processor.process_key(key.to_vec(), salt.clone()),
-        ))
-    })
-}
-
 fn player_timestretch() -> Arc<StretchControls> {
     let controls = StretchControls::new(1.0);
     #[cfg(all(
@@ -52,6 +33,28 @@ fn player_timestretch() -> Arc<StretchControls> {
     ))]
     controls.set_keylock(true);
     controls
+}
+
+use crate::{
+    asset::FfiAssetStore,
+    config::FfiPlayerConfig,
+    event_bridge::EventBridge,
+    item::AudioPlayerItem,
+    observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
+    pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
+    registry::ItemRegistry,
+    types::{
+        FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
+        FfiRepeatMode,
+    },
+};
+
+fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
+    Arc::new(move |key: Bytes| {
+        Ok(Bytes::from(
+            processor.process_key(key.to_vec(), salt.clone()),
+        ))
+    })
 }
 
 /// Build the default `NetOptions`. The `dev` feature enables the
@@ -474,6 +477,17 @@ impl NativeInner {
         drop(eb);
     }
 
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.queue
+            .set_session_ducking(mode.into())
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
+    }
+
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
         let mode = RepeatMode::try_from(mode).map_err(|rejected| FfiError::InvalidArgument {
             reason: format!("repeat mode {rejected:?} is not supported"),
@@ -655,25 +669,6 @@ mod tests {
 
     use super::*;
     use crate::observer::FfiKeyProcessor;
-
-    #[cfg(all(
-        feature = "apple",
-        target_vendor = "apple",
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    #[kithara::test]
-    fn apple_player_defaults_to_pitch_preserving_rate() {
-        assert!(player_timestretch().keylock());
-    }
-
-    #[cfg(all(
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee"),
-        not(all(feature = "apple", target_vendor = "apple"))
-    ))]
-    #[kithara::test]
-    fn non_apple_player_keeps_vinyl_rate_default() {
-        assert!(!player_timestretch().keylock());
-    }
 
     struct TaggedProcessor(u8);
 

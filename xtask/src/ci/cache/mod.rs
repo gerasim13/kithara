@@ -8,10 +8,12 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 
+use self::snapshot::SnapshotArgs;
 use super::config::{CiPins, PINS_PATH};
 use crate::ci::host::read_secret;
 
 mod provision;
+pub(crate) mod snapshot;
 mod verify;
 
 const CLIENT_KEYS: [&str; 7] = [
@@ -31,24 +33,49 @@ pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>
         let (key, value) = line
             .split_once('=')
             .context("invalid cache environment entry")?;
-        ensure!(
-            CLIENT_KEYS.contains(&key),
-            "unexpected cache environment key"
-        );
-        ensure!(!value.is_empty(), "empty cache environment value");
-        ensure!(
-            !value
-                .chars()
-                .any(|character| character.is_control() || matches!(character, '"' | '\\')),
-            "unsafe cache environment value"
-        );
-        ensure!(
-            environment
-                .insert(key.to_owned(), value.to_owned())
-                .is_none(),
-            "duplicate cache environment key"
-        );
+        insert_client_environment(&mut environment, key, value)?;
     }
+    complete_client_environment(environment)
+}
+
+/// Read the restricted cache credentials injected into a CI job.
+pub(crate) fn current_client_environment() -> Result<BTreeMap<String, String>> {
+    let mut environment = BTreeMap::new();
+    for key in CLIENT_KEYS {
+        let value = env::var(key).with_context(|| format!("{key} must be configured"))?;
+        insert_client_environment(&mut environment, key, &value)?;
+    }
+    complete_client_environment(environment)
+}
+
+fn insert_client_environment(
+    environment: &mut BTreeMap<String, String>,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    ensure!(
+        CLIENT_KEYS.contains(&key),
+        "unexpected cache environment key"
+    );
+    ensure!(!value.is_empty(), "empty cache environment value");
+    ensure!(
+        !value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '"' | '\\')),
+        "unsafe cache environment value"
+    );
+    ensure!(
+        environment
+            .insert(key.to_owned(), value.to_owned())
+            .is_none(),
+        "duplicate cache environment key"
+    );
+    Ok(())
+}
+
+fn complete_client_environment(
+    environment: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
     ensure!(
         environment.len() == CLIENT_KEYS.len(),
         "incomplete cache environment"
@@ -76,6 +103,8 @@ enum CacheCommand {
     Initialize,
     /// Verify cache reuse between two independent compiler daemons.
     Verify { env_file: PathBuf },
+    /// Restore and publish immutable trusted Cargo target snapshots.
+    Snapshot(SnapshotArgs),
 }
 
 pub(crate) fn run(args: &CacheArgs) -> Result<()> {
@@ -101,6 +130,7 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Credentials => provision::credentials(),
         CacheCommand::Initialize => provision::initialize(),
         CacheCommand::Verify { env_file } => verify::run(env_file),
+        CacheCommand::Snapshot(args) => snapshot::run(args),
     }
 }
 

@@ -1,3 +1,5 @@
+mod event;
+pub(crate) use event::AnalysisEvent;
 mod entry;
 #[cfg(test)]
 pub(crate) mod fixtures;

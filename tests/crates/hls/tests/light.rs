@@ -4,6 +4,8 @@
     reason = "integration test crate - unwraps are acceptable in test code"
 )]
 
+use kithara_test_dylib as _;
+
 mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
@@ -26,6 +28,8 @@ mod driver_test;
 mod ephemeral;
 #[path = "forward_withheld_segment_busy_spin.rs"]
 mod forward_withheld_segment_busy_spin;
+#[path = "hls_variant_playlists_concurrent.rs"]
+mod hls_variant_playlists_concurrent;
 #[path = "html_error_body.rs"]
 mod html_error_body;
 #[path = "html_error_cleanup.rs"]

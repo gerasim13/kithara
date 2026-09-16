@@ -3,6 +3,10 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use std::num::NonZeroUsize;
@@ -10,9 +14,8 @@ use std::num::NonZeroUsize;
 use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 
 const ROOT_A: &str = "asset_root_a";

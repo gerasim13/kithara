@@ -6,7 +6,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
@@ -25,7 +25,12 @@ const READ_BUF_SAMPLES: usize = 4_096;
 async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(SEGMENTS).await;
-    origin.handle.stop();
+    let origin = spawn_blocking(move || {
+        origin.handle.stop();
+        origin
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

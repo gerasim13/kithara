@@ -53,6 +53,7 @@ pub(crate) mod redundant_reexport;
 pub(crate) mod shared_state;
 pub(crate) mod single_impl_size;
 pub(crate) mod single_word_filenames;
+pub(crate) mod smoothing_primitive_sites;
 pub(crate) mod stray_rs_files;
 pub(crate) mod struct_index;
 pub(crate) mod tokio_dep_quarantine;
@@ -197,6 +198,7 @@ pub(crate) trait Check {
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(cancel_root_sites::CancelRootSites),
+        Box::new(smoothing_primitive_sites::SmoothingPrimitiveSites),
         Box::new(platform_layer_hygiene::PlatformLayerHygiene),
         Box::new(tokio_dep_quarantine::TokioDepQuarantine),
         Box::new(cfg_density::CfgDensity),

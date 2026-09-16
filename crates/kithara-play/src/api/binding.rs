@@ -1,10 +1,10 @@
-use kithara_events::PlaybackDirection;
 use kithara_warp::{
     Beat, BeatEstimate, BeatGridQuery, BeatGridSnapshot, BeatGridStamp, MapAxis, MapPoint,
     MapPosition,
 };
 
 use super::SessionBeat;
+use crate::api::PlaybackDirection;
 
 /// A track cannot participate in session synchronization.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -100,7 +100,6 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
     use kithara_warp::{
         AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision,
@@ -110,6 +109,7 @@ mod tests {
     };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};
+    use crate::api::PlaybackDirection;
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero")

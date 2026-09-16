@@ -11,7 +11,7 @@ categories = ["caching"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 # HTTP backend forwarding. kithara-assets reaches the single kithara-net
 # package only through kithara-storage -> kithara-test-utils -> kithara-events
 # (network event types). These forwards give kithara-net a backend in
@@ -25,7 +25,7 @@ tls-native = ["kithara-storage/tls-native"]
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true }
-kithara-events = { workspace = true, features = ["asset"] }
+kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -57,10 +57,10 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 tempfile = { workspace = true }
 
 [dev-dependencies]
-kithara-assets = { path = "." }
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-assets = { path = ".", features = ["usdt"] }
+kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }
@@ -70,6 +70,9 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

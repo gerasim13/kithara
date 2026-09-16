@@ -162,10 +162,11 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Attaches and transfers one fully configured player or decorator into
-    /// this Host before it can register its lower graph projection.
+    /// this Host, then prepares its graph and initial slot before returning.
+    /// Audio-device setup may block; musical playback remains stopped.
     ///
     /// # Errors
-    /// Returns an error when session binding or canonical attachment fails.
+    /// Returns an error when binding, attachment, or graph preparation fails.
     pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
     where
         P: PlayerControlSource<Schema = S>,
@@ -185,7 +186,12 @@ where
                 "wasm player residence changed during insertion".into(),
             ));
         }
-        Ok(self.owned(grid_id, control))
+        let owned = self.owned::<P>(grid_id, control);
+        if let Err(error) = P::prepare_control(owned.control()) {
+            self.remove(&owned)?;
+            return Err(error);
+        }
+        Ok(owned)
     }
 
     pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {

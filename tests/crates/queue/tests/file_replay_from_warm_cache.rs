@@ -4,19 +4,19 @@
 use std::path::Path;
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::AbrMode,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -71,16 +71,15 @@ async fn build_session(cache_path: &Path) -> Session {
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools.clone())
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools.clone()).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -108,7 +107,7 @@ fn track_source(url: &Url, session: &Session) -> TrackSource<TestPools> {
         .store(session.store.clone())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .build(),
         )
         .initial_abr_mode(AbrMode::Auto(None))

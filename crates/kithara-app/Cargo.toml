@@ -18,6 +18,7 @@ default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
+backend-cpal = ["kithara/backend-cpal"]
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
@@ -43,7 +44,7 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
 # Enable app and facade USDT probes together.
-probe = ["kithara/probe"]
+usdt = ["kithara/usdt"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
 # codec. Opt-in so the default desktop build keeps the Rubato adapter path.
 apple-fused-src = ["kithara/apple-fused-src"]
@@ -56,6 +57,7 @@ stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "download",
     "analysis",
     "audio",
     "bufpool",
@@ -75,6 +77,7 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-events = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -88,7 +91,7 @@ fieldwork = { workspace = true }
 # for the iOS framework closure. Keeping them off iOS lets the workspace-hack
 # leave env-filter (and regex/regex-automata/aho-corasick) out of the iOS build.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["signal"] }
+kithara = { workspace = true, default-features = false, features = ["download", "signal"] }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
@@ -114,32 +117,36 @@ url = { workspace = true }
 # `cargo build` on Linux/Windows would leave the binary with no audio
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["symphonia", "client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, features = ["download", "symphonia", "client-reqwest", "tls-rustls"] }
 
 # HE-AAC v1/v2 through libfdk. Its vendored `FDK_archdef.h` has no branch for
 # MSVC on ARM64 and stops at `fatal error C1021: invalid preprocessor command`,
 # so that one target decodes AAC through symphonia alone.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
+kithara = { workspace = true, default-features = false, features = ["download", "fdk-aac"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }
 
 [build-dependencies]
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["probe", "ui-capture"] }
+kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }
+kithara-app = { path = ".", default-features = false, features = ["usdt"] }
 kithara-encode = { workspace = true, default-features = false }
-kithara-test-fixtures = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["client-reqwest", "net", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, features = ["download", "client-reqwest", "net", "tls-rustls"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`
@@ -147,7 +154,7 @@ kithara = { workspace = true, default-features = false, features = ["client-reqw
 # split a fixed client-reqwest dev-dep would unify with the macOS wreq
 # production path and compile both stacks into the test binary.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["client-wreq", "net"] }
+kithara = { workspace = true, default-features = false, features = ["download", "client-wreq", "net"] }
 
 [lints]
 workspace = true

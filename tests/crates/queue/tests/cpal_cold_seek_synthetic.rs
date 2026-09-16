@@ -1,20 +1,21 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, Event},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -25,7 +26,7 @@ use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
@@ -57,11 +58,10 @@ async fn cold_seek_far_segment_hls_offline(
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools())
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools()).build(),
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -118,7 +118,7 @@ async fn cold_seek_far_segment_hls_offline(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+            Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                 let pos_secs = position_ms as f64 / 1000.0;
                 if pos_secs > seek_target + 0.5 {
                     confirmed = true;

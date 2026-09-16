@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::env;
@@ -5,10 +6,10 @@ use std::env;
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
+    download::Downloader,
     platform::time::Duration,
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::Downloader,
 };
 use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind};
 use kithara_integration_tests::{
@@ -16,10 +17,9 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    served_mp3, temp_dir,
+    served_mp3, temp_dir, usdt_trace,
     waits::wait_for_loader_done_event,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
 use url::Url;
 
@@ -34,7 +34,7 @@ const RENDER_BLOCK_BUDGET: usize = 512;
 #[serial]
 async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelper, Url)) {
     let trace_path = env::var_os("ARCHITECTURE_TRACE_PATH").expect("architecture trace path");
-    let probes = probe_capture::install();
+    let probes = usdt_trace::scope();
     let (_helper, url) = served_mp3;
     let temp = temp_dir();
     let store = disk_asset_store(temp.path());

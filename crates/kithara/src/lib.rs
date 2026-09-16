@@ -112,6 +112,11 @@ pub mod queue {
     pub use kithara_queue::*;
 }
 
+#[cfg(feature = "download")]
+pub mod download {
+    pub use kithara_download::*;
+}
+
 #[cfg(feature = "stream")]
 pub mod stream {
     pub use kithara_stream::*;
@@ -125,6 +130,11 @@ pub mod stretch {
 #[cfg(feature = "ui")]
 pub mod ui {
     pub use kithara_ui::*;
+}
+
+#[cfg(feature = "usdt")]
+pub mod usdt {
+    pub use kithara_test_utils::probe::operation_id;
 }
 
 #[cfg(feature = "warp")]
@@ -172,12 +182,8 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-#[cfg(feature = "test-utils")]
-pub use kithara_test_utils::{kithara::mock, no_block};
-#[cfg(feature = "probe")]
-pub use kithara_test_utils::{
-    kithara::{fixture, test},
-    kithara_facade::{allow_block, flash, no_block},
+pub use kithara_test_macros::{
+    allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
 };
 #[cfg(all(
     feature = "warp",
@@ -206,18 +212,17 @@ pub mod prelude {
     pub use kithara_abr::AbrMode;
     #[cfg(feature = "audio")]
     pub use kithara_audio::{
-        Audio, AudioConfig, AudioControl, AudioRead, AudioReader, AudioSession, ResamplerQuality,
+        Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
+        ResamplerQuality,
     };
     #[cfg(feature = "decode")]
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "events")]
-    pub use kithara_events::HlsEvent;
-    #[cfg(feature = "events")]
-    pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
+    pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig};
+    pub use kithara_file::{File, FileConfig, FileEvent};
     #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig};
+    pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
         EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,

@@ -1,7 +1,5 @@
-use kithara::{
-    self,
-    bufpool::{PoolConfig, PoolError, testing::pools_with},
-};
+use kithara::bufpool::{PoolConfig, PoolError};
+use kithara_test_utils::bufpool::pools_with;
 
 #[kithara::test]
 fn byte_growth_never_crosses_overall_budget() {

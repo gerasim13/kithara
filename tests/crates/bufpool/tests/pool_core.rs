@@ -1,4 +1,5 @@
-use kithara::{self, bufpool::testing::pools, platform::tokio::task::spawn_blocking};
+use kithara::platform::tokio::task::spawn_blocking;
+use kithara_test_utils::bufpool::pools;
 
 #[kithara::test]
 fn byte_buffer_supports_checked_writes() {

@@ -29,6 +29,7 @@ pub struct NavigationState {
     #[field(get = is_shuffle_enabled, set = set_shuffle)]
     shuffle_enabled: bool,
     /// Entries [`Self::history`] keeps; the oldest is dropped past it.
+    #[field(get, copy)]
     history_limit: usize,
 }
 

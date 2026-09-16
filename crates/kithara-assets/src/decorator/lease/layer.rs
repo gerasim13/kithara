@@ -7,7 +7,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use kithara_events::{AssetEvent, EventBus};
+use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 
@@ -17,6 +17,7 @@ use super::{
     live::{LiveRegistry, LiveResource, RemoveFn},
 };
 use crate::{
+    AssetEvent,
     decorator::{Assets, ByteRecorder, CachedAssets, Capabilities, ProcessCtx},
     error::AssetsResult,
     index::{PinDurability, PinsIndex},

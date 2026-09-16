@@ -159,7 +159,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
         .expect("first item must emit ItemDidPlayToEnd before the queue completes");
     let item2_activated = events
         .iter()
-        .filter(|timed| matches!(&timed.event, PlayerEvent::CurrentItemChanged))
+        .filter(|timed| matches!(&timed.event, PlayerEvent::CurrentItemChanged { .. }))
         .nth(1)
         .map(|timed| timed.frame_end)
         .expect("CurrentItemChanged should fire when item-2 takes over");

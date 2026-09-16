@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     mixed_encrypted, mixed_plain, temp_dir,
 };
 use tracing::info;
@@ -124,7 +125,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 
     let mut audio = worker.open(config).await.expect("audio creation");
 
-    let mut events_rx = audio.event_bus().subscribe();
+    let mut events_rx = audio.event_bus().subscribe::<TestEvent>();
 
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();

@@ -1,11 +1,11 @@
-use kithara_events::{DeferredBus, Event};
+use kithara_events::{DeferredBus, EventSet};
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
 use kithara_stream::PlayheadWrite;
 
 use super::PreloadGate;
 use crate::{
-    Fetch,
+    AudioEvent, DecoderEvent, Fetch,
     runtime::{Inlet, Outlet},
 };
 
@@ -26,19 +26,6 @@ impl ProducerPort {
             trash_inlet,
             outlet,
         }
-    }
-
-    /// Create an isolated port and a consumer probe for unit tests.
-    #[cfg(any(test, feature = "probe"))]
-    pub fn probe(
-        capacity: usize,
-    ) -> (
-        Self,
-        impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
-    ) {
-        let (outlet, mut inlet) = crate::runtime::connect(capacity, None);
-        let (_trash_outlet, trash_inlet) = crate::runtime::connect(capacity + 2, None);
-        (Self::new(outlet, trash_inlet), move || inlet.try_pop())
     }
 
     /// Reclaim spent chunks outside the checked producer core.
@@ -66,7 +53,7 @@ impl ProducerPort {
 #[non_exhaustive]
 pub struct PreparedAudioLane<S> {
     /// Deferred event publisher shared with the reader.
-    pub emit: Arc<DeferredBus<Event>>,
+    pub emit: Arc<DeferredBus<AudioLaneEvent>>,
     /// Canonical playback clock written after final audio admission.
     pub playhead: Arc<dyn PlayheadWrite>,
     /// Gate opened when the final audio ring is preloaded.
@@ -101,4 +88,12 @@ impl<S> PreparedAudioLane<S> {
             },
         )
     }
+}
+
+/// Event types carried by the decode ring.
+#[derive(Clone, Debug, EventSet)]
+#[non_exhaustive]
+pub enum AudioLaneEvent {
+    Decoder(DecoderEvent),
+    Audio(AudioEvent),
 }

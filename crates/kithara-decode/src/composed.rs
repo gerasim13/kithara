@@ -12,7 +12,7 @@ use crate::{
     BlenderProfile,
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
-    error::DecodeResult,
+    error::{DecodeError, DecodeResult},
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::TrackMetadata,
 };
@@ -72,6 +72,8 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
     pools: PoolRegion<S>,
+    output: Option<DecodeResult<SampleBuffer>>,
+    prefill: Prefill,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
@@ -96,6 +98,12 @@ pub(crate) struct DecoderRuntime<S> {
     pub(crate) epoch: u64,
 }
 
+enum Prefill {
+    Needed,
+    Buffered(DecodeResult<DecoderChunkOutcome>),
+    Complete,
+}
+
 impl<D, C, S> ComposedDecoder<D, C, S>
 where
     D: Demuxer,
@@ -112,6 +120,8 @@ where
             spec,
             duration,
             pools: runtime.pools,
+            output: None,
+            prefill: Prefill::Needed,
             epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
@@ -122,6 +132,14 @@ where
             head_strip: HeadStrip::default(),
             zero_frame_count: 0,
         }
+    }
+
+    fn decode_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        let output = self.output.take().ok_or(DecodeError::InvalidData {
+            detail: "decoder output was not prepared",
+        })??;
+        self.output = Some(Ok(output));
+        self.next_chunk_inner()
     }
 
     /// Build the output `AudioChunk` from a just-filled pool buffer plus
@@ -181,13 +199,22 @@ where
             return Ok(DecoderChunkOutcome::Eof);
         }
 
-        let mut buf = self.pools.get::<f32>();
+        let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
+            detail: "decoder output was not prepared",
+        })??;
         let timestamp = self
             .spec
             .duration_for(self.frame_offset)
             .unwrap_or(Duration::from_nanos(u64::MAX));
-        let frames = self.codec.decode_frame(&[], timestamp, &[], &mut buf)?;
+        let frames = match self.codec.decode_frame(&[], timestamp, &[], &mut buf) {
+            Ok(frames) => frames,
+            Err(error) => {
+                self.output = Some(Ok(buf));
+                return Err(error);
+            }
+        };
         if frames == 0 {
+            self.output = Some(Ok(buf));
             return Ok(DecoderChunkOutcome::Eof);
         }
         let chunk = self.build_chunk(buf, frames, timestamp, 0);
@@ -227,7 +254,7 @@ where
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             hang_tick!();
-            let frame = match self.demuxer.next_frame()? {
+            let frame = match self.demuxer.next_frame_prepared()? {
                 DemuxOutcome::Frame(frame) => frame,
                 DemuxOutcome::Pending(reason) => {
                     return Ok(DecoderChunkOutcome::Pending(reason));
@@ -239,14 +266,28 @@ where
             let frame_duration = frame.duration;
             let frame_end = frame_pts.saturating_add(frame_duration);
             let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
-            let mut buf = self.pools.get::<f32>();
+            let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
+                detail: "decoder output was not prepared",
+            })??;
             let mut frames =
-                self.codec
-                    .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
-            self.head_strip.record(
-                self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
-                u64::from(frames),
-            );
+                match self
+                    .codec
+                    .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)
+                {
+                    Ok(frames) => frames,
+                    Err(error) => {
+                        self.output = Some(Ok(buf));
+                        return Err(error);
+                    }
+                };
+            let prior_head_strip = self.head_strip.frames();
+            let decoded_pts = self.codec.decoded_pts();
+            if decoded_pts.is_none() {
+                self.head_strip.record(
+                    self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
+                    u64::from(frames),
+                );
+            }
             let zero_frame_budget_reached = if frames == 0 {
                 self.zero_frame_count = self.zero_frame_count.saturating_add(1);
                 self.zero_frame_count >= ZERO_FRAME_BUDGET
@@ -256,22 +297,27 @@ where
             };
             let mut chunk_pts = if frames == 0 {
                 frame_pts
+            } else if let Some(decoded_pts) = decoded_pts {
+                decoded_pts
             } else {
-                self.codec.decoded_pts(frame_pts)
+                // A head-trimmed packet keeps its end time; the missing prefix precedes its PCM.
+                let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
+                frame_pts.saturating_add(
+                    self.codec
+                        .spec()
+                        .duration_for(stripped)
+                        .unwrap_or(Duration::MAX),
+                )
             };
             if let Some(target) = self.pending_seek_target {
-                let decoded_end = if chunk_pts == frame_pts {
-                    frame_end
-                } else {
-                    chunk_pts.saturating_add(
-                        self.codec
-                            .spec()
-                            .duration_for(u64::from(frames))
-                            .unwrap_or(Duration::from_nanos(u64::MAX)),
-                    )
-                };
+                let decoded_end = chunk_pts.saturating_add(
+                    self.codec
+                        .spec()
+                        .duration_for(u64::from(frames))
+                        .unwrap_or(Duration::from_nanos(u64::MAX)),
+                );
                 if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
-                    drop(buf);
+                    self.output = Some(Ok(buf));
                     if zero_frame_budget_reached {
                         return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
                             NotReadyCause::SourcePending,
@@ -289,7 +335,7 @@ where
                     // Duration rounding can leave `frame_end > target` even when
                     // this packet is fully pre-target in sample space.
                     if trim_frames >= frames {
-                        drop(buf);
+                        self.output = Some(Ok(buf));
                         continue;
                     }
                     if trim_frames > 0 {
@@ -313,6 +359,7 @@ where
                 }
             }
             if frames == 0 {
+                self.output = Some(Ok(buf));
                 if zero_frame_budget_reached {
                     return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
                         NotReadyCause::SourcePending,
@@ -334,6 +381,7 @@ where
                 preroll,
             } => {
                 self.codec.flush()?;
+                self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
@@ -348,6 +396,7 @@ where
             }
             DemuxSeekOutcome::PastEof { duration } => {
                 self.codec.flush()?;
+                self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
                 Ok(DecoderSeekOutcome::PastEof { duration })
             }
@@ -379,14 +428,54 @@ where
         TrackMetadata::default()
     }
 
+    fn prepare_next_chunk(&mut self) {
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            return;
+        }
+        if let Err(error) = self.demuxer.prepare_frame() {
+            self.output = Some(Err(error));
+            return;
+        }
+        if self.output.is_none() {
+            let mut buffer = self.pools.get::<f32>();
+            self.output = Some(self.codec.prepare_output(&mut buffer).map(|()| buffer));
+        }
+        if matches!(self.prefill, Prefill::Needed) {
+            self.prefill = Prefill::Buffered(self.decode_prepared());
+        }
+    }
+
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        let outcome = self.next_chunk_inner()?;
+        loop {
+            self.prepare_next_chunk();
+            match self.next_chunk_prepared()? {
+                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+                outcome => return Ok(outcome),
+            }
+        }
+    }
+
+    fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            let Prefill::Buffered(result) = std::mem::replace(&mut self.prefill, Prefill::Complete)
+            else {
+                unreachable!();
+            };
+            let outcome = result?;
+            if matches!(outcome, DecoderChunkOutcome::Pending(_)) {
+                self.prefill = Prefill::Needed;
+            }
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
+        let outcome = self.decode_prepared()?;
         self.emit_chunk_signal(&outcome);
         Ok(outcome)
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.seek_inner(pos)?;
+        self.prefill = Prefill::Needed;
         self.emit_seek_signal(&outcome);
         Ok(outcome)
     }
@@ -444,12 +533,14 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
     }
 }
 
-#[cfg(all(test, feature = "symphonia"))]
+#[cfg(test)]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
     use kithara_test_fixtures::fixtures::tone_mp3;
+    #[cfg(feature = "symphonia")]
     use symphonia::{
         core::{
             formats::{FormatOptions, probe::Hint},
@@ -460,9 +551,11 @@ mod default_priming_tests {
     };
 
     use super::*;
+    #[cfg(feature = "symphonia")]
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    fn build_mp3_decoder(
+    #[cfg(feature = "symphonia")]
+    pub(super) fn build_mp3_decoder(
         tone_mp3: &[u8],
     ) -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec, crate::test_pools::TestPools> {
         let cursor = Cursor::new(tone_mp3.to_vec());
@@ -485,6 +578,143 @@ mod default_priming_tests {
         ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
+    #[cfg(all(not(feature = "symphonia"), feature = "android", target_os = "android"))]
+    pub(super) fn build_mp3_decoder(
+        tone_mp3: &[u8],
+    ) -> ComposedDecoder<
+        crate::android::AndroidMediaExtractorDemuxer,
+        crate::android::AndroidCodec,
+        crate::test_pools::TestPools,
+    > {
+        let (demuxer, format) = crate::android::AndroidMediaExtractorDemuxer::open(
+            Box::new(Cursor::new(tone_mp3.to_vec())),
+            AudioCodec::Mp3,
+            None,
+            None,
+            None,
+        )
+        .expect("MP3 extractor");
+        let codec = crate::android::AndroidCodec::open_with_format(demuxer.track_info(), &format)
+            .expect("MP3 codec");
+        ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
+    }
+
+    fn prepared_chunk(decoder: &mut dyn Decoder) -> AudioChunk {
+        for _ in 0..ZERO_FRAME_BUDGET {
+            decoder.prepare_next_chunk();
+            match decoder.next_chunk_prepared().expect("prepared decode") {
+                DecoderChunkOutcome::Chunk(chunk) => return chunk,
+                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+                _ => panic!("expected PCM or another prepared packet during warmup"),
+            }
+        }
+        panic!("prepared decode exhausted the codec warmup budget");
+    }
+
+    #[kithara::test]
+    fn prefilled_mp3_preserves_first_pcm_and_seek(tone_mp3: &'static [u8]) {
+        let mut decoder = build_mp3_decoder(tone_mp3);
+        decoder.prepare_next_chunk();
+        let mut reference = build_mp3_decoder(tone_mp3);
+        for position in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
+            if let Some(position) = position {
+                decoder.seek(position).expect("seek");
+                reference.seek(position).expect("reference seek");
+            }
+            for _ in 0..4 {
+                decoder.prepare_next_chunk();
+                decoder.prepare_next_chunk();
+                let actual = decoder.next_chunk().expect("prefilled decode");
+                let expected = reference.next_chunk().expect("reference decode");
+                assert_same_mp3_output(&actual, &expected);
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn initialized_mp3_reuses_decoder_storage_after_seek(tone_mp3: &'static [u8]) {
+        let mut decoder = build_mp3_decoder(tone_mp3);
+        let mut reference = build_mp3_decoder(tone_mp3);
+        let first = decoder.next_chunk().expect("initial decode");
+        assert!(matches!(first, DecoderChunkOutcome::Chunk(_)));
+        let expected_first = reference.next_chunk().expect("reference initial decode");
+        assert_same_mp3_output(&first, &expected_first);
+        for position in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
+            if let Some(position) = position {
+                decoder.seek(position).expect("seek");
+                reference.seek(position).expect("reference seek");
+            }
+            let mut produced = 0;
+            for _ in 0..4 {
+                decoder.prepare_next_chunk();
+                let chunk = checked_mp3_chunk(&mut decoder).expect("checked decode");
+                reference.prepare_next_chunk();
+                let expected = reference.next_chunk_prepared().expect("reference decode");
+                assert_same_mp3_output(&chunk, &expected);
+                produced += usize::from(matches!(chunk, DecoderChunkOutcome::Chunk(_)));
+            }
+            assert!(produced > 0, "checked calls must produce PCM");
+        }
+    }
+
+    fn assert_same_mp3_output(actual: &DecoderChunkOutcome, expected: &DecoderChunkOutcome) {
+        match (actual, expected) {
+            (DecoderChunkOutcome::Chunk(actual), DecoderChunkOutcome::Chunk(expected)) => {
+                assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
+                assert_eq!(actual.meta.frame_offset, expected.meta.frame_offset);
+                assert_eq!(actual.meta.frames, expected.meta.frames);
+                assert_eq!(&*actual.samples, &*expected.samples);
+            }
+            (
+                DecoderChunkOutcome::Pending(PendingReason::Retry),
+                DecoderChunkOutcome::Pending(PendingReason::Retry),
+            ) => {}
+            _ => panic!("expected matching PCM or packet progress"),
+        }
+    }
+
+    #[kithara::rtsan_forbid_blocking]
+    fn checked_mp3_chunk(decoder: &mut dyn Decoder) -> DecodeResult<DecoderChunkOutcome> {
+        decoder.next_chunk_prepared()
+    }
+
+    #[kithara::test]
+    fn prepared_mp3_decode_preserves_pcm_and_seek(tone_mp3: &'static [u8]) {
+        let mut prepared = build_mp3_decoder(tone_mp3);
+        let mut regular = build_mp3_decoder(tone_mp3);
+        assert!(matches!(
+            prepared.next_chunk_prepared(),
+            Err(DecodeError::InvalidData { .. })
+        ));
+        prepared.output = Some(Err(DecodeError::InvalidData {
+            detail: "output preparation failed",
+        }));
+        assert!(matches!(
+            prepared.next_chunk_prepared(),
+            Err(DecodeError::InvalidData {
+                detail: "output preparation failed"
+            })
+        ));
+        for seek in [None, Some(Duration::from_millis(250))] {
+            if let Some(position) = seek {
+                prepared.seek(position).expect("prepared seek");
+                regular.seek(position).expect("regular seek");
+            }
+            for _ in 0..4 {
+                let actual = prepared_chunk(&mut prepared);
+                let DecoderChunkOutcome::Chunk(expected) =
+                    regular.next_chunk().expect("regular decode")
+                else {
+                    panic!("expected PCM chunk");
+                };
+                assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
+                assert_eq!(actual.meta.frames, expected.meta.frames);
+                assert_eq!(&*actual.samples, &*expected.samples);
+            }
+        }
+    }
+
+    #[cfg(feature = "symphonia")]
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay(
         tone_mp3: &'static [u8],
@@ -518,50 +748,23 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
     u64::try_from(frames_u128).unwrap_or(u64::MAX)
 }
 
-#[cfg(all(test, feature = "symphonia"))]
+#[cfg(test)]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod smoke_tests {
 
+    #[cfg(feature = "symphonia")]
     use std::io::Cursor;
 
-    use kithara_stream::AudioCodec;
     use kithara_test_fixtures::fixtures::tone_mp3;
-    use kithara_test_utils::kithara;
-    use symphonia::{
-        core::{
-            formats::{FormatOptions, probe::Hint},
-            io::{MediaSourceStream, MediaSourceStreamOptions},
-            meta::MetadataOptions,
-        },
-        default,
-    };
 
-    use super::*;
-    use crate::{
-        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
-        traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    };
-
-    fn build_mp3_demuxer(tone_mp3: &[u8]) -> SymphoniaDemuxer {
-        let cursor = Cursor::new(tone_mp3.to_vec());
-        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
-        let mut hint = Hint::new();
-        hint.with_extension("mp3");
-        let format_reader = default::get_probe()
-            .probe(
-                &hint,
-                mss,
-                FormatOptions::default(),
-                MetadataOptions::default(),
-            )
-            .expect("BUG: MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("BUG: MP3 demuxer should build")
-    }
+    use super::{default_priming_tests::build_mp3_decoder, *};
+    #[cfg(feature = "symphonia")]
+    use crate::symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
     #[kithara::test]
     fn mp3_track_info_carries_codec_and_rate(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let info = demuxer.track_info();
+        let decoder = build_mp3_decoder(tone_mp3);
+        let info = decoder.demuxer.track_info();
         assert_eq!(info.codec, AudioCodec::Mp3);
         assert!(info.sample_rate > 0, "sample rate must be populated");
         assert!(info.channels > 0, "channels must be populated");
@@ -569,11 +772,7 @@ mod smoke_tests {
 
     #[kithara::test]
     fn mp3_universal_decoder_emits_non_empty_chunks(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let mut decoder = build_mp3_decoder(tone_mp3);
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -597,11 +796,7 @@ mod smoke_tests {
 
     #[kithara::test]
     fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let mut decoder = build_mp3_decoder(tone_mp3);
 
         for _ in 0..4 {
             let _ = decoder
@@ -625,6 +820,7 @@ mod smoke_tests {
         }
     }
 
+    #[cfg(feature = "symphonia")]
     #[kithara::test]
     fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek(tone_mp3: &'static [u8]) {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
@@ -673,7 +869,7 @@ fn write_silent_test_frame(
     let frames = usize::try_from(frames_per_call)?;
     let samples = frames
         .checked_mul(usize::from(spec.channels))
-        .ok_or_else(|| crate::error::DecodeError::InvalidData {
+        .ok_or_else(|| DecodeError::InvalidData {
             detail: "test frame sample count overflow",
         })?;
     out.ensure_len(samples)?;
@@ -781,8 +977,8 @@ mod test_stub_codec {
             super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
         }
 
-        fn decoded_pts(&self, _input_pts: Duration) -> Duration {
-            self.decoded_pts
+        fn decoded_pts(&self) -> Option<Duration> {
+            Some(self.decoded_pts)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -1064,6 +1260,7 @@ mod seek_trim_tests {
     enum SeekTrimLayout {
         RegularPackets,
         RoundedPastTarget,
+        UnknownPacketDuration,
     }
 
     impl Demuxer for ThreeFrameDemuxer {
@@ -1164,6 +1361,13 @@ mod seek_trim_tests {
         match layout {
             SeekTrimLayout::RegularPackets => regular_seek_frames(),
             SeekTrimLayout::RoundedPastTarget => rounded_past_target_frames(target),
+            SeekTrimLayout::UnknownPacketDuration => regular_seek_frames()
+                .into_iter()
+                .map(|frame| BoundaryFrame {
+                    duration: Duration::ZERO,
+                    ..frame
+                })
+                .collect(),
         }
     }
 
@@ -1383,6 +1587,11 @@ mod seek_trim_tests {
 
         assert_eq!(chunk.meta.timestamp, target);
         assert_eq!(chunk.meta.frames, FRAME_FRAMES / 2);
+        assert_eq!(
+            decoder.timeline_gap_frames(),
+            0,
+            "buffered PCM must not count as discarded leading frames"
+        );
     }
 
     #[kithara::test]
@@ -1393,6 +1602,10 @@ mod seek_trim_tests {
     #[case::mid_packet(
         test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
         SeekTrimLayout::RegularPackets
+    )]
+    #[case::unknown_packet_duration(
+        test_duration(Consts::SAMPLE_RATE, 512),
+        SeekTrimLayout::UnknownPacketDuration
     )]
     #[case::rounding_hair_past_boundary(
         test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
@@ -1613,6 +1826,12 @@ mod eof_drain_tests {
             .expect("test duration is representable")
         );
         assert_eq!(empty_calls.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            decoder
+                .next_chunk_prepared()
+                .expect("EOF retains prepared output"),
+            DecoderChunkOutcome::Eof
+        ));
     }
 
     #[kithara::test]

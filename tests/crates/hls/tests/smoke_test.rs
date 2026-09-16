@@ -33,7 +33,7 @@ async fn test_hls_session_creation(
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
     let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
+    let mut events_rx = bus.subscribe::<kithara_integration_tests::event::TestEvent>();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

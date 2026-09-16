@@ -5,10 +5,12 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use kithara_abr::{Abr, AbrPublisher, AbrState};
+use kithara_abr::{
+    Abr, AbrMode, AbrProgressSnapshot, AbrPublisher, AbrState, VariantDuration, VariantInfo,
+};
 use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
-use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
+use kithara_download::{FetchCmd, Peer, RequestPriority};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Weak},
@@ -19,10 +21,7 @@ use kithara_platform::{
         task::{spawn, yield_now},
     },
 };
-use kithara_stream::{
-    Activity, DeferredWake, SeekObserve, WorkerWake,
-    dl::{FetchCmd, Peer, RequestPriority},
-};
+use kithara_stream::{Activity, DeferredWake, SeekObserve, WorkerWake};
 use kithara_test_utils::kithara;
 
 use crate::{

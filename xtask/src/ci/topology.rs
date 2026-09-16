@@ -1,12 +1,9 @@
-/// Linker every Linux CI job links with, as target-scoped Cargo variables.
+/// Current default linker for Linux CI jobs, as target-scoped Cargo variables.
 ///
-/// A test job spends more wall-clock linking than compiling: measured on the
-/// GitHub fleet, a warm `Tests (simulated clock)` reached the last `Compiling`
-/// line five and a half minutes before the profile finished, and what filled
-/// that gap was `bfd` linking fifty-two optimised test binaries. `sccache`
-/// cannot shorten it — it declines to cache anything that invokes the system
-/// linker — so the linker itself is the only lever. `lld` is in the CI image
-/// already and was never selected.
+/// Cargo timing establishes that the build dominates the test lane but does
+/// not split code generation from linking, so `lld` is a controlled candidate,
+/// not a root-cause conclusion. The image also carries `mold` for a separately
+/// measured target-scoped override. `sccache` cannot reuse final link outputs.
 ///
 /// Scoped per target rather than through `RUSTFLAGS`, which would follow the
 /// wasm and Apple builds to hosts that have no `ld.lld`. Both Linux triples are
@@ -30,3 +27,10 @@ pub(crate) const SCCACHE_SLOT_CONTROL_NAMESPACE: &str = ".kithara-ci-sccache-slo
 
 /// CI-owned compiler-cache slots, kept disjoint from the local cache directory.
 pub(crate) const SCCACHE_SLOT_CACHE_NAMESPACE: &str = "sccache-slots";
+
+/// A runner owns one cache daemon for the life of its job or container.
+///
+/// The daemon can be ready well before a lane reaches its first compiler
+/// process, so the default idle expiry would make an otherwise initialized
+/// cache disappear and force concurrent clients to race its restart.
+pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";

@@ -42,7 +42,15 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
-    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    (
+        PlayerNodeProcessor::new(
+            inputs,
+            shape,
+            &pools(),
+            kithara::play::DEFAULT_GATE_SMOOTHING,
+        ),
+        control,
+    )
 }
 
 fn track(src: &str, input: &'static [u8]) -> Box<PlayerResource> {
@@ -235,6 +243,60 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'stati
     assert!(
         step <= MAX_STEP,
         "an unchanged crossfade duration must leave the fade alone (step {step})"
+    );
+}
+
+#[kithara::test]
+fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(constant_half: &'static [u8]) {
+    let (mut processor, mut control, fading) = fading_in(constant_half);
+
+    push(
+        &mut control,
+        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
+    );
+    let changed = pump(&mut processor, WARMUP_BLOCKS);
+
+    let step = max_step(&across(&fading, &changed));
+    assert!(
+        step <= MAX_STEP,
+        "a changed crossfade duration must leave the running fade alone (step {step})"
+    );
+    let level = last(&changed);
+    assert!(
+        level < TEST_PCM_DEFAULT_VALUE * 0.9,
+        "the running fade keeps its original duration: it is still climbing after the change \
+         ({level})"
+    );
+}
+
+#[kithara::test]
+fn a_changed_crossfade_duration_applies_to_the_next_fade(
+    constant_half: &'static [u8],
+    constant_quarter: &'static [u8],
+) {
+    let (mut processor, mut control, _) = fading_in(constant_half);
+    let settled = pump(&mut processor, SETTLE_BLOCKS * 20);
+    assert!(
+        (last(&settled) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
+        "the first fade has settled under its original duration before the change ({})",
+        last(&settled)
+    );
+
+    push(
+        &mut control,
+        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
+    );
+    let second_id = load(&mut control, "b.mp3", constant_quarter);
+    push(
+        &mut control,
+        PlayerCmd::Transition(TrackTransition::FadeIn(second_id)),
+    );
+    let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);
+    assert!(
+        (last(&handed_over) - SECOND_LEVEL).abs() < EXACT,
+        "the next fade runs under the new duration: a tenth of the original settles within three \
+         settle windows, the original would not ({})",
+        last(&handed_over)
     );
 }
 

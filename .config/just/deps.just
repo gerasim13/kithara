@@ -10,7 +10,9 @@ machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask
 
 shear:
-    cargo shear --deny-warnings
+    # Advisory: this source-only scan cannot see every cfg-, bench-, and
+    # wasm-only dependency closure, so it reports findings without gating CI.
+    cargo shear || true
 
 hack:
     just _xtask powerset --no-dev-deps
@@ -18,12 +20,13 @@ hack:
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith
     cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith,stretch-bungee
+    cargo check -p kithara-play --lib --no-default-features --features symphonia,client-reqwest,tls-rustls
 
 # Baseline is a revision here, not crates.io: the workspace is unpublished.
 # Routed through xtask so the lane holds the shared target directory's job
 # lease for the whole comparison, like every other build lane.
 semver BASELINE="HEAD~1":
-    just _xtask semver --baseline "{{ BASELINE }}"
+    just _xtask semver --baseline "{{ BASELINE }}" --baseline-feature backend-cpal
 
 geiger:
     cargo geiger --all-targets --all-dependencies --output-format Ascii

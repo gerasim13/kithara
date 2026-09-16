@@ -15,6 +15,7 @@ use kithara::{
         sync::{Arc, Mutex},
         thread,
         time::{Duration, Instant},
+        tokio::task::spawn_blocking,
     },
     play::Resource,
     record::{
@@ -181,7 +182,7 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
     let before = render_blocks(&harness).await;
     harness
         .host()
-        .restart_stream(NEW_RATE)
+        .set_sample_rate(NonZeroU32::new(NEW_RATE).expect("new rate is non-zero"))
         .await
         .expect("restart at the new device rate");
     let after = render_blocks(&harness).await;
@@ -195,7 +196,12 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
         .await
         .expect("release output group");
     let report = wait_recording(&recording_handle);
-    broadcast_handle.stop();
+    let broadcast_handle = spawn_blocking(move || {
+        broadcast_handle.stop();
+        broadcast_handle
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     assert_eq!(
         report.frames,

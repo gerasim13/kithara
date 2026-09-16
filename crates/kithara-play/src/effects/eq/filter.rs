@@ -5,7 +5,6 @@ struct Consts;
 
 impl Consts {
     const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    const HISTORY_LEN: usize = 128;
     const NYQUIST_FACTOR: f32 = 2.0;
     const PASSTHROUGH: Coefficients<f32> = Coefficients {
         a1: 0.0,
@@ -59,9 +58,7 @@ pub(crate) struct CrossoverFilters {
     allpass: Vec<Section>,
     highpass: Vec<Lr4>,
     lowpass: Vec<Lr4>,
-    history: [f32; Consts::HISTORY_LEN],
     sample_rate: f32,
-    history_pos: usize,
 }
 
 impl CrossoverFilters {
@@ -91,14 +88,12 @@ impl CrossoverFilters {
         }
         let lowpass_scratch = pools.get_with_len::<f32>(crossover_freqs.len())?;
         Ok(Self {
-            allpass,
             crossover_freqs,
+            lowpass_scratch,
+            allpass,
             highpass,
             lowpass,
-            lowpass_scratch,
             sample_rate,
-            history: [0.0; Consts::HISTORY_LEN],
-            history_pos: 0,
         })
     }
 
@@ -143,39 +138,8 @@ impl CrossoverFilters {
         }
     }
 
-    pub(crate) fn record(&mut self, input: f32) {
-        self.history[self.history_pos] = input;
-        self.history_pos = (self.history_pos + 1) & (Consts::HISTORY_LEN - 1);
-    }
-
-    pub(crate) fn rehydrate(&mut self) {
-        if self.lowpass.is_empty() {
-            return;
-        }
-        for offset in 0..self.history.len() {
-            let sample = self.history[(self.history_pos + offset) & (Consts::HISTORY_LEN - 1)];
-            let mut high = sample;
-            for index in 0..self.lowpass.len() {
-                self.lowpass_scratch[index] = self.lowpass[index].process(high);
-                high = self.highpass[index].process(high);
-            }
-            let mut allpass_start = 0;
-            for index in 0..self.lowpass.len() {
-                let mut band = self.lowpass_scratch[index];
-                let allpass_count = self.lowpass.len().saturating_sub(index + 1);
-                let allpass_end = allpass_start + allpass_count;
-                for filter in &mut self.allpass[allpass_start..allpass_end] {
-                    band = filter.run(band);
-                }
-                allpass_start = allpass_end;
-            }
-        }
-    }
-
     pub(crate) fn reset(&mut self) {
         self.rebuild();
-        self.history.fill(0.0);
-        self.history_pos = 0;
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {

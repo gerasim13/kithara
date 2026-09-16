@@ -26,7 +26,7 @@ pub(crate) fn bucketize<T: Copy>(
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_fixtures::{
         analysis_fixtures::{bucket_components, bucket_ranges, bucket_short, bucket_sine},

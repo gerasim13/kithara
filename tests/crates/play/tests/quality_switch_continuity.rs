@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use kithara_integration_tests::event::TestEvent;
 #[path = "quality_switch_continuity/continuity.rs"]
 mod continuity;
 #[path = "quality_switch_continuity/desktop.rs"]
@@ -14,11 +15,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
+    audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
-    events::{
-        AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
-        Event, EventBus, EventReceiver,
-    },
+    events::{EventBus, EventReceiver},
     host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
@@ -103,7 +102,7 @@ struct PreparedPlayer {
     _temp: TestTempDir,
     player: OfflinePlayer,
     abr: AbrHandle,
-    events: EventReceiver,
+    events: EventReceiver<TestEvent>,
     capture_frame: i64,
 }
 
@@ -142,7 +141,7 @@ struct DecoderObservation {
     frame_end: usize,
     backend: DecoderBackendKind,
     cause: DecoderChangeCause,
-    codec: Option<AudioCodecKind>,
+    codec: Option<AudioCodec>,
     sample_rate: u32,
     channels: u16,
     variant: Option<u32>,
@@ -185,16 +184,17 @@ fn fixture_with_signal(signal: PackagedSignal) -> HlsFixtureBuilder {
         })
 }
 
-fn variant_codec(variant: usize) -> AudioCodecKind {
+fn variant_codec(variant: usize) -> AudioCodec {
     if variant == FLAC {
-        AudioCodecKind::Flac
+        AudioCodec::Flac
     } else {
-        AudioCodecKind::AacLc
+        AudioCodec::AacLc
     }
 }
 
 fn decoder_backend_kind(backend: DecoderBackend) -> DecoderBackendKind {
     match backend {
+        #[cfg(not(target_os = "android"))]
         DecoderBackend::Symphonia => DecoderBackendKind::Symphonia,
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         DecoderBackend::Apple => DecoderBackendKind::Apple,
@@ -238,7 +238,10 @@ fn target_pcm_frames() -> usize {
     usize::try_from(SAMPLE_RATE).expect("fixture sample rate fits usize") / 4
 }
 
-fn drain_decoder_events(events: &mut EventReceiver, frame_end: usize) -> Vec<DecoderObservation> {
+fn drain_decoder_events(
+    events: &mut EventReceiver<TestEvent>,
+    frame_end: usize,
+) -> Vec<DecoderObservation> {
     let mut decoder_events = Vec::new();
     loop {
         let envelope = match events.try_recv() {
@@ -248,7 +251,7 @@ fn drain_decoder_events(events: &mut EventReceiver, frame_end: usize) -> Vec<Dec
                 panic!("decoder event stream became unreliable at frame {frame_end}: {error}")
             }
         };
-        if let Event::Decoder(DecoderEvent::DecoderChanged {
+        if let TestEvent::Decoder(DecoderEvent::DecoderChanged {
             backend,
             cause,
             codec,

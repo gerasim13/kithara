@@ -1,8 +1,7 @@
 use std::io::{Error as IoError, ErrorKind};
 
-use kithara_abr::PendingAbrClaim;
+use kithara_abr::{PendingAbrClaim, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::VariantIndex;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
@@ -155,7 +154,7 @@ where
         let reader = OpenedVariantReader::new(plan, reader);
         let outgoing = self.active_session();
         self.sessions
-            .publish_exact_two(Arc::clone(&outgoing), Arc::clone(&session));
+            .publish_exact_two(&mut state, Arc::clone(&outgoing), Arc::clone(&session));
         state.incoming = Some(IncomingSlot {
             claim,
             landing_time,

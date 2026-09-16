@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::{process::Process, run::PipelineKind};
 use crate::{
+    android,
     config::{KitharaExt, PublishStep, ReleaseConfig},
     publish, release,
 };
@@ -25,7 +26,7 @@ pub(crate) fn xcframework(
     package: &str,
     kind: PipelineKind,
 ) -> Result<()> {
-    process.require_os("macos", "Apple release")?;
+    process.require_os(&["macos"], "Apple release")?;
     let profile = ext.release.package(package)?;
     let version = version_variable(kind).map(required_env).transpose()?;
     let expected = expected_checksum(version.as_deref(), &ctx.root.join(&ext.release.manifest))?;
@@ -149,7 +150,7 @@ fn expected_checksum(version: Option<&str>, manifest_path: &Path) -> Result<Opti
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "Apple documentation release")?;
+    process.require_os(&["macos"], "Apple documentation release")?;
     // The documentation is generated against the local Swift package, and the
     // package resolves its binary target from the debug build tree. Without
     // it the manifest itself refuses to load, long before anything is
@@ -164,17 +165,24 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
         &["platform", "apple", "doc"],
         "Apple documentation",
     )?;
+    package_docs(process, ctx, ext, "apple")
+}
+
+/// Zip one rendered documentation directory into the release asset the channel
+/// names, and record its checksum beside it.
+fn package_docs(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
+    let docs = ext.release.docs_channel(channel)?;
     zip_directory(
         process,
         &ctx.config.tools,
-        &ctx.root.join(&ext.release.docs_archive),
-        &ctx.root.join(&ext.release.docs_asset),
+        &ctx.root.join(&docs.archive),
+        &ctx.root.join(&docs.asset),
     )?;
-    write_checksum(&ctx.root.join(&ext.release.docs_asset))
+    write_checksum(&ctx.root.join(&docs.asset))
 }
 
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "WASM release")?;
+    process.require_os(&["macos"], "WASM release")?;
     process.run(
         ctx.config.tools.program("just"),
         &["platform", "wasm", "build", "--profile", "release"],
@@ -190,7 +198,7 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    process.require_os("macos", "Android release")?;
+    process.require_os(&["macos"], "Android release")?;
     // The archive builds the libraries and generates the bindings itself, for
     // the release profile the artifact ships. A native build before it took
     // thirteen minutes for both ABIs in the debug profile, and the archive
@@ -206,7 +214,10 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
         copy_required(&source, &destination)?;
         write_checksum(&destination)?;
     }
-    Ok(())
+    // Dokka reads the Kotlin the archive above generated, so the documentation
+    // is rendered here rather than in a job that would have to build it again.
+    android::render_docs()?;
+    package_docs(process, ctx, ext, "android")
 }
 
 pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
@@ -256,10 +267,10 @@ fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
     [
         config.core_asset.as_str(),
         config.merged_asset.as_str(),
-        config.docs_asset.as_str(),
         config.wasm_asset.as_str(),
     ]
     .into_iter()
+    .chain(config.docs_assets())
     .chain(config.platform_assets.iter().map(String::as_str))
     .filter(|name| !name.is_empty())
 }

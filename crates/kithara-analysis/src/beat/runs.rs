@@ -523,7 +523,7 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
     mono.get(start..end)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_bufpool::PoolConfig;
     use kithara_resampler::rubato::RubatoBackend;

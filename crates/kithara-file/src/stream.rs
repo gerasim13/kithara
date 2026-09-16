@@ -5,18 +5,17 @@ use kithara_assets::{
     ResourceAttachment, ResourceKey,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_events::{EventBus, FileError, FileEvent};
+use kithara_download::{Downloader, DownloaderConfig};
+use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
-use kithara_stream::{
-    PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
-    dl::{Downloader, DownloaderConfig},
-};
+use kithara_stream::{PlayheadState, SeekState, SourceError as StreamSourceError, StreamType};
 use kithara_test_utils::kithara;
 use url::Url;
 
 use crate::{
+    FileError, FileEvent,
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
@@ -391,7 +390,6 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
-    use kithara_events::{Event, FileEvent};
     use kithara_platform::time::Duration;
     use tempfile::tempdir;
 
@@ -514,7 +512,7 @@ mod tests {
                 _result = &mut create => panic!("claim wait returned before cancellation"),
                 event = events.recv() => {
                     let event = event.expect("event channel remains open");
-                    if matches!(event.event, Event::File(FileEvent::Error { .. })) {
+                    if matches!(event.event, FileEvent::Error { .. }) {
                         break;
                     }
                 }

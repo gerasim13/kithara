@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+#[cfg(not(target_os = "android"))]
+use kithara_integration_tests::audio_artifact::write_audio_artifact;
 use std::num::NonZeroU32;
 
 use kithara::{
@@ -14,13 +16,12 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    audio_artifact::write_audio_artifact,
     bufpool_ext::{TestPools, pools},
     cochlea::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
@@ -202,6 +203,7 @@ struct RealtimeCapture {
     load_observed_during_capture: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct CaptureMetrics {
     warmup_decode_errors: u64,
@@ -241,6 +243,7 @@ struct MarkerTiming {
     measured_interval_frames: usize,
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<&RealtimeCapture> for CaptureMetrics {
     fn from(capture: &RealtimeCapture) -> Self {
         Self {
@@ -253,6 +256,7 @@ impl From<&RealtimeCapture> for CaptureMetrics {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct PassthroughManifest<'a> {
     case: &'static str,
@@ -270,6 +274,7 @@ struct PassthroughManifest<'a> {
     failures: &'a [String],
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct ActiveStretchManifest<'a> {
     case: &'static str,
@@ -507,12 +512,13 @@ async fn render_passthrough(
     capture
 }
 
-/// Render the same source through a `Queue` control at the same cadence.
+/// Render the same `sine_wav_a440_6s` source through a `Queue` control at the
+/// same cadence.
 ///
 /// Carries the clock guard of [`render_passthrough`] for the same reason: the
 /// tick-and-render pair must not outrun the decode worker.
 #[kithara::flash(true)]
-async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
+async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -522,27 +528,42 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
         SAMPLE_RATE,
     )
     .await;
-    let worker = harness.worker().clone();
-    let mut audio = worker
-        .open(audio_config(source, stretch, Vec::new()))
-        .await
-        .expect("queue audio construction");
-    wait_for_preload(&audio).await;
-    audio.preload().expect("queue audio preload");
-
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .player(harness.take_player())
-                .should_autoplay(false)
                 .build(),
         ))
         .await;
+    let mut events = queue.subscribe::<QueueEvent>();
+    let source = sine_wav_a440_6s()
+        .path()
+        .expect("the queue fixture lives on disk")
+        .to_string_lossy()
+        .into_owned();
     let id = harness
-        .run(&queue, move |q| {
-            q.insert_loaded_for_test(resource_from_reader(audio))
+        .run(&queue, move |q| q.append(source))
+        .await
+        .expect("append local queue fixture");
+    assert!(
+        time::timeout(Duration::from_secs(5), async {
+            while let Ok(envelope) = events.recv().await {
+                if matches!(
+                    envelope.event,
+                    QueueEvent::TrackStatusChanged {
+                        id: seen,
+                        status: TrackStatus::Loaded,
+                    } if seen == id
+                ) {
+                    return true;
+                }
+            }
+            false
         })
-        .await;
+        .await
+        .unwrap_or(false),
+        "local queue fixture must load through the product loader"
+    );
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
@@ -815,7 +836,10 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
@@ -828,7 +852,10 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
@@ -843,7 +870,10 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
@@ -857,7 +887,10 @@ async fn record_no_sync_unity_playback_artifacts(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
@@ -883,8 +916,8 @@ async fn run_no_sync_passthrough(
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
     let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
-    let queue_baseline = render_queue_passthrough(source, None).await;
-    let queue_unity = render_queue_passthrough(source, Some((backend, 1.0))).await;
+    let queue_baseline = render_queue_passthrough(None).await;
+    let queue_unity = render_queue_passthrough(Some((backend, 1.0))).await;
     let mut failures = Vec::new();
     for (label, pcm) in [
         ("queue effect-free", queue_baseline.as_slice()),
@@ -968,23 +1001,26 @@ async fn run_no_sync_passthrough(
         failures.push("unity+load: no bounded shared-worker burst began during capture".to_owned());
     }
 
-    let backend_label = backend.to_string().to_ascii_lowercase();
-    let manifest = PassthroughManifest {
-        case: "no-sync-unity-passthrough",
-        backend: &backend_label,
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        block_frames: BLOCK_FRAMES,
-        baseline: CaptureMetrics::from(&baseline),
-        unity: CaptureMetrics::from(&unity),
-        unity_under_load: CaptureMetrics::from(&loaded),
-        baseline_source_fit: &baseline_source_fit,
-        baseline_cochlea: &baseline_report,
-        unity_cochlea: &unity_report,
-        unity_under_load_cochlea: &loaded_report,
-        failures: &failures,
-    };
+    #[cfg(target_os = "android")]
+    assert!(!record_artifacts, "listening artifact export belongs to the host suite");
+    #[cfg(not(target_os = "android"))]
     if record_artifacts {
+        let backend_label = backend.to_string().to_ascii_lowercase();
+        let manifest = PassthroughManifest {
+            case: "no-sync-unity-passthrough",
+            backend: &backend_label,
+            sample_rate: SAMPLE_RATE,
+            channels: CHANNELS,
+            block_frames: BLOCK_FRAMES,
+            baseline: CaptureMetrics::from(&baseline),
+            unity: CaptureMetrics::from(&unity),
+            unity_under_load: CaptureMetrics::from(&loaded),
+            baseline_source_fit: &baseline_source_fit,
+            baseline_cochlea: &baseline_report,
+            unity_cochlea: &unity_report,
+            unity_under_load_cochlea: &loaded_report,
+            failures: &failures,
+        };
         let artifact_case = format!("no-sync-unity-passthrough-{backend_label}");
         let written = write_audio_artifact(
             &artifact_case,
@@ -1107,6 +1143,9 @@ async fn run_active_stretch(
     assert_oracle_load_bearing(&control.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_oracle_load_bearing(&candidate.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_frame_oracle_load_bearing(&candidate.pcm);
+    #[cfg(target_os = "android")]
+    assert!(!record_artifacts, "listening artifact export belongs to the host suite");
+    #[cfg(not(target_os = "android"))]
     if record_artifacts {
         let backend_label = backend.to_string().to_ascii_lowercase();
         let artifact_case = format!("no-sync-active-keylock-{backend_label}");
@@ -1146,7 +1185,7 @@ async fn run_active_stretch(
     }
     assert!(
         failures.is_empty(),
-        "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}",
+        "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}\ncontinuity={candidate_continuity:?}",
         failures.join("; "),
     );
 }

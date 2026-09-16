@@ -267,12 +267,11 @@ where
             rate_applied,
             request_revision,
             applied_rate_bits = applied_rate.to_bits(),
-            session_epoch = u64::from(committed.context().session_epoch()),
             session_frame,
             source_start,
             source_end
         );
-        self.committed = Some(committed);
+        self.commit(committed, session_frame, source_start);
     }
 
     pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
@@ -284,6 +283,18 @@ where
         else {
             return;
         };
+        self.commit(committed, output_start, source_start);
+    }
+
+    /// The single place a render becomes the committed one, so every committed
+    /// render publishes the session axis it fixed regardless of the path that
+    /// produced it.
+    pub(super) fn commit(
+        &mut self,
+        committed: RenderSnapshot,
+        output_start: i64,
+        source_start: u64,
+    ) {
         kithara::probe_event!(
             render_committed,
             session_epoch = u64::from(committed.context().session_epoch()),
@@ -292,7 +303,6 @@ where
                 .transport_revision()
                 .map_or(0, u64::from),
             output_start,
-            output_end = i64::from(committed.frontier().output()),
             source_start,
             source_end = committed.frontier().source()
         );

@@ -5,11 +5,14 @@ use std::sync::{
 
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
 use kithara_bufpool::HasPool;
-use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{EventBus, TrackId};
 use kithara_platform::CancelToken;
 use kithara_play::{ResourceConfig, ResourceSrc};
 
-use crate::attempts::{AttemptGuard, Ticket};
+use crate::{
+    attempts::{AttemptGuard, Ticket},
+    event::{QueueEvent, TrackStatus},
+};
 
 /// Snapshot of a track entry in the queue.
 #[derive(Debug, Clone)]

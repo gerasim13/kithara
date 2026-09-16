@@ -12,8 +12,10 @@ categories = ["multimedia::audio"]
 [features]
 default = [
     "audio",
+    "backend-cpal",
     "bufpool",
     "decode",
+    "download",
     "events",
     "file",
     "hls",
@@ -23,7 +25,6 @@ default = [
     "resampler",
     "signal",
     "stream",
-    "test-utils",
     "warp",
     "symphonia",
     "resample-rubato",
@@ -46,6 +47,7 @@ all = [
     "bufpool",
     "client-reqwest",
     "decode",
+    "download",
     "drm",
     "encode",
     "events",
@@ -82,6 +84,7 @@ audio = ["dep:kithara-audio"]
 broadcast = ["output", "dep:kithara-broadcast"]
 bufpool = ["dep:kithara-bufpool"]
 decode = ["dep:kithara-decode"]
+download = ["dep:kithara-download"]
 drm = ["dep:kithara-drm"]
 encode = ["dep:kithara-encode"]
 events = ["dep:kithara-events"]
@@ -98,7 +101,6 @@ signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
-test-utils = ["bufpool", "dep:kithara-test-utils", "kithara-bufpool/test-utils"]
 ui = ["dep:kithara-ui"]
 warp = ["dep:kithara-warp"]
 worker = ["dep:kithara-worker"]
@@ -110,6 +112,7 @@ workspace-hack = ["dep:kithara-workspace-hack"]
 client-reqwest = [
     "kithara-analysis?/client-reqwest",
     "kithara-net?/client-reqwest",
+    "kithara-download?/client-reqwest",
     "kithara-stream?/client-reqwest",
     "kithara-assets?/client-reqwest",
     "kithara-broadcast?/client-reqwest",
@@ -123,12 +126,12 @@ client-reqwest = [
     "kithara-audio?/client-reqwest",
     "kithara-decode?/client-reqwest",
     "kithara-encode?/client-reqwest",
-    "kithara-events?/client-reqwest",
     "kithara-abr?/client-reqwest",
 ]
 client-wreq = [
     "kithara-analysis?/client-wreq",
     "kithara-net?/client-wreq",
+    "kithara-download?/client-wreq",
     "kithara-stream?/client-wreq",
     "kithara-assets?/client-wreq",
     "kithara-broadcast?/client-wreq",
@@ -142,12 +145,12 @@ client-wreq = [
     "kithara-audio?/client-wreq",
     "kithara-decode?/client-wreq",
     "kithara-encode?/client-wreq",
-    "kithara-events?/client-wreq",
     "kithara-abr?/client-wreq",
 ]
 tls-rustls = [
     "kithara-analysis?/tls-rustls",
     "kithara-net?/tls-rustls",
+    "kithara-download?/tls-rustls",
     "kithara-stream?/tls-rustls",
     "kithara-assets?/tls-rustls",
     "kithara-broadcast?/tls-rustls",
@@ -161,12 +164,12 @@ tls-rustls = [
     "kithara-audio?/tls-rustls",
     "kithara-decode?/tls-rustls",
     "kithara-encode?/tls-rustls",
-    "kithara-events?/tls-rustls",
     "kithara-abr?/tls-rustls",
 ]
 tls-native = [
     "kithara-analysis?/tls-native",
     "kithara-net?/tls-native",
+    "kithara-download?/tls-native",
     "kithara-stream?/tls-native",
     "kithara-assets?/tls-native",
     "kithara-broadcast?/tls-native",
@@ -180,7 +183,6 @@ tls-native = [
     "kithara-audio?/tls-native",
     "kithara-decode?/tls-native",
     "kithara-encode?/tls-native",
-    "kithara-events?/tls-native",
     "kithara-abr?/tls-native",
 ]
 # Enable the Symphonia software decoder path. Disable to compile with
@@ -262,32 +264,31 @@ beat-dsp = ["analysis", "kithara-analysis/beat-dsp"]
 ui-capture = ["ui", "kithara-ui/capture"]
 ui-iced = ["ui", "kithara-ui/iced"]
 ui-masonry = ["ui", "kithara-ui/masonry"]
-flash = ["platform", "test-utils", "kithara-platform/flash", "kithara-test-utils/flash"]
+flash = ["platform", "dep:kithara-test-utils", "kithara-platform/flash", "kithara-test-utils/flash"]
 loom = ["platform", "kithara-platform/loom"]
-no-block = ["platform", "test-utils", "kithara-platform/no-block", "kithara-test-utils/no-block"]
+no-block = ["platform", "dep:kithara-test-utils", "kithara-platform/no-block", "kithara-test-utils/no-block"]
 tokio-net = ["platform", "kithara-platform/tokio-net"]
 tokio-rt-multi-thread = ["platform", "kithara-platform/tokio-rt-multi-thread"]
 backend-cpal = ["host", "kithara-host/backend-cpal"]
-probe = [
-    "test-utils",
-    "kithara-abr?/probe",
-    "kithara-analysis?/probe",
-    "kithara-assets?/probe",
-    "kithara-audio?/probe",
-    "kithara-decode?/probe",
-    "kithara-file?/probe",
-    "kithara-hls?/probe",
-    "kithara-host?/probe",
-    "kithara-net?/probe",
-    "kithara-play?/probe",
-    "kithara-queue?/probe",
-    "kithara-storage?/probe",
-    "kithara-stream?/probe",
-    "kithara-test-utils/probe",
-    "kithara-worker?/probe",
+backend-web-audio = ["host"]
+usdt = [
+    "dep:kithara-test-utils",
+    "kithara-abr?/usdt",
+    "kithara-analysis?/usdt",
+    "kithara-assets?/usdt",
+    "kithara-audio?/usdt",
+    "kithara-decode?/usdt",
+    "kithara-download?/usdt",
+    "kithara-file?/usdt",
+    "kithara-hls?/usdt",
+    "kithara-host?/usdt",
+    "kithara-play?/usdt",
+    "kithara-queue?/usdt",
+    "kithara-stream?/usdt",
+    "kithara-test-utils/usdt",
+    "kithara-worker?/usdt",
 ]
 mock = [
-    "test-utils",
     "kithara-abr?/mock",
     "kithara-audio?/mock",
     "kithara-decode?/mock",
@@ -334,19 +335,20 @@ apple-fused-src = [
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
-apple-net = ["kithara-net?/client-apple", "kithara-stream?/client-apple"]
+apple-net = ["kithara-net?/client-apple", "kithara-download?/client-apple", "kithara-stream?/client-apple"]
 android = [
+    "audio",
     "kithara-analysis?/android",
     "kithara-audio?/android",
     "kithara-decode?/android",
     "kithara-net?/client-wreq",
     "resample-rubato",
-    "analysis-beat",
 ]
 full = [
     "audio",
     "bufpool",
     "decode",
+    "download",
     "events",
     "file",
     "hls",
@@ -358,7 +360,6 @@ full = [
     "resampler",
     "signal",
     "stream",
-    "test-utils",
     "warp",
     "workspace-hack",
 ]
@@ -371,6 +372,7 @@ kithara-audio = { workspace = true, optional = true, default-features = false }
 kithara-broadcast = { workspace = true, optional = true, default-features = false }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true, default-features = false }
+kithara-download = { workspace = true, optional = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, optional = true, default-features = false }
 kithara-events = { workspace = true, optional = true }
@@ -388,8 +390,9 @@ kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
+kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
-kithara-ui = { workspace = true, optional = true }
+kithara-ui = { workspace = true, optional = true, default-features = false }
 kithara-warp = { workspace = true, optional = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 

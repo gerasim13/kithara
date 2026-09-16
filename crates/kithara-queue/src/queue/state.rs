@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "probe"))]
-use std::collections::HashMap;
 use std::{
     ops::Deref,
     sync::{Mutex, PoisonError},
@@ -14,8 +12,9 @@ use kithara_play::{
     player::{PlayerControl, PlayerControlSource},
 };
 
-use super::types::{
-    AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
+use super::{
+    engine_events::PlayerBusEvent,
+    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
 };
 use crate::{
     config::QueueConfig,
@@ -24,17 +23,11 @@ use crate::{
     track::{TrackRecord, Tracks},
 };
 
-/// Test-only respawn resource cache. Aliased so the field declaration
-/// stays free of the structural `Arc<Mutex<HashMap<…>>>` god-map
-/// pattern (see `arch.no-arc-mutex-godmap`).
-#[cfg(any(test, feature = "probe"))]
-pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
-
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns a [`PlayerImpl`] and a private async track loader, plus
 /// queue-level state (ordered tracks, navigation, pending-select).
-/// Publishes [`QueueEvent`](kithara_events::QueueEvent) on the shared
+/// Publishes [`QueueEvent`](crate::event::QueueEvent) on the shared
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
 #[doc(hidden)]
@@ -55,28 +48,15 @@ where
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
     /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
     ///
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: AtomicTrackId,
-    /// Whether this queue auto-starts playback once the first registered
-    /// track finishes loading. Configured via
-    /// [`QueueConfig::should_autoplay`]. `false` means the user must
-    /// call [`Queue::select`] manually.
-    ///
-    /// Currently consumed only by the test-utils harness — the
-    /// production register/insert paths do not arm autoplay yet (see
-    /// `register_for_test` / `complete_load_for_test`). Gated with the
-    /// same `cfg` so the field carries no cost outside tests.
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) should_autoplay: bool,
-    /// First registered track id awaiting autoplay-on-load. Set when
-    /// `autoplay = true` and the queue has no active selection;
-    /// consumed when the matching id finishes loading.
-    /// [`CrossfadeArm::Disarmed`] = no pending target.
-    #[cfg(any(test, feature = "probe"))]
+    /// Track whose load completion starts playback: the first one appended
+    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
     pub(super) autoplay_target: AtomicTrackId,
+    pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
@@ -88,13 +68,6 @@ where
     /// committed, so the superseded track barges in. Held only across the synchronous
     /// apply critical section — never across an `.await`.
     pub(super) select_apply: Arc<Mutex<()>>,
-    /// Test-only respawn resource cache. Populated by
-    /// [`Queue::supply_test_resource_for_respawn`] and consumed by
-    /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
-    /// re-selected. Lets harness tests exercise the respawn path
-    /// without a real loader.
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) test_resources: Arc<Mutex<TestResources>>,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -105,7 +78,7 @@ where
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver>,
+    pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
 }
@@ -182,10 +155,7 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
-            #[cfg(any(test, feature = "probe"))]
             should_autoplay,
-            #[cfg(not(any(test, feature = "probe")))]
-                should_autoplay: _,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -211,19 +181,15 @@ where
             loader,
             tracks,
             bus,
-            #[cfg(any(test, feature = "probe"))]
-            should_autoplay,
             admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
-            #[cfg(any(test, feature = "probe"))]
-            test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
-            #[cfg(any(test, feature = "probe"))]
             autoplay_target: AtomicTrackId::disarmed(),
+            should_autoplay,
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {
@@ -337,7 +303,7 @@ where
             pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
             pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
-            pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
+            pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
         }
         to self.crossfade_armed_for {
             #[call(load)]
@@ -375,20 +341,23 @@ pub(crate) mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::{Duration, Instant, timeout},
     };
     use kithara_play::{
         AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode,
-        SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
+        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq,
+        SlotId, bridge::slot_channels,
     };
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools};
+    use crate::{
+        event::QueueEvent,
+        test_pools::{TestPools, pools},
+    };
 
     pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(sample_rate) => sample_rate,
@@ -421,7 +390,12 @@ pub(crate) mod tests {
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
-                Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
+                Cmd::RegisterPlayer { .. } => {
+                    Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
+                        id: 1,
+                        eq: SharedEq::new(10),
+                    })
+                }
                 Cmd::AllocateSlot { .. } => {
                     let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                     let (inputs, control) = slot_channels(SharedEq::new(10));
@@ -430,7 +404,6 @@ pub(crate) mod tests {
                 }
                 Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
                 Cmd::QueryStreamShape => Reply::StreamShape(None),
-                Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
                 _ => Reply::Ok,
             };
             Ok(reply)
@@ -466,7 +439,7 @@ pub(crate) mod tests {
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
-        rx: &mut EventReceiver,
+        rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
         timeout_ms: u64,
     ) -> bool
@@ -480,10 +453,7 @@ pub(crate) mod tests {
                 return false;
             }
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Envelope {
-                    event: Event::Queue(ev),
-                    ..
-                })) if matches(&ev) => return true,
+                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }

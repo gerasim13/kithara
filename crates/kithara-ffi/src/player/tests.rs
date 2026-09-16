@@ -58,11 +58,16 @@ fn eq_gain_default_zero() {
 }
 
 #[kithara::test]
-#[case::set_gain((|p: &AudioPlayer| p.set_eq_gain(0, 3.0).is_err()) as fn(&AudioPlayer) -> bool)]
-#[case::reset((|p: &AudioPlayer| p.reset_eq().is_err()) as fn(&AudioPlayer) -> bool)]
-fn eq_mutation_without_engine_returns_error(#[case] op_errs: fn(&AudioPlayer) -> bool) {
+fn idle_player_eq_can_be_configured_and_reset() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test());
-    assert!(op_errs(&player));
+    player.set_eq_gain(0, 3.0).expect("configure idle EQ");
+    assert_eq!(player.eq_gain(0), 3.0);
+    player.reset_eq().expect("reset idle EQ");
+    assert_eq!(player.eq_gain(0), 0.0);
+    assert!(matches!(
+        player.set_eq_gain(99, 3.0),
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
 }
 
 #[kithara::test]

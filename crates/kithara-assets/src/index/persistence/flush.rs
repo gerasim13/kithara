@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-use std::sync::mpsc::Sender;
 use std::{
     num::NonZeroUsize,
     sync::{
@@ -12,8 +10,6 @@ use std::{
 
 use dashmap::DashSet;
 use kithara_derive::Patch;
-#[cfg(test)]
-use kithara_platform::thread;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Condvar, Mutex},
@@ -109,8 +105,6 @@ pub(super) struct HubState {
 pub(super) struct HubWait {
     pub(super) cv: Condvar,
     pub(super) state: Mutex<HubState>,
-    #[cfg(test)]
-    pub(super) idle_park: Mutex<Option<Sender<()>>>,
 }
 
 /// Shared flush coordinator. Created once per process or per
@@ -148,8 +142,6 @@ impl FlushHub {
             wait: Arc::new(HubWait {
                 cv: Condvar::default(),
                 state: Mutex::default(),
-                #[cfg(test)]
-                idle_park: Mutex::default(),
             }),
             worker: WorkerSlot::default(),
         })
@@ -225,23 +217,6 @@ impl FlushHub {
     #[must_use]
     pub fn has_worker(&self) -> bool {
         self.worker.is_started()
-    }
-
-    /// Synchronously flush every dirty source. Serialises with the
-    /// worker through `flush_lock`, so concurrent worker invocations
-    /// see the same dirty set exactly once.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first per-source flush error encountered (others
-    /// are logged through `tracing::warn!` and the source's `dirty`
-    /// flag is restored so the next cycle retries).
-    #[cfg(test)]
-    #[must_use]
-    fn live_source_count(&self) -> usize {
-        let mut g = self.sources.lock();
-        g.retain(|w| w.strong_count() > 0);
-        g.len()
     }
 
     /// Register an index for background-driven flushing. The hub holds
@@ -322,9 +297,10 @@ pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
 mod tests {
     use std::sync::{
         atomic::AtomicUsize,
-        mpsc::{self, TryRecvError},
+        mpsc::{self, Sender, TryRecvError},
     };
 
+    use kithara_platform::thread;
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
 
@@ -525,13 +501,10 @@ mod tests {
     fn cancel_triggers_final_flush() {
         let cancel = CancelToken::never();
         let hub = FlushHub::new(cancel.clone(), fast_policy());
-        let (parked_tx, parked_rx) = mpsc::channel();
-        *hub.wait.idle_park.lock() = Some(parked_tx);
         let (flushed_tx, flushed_rx) = mpsc::channel();
         let src = CountingSource::with_completion("final", flushed_tx);
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
-        parked_rx.recv().unwrap();
         src.dirty.store(true, Ordering::Release);
         cancel.cancel();
         flushed_rx.recv().unwrap();
@@ -550,13 +523,24 @@ mod tests {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let src = CountingSource::new("ephemeral");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
-        assert_eq!(hub.live_source_count(), 1);
+        assert_eq!(
+            hub.sources
+                .lock()
+                .iter()
+                .filter(|source| source.strong_count() > 0)
+                .count(),
+            1
+        );
         drop(src);
 
         hub.flush_now().unwrap();
 
         assert_eq!(
-            hub.live_source_count(),
+            hub.sources
+                .lock()
+                .iter()
+                .filter(|source| source.strong_count() > 0)
+                .count(),
             0,
             "dropped sources must be GC'd from registry"
         );

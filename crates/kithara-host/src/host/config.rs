@@ -18,7 +18,7 @@ pub enum HostConfig<S> {
     /// Device-backed platform session.
     #[non_exhaustive]
     Realtime {
-        /// Initial device-rate hint. Physical route changes may update it later.
+        /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
         sample_rate_hint: NonZeroU32,
         /// Optional native output callback-size override. `None` preserves the backend default.
         output_block_frames: Option<NonZeroU32>,
@@ -30,7 +30,7 @@ pub enum HostConfig<S> {
     Offline {
         /// Typed output pool shared with the Host's players.
         pools: PoolRegion<S>,
-        /// Exact offline output rate.
+        /// Initial offline output rate; `Host::set_sample_rate` moves it later.
         sample_rate: NonZeroU32,
         /// Maximum frames processed by one backend/task quantum.
         max_block_frames: NonZeroU32,
@@ -44,10 +44,17 @@ pub enum HostConfig<S> {
         dispatcher: Box<DispatcherConfig>,
         /// Admission, priority, and cancellation configuration for the session task.
         task: TaskConfig,
-        /// Optional automatic test/probe render cadence.
-        #[cfg(any(test, feature = "probe"))]
-        pacing: Option<Duration>,
     },
+}
+
+#[cfg(not(feature = "offline"))]
+impl<S> Copy for HostConfig<S> {}
+
+#[cfg(not(feature = "offline"))]
+impl<S> Clone for HostConfig<S> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[bon::bon]

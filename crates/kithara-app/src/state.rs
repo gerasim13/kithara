@@ -3,12 +3,9 @@ use std::num::NonZeroU32;
 #[cfg(test)]
 use kithara::analysis::Coverage;
 use kithara::{
-    abr::AbrHandle,
+    abr::{AbrHandle, AbrMode, VariantInfo},
     analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
-    events::{
-        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
-        PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
-    },
+    events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -19,7 +16,10 @@ use kithara::{
             task,
         },
     },
-    play::{StretchControls, effects::eq::GainDb},
+    play::{
+        BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent, StretchControls,
+        effects::eq::GainDb,
+    },
     prelude::EngineLoadSnapshot,
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
@@ -27,7 +27,11 @@ use kithara::{
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 use tracing::warn;
 
-use crate::{analysis::AnalysisHandle, pools::AppQueueControl, waveform::TrackAnalysis};
+use crate::{
+    analysis::{AnalysisEvent, AnalysisHandle},
+    pools::AppQueueControl,
+    waveform::TrackAnalysis,
+};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -410,7 +414,7 @@ pub(crate) async fn listen(
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     cancel: CancelToken,
-    mut rx: EventReceiver,
+    mut rx: EventReceiver<AnalysisEvent>,
     analysis: AnalysisHandle,
 ) {
     let mut held = HeldAnalysis {
@@ -430,12 +434,12 @@ pub(crate) async fn listen(
                 Ok(Envelope { event, .. }) => {
                     apply_event(&event, &queue, &state);
                     match event {
-                        Event::Queue(QueueEvent::CurrentTrackChanged { .. })
-                        | Event::Engine(EngineEvent::Started)
-                        | Event::Session(SessionEvent::RouteChanged { .. }) => {
+                        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. })
+                        | AnalysisEvent::Engine(EngineEvent::Started)
+                        | AnalysisEvent::Session(SessionEvent::RouteChanged { .. }) => {
                             held.follow(&state).await;
                         }
-                        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
+                        AnalysisEvent::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
                             held.follow(&state).await;
                             held.warm(&state).await;
                         }
@@ -527,47 +531,28 @@ fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) ->
     }
 }
 
-fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
-    for (band, &gain) in eq_bands.iter().enumerate() {
-        let _ = queue.set_eq_gain(band, f32::from(gain));
-    }
-}
-
-pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
-        Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
+        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            let eq_bands = {
-                let mut st = state.lock();
-                st.current_track_index = current_index;
-                st.track_name = current_index
-                    .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
-                    .unwrap_or_default();
-                st.selected_variant = None;
-                st.is_seeking = false;
-                st.eq_bands.clone()
-            };
-            reapply_eq(queue, &eq_bands);
-        }
-        Event::Player(PlayerEvent::RateChanged { rate }) => {
-            let started = rate > 0.0;
             let mut st = state.lock();
-            st.playing = started;
-            let eq_bands = started.then(|| st.eq_bands.clone());
-            drop(st);
-            // Playback just started on an active slot -- push the desired EQ
-            // down so gains set before play take effect.
-            if let Some(eq_bands) = eq_bands {
-                reapply_eq(queue, &eq_bands);
-            }
+            st.current_track_index = current_index;
+            st.track_name = current_index
+                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                .unwrap_or_default();
+            st.selected_variant = None;
+            st.is_seeking = false;
+        }
+        AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
+            state.lock().playing = rate > 0.0;
         }
         // Session-mix gain deliberately has no event mapping here: `st.volume`
         // is content volume, owned by the player's volume path alone.
-        Event::Player(PlayerEvent::VolumeChanged { volume }) => {
+        AnalysisEvent::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;
         }
-        Event::Queue(
+        AnalysisEvent::Queue(
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
             | QueueEvent::TrackStatusChanged { .. },
@@ -654,13 +639,13 @@ fn variant_short_label(v: &VariantInfo) -> String {
 mod tests {
     use ::kithara::{
         analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
-        events::PlayerEvent,
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
             time::{self, Duration},
             tokio::{sync::mpsc, task},
         },
+        play::PlayerEvent,
         queue::QueueEvent,
     };
     use kithara_test_utils::kithara;
@@ -773,12 +758,21 @@ mod tests {
         first.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
+        host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
+            .await;
+        queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         queue
             .bus()
             .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
         let second = answer_subscribe(&mut requests, track_id).await;
         second.send_replace(Some(progress(2)));
         wait_for_revision(&state, 2).await;
+        assert_eq!(
+            queue.eq_gain(0),
+            Some(-6.0),
+            "event mirrors preserve the deck EQ"
+        );
+        assert!(state.lock().playing, "the rate event reaches the UI");
 
         drop(first);
         cancel.cancel();

@@ -8,12 +8,12 @@ use kithara::{
     analysis::BeatAnalysisConfigPatch,
     assets::{AssetStoreConfigPatch, FlushPolicyPatch},
     audio::AudioConfigPatch,
+    download::DownloaderConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
     play::{PlayWorkerConfigPatch, PlayerConfigPatch},
     queue::QueueConfigPatch,
-    stream::dl::DownloaderConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde::Deserialize;

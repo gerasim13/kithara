@@ -1,6 +1,10 @@
 //! One non-generic `AssetStore` serves both `ctx = None` (file passthrough) and
 //! `ctx = Some(ProcessCtx)` (per-acquire processing): covers chunk chaining and
 //! per-acquire application of the processor.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use std::{
@@ -12,9 +16,8 @@ use kithara_assets::{
     AcquisitionResult, AssetStore, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
     StorageBackend, WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 use tempfile::tempdir;
 

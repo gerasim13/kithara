@@ -55,7 +55,7 @@ wasm BROWSER="chrome" SUITE="all":
     # the integration suite. Nothing in a wasm build produces a host binary, so
     # without this the run dies with "failed to start test_server ... No such
     # file or directory".
-    cargo build -p kithara-integration-tests --bin test_server
+    cargo build -p kithara-integration-tests --features all --bin test_server
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
@@ -113,7 +113,8 @@ wasm BROWSER="chrome" SUITE="all":
         --target wasm32-unknown-unknown \
         -Z build-std=std,panic_abort,core,alloc \
         -Z build-std-features=optimize_for_size \
-        -p kithara-ffi-web-tests -p kithara-integration-tests --test ffi_web --test suite_heavy
+        -p kithara-ffi-web-tests -p kithara-integration-tests --no-default-features \
+        --features kithara-integration-tests/wasm --test ffi_web --test suite_heavy
       # `wasm-bindgen-test` picks its thread per binary, and the live-graph
       # oracle needs the page's main thread.
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
@@ -121,7 +122,8 @@ wasm BROWSER="chrome" SUITE="all":
         --target wasm32-unknown-unknown \
         -Z build-std=std,panic_abort,core,alloc \
         -Z build-std-features=optimize_for_size \
-        -p kithara-integration-tests --test suite_live_web_audio
+        -p kithara-integration-tests --no-default-features \
+        --features kithara-integration-tests/wasm --test suite_live_web_audio
     fi
     # `webcodecs_browser` belongs to kithara-decode, not to any integration
     # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
@@ -155,7 +157,7 @@ audio-artifacts OUTPUT:
       exit 2
     fi
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-audio-tests --test audio \
+      just test run -p kithara-integration-tests --test suite_heavy \
         --run-ignored=only \
         -E 'test(/no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
@@ -258,6 +260,7 @@ coverage:
       --ignore-default-filter || test_rc=$?
     cargo llvm-cov nextest --no-report \
       -p kithara-app \
+      --features kithara-app/backend-cpal \
       --cargo-profile test-release \
       --ignore-default-filter \
       -E 'package(kithara-app) & test(/^gui::/)' || test_rc=$?
@@ -347,8 +350,10 @@ miri *ARGS:
     # crates reads on the way to its first assertion.
     MIRIFLAGS="-Zmiri-disable-isolation" \
         cargo +nightly miri test --lib \
+        --features kithara-platform/tokio-rt-multi-thread \
         -p kithara-abr \
         -p kithara-bufpool \
+        -p kithara-download \
         -p kithara-events \
         -p kithara-queue \
         -p kithara-stream \

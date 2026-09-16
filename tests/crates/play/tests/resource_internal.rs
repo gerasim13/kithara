@@ -9,12 +9,14 @@
 
 use kithara::{
     self,
-    audio::ReadOutcome,
-    events::{AudioEvent, Event, EventBus},
+    audio::{AudioEvent, ReadOutcome},
+    events::EventBus,
     platform::time::Duration,
     play::Resource,
 };
-use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader, event::TestEvent, test_defaults::Consts,
+};
 use kithara_test_fixtures::integration_fixtures::default_pcm;
 
 #[kithara::fixture]
@@ -139,7 +141,7 @@ async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resour
         .unwrap()
         .unwrap();
 
-    assert!(matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
+    assert!(matches!(event, TestEvent::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
 }
 
 #[kithara::test(tokio)]

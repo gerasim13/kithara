@@ -4,8 +4,9 @@
 use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,7 +14,6 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, WindowStats, rms},
@@ -158,9 +158,26 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::symphonia_locked_low_product_android(DecoderBackend::default(), AbrMode::manual(0))
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::symphonia_locked_high_product_android(DecoderBackend::default(), AbrMode::manual(2))
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))

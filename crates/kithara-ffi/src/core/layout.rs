@@ -1,12 +1,3 @@
-/// Local shim so `#[kithara::mock]` resolves on wasm, which does not
-/// depend on the `kithara` facade crate (only on `kithara-test-macros`).
-/// On native the real `kithara` crate is in scope and provides the macro,
-/// so the shim is wasm-only to avoid an ambiguous-name conflict.
-#[cfg(target_arch = "wasm32")]
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
-
 /// FFI representation of an asset whose resources share one cache root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

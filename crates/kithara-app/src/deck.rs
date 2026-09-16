@@ -365,8 +365,9 @@ mod tests {
     }
 
     fn deck_set(count: usize) -> DeckSet {
-        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let worker = worker();
+        let mut host =
+            AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
         let decks = (0..count)
             .map(|index| one_deck(DeckId(index), &mut host, &worker))
             .collect();
@@ -478,8 +479,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn removing_a_deck_cancels_only_its_subtree() {
         let app = CancelToken::root();
-        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let worker = worker();
+        let mut host =
+            AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
         let decks = (0..2)
             .map(|index| one_deck_under(DeckId(index), &mut host, &worker, &app))
             .collect();

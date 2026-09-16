@@ -8,27 +8,28 @@ publish = false
 autotests = false
 
 [package.metadata.cargo-machete]
-ignored = ["reqwest", "serial_test"]
+ignored = ["kithara-test-utils", "reqwest", "serial_test"]
 
 [features]
-default = ["client-reqwest", "tls-rustls"]
+default = ["client-reqwest", "tls-rustls", "usdt"]
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
 e2e = []
 network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
-kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-dylib = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 cochlea-features = { workspace = true }
 firewheel = { workspace = true }
@@ -45,7 +46,11 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
+kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 
 [lints]
 workspace = true

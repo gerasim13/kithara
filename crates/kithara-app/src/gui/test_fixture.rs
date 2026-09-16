@@ -1,11 +1,11 @@
 use iced::window::Id;
 use kithara::{
     assets::StorageBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
     play::{PlayWorkerConfig, policy::DomainKeyPolicy},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 
 use super::{
@@ -23,7 +23,8 @@ use crate::{
 
 pub(super) fn state() -> Kithara {
     let config = config();
-    let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    let mut host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        .expect("test host");
     let decks: Vec<Deck> = (0..2)
         .map(|index| {
             Deck::build(DeckId(index), &config, &mut host).expect("host accepts the test deck")

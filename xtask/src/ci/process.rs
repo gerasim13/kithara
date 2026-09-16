@@ -80,6 +80,10 @@ impl Process {
         }
     }
 
+    pub(crate) const fn is_recording(&self) -> bool {
+        matches!(&self.mode, Mode::Record(_))
+    }
+
     fn record(&self, step: Step) -> bool {
         let Mode::Record(recording) = &self.mode else {
             return false;
@@ -114,6 +118,14 @@ impl Process {
         self.vars
             .get(OsStr::new("CARGO_TARGET_DIR"))
             .map_or_else(|| self.root.join("target"), PathBuf::from)
+    }
+
+    pub(crate) fn environment_path(&self, name: &str) -> Option<PathBuf> {
+        self.vars
+            .get(OsStr::new(name))
+            .cloned()
+            .or_else(|| env::var_os(name))
+            .map(PathBuf::from)
     }
 
     /// A command that runs inside a subdirectory of the checkout. Build tools
@@ -166,11 +178,12 @@ impl Process {
     /// The platform a lane refuses to run anywhere but on. Recorded rather than
     /// enforced while recording: the shape of a macOS lane is worth capturing
     /// from a Linux runner too.
-    pub(crate) fn require_os(&self, expected: &str, label: &str) -> Result<()> {
-        if self.record(Step::requirement(label, "os", &[expected.to_owned()])) {
+    pub(crate) fn require_os<S: AsRef<str>>(&self, expected: &[S], label: &str) -> Result<()> {
+        let expected: Vec<String> = expected.iter().map(|os| os.as_ref().to_owned()).collect();
+        if self.record(Step::requirement(label, "os", &expected)) {
             return Ok(());
         }
-        require_os(expected, label)
+        require_os(&expected, label)
     }
 
     /// What a predecessor job has to have left behind. Recorded rather than
@@ -247,6 +260,11 @@ impl Process {
         Ok(())
     }
 
+    pub(crate) fn resolve_program(&self, program: &str) -> Result<PathBuf> {
+        self.find_executable(program)
+            .with_context(|| format!("required CI command is missing: {program}"))
+    }
+
     fn find_executable(&self, program: &str) -> Option<PathBuf> {
         let path = Path::new(program);
         if path.components().count() > 1 {
@@ -307,10 +325,11 @@ impl Step {
     }
 }
 
-pub(crate) fn require_os(expected: &str, label: &str) -> Result<()> {
-    if env::consts::OS != expected {
+pub(crate) fn require_os(expected: &[String], label: &str) -> Result<()> {
+    if !expected.iter().any(|os| os == env::consts::OS) {
         bail!(
-            "{label} lane requires {expected}, current platform is {}",
+            "{label} lane requires {}, current platform is {}",
+            expected.join(" or "),
             env::consts::OS
         );
     }
@@ -403,6 +422,16 @@ mod tests {
 
         assert!(error.downcast_ref::<ChildFailure>().is_some());
         assert_eq!(error.to_string(), "fixture command failed (exit code 7)");
+    }
+
+    #[test]
+    fn environment_paths_fall_back_to_the_executor_environment() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+
+        assert_eq!(
+            process.environment_path("PATH").as_deref(),
+            env::var_os("PATH").as_deref().map(Path::new)
+        );
     }
 
     #[test]

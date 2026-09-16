@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use dashmap::DashMap;
 use kithara_platform::{
     sync::{Arc, OnceLock},
     time::Instant,
@@ -10,8 +9,9 @@ use portable_atomic::{AtomicU64, Ordering};
 use smallvec::SmallVec;
 
 use crate::{
-    Envelope, Event, EventMeta, ScopeLabel,
+    Envelope, Event, EventMeta, EventReceiver, EventSet, ScopeLabel,
     scope::{BusScope, next_bus_id},
+    topic::ScopeTopics,
 };
 
 static EVENT_TIME_BASE: OnceLock<Instant> = OnceLock::new();
@@ -19,58 +19,47 @@ static EVENT_TIME_BASE: OnceLock<Instant> = OnceLock::new();
 /// Default capacity for each per-scope broadcast channel.
 pub const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024;
 
-/// Shared state for a bus hierarchy.
-pub(crate) struct BusRegistry {
-    topics: DashMap<u64, broadcast::Sender<Envelope>>,
-    capacity: usize,
-}
-
-/// Hierarchical event bus for the kithara audio pipeline.
-///
-/// One root bus per player. Child scopes are created with [`scoped`](Self::scoped).
-/// Each scope has its own broadcast channel. Publishing sends to the
-/// publisher's channel and all ancestor channels (topic-based routing).
-/// Subscribers only receive events from their scope's subtree — zero
-/// wasted recv/filter work.
+/// Hierarchical bus with one channel per scope and event type.
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EventBus {
-    pub(crate) registry: Arc<BusRegistry>,
     #[field(get)]
     pub(crate) scope: BusScope,
     pub(crate) label: ScopeLabel,
     next_seq: Arc<AtomicU64>,
-    /// Cached senders for self + ancestors, matching scope path order.
-    /// Eliminates `DashMap` lookups on the hot publish path.
-    senders: SmallVec<[broadcast::Sender<Envelope>; 4]>,
+    topics: SmallVec<[Arc<ScopeTopics>; 4]>,
 }
 
 impl EventBus {
-    /// Create a root bus with the given channel capacity.
-    #[must_use]
     pub fn new(capacity: usize) -> Self {
         EVENT_TIME_BASE.get_or_init(Instant::now);
-        let cap = capacity.max(1);
-        let id = next_bus_id();
-        let (tx, _) = broadcast::channel(cap);
-        let next_seq = Arc::new(AtomicU64::new(0));
-        let registry = Arc::new(BusRegistry {
-            topics: DashMap::new(),
-            capacity: cap,
-        });
-        registry.topics.insert(id, tx.clone());
-        let mut senders = SmallVec::new();
-        senders.push(tx);
+        let mut topics = SmallVec::new();
+        topics.push(Arc::new(ScopeTopics::new(capacity.max(1))));
         Self {
-            registry,
-            next_seq,
-            senders,
+            scope: BusScope::root(next_bus_id()),
             label: ScopeLabel::default(),
-            scope: BusScope::root(id),
+            next_seq: Arc::new(AtomicU64::new(0)),
+            topics,
         }
     }
 
-    /// This bus's unique id.
+    #[must_use]
+    pub fn scoped(&self) -> Self {
+        self.scoped_labeled(ScopeLabel::default())
+    }
+
+    pub fn scoped_labeled(&self, label: ScopeLabel) -> Self {
+        let mut topics = SmallVec::with_capacity(self.topics.len() + 1);
+        topics.push(Arc::new(ScopeTopics::new(self.topics[0].capacity())));
+        topics.extend(self.topics.iter().map(Arc::clone));
+        Self {
+            scope: self.scope.child(next_bus_id()),
+            label: self.label.merged_with(label),
+            next_seq: Arc::clone(&self.next_seq),
+            topics,
+        }
+    }
+
     #[must_use]
     pub fn id(&self) -> u64 {
         self.scope.id()
@@ -80,71 +69,47 @@ impl EventBus {
         Arc::clone(&self.next_seq)
     }
 
-    /// Publish an event to this scope and all ancestor scopes.
-    ///
-    /// Accepts any type that converts `Into<Event>`, so you can pass
-    /// sub-enum values directly: `bus.publish(HlsEvent::EndOfStream)`.
-    pub fn publish<E: Into<Event>>(&self, event: E) {
-        let event = Envelope {
-            meta: EventMeta {
-                origin: self.scope.id(),
-                seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
-                ts_micros: ts_micros(),
-                deck: self.label.deck,
-                track: self.label.track,
-            },
-            event: event.into(),
-        };
-        self.publish_envelope(event);
+    pub(crate) fn meta(&self, seq: u64, ts_micros: u64) -> EventMeta {
+        EventMeta {
+            origin: self.scope.id(),
+            seq,
+            ts_micros,
+            deck: self.label.deck,
+            track: self.label.track,
+        }
     }
 
-    pub(crate) fn publish_envelope(&self, event: Envelope) {
-        let len = self.senders.len();
-        if len == 1 {
-            self.senders[0].send(event).ok();
+    /// Stamps `event` and sends it to every scope on this bus's path that has a
+    /// subscriber for its type.
+    pub fn publish<S: EventSet>(&self, event: S) {
+        let meta = self.meta(self.next_seq.fetch_add(1, Ordering::Relaxed), ts_micros());
+        S::publish(self, meta, event);
+    }
+
+    /// Sends an already-stamped event of one concrete type.
+    ///
+    /// This is the seam `EventSet::publish` and [`DeferredBus::flush`] use to
+    /// re-publish an event under a sequence number taken earlier.
+    pub fn publish_stamped<E: Event>(&self, meta: EventMeta, event: E) {
+        let mut targets = self.topics.iter().filter_map(|scope| scope.find::<E>());
+        let Some(mut current) = targets.next() else {
             return;
+        };
+        let envelope = Envelope { event, meta };
+        for next in targets {
+            current.send(envelope.clone());
+            current = next;
         }
-        for sender in &self.senders[..len - 1] {
-            sender.send(event.clone()).ok();
-        }
-        self.senders[len - 1].send(event).ok();
-    }
-    /// Create a child scope sharing the same topic registry.
-    ///
-    /// Events published to the child are visible to all ancestors.
-    /// Subscribing to the child only receives events from its subtree.
-    #[must_use]
-    pub fn scoped(&self) -> Self {
-        self.scoped_labeled(ScopeLabel::default())
+        current.send(envelope);
     }
 
-    /// Create a child scope with optional deck/track overrides.
     #[must_use]
-    pub fn scoped_labeled(&self, label: ScopeLabel) -> Self {
-        let id = next_bus_id();
-        let (tx, _) = broadcast::channel(self.registry.capacity);
-        self.registry.topics.insert(id, tx.clone());
-        let scope = self.scope.child(id);
-        let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
-        senders.push(tx);
-        senders.extend(self.senders.iter().cloned());
-        Self {
-            scope,
-            senders,
-            label: self.label.merged_with(label),
-            next_seq: Arc::clone(&self.next_seq),
-            registry: Arc::clone(&self.registry),
-        }
+    pub fn subscribe<S: EventSet>(&self) -> EventReceiver<S> {
+        EventReceiver::new(S::subscribe(self))
     }
 
-    /// Subscribe to events in this bus's scope.
-    ///
-    /// A root bus sees all events (its own + all descendants).
-    /// A scoped bus sees only events published to itself or its descendants.
-    /// No filtering overhead — each scope has a dedicated channel.
-    #[must_use]
-    pub fn subscribe(&self) -> crate::EventReceiver {
-        crate::EventReceiver::new(self.senders[0].subscribe())
+    pub(crate) fn subscribe_topic<E: Event>(&self) -> broadcast::Receiver<Envelope<E>> {
+        self.topics[0].find_or_insert::<E>().subscribe()
     }
 }
 
@@ -154,15 +119,6 @@ pub(crate) fn ts_micros() -> u64 {
         .elapsed()
         .as_micros();
     u64::try_from(micros).unwrap_or(u64::MAX)
-}
-
-impl Drop for EventBus {
-    fn drop(&mut self) {
-        let id = self.scope.id();
-        if self.senders[0].receiver_count() == 0 {
-            self.registry.topics.remove(&id);
-        }
-    }
 }
 
 impl Default for EventBus {
@@ -185,58 +141,52 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    #[cfg(feature = "file")]
-    use crate::{BusEvent, FileError, FileEvent, SlotId, TrackId};
+    use crate::{BusEvent, SlotId, TrackId};
 
-    #[cfg(feature = "file")]
-    fn assert_file_event(event: &Envelope, expected: &FileEvent) {
-        match &event.event {
-            Event::File(actual) => assert_eq!(actual, expected),
-            other => panic!("expected file event, got {other:?}"),
-        }
+    #[derive(Clone, Debug, PartialEq, Eq, crate::Event)]
+    enum TestEvent {
+        EndOfStream,
+        ReadProgress { position: u64, total: Option<u64> },
+        Error { error: String },
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn publish_without_subscribers_does_not_panic() {
         let bus = EventBus::new(16);
-        bus.publish(FileEvent::EndOfStream);
+        bus.publish(TestEvent::EndOfStream);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
-    #[case(FileEvent::ReadProgress { position: 42, total: None })]
-    #[case(FileEvent::EndOfStream)]
-    async fn publish_and_subscribe(#[case] expected: FileEvent) {
+    #[case(TestEvent::ReadProgress { position: 42, total: None })]
+    #[case(TestEvent::EndOfStream)]
+    async fn publish_and_subscribe(#[case] expected: TestEvent) {
         let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
+        let mut rx = bus.subscribe::<TestEvent>();
         bus.publish(expected.clone());
         let event = rx.recv().await.unwrap();
-        assert_file_event(&event, &expected);
+        assert_eq!(event.event, expected);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
-    #[case(FileEvent::EndOfStream)]
-    #[case(FileEvent::Error {
-        error: FileError::Io("network".to_string()),
+    #[case(TestEvent::EndOfStream)]
+    #[case(TestEvent::Error {
+        error: String::from("network".to_string()),
     })]
-    async fn multiple_subscribers_each_receive(#[case] expected: FileEvent) {
+    async fn multiple_subscribers_each_receive(#[case] expected: TestEvent) {
         let bus = EventBus::new(16);
-        let mut rx1 = bus.subscribe();
-        let mut rx2 = bus.subscribe();
+        let mut rx1 = bus.subscribe::<TestEvent>();
+        let mut rx2 = bus.subscribe::<TestEvent>();
         bus.publish(expected.clone());
-        assert_file_event(&rx1.recv().await.unwrap(), &expected);
-        assert_file_event(&rx2.recv().await.unwrap(), &expected);
+        assert_eq!(rx1.recv().await.unwrap().event, expected);
+        assert_eq!(rx2.recv().await.unwrap().event, expected);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn lagged_subscriber_gets_error() {
         let bus = EventBus::new(2);
-        let mut rx = bus.subscribe();
+        let mut rx = bus.subscribe::<TestEvent>();
         for i in 0..10 {
-            bus.publish(FileEvent::ReadProgress {
+            bus.publish(TestEvent::ReadProgress {
                 position: i,
                 total: None,
             });
@@ -248,17 +198,15 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn clone_shares_channel() {
         let bus1 = EventBus::new(16);
         let bus2 = bus1.clone();
-        let mut rx = bus1.subscribe();
-        bus2.publish(FileEvent::EndOfStream);
+        let mut rx = bus1.subscribe::<TestEvent>();
+        bus2.publish(TestEvent::EndOfStream);
         assert!(rx.try_recv().is_ok());
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     #[case::root_sees_child(true)]
     #[case::child_sees_own(false)]
@@ -266,70 +214,67 @@ mod tests {
         let root = EventBus::new(16);
         let child = root.scoped();
         let mut rx = if subscribe_from_root {
-            root.subscribe()
+            root.subscribe::<TestEvent>()
         } else {
-            child.subscribe()
+            child.subscribe::<TestEvent>()
         };
 
-        child.publish(FileEvent::EndOfStream);
+        child.publish(TestEvent::EndOfStream);
         let event = rx.recv().await.unwrap();
-        assert_file_event(&event, &FileEvent::EndOfStream);
+        assert_eq!(event.event, TestEvent::EndOfStream);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn child_does_not_see_sibling_events() {
         let root = EventBus::new(16);
         let child_a = root.scoped();
         let child_b = root.scoped();
-        let mut rx_a = child_a.subscribe();
+        let mut rx_a = child_a.subscribe::<TestEvent>();
 
-        child_b.publish(FileEvent::EndOfStream);
+        child_b.publish(TestEvent::EndOfStream);
 
         assert!(rx_a.try_recv().is_err());
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn root_sees_grandchild_events() {
         let root = EventBus::new(16);
         let child = root.scoped();
         let grandchild = child.scoped();
-        let mut rx = root.subscribe();
+        let mut rx = root.subscribe::<TestEvent>();
 
-        grandchild.publish(FileEvent::EndOfStream);
+        grandchild.publish(TestEvent::EndOfStream);
         let event = rx.recv().await.unwrap();
-        assert_file_event(&event, &FileEvent::EndOfStream);
+        assert_eq!(event.event, TestEvent::EndOfStream);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn parent_sees_child_but_not_sibling() {
         let root = EventBus::new(16);
         let child_a = root.scoped();
         let child_b = root.scoped();
-        let mut rx_root = root.subscribe();
-        let mut rx_a = child_a.subscribe();
+        let mut rx_root = root.subscribe::<TestEvent>();
+        let mut rx_a = child_a.subscribe::<TestEvent>();
 
-        child_a.publish(FileEvent::EndOfStream);
-        child_b.publish(FileEvent::ReadProgress {
+        child_a.publish(TestEvent::EndOfStream);
+        child_b.publish(TestEvent::ReadProgress {
             position: 99,
             total: None,
         });
 
         let e1 = rx_root.recv().await.unwrap();
         let e2 = rx_root.recv().await.unwrap();
-        assert_file_event(&e1, &FileEvent::EndOfStream);
-        assert_file_event(
-            &e2,
-            &FileEvent::ReadProgress {
+        assert_eq!(e1.event, TestEvent::EndOfStream);
+        assert_eq!(
+            e2.event,
+            TestEvent::ReadProgress {
                 position: 99,
                 total: None,
             },
         );
 
         let ea = rx_a.recv().await.unwrap();
-        assert_file_event(&ea, &FileEvent::EndOfStream);
+        assert_eq!(ea.event, TestEvent::EndOfStream);
         assert!(rx_a.try_recv().is_err());
     }
 
@@ -349,20 +294,6 @@ mod tests {
         assert!(bus.id() > 0);
     }
 
-    #[cfg(feature = "file")]
-    #[kithara::test]
-    fn dropped_scoped_bus_cleans_up_topic() {
-        let root = EventBus::new(16);
-        let child_id;
-        {
-            let child = root.scoped();
-            child_id = child.id();
-            assert!(root.registry.topics.contains_key(&child_id));
-        }
-        assert!(!root.registry.topics.contains_key(&child_id));
-    }
-
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn envelope_meta_stamps_scope_seq_and_time() {
         let root = EventBus::new(16);
@@ -371,10 +302,10 @@ mod tests {
             ..ScopeLabel::default()
         });
         let child_b = root.scoped();
-        let mut rx = root.subscribe();
+        let mut rx = root.subscribe::<TestEvent>();
 
-        child_a.publish(FileEvent::EndOfStream);
-        child_b.publish(FileEvent::EndOfStream);
+        child_a.publish(TestEvent::EndOfStream);
+        child_b.publish(TestEvent::EndOfStream);
 
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
@@ -403,28 +334,108 @@ mod tests {
         assert_eq!(grandchild.label.track, Some(TrackId(12)));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     async fn overflow_event_publishes_exact_drop_count() {
         let bus = EventBus::new(16);
-        let deferred = crate::DeferredBus::new(bus.clone(), 2);
-        let mut rx = bus.subscribe();
+        let deferred = crate::DeferredBus::<TestEvent>::new(bus.clone(), 2);
+        let mut rx = bus.subscribe::<BusEvent>();
 
-        deferred.enqueue(FileEvent::EndOfStream);
-        deferred.enqueue(FileEvent::EndOfStream);
-        deferred.enqueue(FileEvent::EndOfStream);
-        deferred.enqueue(FileEvent::EndOfStream);
+        deferred.enqueue(TestEvent::EndOfStream);
+        deferred.enqueue(TestEvent::EndOfStream);
+        deferred.enqueue(TestEvent::EndOfStream);
+        deferred.enqueue(TestEvent::EndOfStream);
         deferred.flush();
 
-        let _ = rx.recv().await.unwrap();
-        let _ = rx.recv().await.unwrap();
         let overflow = rx.recv().await.unwrap();
         match overflow.event {
-            Event::Bus(BusEvent::Overflow { scope, dropped }) => {
+            BusEvent::Overflow { scope, dropped } => {
                 assert_eq!(scope, bus.id());
                 assert_eq!(dropped, 2);
             }
-            other => panic!("expected overflow event, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Ping(u64);
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Pong(u64);
+
+    impl Event for Ping {}
+    impl Event for Pong {}
+
+    #[derive(Clone, Debug, PartialEq, Eq, crate::EventSet)]
+    enum Probe {
+        Ping(Ping),
+        Pong(Pong),
+    }
+    #[kithara::test]
+    async fn a_publish_reaches_a_typed_subscriber() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe::<Ping>();
+
+        bus.publish(Ping(1));
+
+        assert_eq!(rx.try_recv().expect("the ping arrives").event, Ping(1));
+    }
+
+    #[kithara::test]
+    async fn a_publish_of_an_unsubscribed_type_is_dropped() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe::<Ping>();
+
+        bus.publish(Pong(1));
+        bus.publish(Ping(2));
+
+        assert_eq!(rx.try_recv().expect("only the ping arrives").event, Ping(2));
+    }
+
+    #[kithara::test]
+    async fn a_child_publish_reaches_the_root_subscriber() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe::<Ping>();
+        let child = bus.scoped();
+
+        child.publish(Ping(3));
+
+        let envelope = rx.try_recv().expect("the child event reaches the root");
+        assert_eq!(envelope.event, Ping(3));
+        assert_eq!(envelope.meta.origin, child.id());
+    }
+
+    #[kithara::test]
+    async fn a_root_publish_does_not_reach_a_child_subscriber() {
+        let bus = EventBus::default();
+        let child = bus.scoped();
+        let mut rx = child.subscribe::<Ping>();
+
+        bus.publish(Ping(4));
+
+        assert!(rx.try_recv().is_err(), "the root event stays at the root");
+    }
+
+    #[kithara::test]
+    async fn a_set_receiver_merges_both_member_channels() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe::<Probe>();
+
+        bus.publish(Ping(5));
+        bus.publish(Pong(6));
+
+        assert_eq!(
+            rx.recv().await.expect("the ping arrives").event,
+            Probe::Ping(Ping(5))
+        );
+        assert_eq!(
+            rx.recv().await.expect("the pong arrives").event,
+            Probe::Pong(Pong(6))
+        );
     }
 }

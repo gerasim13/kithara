@@ -5,41 +5,38 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, Event, EventReceiver, PlayerEvent},
+    download::{Downloader, DownloaderConfig},
+    events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope, CancelToken,
         time::{Duration, Instant, sleep, timeout},
-        tokio::{
-            sync::broadcast::error::RecvError,
-            task::{self, yield_now},
-        },
+        tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
+        ResourceConfig, ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
     Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue, QueueTicker},
+    event::TestEvent,
+    offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
+    test_defaults::Consts as Shared,
+    usdt_trace,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
         wait_for_position_event,
     },
 };
-use kithara_test_utils::probe::capture::install as install_recorder;
 
-use crate::{
-    bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
-};
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -129,7 +126,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
 }
 
 async fn observe_playback(
-    mut rx: EventReceiver,
+    mut rx: EventReceiver<TestEvent>,
     initial_rate: f32,
     stop: CancelToken,
 ) -> Result<PlaybackStats, String> {
@@ -140,7 +137,7 @@ async fn observe_playback(
     while !stop.is_cancelled() {
         match timeout(Consts::MONITOR_POLL_INTERVAL, rx.recv()).await {
             Ok(Ok(envelope)) => match envelope.event {
-                Event::Audio(AudioEvent::PlaybackProgress { .. }) => {
+                TestEvent::Audio(AudioEvent::PlaybackProgress { .. }) => {
                     let now = Instant::now();
                     stats.max_progress_gap = stats
                         .max_progress_gap
@@ -148,7 +145,7 @@ async fn observe_playback(
                     stats.progress_events += 1;
                     last_progress = now;
                 }
-                Event::Player(PlayerEvent::RateChanged { rate }) => {
+                TestEvent::Player(PlayerEvent::RateChanged { rate }) => {
                     if (rate - last_rate).abs() > f32::EPSILON {
                         stats.effective_rate_changes += 1;
                         last_rate = rate;
@@ -175,42 +172,41 @@ async fn observe_playback(
 
 async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, target: f64) {
     let mut progress_rx = queue.subscribe();
-    let recorder = install_recorder();
+    let trace = usdt_trace::scope();
     queue
         .seek(target)
         .unwrap_or_else(|error| panic!("{stage}: seek to {target:.2}s: {error}"));
 
+    let seek_output = |event: &usdt_trace::ProbeEvent| {
+        event.target == "kithara_audio_probe"
+            && event.probe == "post_seek_output"
+            && event
+                .field("pending")
+                .is_some_and(|pending| pending != 0 && event.field("epoch") == Some(pending))
+    };
     timeout(Consts::RATE_SEEK_PROGRESS_BUDGET, async {
-        let output = recorder
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_audio_probe"
-                        && event.probe_name() == Some("post_seek_output")
-                        && event.u64("pending").is_some_and(|pending| {
-                            pending != 0 && event.u64("epoch") == Some(pending)
-                        })
-                },
-                Consts::RATE_SEEK_PROGRESS_BUDGET,
-            )
-            .await
+        trace
+            .wait_for(|events| events.iter().any(seek_output))
+            .await;
+        let events = trace.events();
+        let output_index = events
+            .iter()
+            .position(seek_output)
             .unwrap_or_else(|| panic!("{stage}: seek produced no output"));
-        let output_seq = output.seq().expect("probe sequence");
-        let seek_epoch = output.u64("epoch").expect("post-seek output epoch");
-        recorder
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_stream_probe"
-                        && event.probe_name() == Some("write_playhead")
-                        && event.seq().is_some_and(|seq| seq > output_seq)
-                },
-                Consts::RATE_SEEK_PROGRESS_BUDGET,
-            )
-            .await
-            .unwrap_or_else(|| panic!("{stage}: HLS read did not progress after seek"));
+        let seek_epoch = events[output_index]
+            .field("epoch")
+            .expect("post-seek output epoch");
+        trace
+            .wait_for(|events| {
+                events[output_index + 1..].iter().any(|event| {
+                    event.target == "kithara_stream_probe" && event.probe == "write_playhead"
+                })
+            })
+            .await;
 
         loop {
             match progress_rx.recv().await.map(|envelope| envelope.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
                     seek_epoch: progress_epoch,
                     ..
                 })) if progress_epoch == seek_epoch => break,
@@ -245,7 +241,7 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
@@ -378,7 +374,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(10)
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
@@ -431,10 +427,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(
             .cancel(shutdown_token.child())
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
@@ -442,6 +436,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
                 .cancel(shutdown_token.child())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

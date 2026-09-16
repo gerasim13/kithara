@@ -1,5 +1,6 @@
 use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
+use kithara_test_utils::kithara;
 
 use super::{
     CurrentFsm, Failed, TrackFailure, TrackStep, WaitContext, WaitState, WaitingForSource,
@@ -102,6 +103,7 @@ pub(super) enum DecodeStep {
     Failed,
 }
 
+#[kithara::probe]
 pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> DecodeStep {
     let resuming = matches!(src.state, CurrentFsm::AwaitingResume(_));
     let action = {
@@ -140,7 +142,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             start_recreating_decoder(src, recreate);
             DecodeStep::Interrupted
         }
-        CoreDecodeAction::SeekInterrupted => DecodeStep::Interrupted,
+        CoreDecodeAction::Progress | CoreDecodeAction::SeekInterrupted => DecodeStep::Interrupted,
         CoreDecodeAction::Eof => {
             src.update_state(Track::<AtEof>::new(()).erase());
             DecodeStep::Eof

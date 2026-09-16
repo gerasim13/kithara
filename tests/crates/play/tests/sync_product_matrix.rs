@@ -1,30 +1,36 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{env, io, num::NonZeroU32};
+use std::num::NonZeroU32;
+#[cfg(not(target_os = "android"))]
+use std::{env, io};
 
+#[cfg(not(target_os = "android"))]
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
-    events::TrackStatus,
-    hls::AbrMode,
-    host::{Host, HostConfig, HostOwned},
+    host::Host,
     output::{OfflineRenderRequest, OfflineRenderer},
+    platform::CancelScope,
+    record::{RecordingConfig, RecordingCore, RecordingSink},
+    signal::AudioSpec,
+};
+use kithara::{
+    hls::AbrMode,
+    host::{HostConfig, HostOwned},
     platform::{
-        CancelScope,
         sync::Arc,
         time::{self, Duration, Instant},
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
-    record::{RecordingConfig, RecordingCore, RecordingSink},
-    signal::AudioSpec,
+    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     warp::{
         AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
         SyncGroup, SyncIntent, SyncOperation,
     },
 };
+#[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
@@ -34,6 +40,7 @@ use kithara_integration_tests::{
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
+    usdt_trace,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -163,10 +170,12 @@ impl SyncCase {
         self
     }
 
+    #[cfg(not(target_os = "android"))]
     pub(super) const fn decks(self) -> usize {
         self.decks
     }
 
+    #[cfg(not(target_os = "android"))]
     pub(super) const fn id(self) -> &'static str {
         self.id
     }
@@ -331,12 +340,16 @@ pub(super) struct ProductHarness {
     pub(super) failures: Vec<String>,
     block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
+    /// Records the render commits `transport_revision` reads for this harness.
+    _trace: usdt_trace::Scope,
     output_frames: u64,
     paced: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 struct FailingPartSink(AssetPartSink<TestPools>);
 
+#[cfg(not(target_os = "android"))]
 impl RecordingSink for FailingPartSink {
     type Error = io::Error;
     type Output = ();
@@ -354,8 +367,10 @@ impl RecordingSink for FailingPartSink {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 struct OfflineRecordingArtifact;
 
+#[cfg(not(target_os = "android"))]
 fn recording_key(store: &AssetStore<TestPools>, name: &str) -> ResourceKey {
     let source = AssetSource::Local {
         path: env::temp_dir().join("kithara-offline-rendering-test"),
@@ -371,6 +386,7 @@ fn recording_key(store: &AssetStore<TestPools>, name: &str) -> ResourceKey {
         .unwrap_or_else(|error| panic!("offline recording key: {error}"))
 }
 
+#[cfg(not(target_os = "android"))]
 fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
     RecordingConfig::builder()
         .encode(
@@ -383,6 +399,7 @@ fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
         .build()
 }
 
+#[cfg(not(target_os = "android"))]
 fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
     let spec = AudioSpec::new(CHANNELS, sample_rate);
     let session = HostConfig::offline(pools())
@@ -448,6 +465,7 @@ impl ProductHarness {
             .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
             .build();
+        let trace = usdt_trace::scope();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
@@ -490,6 +508,7 @@ impl ProductHarness {
             host,
             output_frames: 0,
             paced,
+            _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
         for (index, (deck, id)) in harness.decks.iter().zip(ids).enumerate() {
@@ -794,6 +813,7 @@ impl ProductHarness {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 #[kithara::test(native, timeout(Duration::from_secs(10)))]
 fn offline_renderer_publishes_only_complete_recordings() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
@@ -1244,6 +1264,7 @@ pub(super) async fn mixed_sources() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
 }
 #[kithara::fixture]
+#[cfg(not(target_os = "android"))]
 pub(super) async fn listening_sources() -> PreparedSources {
     prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }

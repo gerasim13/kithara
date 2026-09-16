@@ -6,7 +6,7 @@ use kithara::{
     events::TrackId,
     net::{HttpClient, NetOptions},
     output::{LiveOutput, OutputGroup},
-    platform::{CancelScope, time::Duration},
+    platform::{CancelScope, time::Duration, tokio::task::spawn_blocking},
     play::Resource,
     signal::AudioSpec,
     worker::{Worker, WorkerConfig},
@@ -235,7 +235,12 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone
     let on_air = OnAir::start(&harness, ROOMY_RING, None).await;
 
     render_tone(&harness, TONE_RENDER_FRAMES).await;
-    on_air.handle.stop();
+    let on_air = spawn_blocking(move || {
+        on_air.handle.stop();
+        on_air
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     let decoded = decode_adts_left(on_air.listed_stream().await);
 
@@ -274,7 +279,12 @@ async fn an_intake_gap_breaks_the_served_playlist(broadcast_tone: Vec<f32>) {
     render_tone(&harness, OVERRUN_FRAMES).await;
     on_air.wait_until_drained().await;
     render_tone(&harness, TAIL_FRAMES).await;
-    on_air.handle.stop();
+    let on_air = spawn_blocking(move || {
+        on_air.handle.stop();
+        on_air
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     let playlist = Playlist::parse(on_air.media_playlist().await);
     let after_break = playlist.uris_after_last_discontinuity().unwrap_or_else(|| {

@@ -5,10 +5,7 @@ use std::{
     task::Poll,
 };
 
-use kithara_events::{
-    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY,
-    Envelope, Event, EventBus, VariantDuration, VariantIndex, VariantInfo,
-};
+use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Envelope, EventBus};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
@@ -19,7 +16,10 @@ use proptest::prelude::*;
 use unimock::{MockFn, Unimock, matching};
 
 use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
-use crate::{Abr, AbrController, AbrMock, AbrSettings, Estimator, ThroughputEstimator};
+use crate::{
+    Abr, AbrController, AbrEvent, AbrMock, AbrMode, AbrProgressSnapshot, AbrReason, AbrSettings,
+    BandwidthSource, Estimator, ThroughputEstimator, VariantDuration, VariantIndex, VariantInfo,
+};
 
 /// Peer that answers with the state and variants it is given and keeps the
 /// default `Abr` behaviour everywhere else. Every test in this module
@@ -934,9 +934,7 @@ fn throughput_samples_published_with(interval: Duration) -> usize {
     }
 
     std::iter::from_fn(|| rx.try_recv().ok())
-        .filter(|Envelope { event, .. }| {
-            matches!(event, Event::Abr(AbrEvent::ThroughputSample { .. }))
-        })
+        .filter(|Envelope { event, .. }| matches!(event, AbrEvent::ThroughputSample { .. }))
         .count()
 }
 

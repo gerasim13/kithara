@@ -6,6 +6,7 @@ use aes::{
 };
 use bytes::Bytes;
 use kithara::drm::UniqueBinaryCipher;
+use kithara_app::secret;
 use kithara_integration_tests::kithara;
 use reqwest::Client;
 
@@ -79,10 +80,9 @@ async fn fetch(client: &Client, url: &str, headers: &[(&str, String)]) -> Result
 #[kithara::test(tokio)]
 async fn prod_chain_sanity_check() {
     let auth_token =
-        std::env::var("KITHARA_DRM_PROD_AUTH_TOKEN").expect("set KITHARA_DRM_PROD_AUTH_TOKEN");
-    let sp_zv =
-        std::env::var("KITHARA_DRM_PROD_SP_ZV_TOKEN").expect("set KITHARA_DRM_PROD_SP_ZV_TOKEN");
-    let prod_cipher_key = std::env::var("KITHARA_DRM_PROD_KEY").expect("set KITHARA_DRM_PROD_KEY");
+        secret("KITHARA_DRM_PROD_AUTH_TOKEN").expect("set KITHARA_DRM_PROD_AUTH_TOKEN");
+    let sp_zv = secret("KITHARA_DRM_PROD_SP_ZV_TOKEN").expect("set KITHARA_DRM_PROD_SP_ZV_TOKEN");
+    let prod_cipher_key = secret("KITHARA_DRM_PROD_KEY").expect("set KITHARA_DRM_PROD_KEY");
     let client = build_client();
 
     let blob = fetch(

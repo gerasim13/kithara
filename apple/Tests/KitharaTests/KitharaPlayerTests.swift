@@ -35,6 +35,24 @@ struct KitharaPlayerTests {
         #expect(player.items().isEmpty)
     }
 
+    @Test("stop clears the queue and allows a fresh item")
+    func stopClearsQueueAndAllowsFreshItem() throws {
+        let player = KitharaPlayer()
+        let old = KitharaPlayerItem(url: "https://example.com/old.mp3")
+        try player.insert(old)
+
+        player.stop()
+
+        #expect(player.items().isEmpty)
+        #expect(player.itemCount == 0)
+        #expect(player.currentAudioItem == nil)
+
+        let fresh = KitharaPlayerItem(url: "https://example.com/fresh.mp3")
+        try player.insert(fresh)
+        #expect(player.itemCount == 1)
+        #expect(player.items().first === fresh)
+    }
+
     @Test("snapshot returns consistent state")
     func snapshotReturnsConsistentState() {
         let player = KitharaPlayer()

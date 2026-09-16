@@ -237,6 +237,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env_remove("KITHARA_CI_CACHE_ROOT")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("PATH", self.fake_path()?)
@@ -401,13 +402,7 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     let cache = fixture._temp.path().join("cache");
     let ready = fixture._temp.path().join("ready");
     let release = fixture._temp.path().join("release");
-    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
-    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
-    let target = if system.trim() == "Linux" {
-        cache.join(format!("target-slots/review-linux-{}-slot-0", arch.trim()))
-    } else {
-        fixture.root.join("target")
-    };
+    let target = fixture._temp.path().join("private-target");
     let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
     command
         .env("CI", "true")
@@ -415,6 +410,7 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
         .env("CI_JOB_ID", "lease-test")
         .env("KITHARA_CACHE_TRUST", "review")
         .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("CARGO_TARGET_DIR", &target)
         .env("SELF_CACHE_READY", &ready)
         .env("SELF_CACHE_RELEASE", &release)
         .stdin(Stdio::null())
@@ -434,6 +430,72 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
     assert!(!heartbeat.exists());
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    let cache = fixture._temp.path().join("cache");
+    let missing = fixture._temp.path().join("missing-target");
+    fs::remove_dir_all(fixture.root.join("target"))?;
+    std::os::unix::fs::symlink(&missing, fixture.root.join("target"))?;
+    let ready = fixture._temp.path().join("ready");
+    let release = fixture._temp.path().join("release");
+    let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
+    command
+        .env("CI", "true")
+        .env("CI_CONCURRENT_ID", "0")
+        .env("CI_JOB_ID", "lease-test")
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env_remove("CARGO_TARGET_DIR")
+        .env("SELF_CACHE_READY", &ready)
+        .env("SELF_CACHE_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command.spawn()?;
+    wait_for_file(&ready)?;
+    let target = cache.join("bootstrap/review/target-Darwin-arm64-0");
+    let lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(target.join(".kithara-job-lease"))?;
+
+    assert!(FileLock::try_exclusive(lease).is_err());
+    fs::write(release, [])?;
+    assert_success(&child.wait_with_output()?);
+    Ok(())
+}
+
+#[test]
+fn ci_bootstrap_ignores_the_ephemeral_runner_name() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let cache = fixture._temp.path().join("cache");
+    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
+    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
+        .env_remove("CI_CONCURRENT_ID")
+        .env("RUNNER_NAME", "ephemeral-registration-4033417")
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(97));
+    assert!(fs::read_to_string(&fixture.cargo_log)?.contains(&format!(
+            "target={}\n",
+            cache
+                .join(format!(
+                    "bootstrap/review/target-{}-{}-local",
+                    system.trim(),
+                    arch.trim()
+                ))
+                .display()
+        )));
     Ok(())
 }
 
@@ -840,11 +902,15 @@ fn killed_refresh_parent_does_not_leave_builder_descendants() -> Result<()> {
         r#"#!/bin/sh
 set -eu
 trap 'exit 0' TERM
-printf '%s\n' "$PPID" > "$SELF_CACHE_WORKER_PID"
-printf '%s\n' "$$" > "$SELF_CACHE_CARGO_PID"
+publish_pid() {
+    printf '%s\n' "$1" > "$2.pending"
+    mv "$2.pending" "$2"
+}
+publish_pid "$PPID" "$SELF_CACHE_WORKER_PID"
+publish_pid "$$" "$SELF_CACHE_CARGO_PID"
 sh -c 'trap "" TERM; while :; do sleep 300; done' &
 descendant=$!
-printf '%s\n' "$descendant" > "$SELF_CACHE_DESCENDANT_PID"
+publish_pid "$descendant" "$SELF_CACHE_DESCENDANT_PID"
 wait "$descendant"
 "#,
     )?;

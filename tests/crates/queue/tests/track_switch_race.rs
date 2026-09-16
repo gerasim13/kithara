@@ -21,8 +21,10 @@
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    download::{Downloader, DownloaderConfig},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -31,12 +33,13 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir,
+    event::TestEvent,
+    kithara,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use url::Url;
@@ -114,9 +117,7 @@ async fn build_queue(
 ) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -125,7 +126,7 @@ async fn build_queue(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -133,6 +134,7 @@ async fn build_queue(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -155,7 +157,7 @@ async fn build_queue(
 /// every absence window would consume real wall time.
 #[kithara::flash(true)]
 async fn next_queue_event<F>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     deadline: Duration,
     mut pred: F,
 ) -> Option<QueueEvent>
@@ -172,7 +174,7 @@ where
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
+            Ok(Ok(TestEvent::Queue(ev))) if pred(&ev) => return Some(ev),
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) | Err(_) => return None,
         }
@@ -430,9 +432,84 @@ async fn supersede_while_loading_cancels_slow_track(
     queue.close().await;
 }
 
+/// `play()` right after `select(target)` must keep that pending selection.
+/// Both loads are gated so the head track is still loading when `play()`
+/// runs; `play()` must not re-point the pending selection at the head and
+/// cancel the user's pick.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+async fn play_keeps_pending_select_of_loading_track(
+    #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
+) {
+    let (helper, head, target) = race_tracks;
+    let head_init = helper.register_init_gate(head.token(), Consts::VARIANT);
+    let target_init = helper.register_init_gate(target.token(), Consts::VARIANT);
+    let head_url = head.master_url();
+    let target_url = target.master_url();
+
+    let temp = temp_dir();
+    let (queue, downloader, store) = build_queue(&temp).await;
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
+
+    let head_id = queue
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&head_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append head track");
+    let target_id = queue
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&target_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append target track");
+    wait_for_init_requested(&head_init, Consts::OBSERVE_DEADLINE)
+        .await
+        .unwrap_or_else(|e| panic!("head init gate: {e}"));
+    wait_for_init_requested(&target_init, Consts::OBSERVE_DEADLINE)
+        .await
+        .unwrap_or_else(|e| panic!("target init gate: {e}"));
+
+    queue
+        .run(move |q| q.select(target_id, Transition::None))
+        .await
+        .expect("select target");
+    queue.run(QueueControl::play).await;
+
+    assert_ne!(
+        queue.track(target_id).map(|entry| entry.status),
+        Some(TrackStatus::Cancelled),
+        "play() cancelled the pending selection of the loading target",
+    );
+
+    head_init.release();
+    target_init.release();
+    let target_current = wait_for_queue_state(
+        &queue,
+        Consts::LOAD_DEADLINE,
+        |queue| queue.current().map(|entry| entry.id) == Some(target_id),
+        |event| {
+            matches!(
+                event,
+                QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == target_id
+            )
+        },
+    )
+    .await;
+    assert!(
+        target_current,
+        "target never became current (current={:?}, head={head_id:?})",
+        queue.current().map(|entry| entry.id),
+    );
+
+    tick_handle.stop().await;
+    queue.close().await;
+}
+
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
-fn drain_event_backlog(rx: &mut EventReceiver) {
+fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv().map(|env| env.event) {

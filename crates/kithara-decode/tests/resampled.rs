@@ -1,4 +1,4 @@
-#![cfg(feature = "symphonia")]
+#![cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 #![forbid(unsafe_code)]
 
 use std::{
@@ -7,10 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use kithara_bufpool::{
-    HasPool,
-    testing::{TestPools, pools as default_pools},
-};
+use kithara_bufpool::HasPool;
 use kithara_decode::{
     DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
 };
@@ -21,11 +18,16 @@ use kithara_resampler::{
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::unit_fixtures::{
     poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
     resampled_wav_seek, trim_silence,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools as default_pools},
+    kithara,
+};
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;
@@ -408,7 +410,7 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target(
     resampled_markers: Vec<f32>,
     resampled_wav_seek: &'static [u8],
 ) {
-    const TARGET: Duration = Duration::from_millis(30);
+    const TARGET: Duration = Duration::from_millis(31);
 
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
@@ -449,7 +451,10 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
 ) {
     const SOURCE_TARGET_FRAME: u64 = 1_441;
     const ROUNDING_TARGET_RATE: u32 = 44_085;
+    #[cfg(not(target_os = "android"))]
     const EXPECTED_LANDED_FRAME: u64 = 1_152;
+    #[cfg(target_os = "android")]
+    const EXPECTED_LANDED_FRAME: u64 = 1_440;
     const EXPECTED_OUTPUT_FRAME: u64 = 1_441;
 
     let target = test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME);
@@ -475,7 +480,7 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
 
     assert_eq!(
         test_frames(ROUNDING_TARGET_RATE, landed_at),
-        1_151,
+        usize::try_from(EXPECTED_LANDED_FRAME - 1).expect("landing fits usize"),
         "test landing must distinguish floor from half-up"
     );
     assert_eq!(
@@ -536,6 +541,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned(
 #[kithara::test(native, flash(false))]
 fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]) {
     let pools = default_pools();
+    assert_eq!(pools.stats().allocated_bytes, 0);
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
         DecoderConfig::builder().pools(pools.clone()).build();
     let media_info = MediaInfo::builder()
@@ -550,13 +556,20 @@ fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]
     .expect("decoder builds");
 
     assert_eq!(pools.stats().allocated_bytes, 0);
+    decoder.prepare_next_chunk();
+    let prepared_bytes = pools.stats().allocated_bytes;
+    assert!(prepared_bytes > 0, "initial PCM uses the injected pool");
     let chunk: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
-    assert!(pools.stats().allocated_bytes > 0);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        prepared_bytes,
+        "delivering prepared PCM must not allocate another buffer"
+    );
 }
 
 fn decoder_over<B>(

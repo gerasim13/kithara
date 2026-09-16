@@ -127,7 +127,7 @@ impl RawSnapshot {
             None
         };
         let transport_revision =
-            NonZeroU64::new(self.transport_revision).map(TransportRevision::from_raw);
+            NonZeroU64::new(self.transport_revision).map(TransportRevision::from);
         let context = RenderContext::new(
             SessionFrame::new(self.output_start)..SessionFrame::new(self.output_end),
             sample_rate,
@@ -167,8 +167,7 @@ impl RenderPublisher {
                 transport_revision = context.transport_revision().map_or(0, u64::from),
                 output_start = i64::from(context.output_frames().start),
                 output_end = i64::from(context.output_frames().end),
-                source = frontier.source(),
-                presentation_frame = i64::from(frontier.output())
+                source = frontier.source()
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
         }

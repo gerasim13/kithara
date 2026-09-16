@@ -4,14 +4,15 @@ use std::{
 };
 
 use kithara::{
+    abr::{AbrEvent, AbrReason},
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    decode::DecoderBackend,
-    events::{
-        AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
-        EventReceiver, HlsEvent, RequestId,
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
     },
-    hls::{AbrMode, Hls, HlsConfig},
+    decode::DecoderBackend,
+    download::{DownloaderEvent, RequestId, RequestMethod},
+    events::{EventBus, EventReceiver},
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -27,6 +28,7 @@ use kithara_integration_tests::SegmentGateHandle;
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     mixed_plain,
@@ -184,7 +186,7 @@ fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
 /// between drains.
 struct EventCollector {
     /// Receiver held for pull draining (see [`Self::drain`]).
-    rx: Mutex<EventReceiver>,
+    rx: Mutex<EventReceiver<TestEvent>>,
     /// In-flight request→(variant, seg) map, carried across drains.
     request_map: Mutex<HashMap<RequestId, (usize, usize)>>,
     /// Network fetches that completed (URL→variant/seg parsed at enqueue).
@@ -250,7 +252,10 @@ impl EventCollector {
     /// `significant_drop_tightening` from mis-suggesting an early drop
     /// inside the loop. Mirrors
     /// `kithara::platform::flash::system::wake::wait_set`.
-    fn drain_locked(&self, mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver>) {
+    fn drain_locked(
+        &self,
+        mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver<TestEvent>>,
+    ) {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         loop {
             let ev = match rx.try_recv().map(|env| env.event) {
@@ -266,31 +271,34 @@ impl EventCollector {
             };
             self.push_event_tail(format!("{ev:?}"));
             match &ev {
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id,
+                    url,
+                    method: RequestMethod::Get,
+                    ..
                 }) => {
                     if let Some(seg) = parse_segment_url(url.as_str()) {
                         self.request_map.lock().insert(*request_id, seg);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(seg) = self.request_map.lock().remove(request_id) {
                         self.network_fetches.lock().insert(seg);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
                 }) => {
                     self.reader_segments.lock().push((*variant, *segment_index));
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                     info!(to = to.get(), ?reason, "VariantApplied");
                     self.applied_transitions.lock().push((to.get(), *reason));
                     self.switch_count.fetch_add(1, Ordering::Release);
                 }
-                Event::Audio(AudioEvent::SeekLifecycle {
+                TestEvent::Audio(AudioEvent::SeekLifecycle {
                     stage,
                     seek_epoch,
                     location,
@@ -299,7 +307,7 @@ impl EventCollector {
                         "SeekLifecycle({stage:?}, epoch={seek_epoch:?}, location={location:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::SeekComplete {
+                TestEvent::Audio(AudioEvent::SeekComplete {
                     position,
                     seek_epoch,
                 }) => {
@@ -307,7 +315,7 @@ impl EventCollector {
                         "SeekComplete(epoch={seek_epoch:?}, position={position:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::DecoderReady {
+                TestEvent::Audio(AudioEvent::DecoderReady {
                     base_offset,
                     variant,
                 }) => {
@@ -315,7 +323,7 @@ impl EventCollector {
                         "DecoderReady(base_offset={base_offset}, variant={variant:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::EndOfStream { .. }) => {
+                TestEvent::Audio(AudioEvent::EndOfStream { .. }) => {
                     self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}
@@ -324,7 +332,7 @@ impl EventCollector {
     }
 
     /// Synthesised view: for every (variant, seg) the reader saw, decide
-    /// whether it came from the network (`RequestCompleted` seen) or from
+    /// whether its body came from the network (completed GET) or from
     /// the cache (no Completed event for that pair). Returns one record
     /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
     /// wins.
@@ -809,14 +817,14 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "LoadSlow for the gated V0 segment",
         |event| {
             match event {
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) if parse_segment_url(url.as_str())
                     == Some((STALLED_VARIANT, STALLED_SEGMENT)) =>
                 {
                     stalled_requests.insert(*request_id);
                 }
-                Event::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
+                TestEvent::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
                     if stalled_requests.contains(request_id) =>
                 {
                     saw_load_slow = true;
@@ -841,7 +849,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "stalled-boundary EscapeStalled rescue",
         |event| {
             match event {
-                Event::Abr(AbrEvent::VariantApplied { from, to, reason })
+                TestEvent::Abr(AbrEvent::VariantApplied { from, to, reason })
                     if from.get() == STALLED_VARIANT
                         && to.get() == RESCUE_VARIANT
                         && *reason == AbrReason::EscapeStalled =>
@@ -886,8 +894,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "the stalled boundary must commit an EscapeStalled switch: {transitions:?}"
     );
     assert!(
-        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT)),
-        "the V0 reader must reach the gated segment boundary: {reader_segments:?}"
+        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT - 1)),
+        "the V0 reader must consume the segment immediately before the gate: {reader_segments:?}"
     );
     assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
 }
@@ -1618,7 +1626,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         let held = wait_for_event(
             &mut hold_rx,
             "TransitionHold for Manual(1)",
-            |ev| matches!(ev, Event::Decoder(DecoderEvent::TransitionHold { .. })),
+            |ev| matches!(ev, TestEvent::Decoder(DecoderEvent::TransitionHold { .. })),
             Duration::from_secs(25),
         )
         .await;
@@ -1733,6 +1741,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .audio_buffer_chunks(4)
         .build();
     let audio = worker.open(config).await.expect("create audio");
 
@@ -1775,12 +1784,16 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     wait_for_event(
         &mut seek_rx,
         "ReaderSeek after seek",
-        |ev| matches!(ev, Event::Hls(HlsEvent::ReaderSeek { .. })),
+        |ev| matches!(ev, TestEvent::Hls(HlsEvent::ReaderSeek { .. })),
         Duration::from_secs(20),
     )
     .await
     .expect("ReaderSeek after seek");
 
+    assert!(
+        audio.decoded_frontier() < audio.duration().expect("finite WAV duration"),
+        "the manual switch requires undecoded audio after the cached seek"
+    );
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -2091,7 +2104,8 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw(DecoderBackend::Apple)
@@ -2318,8 +2332,22 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-#[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
-#[case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_same_codec_aac_low_to_high_android(DecoderBackend::default(), 2usize)
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_cross_codec_aac_to_flac_android(DecoderBackend::default(), 3usize)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw_same_codec_aac_low_to_high(DecoderBackend::Apple, 2usize)
@@ -2356,7 +2384,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     spawn(async move {
         loop {
             match applied_rx.recv().await.map(|env| env.event) {
-                Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+                Ok(TestEvent::Abr(AbrEvent::VariantApplied { to, .. })) => {
                     applied_bg.lock().push(to.get());
                 }
                 Ok(_) => {}

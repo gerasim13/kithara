@@ -5,26 +5,25 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::{
-        AudioCodec,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
+    usdt_trace,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -118,7 +117,8 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 /// `PlayheadWrite::advance` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
@@ -161,8 +161,6 @@ async fn flac_swallow_fixture(
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let recorder = probe_capture::install();
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
@@ -182,10 +180,12 @@ async fn flac_swallow_fixture(
     // instead of the virtual clock racing past the producer (which starves the
     // worker so the track never plays). Off the `flash` feature this is a ZST
     // no-op and the clock is already real.
+    let trace = usdt_trace::scope();
     play_realtime(&mut player, windows, window_secs).await;
+    let records = trace.events();
 
-    assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
-    assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
+    assert_committed_reached(&records, Duration::from_secs_f64(MIN_DELAYED_PLAYHEAD_SECS));
+    assert_no_committed_swallow(&records, Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS));
     player.close().await;
 }
 

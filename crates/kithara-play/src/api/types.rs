@@ -1,9 +1,6 @@
-pub use kithara_events::{
-    DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemRole, ItemStatus, PlaybackDirection,
-    PlayerEvent, PlayerStatus, RouteChangeReason, SessionEvent, SlotId, TimeControlStatus,
-    TimeRange, TrackId, TrackRef, TransportEvent, WaitingReason,
-};
+pub use kithara_events::{SlotId, TrackId};
 
+/// How far the whole session output is lowered under a competing sound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SessionDuckingMode {

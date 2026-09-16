@@ -19,21 +19,25 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, PlayerEvent},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::{
+        CancelToken,
+        time::{self, Duration},
+    },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineHostHarness,
+    PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
+    offline::OfflineHostHarness,
 };
 
 use crate::bufpool_ext::{Pools, TestPools, pools};
@@ -138,25 +142,25 @@ impl Harness {
     }
 }
 
-async fn build_hls_resource(
+fn build_hls_source(
     master: &url::Url,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,
     worker: &PlayWorker<TestPools>,
-) -> Resource {
+) -> TrackSource<TestPools> {
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
-                    .backend(DecoderBackend::Symphonia)
+                    .backend(DecoderBackend::default())
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
             .worker(worker.clone())
             .build();
-    Resource::new(cfg).await.expect("create HLS resource")
+    TrackSource::Config(Box::new(cfg))
 }
 
 /// What the queue did during the post-seek observation window.
@@ -258,26 +262,26 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
-    let target_src = target.src().clone();
-    let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
+    let target = build_hls_source(&master, &downloader, &store, &harness.worker);
+    let target_src = kithara::platform::sync::Arc::from(master.as_str());
+    let next = build_hls_source(&master, &downloader, &store, &harness.worker);
     let player = harness.take_player();
     let queue = harness
         .host
-        .insert_control(Queue::new(
-            QueueConfig::builder()
-                .should_autoplay(false)
-                .player(player)
-                .build(),
-        ))
+        .insert_control(Queue::new(QueueConfig::builder().player(player).build()))
         .await
         .expect("insert queue into product offline Host");
+    let mut queue_events = queue.subscribe::<TestEvent>();
     let id0 = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(target))
-        .await;
+        .run(&queue, move |q| q.append(target))
+        .await
+        .expect("append gated HLS track");
+    wait_loaded(&mut queue_events, id0).await;
     let _id1 = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(next))
-        .await;
+        .run(&queue, move |q| q.append(next))
+        .await
+        .expect("append successor HLS track");
+    wait_loaded(&mut queue_events, _id1).await;
 
     harness
         .run(&queue, move |q| q.select(id0, Transition::None))
@@ -311,7 +315,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
-            if let kithara::events::Event::Player(pe) = ev {
+            if let TestEvent::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref item } if item.track().src == target_src => {
                         trigger = Trigger::DidFail;
@@ -354,7 +358,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            queue.clear();
+            harness.run(&queue, |q| q.clear()).await;
             drop(queue);
             drop(server);
             panic!(
@@ -368,10 +372,33 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         }
     }
 
-    queue.clear();
+    harness.run(&queue, |q| q.clear()).await;
     drop(queue);
     drop(server);
     harness.close().await;
+}
+
+async fn wait_loaded(
+    events: &mut kithara::events::EventReceiver<TestEvent>,
+    id: kithara::events::TrackId,
+) {
+    let loaded = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id: seen,
+                    status: TrackStatus::Loaded,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(loaded, "track {id:?} must load through Queue loader");
 }
 
 #[kithara::fixture]

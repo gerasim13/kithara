@@ -6,6 +6,7 @@ use firewheel::{
     diff::{Diff, Patch, PatchError},
     event::ParamData,
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
@@ -28,6 +29,9 @@ pub struct PlayerNode<S> {
 
     #[diff(skip)]
     context_requirement: ContextRequirement,
+
+    #[diff(skip)]
+    gate_smoothing: SmootherConfig,
 
     /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
@@ -63,6 +67,7 @@ impl<S> Clone for PlayerNode<S> {
         Self {
             active: self.active,
             inputs: Arc::clone(&self.inputs),
+            gate_smoothing: self.gate_smoothing,
             pools: self.pools.clone(),
             context_requirement: self.context_requirement,
         }
@@ -71,12 +76,13 @@ impl<S> Clone for PlayerNode<S> {
 
 impl<S> PlayerNode<S> {
     /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>) -> Self {
+    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>, gate_smoothing: SmootherConfig) -> Self {
         Self {
             pools,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
             context_requirement: ContextRequirement::Standalone,
+            gate_smoothing,
         }
     }
 
@@ -116,6 +122,7 @@ where
             inputs,
             shape,
             &self.pools,
+            self.gate_smoothing,
             self.context_requirement,
         )
     }
@@ -143,7 +150,7 @@ mod tests {
 
     fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, pools());
+        let node = PlayerNode::new(inputs, pools(), crate::DEFAULT_GATE_SMOOTHING);
         (node, control)
     }
 

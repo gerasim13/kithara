@@ -1,12 +1,13 @@
 use delegate::delegate;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerRuntime;
-#[cfg(any(test, feature = "probe"))]
-use crate::bridge::RtMetricsSnapshot;
 use crate::{
-    EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
+    EngineLoadSnapshot, PlayWorker,
+    api::PlayerStatus,
+    bridge::{PlaybackSnapshot, RtMetricsSnapshot},
+    engine::EngineImpl,
 };
 
 impl<S> PlayerRuntime<S> {
@@ -41,11 +42,7 @@ impl<S> PlayerRuntime<S> {
 
     /// Get EQ gain for a band in dB.
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = self.slot()?;
-        self.core
-            .engine
-            .slot_eq(slot_id)
-            .and_then(|eq| eq.gain(band))
+        self.core.engine.eq().and_then(|eq| eq.gain(band))
     }
 
     /// Single coherent read of the active slot's live playback scalars.
@@ -77,8 +74,7 @@ impl<S> PlayerRuntime<S> {
             .map(|held| held.as_secs_f64())
     }
 
-    /// Read the active audio slot's real-time counters for tests and probes.
-    #[cfg(any(test, feature = "probe"))]
+    /// Read the active audio slot's real-time counters.
     #[must_use]
     pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot> {
         let slot_id = self.slot()?;
@@ -97,7 +93,7 @@ impl<S> PlayerRuntime<S> {
     }
 
     /// Subscribe to player events.
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.core.engine.bus().subscribe()
     }
 

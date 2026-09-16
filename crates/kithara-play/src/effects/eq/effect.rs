@@ -104,8 +104,8 @@ mod tests {
 
     use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_test_fixtures::unit_fixtures::{
-        eq_bypass, eq_finite, eq_half, eq_oscillation, eq_silence, eq_sine_40, eq_sine_1000,
-        eq_sine_10000, eq_sine_15000, eq_transition,
+        eq_finite, eq_half, eq_oscillation, eq_silence, eq_sine_40, eq_sine_1000, eq_sine_10000,
+        eq_sine_15000, eq_transition,
     };
     use kithara_test_utils::kithara;
 
@@ -139,12 +139,6 @@ mod tests {
         let config = EqConfig::builder(pools.clone()).build();
         EqEffect::new(&config, bands, sample_rate, channels)
             .unwrap_or_else(|error| panic!("test EQ: {error}"))
-    }
-
-    fn make_isolator(pools: &Pools, bands: &[EqBandConfig], sample_rate: u32) -> IsolatorEq {
-        let config = EqConfig::builder(pools.clone()).build();
-        IsolatorEq::new(&config, bands, sample_rate)
-            .unwrap_or_else(|error| panic!("test isolator: {error}"))
     }
 
     #[kithara::test]
@@ -507,134 +501,6 @@ mod tests {
                 assert!(s.is_finite());
             }
         }
-    }
-
-    #[kithara::test]
-    fn eq_fresh_at_zero_db_is_bypass_active() {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let eq = make_isolator(&pools, &bands, 44100);
-        assert!(
-            eq.bypass_active(),
-            "default 0 dB bands should activate bypass so the LR-4 chain \
-             never runs for users who never touch the EQ"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_bypass_deactivates_on_gain_change() {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&pools, &bands, 44100);
-        assert!(eq.bypass_active(), "precondition: fresh EQ is in bypass");
-
-        eq.set_gain(0, GainDb::from(3.0));
-
-        assert!(
-            !eq.bypass_active(),
-            "bypass must deactivate the instant any band targets a non-unity \
-             gain, so the next sample reaches the actual filter chain"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_bypass_reactivates_after_return_to_unity(eq_silence: Vec<f32>) {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let spec = EqFixture::spec(1, 44100);
-        let mut eq_effect = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
-
-        eq_effect.set_gain(0, GainDb::MAX);
-        converge_smoother(&pools, &mut eq_effect, spec, &eq_silence);
-        assert!(!eq_effect.eq_l.bypass_active());
-
-        eq_effect.set_gain(0, GainDb::default());
-        converge_smoother(&pools, &mut eq_effect, spec, &eq_silence);
-        converge_smoother(&pools, &mut eq_effect, spec, &eq_silence);
-
-        assert!(
-            eq_effect.eq_l.bypass_active(),
-            "after gains smooth back to unity, bypass must reactivate so the \
-             filter chain stops running"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_bypass_returns_input_unchanged(eq_bypass: Vec<f32>) {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&pools, &bands, 44100);
-        assert!(eq.bypass_active(), "precondition: bypass is active");
-
-        let inputs = eq_bypass;
-        for &input in inputs.iter() {
-            let output = eq.process_sample(input);
-            assert_eq!(
-                output, input,
-                "bypass must return input bit-for-bit, got {output} for {input}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn eq_all_min_gain_after_smoothing_is_silence_active(eq_silence: Vec<f32>) {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let spec = EqFixture::spec(1, 44100);
-        let mut eq_effect = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
-
-        for i in 0..3 {
-            eq_effect.set_gain(i, GainDb::MIN);
-        }
-        converge_smoother(&pools, &mut eq_effect, spec, &eq_silence);
-
-        assert!(
-            eq_effect.eq_l.silence_active(),
-            "all bands at the floor of the range after the smoother converges must \
-             the silence fast path so the filter chain is skipped entirely"
-        );
-    }
-
-    #[kithara::test]
-    fn eq_silence_returns_zero(eq_bypass: Vec<f32>) {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&pools, &bands, 44100);
-        for i in 0..3 {
-            eq.set_gain(i, GainDb::MIN);
-            eq.settle_gain(i);
-        }
-        assert!(eq.silence_active(), "precondition: silence is active");
-
-        let inputs = &eq_bypass[..5];
-        for &input in inputs.iter() {
-            let output = eq.process_sample(input);
-            assert_eq!(
-                output, 0.0,
-                "silence must return literal 0.0 for any input, got {output} \
-                 for {input}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn eq_silence_deactivates_when_any_band_raised() {
-        let pools = pools();
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&pools, &bands, 44100);
-        for i in 0..3 {
-            eq.set_gain(i, GainDb::MIN);
-            eq.settle_gain(i);
-        }
-        assert!(eq.silence_active(), "precondition: silence is active");
-
-        eq.set_gain(1, GainDb::from(-3.0));
-
-        assert!(
-            !eq.silence_active(),
-            "raising any band above the floor must disable silence so the \
-             filter chain re-engages via smoother ramp-up"
-        );
     }
 
     fn converge_smoother(pools: &Pools, eq: &mut EqEffect, spec: AudioSpec, silence: &[f32]) {

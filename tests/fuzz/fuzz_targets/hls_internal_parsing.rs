@@ -2,7 +2,7 @@
 
 use arbitrary::Arbitrary;
 use kithara::{
-    events::VariantInfo,
+    abr::VariantInfo,
     hls::{FromWithParams, parse_master_playlist, parse_media_playlist},
 };
 use libfuzzer_sys::fuzz_target;

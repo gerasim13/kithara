@@ -2,18 +2,20 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{Event, EventReceiver, PlayerEvent},
+    events::EventReceiver,
     hls::AbrMode,
     platform::time::{Duration, Instant, timeout},
+    play::PlayerEvent,
     queue::{QueueControl, Transition},
 };
 use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
+    event::TestEvent,
     kithara,
     offline::{AppQueueFixture, insecure_app_queue},
+    usdt_trace::{Scope, scope},
     waits::wait_for_loader_done_event,
 };
-use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
 /// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
 ///
@@ -56,14 +58,17 @@ async fn build_ctx() -> AppQueueFixture {
 /// probe — fires the moment the demuxer + frame codec hand a chunk to
 /// the audio pipeline, which is the production-truth signal for
 /// "warmup complete". Replaces a wall-clock `wait_for_position`.
-async fn wait_for_warmup(recorder: &Recorder, budget: Duration) -> Result<(), String> {
-    let evt = recorder
-        .wait_for_probe_async(
-            |e| e.target == "kithara_decode_probe" && e.probe_name() == Some("build_chunk"),
-            budget,
-        )
-        .await;
-    if evt.is_none() {
+async fn wait_for_warmup(recorder: &Scope, budget: Duration) -> Result<(), String> {
+    let warmed = timeout(
+        budget,
+        recorder.wait_for(|events| {
+            events
+                .iter()
+                .any(|e| e.target == "kithara_decode_probe" && e.probe == "build_chunk")
+        }),
+    )
+    .await;
+    if warmed.is_err() {
         return Err(format!(
             "no `kithara_decode_probe::build_chunk` within {budget:?} — decoder produced no PCM"
         ));
@@ -80,8 +85,8 @@ async fn wait_for_warmup(recorder: &Recorder, budget: Duration) -> Result<(), St
 /// Counting probe events is the production-truth check: if this number
 /// doesn't grow after the seek, no new audio is being decoded — the
 /// user hears nothing, regardless of what `position_seconds` reports.
-fn count_build_chunks(recorder: &Recorder) -> usize {
-    recorder.events_with_probe("build_chunk").len()
+fn count_build_chunks(recorder: &Scope) -> usize {
+    recorder.events().len()
 }
 
 /// One observed event with a wall-clock relative timestamp. Captured
@@ -91,7 +96,7 @@ fn count_build_chunks(recorder: &Recorder) -> usize {
 #[derive(Debug, Clone)]
 struct TimedEvent {
     elapsed: Duration,
-    event: Event,
+    event: TestEvent,
 }
 
 /// What the engine did with the queue during the observation window.
@@ -135,8 +140,8 @@ enum AdvanceTrigger {
 
 struct ScrubObservation<'a> {
     queue: &'a QueueControl<AppPools>,
-    rx: &'a mut EventReceiver,
-    recorder: &'a Recorder,
+    rx: &'a mut EventReceiver<TestEvent>,
+    recorder: &'a Scope,
     event_log: &'a mut Vec<TimedEvent>,
     started_at: Instant,
     params: ScrubParams<'a>,
@@ -212,12 +217,12 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let Event::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                if let TestEvent::Player(PlayerEvent::ItemDidFail { item }) = &ev
                     && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);
                 }
-                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                if let TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
                     && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);
@@ -278,7 +283,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let recorder = install_recorder();
+    let recorder = scope();
     let ctx = build_ctx().await;
 
     // Multi-track playlist that mirrors a real user session. The

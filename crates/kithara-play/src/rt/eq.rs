@@ -1,17 +1,24 @@
-use core::num::NonZeroU32;
+#[cfg(test)]
+mod tests;
+
+use core::{mem, num::NonZeroU32};
 
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
-    event::{ParamData, ProcEvents},
+    dsp::{
+        fade::FadeCurve,
+        mix::{Mix, MixDSP},
+    },
+    event::{NodeEventType, ParamData, ProcEvents},
     mask::MaskType,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolError};
 use kithara_test_utils::kithara;
 use tracing::warn;
 
@@ -31,6 +38,27 @@ pub struct MasterEqNode<S> {
     pub(crate) enabled: bool,
     #[diff(skip)]
     config: EqConfig<S>,
+}
+
+/// A band layout on its way to the processor. Built on the control thread;
+/// leaves the audio thread carrying the retired pair, so nothing is freed there.
+#[derive(Default)]
+pub(super) struct MasterEqLayout {
+    bands: Vec<MasterEqBand>,
+    equalizers: Option<(IsolatorEq, IsolatorEq)>,
+}
+
+enum LayoutUpdate {
+    Pending(MasterEqLayout),
+    Retired(MasterEqLayout),
+}
+
+impl LayoutUpdate {
+    fn into_inner(self) -> MasterEqLayout {
+        match self {
+            Self::Pending(layout) | Self::Retired(layout) => layout,
+        }
+    }
 }
 
 /// An opaque runtime parameter patch for [`MasterEqNode`].
@@ -101,6 +129,21 @@ impl<S> MasterEqNode<S> {
         self.bands.len()
     }
 
+    /// Prepares a layout event without changing the running equalizer.
+    ///
+    /// # Errors
+    /// Returns the pool error if the replacement cannot be prepared.
+    pub fn layout_event(&self, sample_rate: NonZeroU32) -> Result<NodeEventType, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let equalizers = build_equalizers(self, sample_rate)?;
+        Ok(NodeEventType::custom(MasterEqLayout {
+            bands: self.bands.clone(),
+            equalizers: Some(equalizers),
+        }))
+    }
+
     pub fn set_gain(&mut self, index: usize, gain_db: GainDb) {
         if let Some(band) = self.bands.get_mut(index) {
             band.gain_db = f32::from(gain_db);
@@ -119,7 +162,7 @@ where
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
-        MasterEqProcessor::new(self.clone(), cx.stream_info.sample_rate)
+        MasterEqProcessor::new(self.clone(), cx.stream_info)
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -135,56 +178,96 @@ where
 struct MasterEqProcessor<S> {
     params: MasterEqNode<S>,
     sample_rate: NonZeroU32,
-    eq_l: Option<IsolatorEq>,
-    eq_r: Option<IsolatorEq>,
+    active: Option<(IsolatorEq, IsolatorEq)>,
+    retiring: Option<(IsolatorEq, IsolatorEq)>,
+    crossover: MixDSP,
+    layout: Option<LayoutUpdate>,
 }
 
 impl<S> MasterEqProcessor<S>
 where
     S: HasPool<f32>,
 {
-    fn new(params: MasterEqNode<S>, sample_rate: NonZeroU32) -> Self {
-        let bands = bands_from_params(&params);
-        let equalizers =
-            IsolatorEq::new(&params.config, &bands, sample_rate.get()).and_then(|left| {
-                IsolatorEq::new(&params.config, &bands, sample_rate.get())
-                    .map(|right| (left, right))
-            });
-        let (mut eq_l, mut eq_r) = match equalizers {
-            Ok(equalizers) => (Some(equalizers.0), Some(equalizers.1)),
+    fn new(params: MasterEqNode<S>, stream_info: &StreamInfo) -> Self {
+        let active = match build_equalizers(&params, stream_info.sample_rate) {
+            Ok(equalizers) => Some(equalizers),
             Err(error) => {
                 warn!(%error, "master EQ disabled because its pooled scratch allocation failed");
-                (None, None)
+                None
             }
         };
-
-        for (i, band) in params.bands.iter().enumerate() {
-            if let Some(eq) = eq_l.as_mut() {
-                eq.set_gain(i, GainDb::from(band.gain_db));
-            }
-            if let Some(eq) = eq_r.as_mut() {
-                eq.set_gain(i, GainDb::from(band.gain_db));
-            }
-        }
+        let crossover = MixDSP::new(
+            Mix::FULLY_WET,
+            FadeCurve::Linear,
+            params.config.smoothing(),
+            stream_info.sample_rate,
+        );
 
         Self {
             params,
-            sample_rate,
-            eq_l,
-            eq_r,
+            active,
+            retiring: None,
+            crossover,
+            layout: None,
+            sample_rate: stream_info.sample_rate,
         }
     }
 
     fn sync_gains(&mut self) {
         for (i, band) in self.params.bands.iter().enumerate() {
-            if let Some(eq) = self.eq_l.as_mut() {
-                eq.set_gain(i, GainDb::from(band.gain_db));
-            }
-            if let Some(eq) = self.eq_r.as_mut() {
-                eq.set_gain(i, GainDb::from(band.gain_db));
+            if let Some((left, right)) = self.active.as_mut() {
+                left.set_gain(i, GainDb::from(band.gain_db));
+                right.set_gain(i, GainDb::from(band.gain_db));
             }
         }
     }
+
+    fn take_layout(&mut self, layout: &mut MasterEqLayout) {
+        let incoming = mem::take(layout);
+        if let Some(previous) = self.layout.replace(LayoutUpdate::Pending(incoming)) {
+            *layout = previous.into_inner();
+        }
+    }
+
+    fn advance_layout(&mut self) {
+        if !self.crossover.has_settled() {
+            return;
+        }
+        match self.layout.take() {
+            Some(LayoutUpdate::Pending(mut layout)) => {
+                mem::swap(&mut self.params.bands, &mut layout.bands);
+                let incoming = layout.equalizers.take();
+                layout.equalizers = self.retiring.take();
+                self.retiring = self.active.take();
+                self.active = incoming;
+                self.crossover.set_mix(Mix::FULLY_DRY, FadeCurve::Linear);
+                self.crossover.reset_to_target();
+                self.crossover.set_mix(Mix::FULLY_WET, FadeCurve::Linear);
+                self.layout = Some(LayoutUpdate::Retired(layout));
+                self.sync_gains();
+            }
+            previous => self.layout = previous,
+        }
+    }
+
+    fn apply_patch(&mut self, patch: MasterEqNodePatch) {
+        match (&mut self.layout, patch.0) {
+            (Some(LayoutUpdate::Pending(layout)), MasterEqNodePatchKind::Bands(patch)) => {
+                layout.bands.apply(patch);
+            }
+            (_, patch) => self.params.apply(MasterEqNodePatch(patch)),
+        }
+    }
+}
+
+fn build_equalizers<S: HasPool<f32>>(
+    params: &MasterEqNode<S>,
+    sample_rate: NonZeroU32,
+) -> Result<(IsolatorEq, IsolatorEq), PoolError> {
+    let bands = bands_from_params(params);
+    let left = IsolatorEq::new(&params.config, &bands, sample_rate.get())?;
+    let right = IsolatorEq::new(&params.config, &bands, sample_rate.get())?;
+    Ok((left, right))
 }
 
 fn bands_from_params<S>(params: &MasterEqNode<S>) -> Vec<EqBandConfig> {
@@ -208,11 +291,20 @@ where
 {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.sample_rate = stream_info.sample_rate;
-        if let Some(eq) = self.eq_l.as_mut() {
-            eq.update_sample_rate(self.sample_rate.get());
+        if let Some((left, right)) = self.active.as_mut() {
+            left.update_sample_rate(self.sample_rate.get());
+            right.update_sample_rate(self.sample_rate.get());
         }
-        if let Some(eq) = self.eq_r.as_mut() {
-            eq.update_sample_rate(self.sample_rate.get());
+        if let Some((left, right)) = self.retiring.as_mut() {
+            left.update_sample_rate(self.sample_rate.get());
+            right.update_sample_rate(self.sample_rate.get());
+        }
+        self.crossover.update_sample_rate(self.sample_rate);
+        if let Some(LayoutUpdate::Pending(layout)) = &mut self.layout
+            && let Some((left, right)) = &mut layout.equalizers
+        {
+            left.update_sample_rate(self.sample_rate.get());
+            right.update_sample_rate(self.sample_rate.get());
         }
     }
 
@@ -227,21 +319,27 @@ where
         /// Minimum stereo channel count for processing.
         const MIN_STEREO: usize = 2;
         let mut dirty = false;
-        for patch in events.drain_patches::<MasterEqNode<S>>() {
-            self.params.apply(patch);
+        for mut event in events.drain() {
+            if let Some(layout) = event.downcast_mut::<MasterEqLayout>() {
+                self.take_layout(layout);
+            } else if let Some(patch) = MasterEqNode::<S>::patch_event(&event) {
+                self.apply_patch(patch);
+            } else {
+                continue;
+            }
             dirty = true;
         }
         if dirty {
             self.sync_gains();
         }
+        self.advance_layout();
 
         if buffers.inputs.len() < MIN_STEREO || buffers.outputs.len() < MIN_STEREO {
             return ProcessStatus::Bypass;
         }
 
         if !self.params.enabled
-            || self.eq_l.is_none()
-            || self.eq_r.is_none()
+            || self.active.is_none()
             || info.in_silence_mask.all_channels_silent(MIN_STEREO)
         {
             buffers.outputs[0].copy_from_slice(buffers.inputs[0]);
@@ -260,12 +358,30 @@ where
         let out_l = &mut out_l_slice[..info.frames];
         let out_r = &mut out_r_slice[..info.frames];
 
-        let (Some(eq_l), Some(eq_r)) = (self.eq_l.as_mut(), self.eq_r.as_mut()) else {
+        let Some((active_l, active_r)) = self.active.as_mut() else {
             return ProcessStatus::Bypass;
         };
         for frame in 0..info.frames {
-            out_l[frame] = eq_l.process_sample(in_l[frame]);
-            out_r[frame] = eq_r.process_sample(in_r[frame]);
+            let mut left = [active_l.process_sample(in_l[frame])];
+            let mut right = [active_r.process_sample(in_r[frame])];
+            if !self.crossover.has_settled() {
+                let (dry_l, dry_r) = match self.retiring.as_mut() {
+                    Some((retiring_l, retiring_r)) => (
+                        retiring_l.process_sample(in_l[frame]),
+                        retiring_r.process_sample(in_r[frame]),
+                    ),
+                    None => (in_l[frame], in_r[frame]),
+                };
+                self.crossover.mix_dry_into_wet_stereo(
+                    &[dry_l],
+                    &[dry_r],
+                    &mut left,
+                    &mut right,
+                    1,
+                );
+            }
+            out_l[frame] = left[0];
+            out_r[frame] = right[0];
         }
 
         ProcessStatus::OutputsModified

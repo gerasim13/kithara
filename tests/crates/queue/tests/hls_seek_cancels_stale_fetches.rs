@@ -4,30 +4,32 @@
 use std::collections::{HashMap, HashSet};
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId},
+    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestId},
+    hls::HlsEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant},
+        CancelToken, time,
+        time::{Duration, Instant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
-    temp_dir,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    temp_dir, usdt_trace,
     waits::wait_for_loader_done,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -105,9 +107,7 @@ async fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -116,7 +116,7 @@ async fn build_queue_with_tick(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -124,6 +124,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -145,12 +146,12 @@ struct PostSeekObservation {
     /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
     /// actually called `Seek::seek` on the stream (not just that
     /// `SeekControl::begin` ran).
-    reader_seek: Option<Event>,
+    reader_seek: Option<TestEvent>,
     /// First `SegmentReadStart` after `seek_at`. The discriminating
     /// signal: a healthy seek path emits this with `segment_index ≈
     /// target`; a broken one emits it with `segment_index ∈ [0..3]`
     /// because the reader is still chewing through the prefix.
-    first_segment_read_start: Option<Event>,
+    first_segment_read_start: Option<TestEvent>,
     /// `RequestId`s of `RequestEnqueued` after `seek_at` whose URL
     /// resolves to a prefix segment (`segment_index < target -
     /// WARMUP_TOLERANCE`). Hard cap.
@@ -172,7 +173,8 @@ struct PostSeekObservation {
     timeout(Duration::from_secs(60)),
     tracing("kithara_hls=debug,kithara_queue=debug,kithara_stream=debug")
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
@@ -184,7 +186,7 @@ async fn hls_seek_near_end_skips_prefix(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let probe_recorder = probe_capture::install();
+    let probe_recorder = usdt_trace::scope();
 
     let (_server, url) = prepared_hls;
 
@@ -242,10 +244,12 @@ async fn hls_seek_near_end_skips_prefix(
     let _ = time::timeout(Consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+                Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, ..
+                })) => {
                     pre_seek_enqueued.insert(request_id);
                 }
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
                     if position_ms > 0 =>
                 {
                     break;
@@ -262,7 +266,7 @@ async fn hls_seek_near_end_skips_prefix(
     // enqueued baseline is complete before the seek fires.
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+            Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
@@ -274,48 +278,40 @@ async fn hls_seek_near_end_skips_prefix(
     let duration = queue.duration_seconds().expect("duration");
     let target_seconds = (duration - 0.5).max(0.0);
 
-    // Partition probe firings into pre- vs post-seek by the process-wide
-    // monotonic `seq` counter, NOT by `Instant` timestamps. Under flash the
-    // probe's `at` is stamped on the HLS scheduler's poll thread while
-    // `seek_at` is read in the (virtual-clock) test body; those two clocks are
-    // not comparable, so `e.at >= seek_at` would drop the legitimately-fired
-    // `seek_epoch_reset`. `seq` is incremented causally at each probe firing,
-    // so a firing after `queue.seek` always has `seq > pre_seek_seq`.
-    let pre_seek_seq = probe_recorder
-        .snapshot()
-        .iter()
-        .filter_map(kithara_test_utils::probe::capture::ProbeEvent::seq)
-        .max()
-        .unwrap_or(0);
+    // Partition probe firings into pre- vs post-seek by their position in the
+    // scope's recorded order, NOT by timestamps: under flash the scheduler's
+    // poll thread and the (virtual-clock) test body read incomparable clocks.
+    // The scope records firings causally, so every firing after `queue.seek`
+    // sits at an index past `pre_seek`.
+    let pre_seek = probe_recorder.events().len();
 
     let seek_at = Instant::now();
     queue.seek(target_seconds).expect("seek");
 
     // Observe post-seek bus events AND wait for the scheduler to record the
-    // epoch reset, concurrently. `wait_for_probe_async` parks on the virtual
-    // clock between probe-snapshot polls, which lets the flash engine advance
-    // virtual time so the (flash-coherent) tick driver cycles the HLS
-    // scheduler — that poll cycle is what fires
-    // `kithara_hls_probe::seek_epoch_reset`. Without this parking the
-    // scheduler never observes the new epoch under flash. The budget is a
-    // virtual hang ceiling, not a pacing wait; the probe-fired assertion
+    // epoch reset, concurrently. Awaiting the scope parks the test body until
+    // a probe is recorded, which lets the flash engine advance virtual time so
+    // the (flash-coherent) tick driver cycles the HLS scheduler — that poll
+    // cycle is what fires `kithara_hls_probe::seek_epoch_reset`. The budget is
+    // a virtual hang ceiling, not a pacing wait; the probe-fired assertion
     // below is unchanged.
     let (observation, _reset_evt) = tokio::join!(
         observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
-        probe_recorder.wait_for_probe_async(
-            |e| {
-                e.seq().is_some_and(|s| s > pre_seek_seq)
-                    && e.target == "kithara_hls_probe"
-                    && e.probe_name() == Some("seek_epoch_reset")
-            },
+        time::timeout(
             Consts::POST_SEEK_OBSERVATION,
+            probe_recorder.wait_for(|events| {
+                events[pre_seek..]
+                    .iter()
+                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
+            }),
         ),
     );
 
     tick_handle.stop().await;
 
-    let probe_events = probe_recorder.snapshot();
-    let total_probes = probe_events.len();
+    let all_probe_events = probe_recorder.events();
+    let total_probes = all_probe_events.len();
+    let probe_events = &all_probe_events[pre_seek..];
     assert!(
         total_probes > 0,
         "[{backend:?}, probe] zero probe events captured — `usdt-probes` \
@@ -324,8 +320,7 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_resets: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("seek_epoch_reset"))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
         .collect();
     assert!(
         !post_seek_resets.is_empty(),
@@ -334,11 +329,11 @@ async fn hls_seek_near_end_skips_prefix(
     );
     let new_epoch = post_seek_resets
         .iter()
-        .filter_map(|e| e.u64("seek_epoch"))
+        .filter_map(|e| e.field("seek_epoch"))
         .max()
         .expect("seek_epoch field present on seek_epoch_reset probe");
 
-    let Some(Event::Hls(HlsEvent::ReaderSeek {
+    let Some(TestEvent::Hls(HlsEvent::ReaderSeek {
         to_offset,
         seek_epoch: reader_seek_epoch,
         segment_index,
@@ -370,11 +365,10 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
-        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
         .filter(|e| {
-            e.u64("segment_index").is_some_and(|s| {
+            e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(usize::MAX);
                 seg < target_floor
             })
@@ -390,17 +384,16 @@ async fn hls_seek_near_end_skips_prefix(
         post_seek_prefix_emissions
             .iter()
             .take(5)
-            .filter_map(|e| e.u64("segment_index"))
+            .filter_map(|e| e.field("segment_index"))
             .collect::<Vec<_>>(),
     );
 
     let target_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
-        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
         .filter(|e| {
-            e.u64("segment_index").is_some_and(|s| {
+            e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(0);
                 seg >= target_floor
             })
@@ -413,7 +406,7 @@ async fn hls_seek_near_end_skips_prefix(
          scheduler did not emit a FetchCmd for the seek target"
     );
 
-    let Some(Event::Hls(HlsEvent::SegmentReadStart {
+    let Some(TestEvent::Hls(HlsEvent::SegmentReadStart {
         segment_index: first_seg,
         ..
     })) = observation.first_segment_read_start
@@ -440,7 +433,7 @@ async fn hls_seek_near_end_skips_prefix(
         Consts::MAX_CONCURRENT,
     );
 
-    // Event-driven progress contract: the new epoch must START a download
+    // TestEvent-driven progress contract: the new epoch must START a download
     // (`RequestStarted`) within the bounded observation window. A seek that
     // dropped silently, or a target left permanently starved behind stale
     // fetches that never free a slot, would never start one. Asserting the
@@ -462,7 +455,7 @@ async fn hls_seek_near_end_skips_prefix(
 }
 
 async fn observe_post_seek(
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
@@ -489,19 +482,21 @@ async fn observe_post_seek(
         loop {
             match rx.recv().await {
                 Ok(env) => match &env.event {
-                    Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
+                    TestEvent::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
                         if obs.reader_seek.is_none() {
                             target_segment = *segment_index;
                             obs.reader_seek = Some(env.event.clone());
                         }
                     }
-                    Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
+                    TestEvent::Hls(HlsEvent::SegmentReadStart { .. }) => {
                         if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
                             obs.first_segment_read_start = Some(env.event.clone());
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
+                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id,
+                        url,
+                        ..
                     }) => {
                         if !pre_seek_enqueued.contains(request_id) {
                             new_epoch_enqueued.insert(*request_id);
@@ -514,7 +509,7 @@ async fn observe_post_seek(
                             }
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestStarted {
+                    TestEvent::Downloader(DownloaderEvent::RequestStarted {
                         request_id,
                         wait_in_queue,
                     }) if obs.target_started_wait.is_none()

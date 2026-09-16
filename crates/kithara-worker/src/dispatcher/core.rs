@@ -44,6 +44,14 @@ pub(super) fn run_loop(
         recycle_all(&mut slots);
 
         let report = produce_pass(&mut slots, budgets, observer.as_mut());
+        kithara::probe_event!(
+            scheduler_pass,
+            active = report.active_tasks,
+            progress = report.progress_tasks,
+            waiting = report.waiting_tasks,
+            backpressured = report.backpressured_tasks,
+            done = report.done_tasks
+        );
         needs_reorder |= remove_terminal(&mut slots);
         report_outcome(observer.as_mut(), report);
         observer.on_event(Event::PassEnd);

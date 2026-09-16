@@ -7,7 +7,7 @@ use std::{
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
-use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelScope,
     sync::Arc,
@@ -21,9 +21,9 @@ use kithara_test_utils::kithara;
 use tracing::{debug, info, warn};
 
 use super::{
-    AudioConfig, AudioDecoderConfig, AudioSession, ConsumerWakeMode, DecodeError, DecodeInit,
-    PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
-    StreamDecoderFactory, ThreadWake,
+    AudioConfig, AudioDecoderConfig, AudioLaneEvent, AudioSession, ConsumerWakeMode, DecodeError,
+    DecodeInit, PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts,
+    StreamAudioSource, StreamDecoderFactory, ThreadWake,
     core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
     cursor::ChunkCursor,
     event::{
@@ -32,6 +32,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
+use crate::{DecoderChangeCause, FrameDomain};
 
 struct DecoderDeps<B, S> {
     host_sample_rate: Arc<AtomicU32>,
@@ -199,7 +200,7 @@ where
 
     #[must_use]
     /// Subscribes to unified stream and audio events.
-    pub fn events(&self) -> kithara_events::EventReceiver {
+    pub fn events<E: EventSet>(&self) -> EventReceiver<E> {
         self.event_bus().subscribe()
     }
 
@@ -345,7 +346,7 @@ fn current_runtime_handle() -> Result<RuntimeHandle, DecodeError> {
 /// cannot hold the chunks preload waits for never signals readiness.
 fn prepare_pcm_ring(
     audio_buffer_chunks: usize,
-    emit: &Arc<kithara_events::DeferredBus<Event>>,
+    emit: &Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
     epoch: &Arc<AtomicU64>,
     block_on_underrun: bool,
     consumer_wake_mode: ConsumerWakeMode,

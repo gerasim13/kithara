@@ -15,7 +15,7 @@ wasm MODE="check" *ARGS:
         # `parking_lot_core` needs its nightly-only feature to compile a wasm
         # parker that does not panic. The target is nightly-only either way.
         toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
+        for c in kithara-storage kithara-net kithara-download kithara-stream kithara-assets kithara-hls; do
           cargo "+$toolchain" check -p "$c" --target wasm32-unknown-unknown
         done
         cargo "+$toolchain" check -p kithara-beat --target wasm32-unknown-unknown --features dsp
@@ -37,7 +37,7 @@ wasm MODE="check" *ARGS:
         ;;
     esac
 
-# Android tasks: build, aar, or another xtask mode.
+# Android tasks: build, aar, doc, or another xtask mode.
 [positional-arguments]
 android MODE="build" *ARGS:
     #!/usr/bin/env bash
@@ -50,6 +50,9 @@ android MODE="build" *ARGS:
         ;;
       aar)
         just _xtask android aar
+        ;;
+      doc)
+        just _xtask android doc "$@"
         ;;
       *)
         just _xtask android "$mode" "$@"

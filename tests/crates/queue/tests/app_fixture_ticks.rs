@@ -1,10 +1,11 @@
+#![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::fs;
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
     platform::{time::Duration, tokio::task::spawn_blocking},
     queue::Transition,
 };

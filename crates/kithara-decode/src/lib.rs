@@ -1,5 +1,6 @@
 // NOTE: deny instead of forbid to allow unsafe in Android FFI modules.
 #![deny(unsafe_code)]
+#![cfg_attr(all(test, rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 //! # Kithara Decode
 //!
@@ -27,10 +28,10 @@ mod gapless;
 mod mp4;
 mod resampled;
 mod retire;
-#[cfg(feature = "symphonia")]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod symphonia;
 #[cfg(test)]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
 mod types;
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]

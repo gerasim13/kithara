@@ -28,7 +28,9 @@ pub struct TestArgs {
 #[derive(Debug)]
 struct TestRequest {
     flash: Option<bool>,
-    lane: Option<String>,
+    /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
+    /// they bound what the touched paths may select.
+    lanes: Vec<String>,
     loom: Option<bool>,
     net_backend: Option<String>,
     no_block: Option<bool>,
@@ -39,10 +41,10 @@ struct TestRequest {
 impl TestRequest {
     fn parse(args: &[String]) -> Result<Self> {
         let mut request = Self {
-            lane: None,
+            lanes: Vec::new(),
+            net_backend: None,
             no_block: None,
             loom: None,
-            net_backend: None,
             passthrough: Vec::new(),
             flash: None,
             touched: false,
@@ -79,7 +81,7 @@ impl TestRequest {
                     let value = iter
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--lane requires a value"))?;
-                    request.lane = Some(value.clone());
+                    request.lanes.push(value.clone());
                 }
                 "--net-backend" => {
                     let value = iter
@@ -101,7 +103,7 @@ impl TestRequest {
                 }
                 _ if arg.starts_with("--lane=") => {
                     let value = arg.trim_start_matches("--lane=");
-                    request.lane = Some(value.to_owned());
+                    request.lanes.push(value.to_owned());
                 }
                 _ if arg.starts_with("--net-backend=") => {
                     let value = arg.trim_start_matches("--net-backend=");
@@ -130,11 +132,8 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
 /// Run every lane the branch touched, serially, without letting the first
 /// failure hide the rest: this exists to name which lane broke.
 fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
-    if request.lane.is_some() {
-        bail!("--touched selects its own lanes and conflicts with --lane");
-    }
     let test = &project.test;
-    let selected = touched::lanes(test)?;
+    let selected = touched::lanes(test, &request.lanes)?;
     if selected.is_empty() {
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());
@@ -198,10 +197,7 @@ fn lane_command(
                     .no_block
                     .unwrap_or_else(|| lane.default_no_block.unwrap_or(test.no_block.default)),
             };
-            let backend = request
-                .net_backend
-                .as_deref()
-                .unwrap_or(&test.default_backend);
+            let backend = backend_name(test, lane, request);
             let (_, cmd) = nextest_lane_command(project, toggles, backend, &request.passthrough)?;
             Ok(cmd)
         }
@@ -261,6 +257,13 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
         if lane.program.is_empty() {
             bail!("test.lanes.{name}.program is empty");
         }
+        if let Some(backend) = &lane.default_backend
+            && !config.net_backends.contains_key(backend)
+        {
+            bail!(
+                "test.lanes.{name}.default_backend `{backend}` is not configured under test.net_backends"
+            );
+        }
         passthrough_position(lane).with_context(|| format!("test.lanes.{name}.passthrough"))?;
     }
     Ok(())
@@ -270,7 +273,11 @@ fn select_lane<'a>(
     config: &'a TestCommandConfig,
     request: &'a TestRequest,
 ) -> Result<(&'a str, &'a TestLaneConfig)> {
-    let explicit_lane = request.lane.as_deref();
+    let explicit_lane = match request.lanes.as_slice() {
+        [] => None,
+        [lane] => Some(lane.as_str()),
+        _ => bail!("more than one --lane needs --touched to choose between them"),
+    };
     let lane_name = match request.loom {
         Some(true) => {
             if config.loom_lane.is_empty() {
@@ -322,11 +329,20 @@ fn features_for(
     let no_block = request
         .no_block
         .unwrap_or_else(|| lane.default_no_block.unwrap_or(config.no_block.default));
-    let backend_name = request
+    let backend = backend_name(config, lane, request);
+    lane_features(config, lane, LaneToggles { flash, no_block }, backend)
+}
+
+fn backend_name<'a>(
+    config: &'a TestCommandConfig,
+    lane: &'a TestLaneConfig,
+    request: &'a TestRequest,
+) -> &'a str {
+    request
         .net_backend
-        .clone()
-        .unwrap_or_else(|| config.default_backend.clone());
-    lane_features(config, lane, LaneToggles { flash, no_block }, &backend_name)
+        .as_deref()
+        .or(lane.default_backend.as_deref())
+        .unwrap_or(&config.default_backend)
 }
 
 pub(crate) fn lane_features(
@@ -366,10 +382,51 @@ pub(crate) fn nextest_lane_command(
     nextest_lane_command_for(project, toggles, backend, extra, NextestAction::Run)
 }
 
+/// Operation on the same configured nextest selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NextestAction {
+pub enum NextestAction {
     Run,
     List,
+}
+
+/// Build the default suite command for a platform adapter.
+///
+/// # Errors
+/// Returns an error when the configured suite or backend is invalid.
+pub fn default_nextest_command(
+    project: &ProjectConfig,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
+    nextest_command_for_lane(project, &project.test.default_lane, extra, action)
+}
+
+/// Build the command for a configured test lane.
+/// # Errors
+/// Returns an error when the lane or its backend configuration is invalid.
+pub fn nextest_command_for_lane(
+    project: &ProjectConfig,
+    lane_name: &str,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
+    let test = &project.test;
+    validate_config(test)?;
+    let lane = test
+        .lanes
+        .get(lane_name)
+        .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
+    let toggles = LaneToggles {
+        flash: lane.default_flash.unwrap_or(test.flash.default),
+        no_block: lane.default_no_block.unwrap_or(test.no_block.default),
+    };
+    let backend = lane
+        .default_backend
+        .as_deref()
+        .unwrap_or(&test.default_backend);
+    let features = lane_features(test, lane, toggles, backend)?;
+    let (_, command) = nextest_command(test, lane, features, extra, action)?;
+    Ok(command)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -640,6 +697,7 @@ mod tests {
                 ],
                 suffix_args: vec!["--locked".to_owned()],
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: None,
                 default_no_block: None,
                 passthrough: String::new(),
@@ -658,6 +716,7 @@ mod tests {
                 ],
                 suffix_args: vec!["-E".to_owned(), "test(loom_model_)".to_owned()],
                 default_features: vec!["demo/loom".to_owned()],
+                default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
                 passthrough: String::new(),
@@ -672,6 +731,7 @@ mod tests {
                 prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
                 suffix_args: Vec::new(),
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: None,
                 default_no_block: Some(true),
                 passthrough: String::new(),
@@ -686,6 +746,7 @@ mod tests {
                 prefix_args: vec!["test".to_owned()],
                 suffix_args: vec!["selenium".to_owned()],
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
                 passthrough: "after-suffix".to_owned(),
@@ -744,6 +805,29 @@ mod tests {
     }
 
     #[test]
+    fn lane_backend_default_does_not_override_an_explicit_request() {
+        let mut project = synthetic_project();
+        project.test.default_backend = "native".into();
+        project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .unwrap()
+            .default_backend = Some("http".into());
+        let default = TestRequest::parse(&["--flash=off".into()]).unwrap();
+        let lane = &project.test.lanes["workspace"];
+        let features = features_for(&project.test, lane, &default).unwrap();
+        let explicit =
+            TestRequest::parse(&["--flash=off".into(), "--net-backend=native".into()]).unwrap();
+        let requested = features_for(&project.test, lane, &explicit).unwrap();
+        assert_eq!(features, BTreeSet::from(["base-feature".into()]));
+        assert_eq!(
+            requested,
+            BTreeSet::from(["base-feature".into(), "demo/native-net".into()])
+        );
+    }
+
+    #[test]
     fn lane_features_flash_and_backend() {
         let project = synthetic_project();
         let test = &project.test;
@@ -786,6 +870,87 @@ mod tests {
 
         let feats = features_for(test, lane, &request).expect("features");
         assert!(!feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn default_lane_command_resolves_cli_then_lane_then_project_backend() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .expect("workspace")
+            .default_backend = Some("native".to_owned());
+        let lane = &project.test.lanes[&project.test.default_lane];
+
+        let lane_backend = lane_command(
+            &project,
+            &project.test.default_lane,
+            lane,
+            &TestRequest::parse(&[]).expect("parse request"),
+        )
+        .expect("default lane command");
+        assert!(
+            args_of(&lane_backend)
+                .iter()
+                .any(|arg| arg.contains("demo/native-net"))
+        );
+
+        let cli_backend = lane_command(
+            &project,
+            &project.test.default_lane,
+            lane,
+            &TestRequest::parse(&["--net-backend=http".to_owned()]).expect("parse request"),
+        )
+        .expect("default lane command");
+        assert!(
+            !args_of(&cli_backend)
+                .iter()
+                .any(|arg| arg.contains("demo/native-net"))
+        );
+    }
+
+    #[test]
+    fn lane_backend_must_be_configured() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .get_mut("browser")
+            .expect("browser")
+            .default_backend = Some("missing".to_owned());
+
+        let error = validate_config(&project.test).expect_err("unknown lane backend fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("test.lanes.browser.default_backend")
+        );
+    }
+
+    #[test]
+    fn linux_usdt_contract_lanes_keep_their_product_feature_closures() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project = ProjectConfig::load(&root).expect("load repository config");
+        let test = &project.test;
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        for (name, feature) in [
+            ("usdt-play", "kithara-play-tests/usdt"),
+            ("usdt-play-scheduler", "kithara-play/usdt"),
+            ("usdt-hls", "kithara-hls-tests/usdt"),
+            ("usdt-hls-stress", "kithara-hls-tests/usdt"),
+            ("usdt-queue", "kithara-queue-tests/usdt"),
+        ] {
+            let lane = &test.lanes[name];
+            let features = features_for(test, lane, &request).expect("features");
+            assert!(features.contains(feature), "{name} keeps {feature}");
+            assert!(
+                !features.contains("usdt-observer"),
+                "{name} no longer reaches the removed observer"
+            );
+        }
     }
 
     #[test]
@@ -1084,6 +1249,32 @@ mod tests {
         assert_eq!(
             envs_of(&cmd),
             vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_platform_adapter_can_build_a_named_lane_inventory() {
+        let project = synthetic_project();
+        let command = nextest_command_for_lane(
+            &project,
+            "loom",
+            &["-p".to_owned(), "demo-platform-tests".to_owned()],
+            NextestAction::List,
+        )
+        .expect("named lane inventory");
+
+        assert_eq!(
+            args_of(&command),
+            [
+                "nextest",
+                "list",
+                "--features",
+                "base-feature,demo/loom",
+                "-p",
+                "demo-platform-tests",
+                "-E",
+                "test(loom_model_)",
+            ]
         );
     }
 }

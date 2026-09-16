@@ -1,8 +1,8 @@
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, TrackId};
+use kithara_events::TrackId;
 
 use super::{Queue, Transition};
-use crate::{QueueError, TrackSource};
+use crate::{QueueError, TrackSource, event::AdvanceReason};
 
 impl<S> Queue<S>
 where

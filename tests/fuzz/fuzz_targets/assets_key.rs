@@ -1,10 +1,10 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara::{
-    assets::{AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend},
-    bufpool::testing::pools,
+use kithara::assets::{
+    AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend,
 };
+use kithara_test_utils::bufpool::pools;
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 

@@ -4,11 +4,11 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
@@ -42,7 +42,10 @@ impl Consts {
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::quick_symphonia(1, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::quick_symphonia(1, DecoderBackend::Symphonia)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::quick_apple(1, DecoderBackend::Apple)

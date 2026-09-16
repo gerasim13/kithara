@@ -3,6 +3,7 @@ use std::ops::Range;
 use kithara_decode::DecoderFactory;
 use kithara_platform::sync::Arc;
 use kithara_stream::{DeferredWake, ReaderInput, SeekControl, SourcePhase, StreamType};
+use kithara_test_utils::kithara;
 use tracing::trace;
 
 use crate::pipeline::{
@@ -194,6 +195,11 @@ fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> S
     phase
 }
 
+#[kithara::probe(
+    apply_seek = u64::from(matches!(context, WaitContext::ApplySeek(_))),
+    post_seek = u64::from(matches!(context, WaitContext::PostSeek(_))),
+    position = stream.position()
+)]
 pub(crate) fn source_phase_for_wait_context<T: StreamType>(
     stream: &SharedStream<T>,
     context: &WaitContext,

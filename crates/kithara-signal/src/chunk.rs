@@ -91,7 +91,7 @@ impl AsRef<[f32]> for AudioChunk {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_test_fixtures::fixtures::silence_pcm;
+    use kithara_core_test_fixtures::silence_pcm;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -122,7 +122,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn chunk_reports_complete_frames(silence_pcm: Vec<f32>) {
+    fn chunk_reports_complete_frames() {
+        let silence_pcm = silence_pcm();
         let pools = pools();
         assert_eq!(
             chunk(&pools, audio_spec(2, 44_100), silence_pcm).frames(),
@@ -131,7 +132,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn zero_channels_report_no_frames(silence_pcm: Vec<f32>) {
+    fn zero_channels_report_no_frames() {
+        let silence_pcm = silence_pcm();
         let pools = pools();
         assert_eq!(
             chunk(&pools, audio_spec(0, 44_100), silence_pcm[..4].to_vec()).frames(),

@@ -19,7 +19,8 @@ const THROUGHPUT_DRIVEN: [AbrReason; 3] = [
 /// does not invalidate what the user asked for or the initial variant.
 const SEEK_DURABLE: [AbrReason; 2] = [AbrReason::ManualOverride, AbrReason::Initial];
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn seek_invalidates_throughput_driven_pending() {
     for reason in THROUGHPUT_DRIVEN {
         let state = fresh_state(0);
@@ -46,7 +47,8 @@ async fn seek_invalidates_throughput_driven_pending() {
     }
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn seek_preserves_user_and_initial_pending() {
     for reason in SEEK_DURABLE {
         let state = fresh_state(0);
@@ -67,7 +69,8 @@ async fn seek_preserves_user_and_initial_pending() {
     }
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn lock_then_invalidate_drops_stale_throughput_across_unlock() {
     // Locking gates *publish* but preserves intent; invalidation is
     // destructive and orthogonal to the lock. A throughput-driven
@@ -100,7 +103,8 @@ async fn lock_then_invalidate_drops_stale_throughput_across_unlock() {
     );
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn invalidate_pending_on_empty_slot_is_a_noop() {
     let state = fresh_state(1);
     assert_eq!(state.pending_target(), None);

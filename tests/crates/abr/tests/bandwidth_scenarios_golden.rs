@@ -1,7 +1,6 @@
 use kithara::{
     self,
-    abr::{AbrMode, AbrState, AbrView},
-    events::VariantIndex,
+    abr::{AbrMode, AbrState, AbrView, VariantIndex},
     platform::time::{Duration as StdDuration, Instant},
 };
 

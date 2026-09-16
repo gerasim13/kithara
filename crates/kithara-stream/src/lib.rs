@@ -4,12 +4,9 @@
 //!
 //! ## Design goals
 //! - `Reader`: sync `Read + Seek` via direct Source calls
-//! - `dl::Downloader`: unified download orchestrator (owns `HttpClient`,
-//!   dispatches `FetchCmd` with per-chunk writer callbacks)
 
 #![forbid(unsafe_code)]
 
-pub mod dl;
 mod error;
 mod hooks;
 mod media;
@@ -17,6 +14,7 @@ mod playhead;
 mod preroll;
 mod profile;
 mod reader;
+mod seek;
 mod seek_state;
 mod source;
 mod stream;
@@ -37,6 +35,7 @@ pub use reader::{
     ConstructionGate, OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan,
     VariantReaderTake,
 };
+pub use seek::SeekEpoch;
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,
