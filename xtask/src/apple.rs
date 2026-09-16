@@ -28,9 +28,6 @@ impl Consts {
     /// the slice, and LTO consumes exactly the rlib bitcode that flag
     /// suppresses. rustc rejects the two together for the same reason.
     const RELEASE_RUSTFLAGS: &[&str] = &["-Z", "unstable-options", "-C", "panic=immediate-abort"];
-    /// Feature set of every release slice, shared by the `cargo swift`
-    /// packaging build and the whole-program relink so both see one graph.
-    const SLICE_FEATURES: &str = "uniffi,apple,dev,stretch-signalsmith";
     /// Target triples behind each `*.xcframework` slice directory. Universal
     /// slices list every arch and are recombined with `lipo -create`.
     const SLICE_TARGETS: &[(&str, &[&str])] = &[
@@ -445,6 +442,7 @@ fn run_build(
     };
 
     println!("==> Building KitharaFFI with cargo-swift");
+    let features = device_features("apple", true);
 
     let mut cmd = Command::new("cargo");
     if matches!(profile, crate::BuildProfile::Release) {
@@ -468,7 +466,7 @@ fn run_build(
         // the Apple AudioToolbox backend is the sole decoder on-device.
         "--no-default-features",
         "-F",
-        Consts::SLICE_FEATURES,
+        &features,
         "--swift-tools-version",
         "6.0",
         "-y",
@@ -503,6 +501,7 @@ fn run_build(
             &crate_dir,
             metadata.target_directory.as_std_path(),
             &deployment_target,
+            &features,
             tools,
         )?;
         strip_xcframework(&xcf_dst, tools)?;
@@ -544,6 +543,19 @@ fn run_build(
     }
 
     Ok(())
+}
+
+fn device_features(platform: &str, dev: bool) -> String {
+    let mut features = format!("uniffi,{platform}");
+    if dev {
+        features.push_str(",dev");
+    }
+    let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_else(|_| "standard".to_owned());
+    if !selected.trim().is_empty() {
+        features.push(',');
+        features.push_str(selected.trim());
+    }
+    features
 }
 
 fn normalize_generated_swift(src: &str) -> String {
@@ -649,6 +661,7 @@ fn relink_slices_with_lto(
     crate_dir: &Path,
     target_dir: &Path,
     deployment_target: &str,
+    features: &str,
     tools: &ToolsConfig,
 ) -> Result<()> {
     require_dir(xcframework)?;
@@ -675,7 +688,14 @@ fn relink_slices_with_lto(
         let archives = targets
             .iter()
             .map(|target| {
-                build_slice_staticlib(crate_dir, target_dir, target, deployment_target, tools)
+                build_slice_staticlib(
+                    crate_dir,
+                    target_dir,
+                    target,
+                    deployment_target,
+                    features,
+                    tools,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         match archives.as_slice() {
@@ -697,6 +717,7 @@ fn build_slice_staticlib(
     target_dir: &Path,
     target: &str,
     deployment_target: &str,
+    features: &str,
     tools: &ToolsConfig,
 ) -> Result<PathBuf> {
     let mut cmd = Command::new("cargo");
@@ -710,7 +731,7 @@ fn build_slice_staticlib(
         target,
         "--no-default-features",
         "-F",
-        Consts::SLICE_FEATURES,
+        features,
         "--crate-type",
         "staticlib",
     ]);

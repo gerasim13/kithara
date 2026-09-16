@@ -39,7 +39,7 @@ impl AudioPlayer {
     /// Start (or restart) the analysis pass for a queued track.
     ///
     /// # Errors
-    /// Returns a JS error if the id is not in the queue.
+    /// Returns a JS error if the id is not in the queue or analysis is unavailable.
     #[wasm_bindgen(js_name = analyze)]
     pub fn analyze_js(&self, track_id: f64) -> Result<(), JsValue> {
         let item = self
@@ -47,7 +47,7 @@ impl AudioPlayer {
             .ok_or_else(|| JsValue::from_str("unknown track id"))?;
         self.inner
             .analyze(item.track_id())
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Append a track to the tail of the queue. Returns the allocated
@@ -118,7 +118,7 @@ impl AudioPlayer {
         self.inner.is_muted()
     }
 
-    fn item_by_id(&self, raw: f64) -> Option<Arc<AudioPlayerItem>> {
+    pub(crate) fn item_by_id(&self, raw: f64) -> Option<Arc<AudioPlayerItem>> {
         if raw < 0.0 {
             return None;
         }
@@ -254,8 +254,7 @@ impl AudioPlayer {
         self.inner.set_abr_mode(mode);
     }
 
-    /// Register a JS callback receiving one object per analysis publication:
-    /// `{ trackId, revision, settled, sampleRate, sourceFrames, waveform, beats, downbeats, bpm, beatFinal }`.
+    /// Register a JS callback receiving analysis publications.
     ///
     /// # Errors
     /// Returns a JS error if `obj` is not a callable function.

@@ -23,6 +23,22 @@ See the workspace tooling for end-to-end builds:
 - `just platform wasm build` — builds the browser demo via Trunk (output in `dist/`).
 - `just tooling xtask wasm postbuild` — post-build patches for the wasm output.
 
+Apple and Android builds use the `standard` feature set unless
+`KITHARA_FFI_FEATURES` supplies a comma-separated replacement. Apple and Android
+always include their required Signalsmith time-stretch backend; an empty value
+removes only optional capabilities. WASM keeps its required `wasm` feature and
+adds the selected features. For example:
+
+```sh
+KITHARA_FFI_FEATURES= just platform apple xcframework
+KITHARA_FFI_FEATURES=standard,analysis just platform android aar
+KITHARA_FFI_FEATURES=ui-iced just platform wasm build
+```
+
+The crate features are the source of truth for available capabilities. Platform
+features select only their platform backend and do not implicitly enable
+analysis or UI. UI backends keep their own target support constraints.
+
 ## Integration
 
 - Exposes a stable, language-agnostic surface over `kithara-play` so platform shims (`kithara/apple`, `kithara/android`, and the browser demo) can talk to the engine without depending on internal Rust types.
