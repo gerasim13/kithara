@@ -1,14 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
+use std::{collections::BTreeMap, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
     events::TrackId,
-    platform::{
-        sync::Arc,
-        time::{Duration, Instant},
-    },
+    platform::sync::Arc,
     play::{
         Resource, SharedEq,
         bridge::{PlayerCmd, SlotControl, slot_channels},
@@ -18,6 +15,7 @@ use kithara::{
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::peak};
 use kithara_test_fixtures::integration_fixtures::deadline_tracks;
+use kithara_test_utils::test::usdt::{self, ProbeEvent};
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -26,22 +24,19 @@ struct Consts;
 
 impl Consts {
     const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
+    /// Callbacks one census window covers. A mix that walked its track list per
+    /// frame would fire the probe `block_frames` times per track per callback,
+    /// and this window keeps even that history inside `usdt::MAX_EVENTS`, so
+    /// the walk count is what fails there, not the recorder.
+    const CENSUS_BLOCKS: usize = 32;
     const CHANNELS: u16 = 2;
-    /// The slack over a perfectly proportional mix. Measured growth is below
-    /// `1.0` at every cell, because more tracks amortise the per-callback work;
-    /// a mix that rescans what it already mixed lands at `2.5` and above.
-    const MAX_PER_TRACK_GROWTH: f64 = 1.25;
+    /// Callbacks a cell renders after warmup, read as
+    /// `MEASURED_BLOCKS / CENSUS_BLOCKS` windows. Every one of them is checked
+    /// for the exact sum of all its tracks, so the length is the PCM evidence;
+    /// the walk count is already exact inside a single window.
     const MEASURED_BLOCKS: usize = 4_096;
-    const MIXED_TRACK_COUNTS: [usize; 2] = [2, 4];
-    /// How many adjacent `alone`/`mixed` pairs the ratio is taken as the best
-    /// of. The runner runs this code in two regimes about 1.6x apart -- across
-    /// 1 148 stress samples `alone` at 1 024 frames held 3.84 us through p75
-    /// and 6.04 us by p95 -- and a whole 4 096-block measurement sits inside
-    /// one of them. A single pair straddling that edge reads 1.6 or 0.6
-    /// whatever the mix costs, which breached 0.96 % of cells and so 7.4 % of
-    /// runs; three pairs put that at one in a million.
-    const PAIRED_SAMPLES: usize = 3;
     const SAMPLE_RATE: u32 = 48_000;
+    const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
     const TRACK_SECONDS: f64 = 300.0;
     const WARMUP_BLOCKS: usize = 512;
 }
@@ -132,7 +127,7 @@ fn render_block(
     control: &SlotControl,
     out_l: &mut [f32],
     out_r: &mut [f32],
-) -> Duration {
+) {
     let frames = out_l.len();
     let is_playing = control.playback.playing.load(Ordering::SeqCst);
     let inputs: [&[f32]; 0] = [];
@@ -142,14 +137,9 @@ fn render_block(
         outputs: &mut outputs,
     };
 
-    let start = Instant::now();
     processor.drain_commands();
     processor.cleanup_finished_tracks();
-    let outcome = processor.render_audio(&mut buffers, frames, is_playing);
-    let elapsed = start.elapsed();
-
-    black_box(outcome);
-    elapsed
+    let _ = processor.render_audio(&mut buffers, frames, is_playing);
 }
 
 fn assert_all_tracks_contributed(
@@ -167,7 +157,50 @@ fn assert_all_tracks_contributed(
     );
 }
 
-fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) -> Duration {
+/// How many times the mix walked each track, keyed by the track it walked.
+fn walks_per_track(recorded: &[ProbeEvent]) -> BTreeMap<u64, usize> {
+    let mut walks = BTreeMap::new();
+    for event in recorded.iter().filter(|event| event.probe == "render") {
+        let track = event
+            .field("track_id")
+            .expect("the render probe carries the track it walked");
+        *walks.entry(track).or_insert(0_usize) += 1;
+    }
+    walks
+}
+
+fn assert_one_walk_per_track_per_block(recorded: &[ProbeEvent], block_frames: u32, tracks: usize) {
+    let walks = walks_per_track(recorded);
+    assert_eq!(
+        walks.len(),
+        tracks,
+        "a census window at {block_frames} frames must walk every one of the \
+         {tracks} playing track(s), observed {walks:?}"
+    );
+    assert!(
+        walks.values().all(|count| *count == Consts::CENSUS_BLOCKS),
+        "the mix must walk each of {tracks} track(s) once per callback; \
+         {} callbacks at {block_frames} frames walked {walks:?}",
+        Consts::CENSUS_BLOCKS,
+    );
+}
+
+fn assert_each_walk_covers_the_block(recorded: &[ProbeEvent], block_frames: u32, tracks: usize) {
+    let sliced = recorded
+        .iter()
+        .filter(|event| event.probe == "render")
+        .find(|event| {
+            event.field("range_start") != Some(0)
+                || event.field("range_end") != Some(u64::from(block_frames))
+        });
+    assert!(
+        sliced.is_none(),
+        "a mix walk must cover the whole callback of {block_frames} frames with \
+         {tracks} track(s), not a slice of it: {sliced:?}"
+    );
+}
+
+fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) {
     let (mut processor, mut control) = processor(block_frames);
     let expected_sample = load_tracks(&mut processor, &mut control, tracks, deadline_tracks);
     assert_eq!(
@@ -182,32 +215,26 @@ fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]
     let metrics_before = control.playback.metrics().snapshot();
 
     for _ in 0..Consts::WARMUP_BLOCKS {
-        black_box(render_block(
-            &mut processor,
-            &control,
-            &mut out_l,
-            &mut out_r,
-        ));
+        render_block(&mut processor, &control, &mut out_l, &mut out_r);
     }
-    let warm_peak = peak(&out_l).max(peak(&out_r));
     assert!(
-        warm_peak > 0.0,
-        "deadline cell must reach audible PCM before timing ({block_frames} frames, {tracks} track(s))"
+        peak(&out_l).max(peak(&out_r)) > 0.0,
+        "deadline cell must reach audible PCM before the census ({block_frames} frames, {tracks} track(s))"
     );
     assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
     assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
 
-    let mut cheapest = Duration::MAX;
-    for _ in 0..Consts::MEASURED_BLOCKS {
-        cheapest = cheapest.min(render_block(
-            &mut processor,
-            &control,
-            &mut out_l,
-            &mut out_r,
-        ));
-        assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
-        assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
-        black_box((&out_l, &out_r));
+    for _ in 0..Consts::MEASURED_BLOCKS / Consts::CENSUS_BLOCKS {
+        let trace = usdt::scope();
+        for _ in 0..Consts::CENSUS_BLOCKS {
+            render_block(&mut processor, &control, &mut out_l, &mut out_r);
+            assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
+            assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
+        }
+        let recorded = trace.events();
+        drop(trace);
+        assert_one_walk_per_track_per_block(&recorded, block_frames, tracks);
+        assert_each_walk_covers_the_block(&recorded, block_frames, tracks);
     }
 
     let metrics_after = control.playback.metrics().snapshot();
@@ -228,75 +255,26 @@ fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]
     );
     assert!(
         peak(&out_l).max(peak(&out_r)) > 0.0,
-        "measured callbacks must finish on audible PCM, not silence"
+        "census callbacks must finish on audible PCM, not silence"
     );
-    cheapest
-}
-
-fn micros(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1e6
-}
-
-fn per_track_growth(mixed: Duration, alone: Duration, tracks: usize) -> f64 {
-    let count = u32::try_from(tracks).expect("track count fits u32");
-    mixed.as_secs_f64() / (alone.as_secs_f64() * f64::from(count))
 }
 
 /// Mixing a track costs the same however many tracks play.
 ///
 /// The hot path scans the active tracks again inside its per-track loop, so a
 /// stray per-frame step there turns the mix quadratic and the audio deadline
-/// stops holding as the queue fills. A clock cannot say so by itself here: a
-/// whole callback costs 0.03-0.30 % of its period, and judging its tail read the
-/// runner's queue instead -- p99 was 24-38 us idle, 1 695 us under 8x
-/// oversubscription and 14 062 us on the stress runner, all on this code. What a
-/// block costs per track is the code talking, so the cheapest of 4 096 blocks
-/// carries the verdict, read as the best of [`Consts::PAIRED_SAMPLES`] adjacent
-/// pairs. Absolute block cost belongs to the `rt_block_budget` bench, which
-/// times this processor and asks the clock for no verdict.
+/// stops holding as the queue fills. The `render` probe fires on every walk the
+/// mix makes over a track, so a callback's firings are that work itself: one
+/// per playing track, each covering the whole block. A mix that walks per frame
+/// multiplies both by the block size. Counting walks asks no clock, so the
+/// verdict holds whatever else the runner is doing. Absolute block cost belongs
+/// to the `rt_block_budget` bench, which times this processor and asks the
+/// clock for no verdict.
 #[kithara::test(native, serial, flash(false))]
 fn mixing_a_track_costs_the_same_however_many_tracks_play(deadline_tracks: [&'static [u8]; 4]) {
     for block_frames in Consts::BLOCK_FRAMES {
-        let mut best: [Option<(Duration, Duration)>; Consts::MIXED_TRACK_COUNTS.len()] =
-            [None; Consts::MIXED_TRACK_COUNTS.len()];
-
-        for _ in 0..Consts::PAIRED_SAMPLES {
-            let alone = measure(block_frames, 1, deadline_tracks);
-            for (slot, tracks) in best.iter_mut().zip(Consts::MIXED_TRACK_COUNTS) {
-                let mixed = measure(block_frames, tracks, deadline_tracks);
-                let improves = slot.is_none_or(|(kept_alone, kept_mixed)| {
-                    per_track_growth(mixed, alone, tracks)
-                        < per_track_growth(kept_mixed, kept_alone, tracks)
-                });
-                if improves {
-                    *slot = Some((alone, mixed));
-                }
-            }
-        }
-
-        for (slot, tracks) in best.into_iter().zip(Consts::MIXED_TRACK_COUNTS) {
-            let (alone, mixed) = slot.expect("every mixed cell is measured at least once");
-            let count = u32::try_from(tracks).expect("track count fits u32");
-            let growth = per_track_growth(mixed, alone, tracks);
-
-            println!(
-                "no-SYNC mix cost: frames={block_frames:>4} tracks={tracks} \
-                 alone={:>8.2} us mixed={:>8.2} us per track={:>8.2} us growth={growth:>5.3}",
-                micros(alone),
-                micros(mixed),
-                micros(mixed / count),
-            );
-            assert!(
-                growth <= Consts::MAX_PER_TRACK_GROWTH,
-                "mixing {tracks} tracks at {block_frames} frames costs {:.2} us, \
-                 {:.2} us per track against {:.2} us for a single track; a mix that \
-                 stays proportional to its tracks grows at most {:.2}x per track, \
-                 this one grows {growth:.2}x",
-                micros(mixed),
-                micros(mixed / count),
-                micros(alone),
-                Consts::MAX_PER_TRACK_GROWTH,
-            );
+        for tracks in Consts::TRACK_COUNTS {
+            census(block_frames, tracks, deadline_tracks);
         }
     }
 }
