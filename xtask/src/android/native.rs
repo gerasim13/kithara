@@ -473,7 +473,7 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
             [
                 "--no-default-features",
                 "--features",
-                crate::android::device_features(crate::BuildProfile::Debug),
+                &crate::android::device_features(crate::BuildProfile::Debug),
                 "--tests",
                 "--target",
                 "aarch64-linux-android",
