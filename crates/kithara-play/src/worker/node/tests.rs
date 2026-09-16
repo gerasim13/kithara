@@ -13,7 +13,7 @@ use kithara_platform::{
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{
     PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState, Stream,
-    WorkerWake,
+    mock::NoopWorkerWake,
 };
 use kithara_test_fixtures::{assets, unit_fixtures::eq_silence as node_silence};
 use kithara_test_utils::kithara;
@@ -26,14 +26,6 @@ use crate::{
     test_pools::{Pools, pools, sample_buffer},
     worker::{EngineLoad, WarpSource},
 };
-
-struct TestWorkerWake;
-
-impl WorkerWake for TestWorkerWake {
-    fn defer(&self) {}
-
-    fn wake(&self) {}
-}
 
 pub(super) async fn prepared_node<S>(
     source: S,
@@ -60,7 +52,7 @@ where
             std::num::NonZeroUsize::new(preload_chunks).expect("non-zero preload threshold"),
         )
         .build();
-    let prepared = Audio::prepare(config, Arc::new(TestWorkerWake), pools)
+    let prepared = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
         .await
         .unwrap_or_else(|error| panic!("prepare real audio lane: {error}"))
         .map(|audio, _| (audio, source));
