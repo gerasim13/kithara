@@ -408,12 +408,6 @@ where
             }
         } else {
             writer.fail(e.to_string());
-            // A terminal cause parks the slot `Failed`, which stops the
-            // re-dispatch loop and lets a waiting reader surface a terminal
-            // error. Everything else — a cancel (the epoch rebuild owns the
-            // re-dispatch) and a spent retry budget over a transient cause —
-            // returns to `Missing`. The typed cause is logged here; readers
-            // see only the fixed terminal message (no transport detail).
             if is_terminal_fetch_error(e) {
                 error!(
                     target: "kithara_hls::settle",
