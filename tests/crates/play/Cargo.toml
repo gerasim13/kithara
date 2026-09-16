@@ -20,7 +20,6 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
-e2e = []
 network = []
 network-manual = []
 
@@ -66,11 +65,6 @@ path = "tests/heavy.rs"
 [[test]]
 name = "play_stress"
 path = "tests/stress.rs"
-
-[[test]]
-name = "e2e"
-path = "tests/e2e.rs"
-required-features = ["e2e"]
 
 [[test]]
 name = "network"
