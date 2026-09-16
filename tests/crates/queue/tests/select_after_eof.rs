@@ -257,9 +257,14 @@ async fn reselect_playing_track_cancels_pending_switch() {
 /// restart must not depend on the flag, and a prefetch reload is not a
 /// substitute — it re-loads the resource without stashing a select, so
 /// nothing would sound again.
+///
+/// The second pass waits for that reload the way its siblings do. Which
+/// status the advance finds decides whether the resource is already in hand
+/// or still on its way, so a fixed budget of immediate renders would assert
+/// the loader's latency rather than the restart.
 #[kithara::test(tokio, flash(false))]
 async fn repeat_one_restarts_the_track_its_own_eof_ended() {
-    const FIRST_PASS_BLOCKS: usize = 64;
+    const PASS_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = assets::constant_wav_three_0_4s();
@@ -270,14 +275,17 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
         .await
         .expect("select the only track");
 
-    let pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
-    let first_pass = FIRST_PASS_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS);
+    let mut reload_events = queue.subscribe();
+    let first_pass = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
-        first_onset_frame(&pcm[..first_pass], 0.005).is_some(),
+        first_onset_frame(&first_pass, 0.005).is_some(),
         "the track must play once before repeat-one is judged"
     );
+    wait_loaded(&mut reload_events, id).await;
+
+    let after_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
-        first_onset_frame(&pcm[first_pass..], 0.005).is_some(),
+        first_onset_frame(&after_eof, 0.005).is_some(),
         "repeat-one must restart the track its own EOF ended"
     );
     drop(queue);
