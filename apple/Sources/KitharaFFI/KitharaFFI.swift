@@ -695,20 +695,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func items()  -> [AudioPlayerItem]
 
-    /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-    func notifyAudioRouteChanged(reason: String) throws
-
     func pause()
 
     func play()
@@ -790,6 +776,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func setAbrMode(mode: FfiAbrMode)
 
+    /**
+     * Change the crossfade window at runtime. The initial value belongs in
+     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
+     */
     func setCrossfadeDuration(seconds: Float)
 
     /**
@@ -818,32 +808,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setVolume(volume: Float)
 
     /**
-     * Register a runtime DRM key processor for every host (`"*"`).
-     *
-     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
-     * into the player-wide `SALT_HEADER` (so it accompanies every
-     * outgoing manifest/segment/key request), and forwards it to
-     * `processor.process_key(key, salt)` on each decrypt.
-     *
-     * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`Self::insert`] for the new processor
-     * to apply.
-     */
-    func setupHlsAes(processor: FfiKeyProcessor)
-
-    /**
-     * Register a runtime DRM key processor with explicit rule control
-     * (custom domains, headers, salt). The rule's salt — if any — is
-     * mirrored into the player-wide header map under `SALT_HEADER`.
-     *
-     * Items already in the queue keep their original key registry.
-     */
-    func setupHlsAesWithRule(rule: FfiKeyRule)
-
-    /**
-     * Player-wide auth header. Stores `auth_token` under
-     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Replace the player-wide auth header at runtime. Stores `auth_token`
+     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
+     * The initial value belongs in
+     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
     func setupNetwork(authToken: String)
 
@@ -873,6 +842,30 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
     func volume()  -> Float
+
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+    func notifyAudioRouteChanged(reason: String) throws
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+    func setDuckingMode(mode: FfiDuckingMode) throws
 
 }
 /**
@@ -1076,26 +1069,6 @@ open func items() -> [AudioPlayerItem]  {
 })
 }
 
-    /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(reason),$0
-    )
-}
-}
-
 open func pause()  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_pause(
             self.uniffiCloneHandle(),$0
@@ -1249,6 +1222,10 @@ open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
 }
 }
 
+    /**
+     * Change the crossfade window at runtime. The initial value belongs in
+     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
+     */
 open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_duration(
             self.uniffiCloneHandle(),
@@ -1320,44 +1297,11 @@ open func setVolume(volume: Float)  {try! rustCall() {
 }
 
     /**
-     * Register a runtime DRM key processor for every host (`"*"`).
-     *
-     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
-     * into the player-wide `SALT_HEADER` (so it accompanies every
-     * outgoing manifest/segment/key request), and forwards it to
-     * `processor.process_key(key, salt)` on each decrypt.
-     *
-     * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`Self::insert`] for the new processor
-     * to apply.
-     */
-open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiKeyProcessor_lower(processor),$0
-    )
-}
-}
-
-    /**
-     * Register a runtime DRM key processor with explicit rule control
-     * (custom domains, headers, salt). The rule's salt — if any — is
-     * mirrored into the player-wide header map under `SALT_HEADER`.
-     *
-     * Items already in the queue keep their original key registry.
-     */
-open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes_with_rule(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiKeyRule_lower(rule),$0
-    )
-}
-}
-
-    /**
-     * Player-wide auth header. Stores `auth_token` under
-     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Replace the player-wide auth header at runtime. Stores `auth_token`
+     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
+     * The initial value belongs in
+     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
 open func setupNetwork(authToken: String)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_network(
@@ -1416,6 +1360,42 @@ open func volume() -> Float  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(reason),$0
+    )
+}
+}
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+open func setDuckingMode(mode: FfiDuckingMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_ducking_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiDuckingMode_lower(mode),$0
+    )
+}
 }
 
 
@@ -3838,8 +3818,7 @@ public struct FfiKeyRule {
      * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
      * on every decrypt. `None` is treated as an empty string.
      *
-     * `setup_hls_aes` populates this automatically with a freshly
-     * generated 16-character alphanumeric value and mirrors it into
+     * A rule carrying a salt also mirrors it into
      * [`crate::observer::SALT_HEADER`] in the player-wide header map.
      */
     public let salt: String?
@@ -3856,8 +3835,7 @@ public struct FfiKeyRule {
          * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
          * on every decrypt. `None` is treated as an empty string.
          *
-         * `setup_hls_aes` populates this automatically with a freshly
-         * generated 16-character alphanumeric value and mirrors it into
+         * A rule carrying a salt also mirrors it into
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
          */salt: String?,
         /**
@@ -3922,6 +3900,11 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
 
 /**
  * FFI-friendly player configuration.
+ *
+ * Carries the player's whole initial state: every field is applied while
+ * [`crate::player::AudioPlayer::new`] constructs the engine, so a caller
+ * never has to follow the constructor with a setup call to reach the state
+ * it wanted from the start.
  */
 public struct FfiPlayerConfig {
     /**
@@ -3929,13 +3912,27 @@ public struct FfiPlayerConfig {
      */
     public let store: FfiAssetStore
     /**
-     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+     * DRM key handling — the only place key rules are declared. Pass an
+     * empty [`FfiKeyOptions`] when no DRM is needed.
      */
     public let keyOptions: FfiKeyOptions
     /**
      * Number of EQ bands (log-spaced). Default: 10.
      */
     public let eqBandCount: UInt32
+    /**
+     * Player-wide auth token written to
+     * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
+     * HTTP headers. Empty means no token; change it later through
+     * [`crate::player::AudioPlayer::setup_network`].
+     */
+    public let authToken: String
+    /**
+     * Initial crossfade window in seconds. Callers that have no opinion
+     * pass [`default_crossfade_duration`]; change it later through
+     * [`crate::player::AudioPlayer::set_crossfade_duration`].
+     */
+    public let crossfadeDuration: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3944,14 +3941,28 @@ public struct FfiPlayerConfig {
          * Shared asset store used by every item created by this player.
          */store: FfiAssetStore,
         /**
-         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+         * DRM key handling — the only place key rules are declared. Pass an
+         * empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
-         */eqBandCount: UInt32) {
+         */eqBandCount: UInt32,
+        /**
+         * Player-wide auth token written to
+         * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
+         * HTTP headers. Empty means no token; change it later through
+         * [`crate::player::AudioPlayer::setup_network`].
+         */authToken: String,
+        /**
+         * Initial crossfade window in seconds. Callers that have no opinion
+         * pass [`default_crossfade_duration`]; change it later through
+         * [`crate::player::AudioPlayer::set_crossfade_duration`].
+         */crossfadeDuration: Float) {
         self.store = store
         self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
+        self.authToken = authToken
+        self.crossfadeDuration = crossfadeDuration
     }
 
 
@@ -3972,7 +3983,9 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
             try FfiPlayerConfig(
                 store: FfiConverterTypeFfiAssetStore.read(from: &buf),
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
-                eqBandCount: FfiConverterUInt32.read(from: &buf)
+                eqBandCount: FfiConverterUInt32.read(from: &buf),
+                authToken: FfiConverterString.read(from: &buf),
+                crossfadeDuration: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -3980,6 +3993,8 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+        FfiConverterString.write(value.authToken, into: &buf)
+        FfiConverterFloat.write(value.crossfadeDuration, into: &buf)
     }
 }
 
@@ -5402,6 +5417,92 @@ public func FfiConverterTypeFfiDecoderChangeCause_lift(_ buf: RustBuffer) throws
 #endif
 public func FfiConverterTypeFfiDecoderChangeCause_lower(_ value: FfiDecoderChangeCause) -> RustBuffer {
     return FfiConverterTypeFfiDecoderChangeCause.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * How far the whole session output drops under a competing sound.
+ */
+
+public enum FfiDuckingMode: Equatable, Hashable {
+
+    /**
+     * Full level.
+     */
+    case off
+    /**
+     * Lowered to 40%.
+     */
+    case soft
+    /**
+     * Lowered to 20%.
+     */
+    case hard
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDuckingMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDuckingMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDuckingMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDuckingMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .off
+
+        case 2: return .soft
+
+        case 3: return .hard
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDuckingMode, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .off:
+            writeInt(&buf, Int32(1))
+
+
+        case .soft:
+            writeInt(&buf, Int32(2))
+
+
+        case .hard:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDuckingMode_lift(_ buf: RustBuffer) throws -> FfiDuckingMode {
+    return try FfiConverterTypeFfiDuckingMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDuckingMode_lower(_ value: FfiDuckingMode) -> RustBuffer {
+    return FfiConverterTypeFfiDuckingMode.lower(value)
 }
 
 
@@ -8425,6 +8526,18 @@ public func queryIdentityLayout(rules: [FfiCacheIdentityRule]) -> FfiAssetLayout
     )
 })
 }
+/**
+ * Crossfade window a player starts with when the caller has no opinion.
+ * Re-exports the engine-owned [`kithara::play::DEFAULT_CROSSFADE_DURATION`]
+ * so Swift and Kotlin can default their own configuration to it instead of
+ * restating the number.
+ */
+public func defaultCrossfadeDuration() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_default_crossfade_duration($0
+    )
+})
+}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8466,6 +8579,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_default_crossfade_duration() != 51240) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
@@ -8573,9 +8689,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 23485) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 14847) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_pause() != 42092) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8612,7 +8725,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 58512) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 37317) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
@@ -8633,13 +8746,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 43124) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {
@@ -8652,6 +8759,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 53086) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
