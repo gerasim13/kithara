@@ -987,6 +987,19 @@ mod tests {
             .expect("select task completes")
             .expect("loaded track starts through the real queue lifecycle");
 
+        // WHY: The natural end is the render thread's verdict, and this test owns no render. The FFI session shares one process-wide audio
+        // Host whose device decides when — or whether — it pulls a second block, and the fixture is ten frames long, so the whole track fits
+        // inside the first pull: whether a second pull ever arrives is the sound card's business, not this contract's. Publishing the end the
+        // render thread publishes keeps the trigger faithful and leaves the claim under test — the polling thread carries an ambient runtime
+        // into the load that end respawns — independent of the device.
+        queue.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                id,
+                SlotId::new(0),
+                Arc::from(track.to_string_lossy().as_ref()),
+            )),
+        });
+
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
         let thread = EventBridge::spawn_time_thread(
