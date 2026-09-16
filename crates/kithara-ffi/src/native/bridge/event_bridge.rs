@@ -3,7 +3,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
-        thread::{JoinHandle, paced_backoff, spawn},
+        thread::{JoinHandle, sleep, spawn},
         time::Duration,
         tokio,
         tokio::sync::broadcast,
@@ -351,7 +351,7 @@ impl EventBridge {
             let mut last_buffered: Option<f64> = None;
 
             while !cancel.is_cancelled() {
-                paced_backoff(interval);
+                sleep(interval);
                 let _ = queue.tick();
                 queue.process_notifications();
                 let view = queue.playback_view();
@@ -930,7 +930,10 @@ mod tests {
     /// — async work that panics without an ambient runtime. The thread is
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
-    #[kithara::test(tokio)]
+    ///
+    /// The EOF comes from the real output device's render callback, so the
+    /// wait for it must run on wall-clock time, not on flash's virtual clock.
+    #[kithara::test(tokio, flash(false))]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
