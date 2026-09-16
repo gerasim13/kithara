@@ -383,7 +383,6 @@ mod tests {
     use kithara::{
         events::{EventBus, SlotId, TrackId},
         platform::{
-            flash::real_io,
             sync::{Arc, Mutex},
             tokio::{sync::broadcast::error::RecvError, task::spawn_blocking},
         },
@@ -976,19 +975,12 @@ mod tests {
         let track = assets::sine_wav_a440_10_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = {
-            // WHY: The product loader reads this WAV off disk and the quiescence engine does not count that read, so a bare virtual deadline
-            // here is spent at the first quiescence instead of on the load: two seconds collapse into microseconds and the wait reports a
-            // load that is still in flight. The real-I/O bracket paces the clock to host time for this region alone.
-            let _real_io = real_io();
-            let id = queue
-                .append(track.to_string_lossy().into_owned())
-                .expect("open queue accepts a local track");
-            if let Err(seen) = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await {
-                panic!("real local track must load before playback; saw {seen:?}");
-            }
-            id
-        };
+        let id = queue
+            .append(track.to_string_lossy().into_owned())
+            .expect("open queue accepts a local track");
+        if let Err(seen) = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await {
+            panic!("real local track must load before playback; saw {seen:?}");
+        }
         let selecting = queue.clone();
         spawn_blocking(move || selecting.select(id, Transition::None))
             .await
@@ -1005,13 +997,8 @@ mod tests {
             cancel.clone(),
         );
 
-        let (reload_started, status) = {
-            // WHY: The same read runs again behind this wait — the engine plays the ten frames and the reload re-opens the file — and the
-            // engine counts neither, so the deadline needs host time here too.
-            let _real_io = real_io();
-            let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
-            (reload_started, queue.track(id).map(|entry| entry.status))
-        };
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
             let joined = thread.join();
