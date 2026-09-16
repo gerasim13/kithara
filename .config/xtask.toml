@@ -1235,10 +1235,7 @@ prefix_args = [
 ]
 default_features = ["kithara-play-tests/usdt"]
 default_flash = false
-suffix_args = [
-  "-E",
-  "test(/rate_response::live_rate_change_reaches_presented_pcm_within_response_budget/)",
-]
+suffix_args = ["-E", "test(/rate_response::/)"]
 owns = ["tests/crates/play/tests/rate_response.rs"]
 
 [test.lanes.usdt-play-scheduler]

@@ -1295,6 +1295,7 @@ mod tests {
                 ],
                 suffix_args: Vec::new(),
                 default_features: Vec::new(),
+                default_backend: None,
                 default_flash: Some(false),
                 default_no_block: Some(false),
                 passthrough: String::new(),

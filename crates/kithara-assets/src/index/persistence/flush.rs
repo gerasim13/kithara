@@ -293,7 +293,6 @@ mod tests {
         mpsc::{self, Sender, TryRecvError},
     };
 
-    use kithara_platform::thread;
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
 
@@ -461,12 +460,9 @@ mod tests {
                 force_every_n_ops: NonZeroUsize::new(BURST).unwrap(),
             },
         );
-        let (parked_tx, parked_rx) = mpsc::channel();
-        *hub.wait.idle_park.lock() = Some(parked_tx);
         let (flushed_tx, flushed_rx) = mpsc::channel();
         let src = CountingSource::with_completion("burst", flushed_tx);
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
-        parked_rx.recv().unwrap();
 
         for _ in 0..BURST {
             src.dirty.store(true, Ordering::Release);
@@ -488,12 +484,9 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn worker_flushes_once_the_debounce_window_elapses() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
-        let (parked_tx, parked_rx) = mpsc::channel();
-        *hub.wait.idle_park.lock() = Some(parked_tx);
         let (flushed_tx, flushed_rx) = mpsc::channel();
         let src = CountingSource::with_completion("debounced", flushed_tx);
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
-        parked_rx.recv().unwrap();
 
         src.dirty.store(true, Ordering::Release);
         hub.signal();
@@ -520,12 +513,9 @@ mod tests {
             force_every_n_ops: NonZeroUsize::new(4).unwrap(),
         };
         let hub = FlushHub::new(CancelToken::never(), policy);
-        let (parked_tx, parked_rx) = mpsc::channel();
-        *hub.wait.idle_park.lock() = Some(parked_tx);
         let (flushed_tx, flushed_rx) = mpsc::channel();
         let src = CountingSource::with_completion("force", flushed_tx);
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
-        parked_rx.recv().unwrap();
 
         for _ in 0..6 {
             src.dirty.store(true, Ordering::Release);
