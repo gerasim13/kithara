@@ -92,7 +92,6 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 Shared::NON_ZERO_SAMPLE_RATE.get(),
             )),
             Cmd::QueryStreamShape => Reply::StreamShape(None),
-            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
         Ok(reply)
