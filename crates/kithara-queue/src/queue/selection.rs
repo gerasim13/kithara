@@ -63,11 +63,13 @@ where
         };
 
         // WHY: `is_playing` is a session flag, not a verdict on this item. The render thread queues the natural end while rendering a block
-        // and only clears the flag at the top of the next `process`, so for one whole block the item that just ended still reads as playing.
-        // Repeat-one advances onto that very item, so the early return fires and leaves it `Consumed` with nothing to reload it. The caller
-        // answering an end owns that fact; `item_has_resource` cannot stand in for it, because loading empties the slot for the whole of
-        // normal playback and the conjunct would kill the early return for live tracks too.
-        if !matches!(reason, AdvanceReason::NaturalEof)
+        // and clears the flag only at the top of the next `process`, so the item that just ended still reads as playing. Repeat-one answers
+        // that end by advancing onto the very same entry, which the prefetch handler has already reloaded to `Loaded`; the early return then
+        // dropped the re-select and nothing sounded again. Only that pair is exempt — the flag still owns every other status, and
+        // `item_has_resource` cannot stand in for it, because loading empties the slot for the whole of normal playback.
+        let reloaded_by_its_own_end =
+            matches!(reason, AdvanceReason::NaturalEof) && matches!(status, TrackStatus::Loaded);
+        if !reloaded_by_its_own_end
             && self.player.current_index() == index
             && self.player.is_playing()
         {
