@@ -24,13 +24,16 @@ where
     /// Takes the admission lock and dispatches through the session's
     /// synchronous command bridge, so the caller waits for a reply. On a
     /// runtime worker that wait parks the executor thread.
+    ///
+    /// The apply lock is held across the whole synchronous block and never
+    /// across an await, so the cancellation re-check and the selection that
+    /// follows it observe one state.
     fn apply_loaded(&self, id: TrackId, resource: Resource) {
         let _admission = self.lock_admission();
         if self.is_closed() {
             return;
         }
 
-        // WHY: Held across the whole synchronous block (never across .await): the Cancelled re-check and select_item must be atomic w.r.t. a
         let _apply = self
             .select_apply
             .lock()
