@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, num::NonZeroUsize};
 
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Date, Promise};
@@ -85,6 +85,10 @@ async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
     (helper, url)
 }
 
+/// Every segment of the stress fixture plus its init resource, so a random
+/// seek reads what an earlier one downloaded.
+const STRESS_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
 async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
@@ -95,6 +99,15 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
+                // The store's default in-memory capacity holds an init
+                // segment and two or three media segments, which is what
+                // sequential playback needs. These tests seek at random
+                // across all 48 segments of the fixture, so that default
+                // turns almost every seek into a fresh network fetch of the
+                // segment it lands in and the suite measures the server
+                // rather than the pipeline. The capacity covers the whole
+                // fixture instead.
+                .cache_capacity(STRESS_CACHE_CAPACITY)
                 .build(),
         )
         .pools(pools.clone())
