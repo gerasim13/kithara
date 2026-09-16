@@ -814,7 +814,10 @@ where
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
             TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-            _ => {}
+            TrackStatus::Pending
+            | TrackStatus::Loading
+            | TrackStatus::Slow
+            | TrackStatus::Cancelled => {}
         }
     }
     let mut rx = queue.subscribe();
@@ -826,7 +829,10 @@ where
                 match &entry.status {
                     TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
                     TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => {}
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Cancelled => {}
                 }
             }
             let Some(ev) = recv_event(&mut rx).await? else {
@@ -838,7 +844,10 @@ where
                 match status {
                     TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
                     TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => {}
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Cancelled => {}
                 }
             }
         }

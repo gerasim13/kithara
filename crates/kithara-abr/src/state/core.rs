@@ -115,7 +115,14 @@ const fn pending_decision(from: VariantIndex, to: VariantIndex, reason: AbrReaso
         AbrReason::DownSwitch | AbrReason::UrgentDownSwitch => {
             AbrDecision::DownSwitch { from, to, reason }
         }
-        _ => AbrDecision::UpSwitch { from, to, reason },
+        AbrReason::Initial
+        | AbrReason::UpSwitch
+        | AbrReason::MinInterval
+        | AbrReason::NoEstimate
+        | AbrReason::BufferTooLowForUpSwitch
+        | AbrReason::EscapeStalled
+        | AbrReason::AlreadyOptimal
+        | AbrReason::Locked => AbrDecision::UpSwitch { from, to, reason },
     }
 }
 

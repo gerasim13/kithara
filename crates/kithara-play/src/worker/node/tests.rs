@@ -351,7 +351,20 @@ async fn deferred_eof_event_keeps_the_decode_epoch() {
     let mut eof_epochs =
         std::iter::from_fn(|| events.try_recv().ok()).filter_map(|envelope| match envelope.event {
             AudioEvent::EndOfStream { seek_epoch } => Some(seek_epoch),
-            _ => None,
+            AudioEvent::FormatDetected { .. }
+            | AudioEvent::FormatChanged { .. }
+            | AudioEvent::PlaybackProgress { .. }
+            | AudioEvent::OutputAvailable
+            | AudioEvent::SeekLifecycle { .. }
+            | AudioEvent::SeekComplete { .. }
+            | AudioEvent::SeekRejected { .. }
+            | AudioEvent::DecoderReady { .. }
+            | AudioEvent::TrackFailed { .. }
+            | AudioEvent::UnderrunStarted { .. }
+            | AudioEvent::UnderrunEnded { .. }
+            | AudioEvent::BufferHealth { .. }
+            | AudioEvent::EngineLoad { .. }
+            | AudioEvent::PlaybackResamplerConfigured { .. } => None,
         });
     assert_eq!(eof_epochs.next(), Some(0));
     assert_eq!(eof_epochs.next(), None);

@@ -93,7 +93,6 @@ pub enum CancelReason {
 ///
 /// Every variant for a single fetch carries the same [`RequestId`].
 #[derive(Debug, Clone, Event)]
-#[non_exhaustive]
 pub enum DownloaderEvent {
     /// Request was accepted by the Downloader and placed into a
     /// priority slot. Published exactly once when `Registry::poll_peers`

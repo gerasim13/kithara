@@ -119,7 +119,6 @@ impl From<usize> for AbrMode {
 
 /// Reason attached to an ABR decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum AbrReason {
     Initial,
     ManualOverride,
@@ -142,7 +141,6 @@ pub enum AbrReason {
 
 /// Source of a bandwidth sample.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum BandwidthSource {
     Network,
     Cache,
@@ -185,7 +183,6 @@ pub struct VariantInfo {
 /// Published into the peer's track-scoped bus; root-level subscribers see
 /// events for every track, track-scoped subscribers only their own.
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum AbrEvent {
     ThroughputSample {
         bytes_per_second: f64,

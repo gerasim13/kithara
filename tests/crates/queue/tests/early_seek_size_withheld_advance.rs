@@ -325,7 +325,18 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
                     {
                         trigger = Trigger::DidPlayToEnd;
                     }
-                    _ => {}
+                    PlayerEvent::ItemDidFail { .. }
+                    | PlayerEvent::ItemDidPlayToEnd { .. }
+                    | PlayerEvent::StatusChanged { .. }
+                    | PlayerEvent::TimeControlStatusChanged { .. }
+                    | PlayerEvent::RateChanged { .. }
+                    | PlayerEvent::PlaybackStarted { .. }
+                    | PlayerEvent::VolumeChanged { .. }
+                    | PlayerEvent::MuteChanged { .. }
+                    | PlayerEvent::CurrentItemChanged { .. }
+                    | PlayerEvent::PrerollCompleted { .. }
+                    | PlayerEvent::PrefetchRequested
+                    | PlayerEvent::HandoverRequested { .. } => {}
                 }
             }
         }

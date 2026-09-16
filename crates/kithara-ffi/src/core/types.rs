@@ -158,7 +158,7 @@ impl From<PlayerStatus> for FfiPlayerStatus {
         match s {
             PlayerStatus::ReadyToPlay => Self::ReadyToPlay,
             PlayerStatus::Failed => Self::Failed,
-            _ => Self::Unknown,
+            PlayerStatus::Unknown => Self::Unknown,
         }
     }
 }
@@ -177,7 +177,7 @@ impl From<ItemStatus> for FfiItemStatus {
         match s {
             ItemStatus::ReadyToPlay => Self::ReadyToPlay,
             ItemStatus::Failed => Self::Failed,
-            _ => Self::Unknown,
+            ItemStatus::Unknown => Self::Unknown,
         }
     }
 }
@@ -196,7 +196,7 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
         match s {
             TimeControlStatus::WaitingToPlay => Self::WaitingToPlay,
             TimeControlStatus::Playing => Self::Playing,
-            _ => Self::Paused,
+            TimeControlStatus::Paused => Self::Paused,
         }
     }
 }
@@ -233,7 +233,7 @@ impl From<kithara::queue::TrackStatus> for FfiTrackStatus {
             TS::Failed(reason) => Self::Failed { reason },
             TS::Consumed => Self::Consumed,
             TS::Cancelled => Self::Cancelled,
-            _ => Self::Pending,
+            TS::Pending => Self::Pending,
         }
     }
 }
@@ -265,7 +265,6 @@ impl From<AdvanceReason> for FfiAdvanceReason {
             AdvanceReason::RemovedCurrent => Self::RemovedCurrent,
             AdvanceReason::Repeat => Self::Repeat,
             AdvanceReason::Cancelled => Self::Cancelled,
-            _ => Self::Unknown,
         }
     }
 }
@@ -285,7 +284,6 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
             QueueRepeatMode::Off => Self::Off,
             QueueRepeatMode::One => Self::One,
             QueueRepeatMode::All => Self::All,
-            _ => Self::Unknown,
         }
     }
 }
@@ -359,7 +357,7 @@ impl From<RouteChangeReason> for FfiRouteChangeReason {
             RouteChangeReason::WakeFromSleep => Self::WakeFromSleep,
             RouteChangeReason::NoSuitableRouteForCategory => Self::NoSuitableRouteForCategory,
             RouteChangeReason::RouteConfigurationChange => Self::RouteConfigurationChange,
-            _ => Self::Unknown,
+            RouteChangeReason::Unknown => Self::Unknown,
         }
     }
 }
@@ -377,7 +375,7 @@ impl From<StretchBackendKind> for FfiStretchBackendKind {
         match value {
             StretchBackendKind::Signalsmith => Self::Signalsmith,
             StretchBackendKind::Bungee => Self::Bungee,
-            _ => Self::Unknown,
+            StretchBackendKind::Unknown => Self::Unknown,
         }
     }
 }
@@ -397,7 +395,6 @@ impl From<EvictReason> for FfiEvictReason {
             EvictReason::QuotaBytes => Self::QuotaBytes,
             EvictReason::QuotaAssets => Self::QuotaAssets,
             EvictReason::Displaced => Self::Displaced,
-            _ => Self::Unknown,
         }
     }
 }
@@ -590,7 +587,6 @@ impl From<DecoderBackend> for FfiDecoderBackend {
             DecoderBackend::Symphonia => Self::Symphonia,
             DecoderBackend::Apple => Self::Apple,
             DecoderBackend::Android => Self::Android,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -616,7 +612,6 @@ impl From<DecoderChangeCause> for FfiDecoderChangeCause {
             DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
             DecoderChangeCause::Recovery => Self::Recovery,
             DecoderChangeCause::HostRateChange => Self::HostRateChange,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -636,7 +631,6 @@ impl From<DecodeErrorClass> for FfiDecodeErrorClass {
             DecodeErrorClass::Interrupted => Self::Interrupted,
             DecodeErrorClass::VariantChange => Self::VariantChange,
             DecodeErrorClass::Other => Self::Other,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -676,7 +670,6 @@ impl From<DecodeErrorKind> for FfiDecodeErrorKind {
             DecodeErrorKind::BackendStatus => Self::BackendStatus,
             DecodeErrorKind::Interrupted => Self::Interrupted,
             DecodeErrorKind::Backend => Self::Backend,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -694,7 +687,6 @@ impl From<FrameDomain> for FfiFrameDomain {
         match value {
             FrameDomain::Source => Self::Source,
             FrameDomain::Output => Self::Output,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -716,7 +708,6 @@ impl From<ResamplerKind> for FfiResamplerKind {
             ResamplerKind::Apple => Self::Apple,
             ResamplerKind::Glide => Self::Glide,
             ResamplerKind::None => Self::None,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -736,7 +727,6 @@ impl From<PlaybackResamplerKind> for FfiPlaybackResamplerKind {
             PlaybackResamplerKind::Rubato => Self::Rubato,
             PlaybackResamplerKind::Glide => Self::Glide,
             PlaybackResamplerKind::None => Self::None,
-            _ => Self::Unknown,
         }
     }
 }
@@ -756,7 +746,6 @@ impl From<TrackFailureKind> for FfiTrackFailureKind {
             TrackFailureKind::Decode => Self::Decode,
             TrackFailureKind::RecreateFailed { offset } => Self::RecreateFailed { offset },
             TrackFailureKind::SourceCancelled => Self::SourceCancelled,
-            _ => Self::Unknown,
         }
     }
 }
@@ -794,7 +783,6 @@ impl From<TotalBytesSource> for FfiTotalBytesSource {
         match value {
             TotalBytesSource::CommittedLen => Self::CommittedLen,
             TotalBytesSource::ContentLength => Self::ContentLength,
-            _ => Self::Unknown,
         }
     }
 }
@@ -816,7 +804,6 @@ impl From<KeyFailureStage> for FfiKeyFailureStage {
             KeyFailureStage::BodyCollect => Self::BodyCollect,
             KeyFailureStage::Processor => Self::Processor,
             KeyFailureStage::Missing => Self::Missing,
-            _ => Self::Unknown,
         }
     }
 }
@@ -836,7 +823,6 @@ impl From<KeySource> for FfiKeySource {
             KeySource::Network => Self::Network,
             KeySource::DiskCache => Self::DiskCache,
             KeySource::MemCache => Self::MemCache,
-            _ => Self::Unknown,
         }
     }
 }

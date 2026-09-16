@@ -132,7 +132,6 @@ impl EventBridge {
                     index: *index as u64,
                 });
             }
-            _ => {}
         }
     }
 
@@ -222,7 +221,19 @@ impl EventBridge {
                 status: TimeControlStatus::WaitingToPlay,
                 ..
             } => *last_current.lock(),
-            _ => return,
+            PlayerEvent::TimeControlStatusChanged {
+                status: TimeControlStatus::Paused | TimeControlStatus::Playing,
+                ..
+            }
+            | PlayerEvent::StatusChanged { .. }
+            | PlayerEvent::RateChanged { .. }
+            | PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::MuteChanged { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return,
         };
         let Some(track_id) = target else { return };
         let Some(item) = items.lock().get(&track_id).cloned() else {
@@ -235,7 +246,15 @@ impl EventBridge {
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
             PlayerEvent::ItemDidFail { .. } => FfiItemEvent::DidFail,
             PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
-            _ => return,
+            PlayerEvent::StatusChanged { .. }
+            | PlayerEvent::RateChanged { .. }
+            | PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::MuteChanged { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return,
         };
         item_obs.on_event(ffi_event);
     }
