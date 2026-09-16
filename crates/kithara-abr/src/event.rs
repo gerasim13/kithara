@@ -2,7 +2,7 @@
 
 use kithara_events::Event;
 use kithara_platform::time::Duration;
-use kithara_test_utils::probe::IntoProbeArg;
+use kithara_test_utils::kithara;
 
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
 /// `usize` representation of [`AbrMode`].
@@ -58,7 +58,8 @@ pub struct BoundsError {
 }
 
 /// ABR mode selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara::IntoProbeArg)]
+#[probe_arg(encode_only, with = Self::encode_probe_arg)]
 pub enum AbrMode {
     /// Automatic bitrate adaptation.
     /// Optional initial variant index (defaults to 0 when `None`).
@@ -81,6 +82,10 @@ impl AbrMode {
     #[must_use]
     pub const fn manual(idx: usize) -> Self {
         Self::Manual(VariantIndex::new(idx))
+    }
+
+    fn encode_probe_arg(self) -> u64 {
+        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 
@@ -109,12 +114,6 @@ impl From<usize> for AbrMode {
         } else {
             Self::Manual(VariantIndex::new(val))
         }
-    }
-}
-
-impl IntoProbeArg for AbrMode {
-    fn into_probe_arg(self) -> u64 {
-        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 
@@ -231,7 +230,7 @@ pub enum AbrEvent {
 mod tests {
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
     use super::*;
     #[kithara::test]
@@ -253,6 +252,22 @@ mod tests {
         let manual: usize = AbrMode::Manual(VariantIndex::new(0)).into();
         let auto: usize = AbrMode::Auto(None).into();
         assert_ne!(manual, auto);
+    }
+
+    #[kithara::test]
+    fn abr_mode_probe_argument_keeps_the_existing_usize_wire() {
+        for mode in [
+            AbrMode::Auto(None),
+            AbrMode::Auto(Some(VariantIndex::new(0))),
+            AbrMode::Auto(Some(VariantIndex::new(42))),
+            AbrMode::Manual(VariantIndex::new(0)),
+            AbrMode::Manual(VariantIndex::new(42)),
+        ] {
+            assert_eq!(
+                mode.into_probe_arg(),
+                u64::try_from(usize::from(mode)).expect("usize fits the u64 probe wire")
+            );
+        }
     }
 
     #[kithara::test]

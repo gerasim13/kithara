@@ -66,6 +66,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
+    pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_node_control: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,

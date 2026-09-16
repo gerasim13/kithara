@@ -31,6 +31,7 @@ pub(crate) mod derivable_error;
 pub(crate) mod derivable_event;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
+pub(crate) mod derivable_into_probe_arg;
 pub(crate) mod derivable_node_control;
 pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
@@ -89,6 +90,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_error::DerivableError),
         Box::new(derivable_event::DerivableEvent),
         Box::new(derivable_getter::DerivableGetter),
+        Box::new(derivable_into_probe_arg::DerivableIntoProbeArg),
         Box::new(derivable_node_control::DerivableNodeControl),
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),

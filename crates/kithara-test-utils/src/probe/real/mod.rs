@@ -8,7 +8,7 @@ mod wire;
 
 #[cfg(all(target_os = "macos", not(miri)))]
 pub use usdt_wire::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5};
-pub use wire::{IntoProbeArg, Probe, operation_id, register_probes};
+pub use wire::register_probes;
 
 #[cfg(all(test, target_os = "macos", not(miri)))]
 mod tests {

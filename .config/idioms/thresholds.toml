@@ -84,6 +84,10 @@ exempt_files = [
 enabled = true
 severity = "deny"
 
+[derivable_into_probe_arg]
+enabled = true
+severity = "deny"
+
 [derivable_built_default]
 enabled = true
 severity = "deny"

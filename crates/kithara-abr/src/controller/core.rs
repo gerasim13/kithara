@@ -13,7 +13,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
-use kithara_test_utils::{kithara, probe::IntoProbeArg};
+use kithara_test_utils::kithara;
 
 use super::peer::PeerEntry;
 use crate::{
@@ -41,7 +41,8 @@ impl Defaults {
 }
 
 /// Opaque peer identifier assigned by the ABR controller on `register`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, kithara::IntoProbeArg)]
+#[probe_arg(encode_only)]
 pub struct AbrPeerId(NonZeroU64);
 
 impl AbrPeerId {
@@ -49,12 +50,6 @@ impl AbrPeerId {
     #[must_use]
     pub const fn new(id: NonZeroU64) -> Self {
         Self(id)
-    }
-}
-
-impl IntoProbeArg for AbrPeerId {
-    fn into_probe_arg(self) -> u64 {
-        self.0.get()
     }
 }
 
@@ -264,10 +259,22 @@ impl Drop for AbrController {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
+    use std::num::NonZeroU64;
 
-    use super::{AbrSettings, AbrSettingsPatch};
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::{kithara, probe::IntoProbeArg};
+
+    use super::{AbrPeerId, AbrSettings, AbrSettingsPatch};
+
+    #[kithara::test]
+    fn peer_id_probe_argument_preserves_the_non_zero_value() {
+        assert_eq!(AbrPeerId::new(NonZeroU64::MIN).into_probe_arg(), 1);
+        assert_eq!(
+            AbrPeerId::new(NonZeroU64::new(u64::MAX).expect("u64::MAX is non-zero"))
+                .into_probe_arg(),
+            u64::MAX
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_hysteresis_it_names() {
