@@ -34,23 +34,11 @@ use super::{
 };
 use crate::{DecoderChangeCause, FrameDomain};
 
+#[derive_where::derive_where(Clone; B: Clone)]
 struct DecoderDeps<B, S> {
     host_sample_rate: Arc<AtomicU32>,
     decoder: AudioDecoderConfig<B>,
     pools: PoolRegion<S>,
-}
-
-impl<B, S> Clone for DecoderDeps<B, S>
-where
-    B: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            host_sample_rate: Arc::clone(&self.host_sample_rate),
-            decoder: self.decoder.clone(),
-            pools: self.pools.clone(),
-        }
-    }
 }
 
 impl<B, S> DecoderDeps<B, S>

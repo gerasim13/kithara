@@ -22,6 +22,7 @@ pub struct RegionStats {
 }
 
 /// One cloneable facade over a closed typed schema and its shared hard budget.
+#[derive_where::derive_where(Clone)]
 pub struct PoolRegion<S> {
     inner: Arc<RegionInner<S>>,
 }
@@ -115,14 +116,6 @@ impl<S> PoolRegion<S> {
             allocated_bytes: self.inner.budget.current(),
             max_bytes: self.inner.budget.limit(),
             peak_allocated_bytes: self.inner.budget.peak(),
-        }
-    }
-}
-
-impl<S> Clone for PoolRegion<S> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
         }
     }
 }

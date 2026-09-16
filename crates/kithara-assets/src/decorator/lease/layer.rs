@@ -1,10 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    fmt::{self, Debug},
-    num::NonZeroUsize,
-    path::Path,
-};
+use std::{num::NonZeroUsize, path::Path};
 
 use dashmap::{DashMap, mapref::entry::Entry};
 use kithara_events::EventBus;
@@ -73,29 +69,23 @@ type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>
 ///
 /// Absolute keys bypass pinning (no asset to pin under). The capability gate also
 /// bypasses.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 pub struct LeaseAssets<A> {
+    #[debug(skip)]
     inner: Arc<A>,
+    #[debug(skip)]
     live: Arc<LiveRegistry>,
+    #[debug(skip)]
     cancel: CancelToken,
+    #[debug(skip)]
     event_bus: LeaseEvents,
+    #[debug(skip)]
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and
     /// `DiskAssetDeleter`. A writer's pin is durable and flushes on its
     /// 0→1 / 1→0 transitions; a reader's pin is process-local and stays
     /// in memory, so the decoder read loop never reaches disk.
     pins: PinsIndex,
-}
-
-impl<A> Debug for LeaseAssets<A>
-where
-    A: Assets,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LeaseAssets")
-            .field("pins", &self.pins)
-            .finish_non_exhaustive()
-    }
 }
 
 impl<A> LeaseAssets<CachedAssets<A>>

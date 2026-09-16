@@ -43,15 +43,12 @@ impl ResourceProcessor for XorProcessor {
     }
 }
 
+#[derive(derive_more::Debug)]
 struct XorSink {
+    #[debug(skip)]
     call_count: Arc<AtomicUsize>,
+    #[debug(skip)]
     xor_key: u8,
-}
-
-impl fmt::Debug for XorSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("XorSink").finish_non_exhaustive()
-    }
 }
 
 impl ChunkSink for XorSink {

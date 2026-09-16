@@ -78,3 +78,11 @@ exempt_files = [
 [derivable_ranged]
 enabled = true
 severity = "deny"
+
+[derivable_clone]
+enabled = true
+severity = "deny"
+
+[derivable_debug]
+enabled = true
+severity = "deny"

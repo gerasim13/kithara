@@ -27,6 +27,7 @@ use crate::{EngineLoad, PlayWorker};
 #[derive(Builder)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone; B: Clone + Default, S: HasPool<u8> + Send + Sync + 'static)]
 pub struct ResourceConfig<S, B: Default = PlaybackResamplerBackend>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -116,38 +117,6 @@ where
     /// than no knob. Make it one when the ABR wiring lands.
     #[builder(default = 0.0)]
     pub(crate) preferred_peak_bitrate: f64,
-}
-
-impl<S, B> Clone for ResourceConfig<S, B>
-where
-    B: Clone + Default,
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            src: self.src.clone(),
-            initial_abr_mode: self.initial_abr_mode,
-            store: self.store.clone(),
-            decoder: self.decoder.clone(),
-            keys: self.keys.clone(),
-            hls: self.hls.clone(),
-            file: self.file.clone(),
-            audio: self.audio.clone(),
-            block_on_underrun: self.block_on_underrun,
-            host_sample_rate: self.host_sample_rate,
-            preferred_peak_bitrate: self.preferred_peak_bitrate,
-            bus: self.bus.clone(),
-            cancel: self.cancel.clone(),
-            discriminator: self.discriminator.clone(),
-            downloader: self.downloader.clone(),
-            engine_load: self.engine_load.clone(),
-            headers: self.headers.clone(),
-            hint: self.hint.clone(),
-            hls_base_url: self.hls_base_url.clone(),
-            warp: self.warp.clone(),
-            worker: self.worker.clone(),
-        }
-    }
 }
 
 #[cfg(test)]

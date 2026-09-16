@@ -19,6 +19,8 @@ pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
 pub(crate) mod const_group_enum_shape;
+pub(crate) mod derivable_clone;
+pub(crate) mod derivable_debug;
 pub(crate) mod derivable_delegation;
 pub(crate) mod derivable_deref;
 pub(crate) mod derivable_display;
@@ -62,6 +64,8 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(branch_chains::BranchChains),
         Box::new(guard_cascade::GuardCascade),
         Box::new(derivable_delegation::DerivableDelegation),
+        Box::new(derivable_clone::DerivableClone),
+        Box::new(derivable_debug::DerivableDebug),
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_deref::DerivableDeref),

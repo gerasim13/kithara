@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt, path::Path};
+use std::{collections::HashSet, path::Path};
 
 use dashmap::DashSet;
 use kithara_events::EventBus;
@@ -74,33 +74,32 @@ pub(crate) trait ByteRecorder: Send + Sync {
 /// - Byte accounting is best-effort and must be explicitly updated via
 ///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
 /// - When `enabled` is `false`, all operations delegate directly to the inner layer.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 pub struct EvictAssets<A>
 where
     A: Assets,
 {
     /// Single canonical removal channel — see [`crate::backend::AssetDeleter`].
+    #[debug(skip)]
     deleter: Arc<dyn AssetDeleter>,
+    #[debug(skip)]
     inner: Arc<A>,
+    #[debug(skip)]
     seen: Arc<DashSet<String>>,
+    #[debug(skip)]
     cancel: CancelToken,
     cfg: EvictConfig,
+    #[debug(skip)]
     events: EvictionEvents,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
+    #[debug(skip)]
     lru: LruIndex,
     /// Shared pins index — same instance used by `LeaseAssets` for
     /// pin/unpin lifecycle and by `DiskAssetDeleter` for full-asset
     /// removal cleanup.
+    #[debug(skip)]
     pins: PinsIndex,
-}
-
-impl<A: Assets> fmt::Debug for EvictAssets<A> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EvictAssets")
-            .field("cfg", &self.cfg)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Eviction wiring for [`EvictAssets::new`], separate from the wrapped

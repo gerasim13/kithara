@@ -1,9 +1,10 @@
-use std::fmt;
-
 use super::OwnedBuffer;
 use crate::PoolError;
 
 /// A checked vector guard returned by a registered [`crate::VecKey`].
+#[derive(derive_more::Debug)]
+#[debug(bound(T: std::fmt::Debug))]
+#[debug("{:?}", _0.value)]
 pub struct PooledVec<T, const SHARDS: usize>(pub(super) OwnedBuffer<SHARDS, Vec<T>, true>);
 
 impl<T, const SHARDS: usize> PooledVec<T, SHARDS> {
@@ -62,14 +63,5 @@ impl<T, const SHARDS: usize> std::ops::Deref for PooledVec<T, SHARDS> {
 impl<T, const SHARDS: usize> std::ops::DerefMut for PooledVec<T, SHARDS> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0.value
-    }
-}
-
-impl<T, const SHARDS: usize> fmt::Debug for PooledVec<T, SHARDS>
-where
-    T: fmt::Debug,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.value.fmt(formatter)
     }
 }

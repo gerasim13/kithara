@@ -37,6 +37,7 @@ kithara-test-utils = { workspace = true }
 
 bon = { workspace = true }
 bytes = { workspace = true }
+derive_more = { workspace = true }
 futures = { workspace = true }
 humantime-serde = { workspace = true }
 serde = { workspace = true }

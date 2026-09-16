@@ -8,7 +8,9 @@ use kithara_platform::tokio::sync::broadcast::{
 use crate::{Envelope, Event, EventBus, EventSet};
 
 /// One event type's channel on one bus scope.
+#[derive(derive_more::Debug)]
 pub struct TopicReceiver<E: Event> {
+    #[debug(skip)]
     rx: broadcast::Receiver<Envelope<E>>,
     closed: bool,
 }
@@ -62,16 +64,10 @@ impl<E: Event> TopicReceiver<E> {
     }
 }
 
-impl<E: Event> core::fmt::Debug for TopicReceiver<E> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TopicReceiver")
-            .field("closed", &self.closed)
-            .finish_non_exhaustive()
-    }
-}
-
 /// A receiver for one [`EventSet`] — one channel per member.
+#[derive(derive_more::Debug)]
 pub struct EventReceiver<S: EventSet> {
+    #[debug(skip)]
     rx: S::Receivers,
 }
 
@@ -96,11 +92,5 @@ impl<S: EventSet> EventReceiver<S> {
     /// Returns `Empty`, lag information, or `Closed` when all members close.
     pub fn try_recv(&mut self) -> Result<Envelope<S>, TryRecvError> {
         S::try_recv(&mut self.rx)
-    }
-}
-
-impl<S: EventSet> core::fmt::Debug for EventReceiver<S> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("EventReceiver").finish_non_exhaustive()
     }
 }

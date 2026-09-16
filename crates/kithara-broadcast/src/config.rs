@@ -18,6 +18,7 @@ use crate::{BroadcastError, BroadcastResult};
 /// [`BroadcastConfigPatch`] is what a configuration document may say about it.
 #[derive(Builder, Patch)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
     #[builder(start_fn)]
@@ -130,37 +131,6 @@ impl Defaults {
         Some(value) => value,
         None => unreachable!(),
     };
-}
-
-impl<S> Clone for BroadcastConfig<S> {
-    fn clone(&self) -> Self {
-        Self {
-            worker: self.worker.clone(),
-            pools: self.pools.clone(),
-            cancel: self.cancel.clone(),
-            segment_target: self.segment_target,
-            bind: self.bind,
-            channels: self.channels,
-            sample_rate: self.sample_rate,
-            bit_rate: self.bit_rate,
-            codec: self.codec,
-            container: self.container,
-            grace: self.grace,
-            window: self.window,
-            buffer_frames: self.buffer_frames,
-            tick_frames: self.tick_frames,
-            generation_capacity: self.generation_capacity,
-            dispatcher_capacity: self.dispatcher_capacity,
-            fairness_yield_interval: self.fairness_yield_interval,
-            idle_timeout: self.idle_timeout,
-            slow_tick_threshold: self.slow_tick_threshold,
-            task_burst: self.task_burst,
-            wait_timeout: self.wait_timeout,
-            priority: self.priority,
-            max_compute_tasks: self.max_compute_tasks,
-            stop_timeout: self.stop_timeout,
-        }
-    }
 }
 
 impl<S> fmt::Debug for BroadcastConfig<S> {

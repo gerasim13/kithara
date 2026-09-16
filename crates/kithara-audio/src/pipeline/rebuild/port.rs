@@ -29,24 +29,13 @@ use crate::pipeline::{
     stream::shared::SharedStream,
 };
 
+#[derive(Clone)]
 struct JobDeps {
     incoming_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     replacement_completion: Arc<ArrayQueue<DecoderBuildComplete>>,
     wake: Arc<dyn WorkerWake>,
     factory: DecoderFactory,
     gapless_mode: GaplessMode,
-}
-
-impl Clone for JobDeps {
-    fn clone(&self) -> Self {
-        Self {
-            incoming_completion: self.incoming_completion.clone(),
-            factory: self.factory.clone(),
-            gapless_mode: self.gapless_mode,
-            replacement_completion: self.replacement_completion.clone(),
-            wake: self.wake.clone(),
-        }
-    }
 }
 
 enum PendingInput<T: StreamType> {

@@ -154,15 +154,10 @@ impl Drop for PeerInner {
 /// Cheap to [`Clone`] (one Arc bump). When the last clone is dropped,
 /// the peer-level cancel token fires, aborting all in-flight fetches
 /// for this peer.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 pub struct PeerHandle {
+    #[debug(skip)]
     inner: Arc<PeerInner>,
-}
-
-impl std::fmt::Debug for PeerHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PeerHandle").finish_non_exhaustive()
-    }
 }
 
 impl PeerHandle {

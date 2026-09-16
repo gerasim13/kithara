@@ -34,6 +34,10 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_deref: DerivableConfig,
     #[serde(default)]
+    pub(crate) derivable_clone: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_debug: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_display: DerivableConfig,
     #[serde(default)]
     pub(crate) derivable_event: DerivableEventConfig,

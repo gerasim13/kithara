@@ -12,6 +12,7 @@ use crate::{
 };
 
 /// Applies optional resource processing to another asset store.
+#[derive_where::derive_where(Clone; A: Assets)]
 pub struct ProcessingAssets<A, S>
 where
     A: Assets,
@@ -24,20 +25,6 @@ where
     /// the caller left the processing layer's own default in place.
     gate_poll_interval: Option<Duration>,
     pools: PoolRegion<S>,
-}
-
-impl<A, S> Clone for ProcessingAssets<A, S>
-where
-    A: Assets,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            pools: self.pools.clone(),
-            chunk_size: self.chunk_size,
-            gate_poll_interval: self.gate_poll_interval,
-        }
-    }
 }
 
 impl<A, S> ProcessingAssets<A, S>

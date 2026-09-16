@@ -47,21 +47,13 @@ const BAKED_PATH: &str = "<baked app.yaml>";
 /// The configuration this process runs on, and the document it came from.
 #[derive(Clone)]
 #[non_exhaustive]
+#[derive(derive_more::Debug)]
 pub struct Config {
+    #[debug(skip)]
     document: Document,
     /// The merged document before expansion. Kept so a dump can print
     /// references rather than the secrets behind them.
     source: Value,
-}
-
-impl fmt::Debug for Config {
-    /// Renders the pre-expansion document: the typed one holds resolved
-    /// values, and a `Debug` that prints them defeats [`Config::dump`].
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("source", &self.source)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Why a document could not be turned into a configuration.

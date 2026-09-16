@@ -54,17 +54,10 @@ pub mod error {
 
     /// Returned by `Sender::send` when there are no live receivers; carries the
     /// value back. Callers typically discard it via `.ok()`.
-    #[derive(derive_more::Display)]
+    #[derive(derive_more::Debug, derive_more::Display)]
+    #[debug("SendError(..)")]
     #[display("sending on a channel with no receivers")]
     pub struct SendError<T>(pub T);
-
-    // WHY: Debug/Display without a `T` bound (opaque payload) so the error is `Error` for every payload type, matching how callers use
-    // it.
-    impl<T> std::fmt::Debug for SendError<T> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("SendError(..)")
-        }
-    }
 
     impl<T> std::error::Error for SendError<T> {}
 }

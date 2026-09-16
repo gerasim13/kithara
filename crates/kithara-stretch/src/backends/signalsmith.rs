@@ -1,5 +1,3 @@
-use std::fmt;
-
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
@@ -51,10 +49,14 @@ enum TerminalState {
 
 /// Exact-span Signalsmith engine, prepared for fixed maximum source and output
 /// blocks.
+#[derive(derive_more::Debug)]
 pub(crate) struct SignalsmithElastic {
     capabilities: ElasticCapabilities,
+    #[debug(skip)]
     prime_input: SampleBuffer,
+    #[debug(skip)]
     inner: Stretch,
+    #[debug(skip)]
     terminal: TerminalState,
 }
 
@@ -154,15 +156,6 @@ impl SignalsmithElastic {
             .map(|frames| frames / request.output_frames())
             .map(|frames| frames.min(self.capabilities.latency().source_frames()))
             .ok_or(ElasticError::SampleCountOverflow)
-    }
-}
-
-impl fmt::Debug for SignalsmithElastic {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SignalsmithElastic")
-            .field("capabilities", &self.capabilities)
-            .finish_non_exhaustive()
     }
 }
 

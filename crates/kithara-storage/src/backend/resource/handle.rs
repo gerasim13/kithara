@@ -70,16 +70,9 @@ impl<D: DriverIo> Drop for WriteGuard<D> {
 }
 
 /// Read-only payload shared by the `Committed` and `Reader` phases.
+#[derive_where::derive_where(Clone; D: DriverIo)]
 pub struct ReadCore<D: DriverIo> {
     core: ResourceCore<D>,
-}
-
-impl<D: DriverIo> Clone for ReadCore<D> {
-    fn clone(&self) -> Self {
-        Self {
-            core: self.core.clone(),
-        }
-    }
 }
 
 /// Phantom-typestate storage resource. The phase `S` selects the stored payload

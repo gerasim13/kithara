@@ -83,23 +83,18 @@ pub const fn duration_to_seconds(d: Duration) -> f64 {
 /// processors and headers can coexist.
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(derive_more::Debug)]
 pub struct FfiKeyOptions {
+    #[debug("{:?}", self.rules.len())]
     pub rules: Vec<FfiKeyRule>,
-}
-
-impl std::fmt::Debug for FfiKeyOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FfiKeyOptions")
-            .field("rules", &self.rules.len())
-            .finish()
-    }
 }
 
 /// A single DRM rule: domain patterns + key processor + optional
 /// per-provider headers / query params.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiKeyRule {
+    #[debug(skip)]
     pub processor: Arc<dyn crate::observer::FfiKeyProcessor>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_params: Option<std::collections::HashMap<String, String>>,
@@ -109,21 +104,11 @@ pub struct FfiKeyRule {
     /// `setup_hls_aes` populates this automatically with a freshly
     /// generated 16-character alphanumeric value and mirrors it into
     /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
+    #[debug("{:?}", self.salt.as_ref().map(|_| "<set>"))]
     pub salt: Option<String>,
     /// Domain patterns — exact (`"example.com"`), wildcard subdomain
     /// (`"*.example.com"`), or match-any (`"*"`).
     pub domains: Vec<String>,
-}
-
-impl std::fmt::Debug for FfiKeyRule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FfiKeyRule")
-            .field("domains", &self.domains)
-            .field("headers", &self.headers)
-            .field("query_params", &self.query_params)
-            .field("salt", &self.salt.as_ref().map(|_| "<set>"))
-            .finish_non_exhaustive()
-    }
 }
 
 /// FFI-friendly per-item configuration. All fields immutable after

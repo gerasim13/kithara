@@ -84,24 +84,13 @@ where
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
+#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
 pub struct QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) player: PlayerControl<S>,
     runtime: Arc<QueueRuntime<S>>,
-}
-
-impl<S> Clone for QueueControl<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            player: self.player.clone(),
-            runtime: Arc::clone(&self.runtime),
-        }
-    }
 }
 
 /// AVQueuePlayer-analogue orchestration facade.
