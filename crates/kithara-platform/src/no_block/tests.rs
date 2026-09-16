@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cpu_time::ThreadTime;
 use kithara_test_utils::kithara;
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -33,7 +34,7 @@ const FORCED_SPIN_CPU_MS: u64 = 10_000;
 const PAUSED_CPU_SLEEP_MS: u64 = 20;
 const WORK_TEST_BUDGET_MS: u64 = 10;
 const WORK_TEST_SLEEP_MS: u64 = 50;
-const WORK_TEST_SPIN_MS: u64 = 50;
+const WORK_TEST_SPIN_CPU_MS: u64 = 50;
 
 static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
 
@@ -57,6 +58,19 @@ fn temp_log_path(name: &str) -> PathBuf {
 fn spin_for(d: Duration) {
     let start = Instant::now();
     while start.elapsed() < d {
+        std::hint::spin_loop();
+    }
+}
+
+/// Spend `cpu` of this thread's own CPU time.
+///
+/// A work budget reads CPU, and wall time buys an unknown share of it: a
+/// loaded runner can hand a 50 ms wall spin less than the 10 ms of CPU the
+/// budget is asking about, and the poll under test would then have spent
+/// nothing to flag.
+fn spin_cpu_for(cpu: Duration) {
+    let start = ThreadTime::try_now().expect("thread CPU clock");
+    while start.try_elapsed().expect("thread CPU clock") < cpu {
         std::hint::spin_loop();
     }
 }
@@ -264,7 +278,7 @@ fn a_work_budget_ignores_sanctioned_work() {
 
     let fut = watch_cpu_budget("sanctioned_work_task", WORK_TEST_BUDGET_MS, async {
         let _p = permit();
-        spin_for(Duration::from_millis(WORK_TEST_SPIN_MS));
+        spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
     });
     let _ = poll_once(fut);
 }
@@ -275,7 +289,7 @@ fn a_work_budget_flags_a_poll_that_spent_it() {
 
     let caught = std::panic::catch_unwind(|| {
         let fut = watch_cpu_budget("work_task", WORK_TEST_BUDGET_MS, async {
-            spin_for(Duration::from_millis(WORK_TEST_SPIN_MS));
+            spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
         });
         let _ = poll_once(fut);
     });
