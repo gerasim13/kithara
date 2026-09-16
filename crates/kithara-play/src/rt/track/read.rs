@@ -386,7 +386,7 @@ impl PlayerTrack {
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
-        if self.fade.has_settled() {
+        if self.fade.settled() {
             self.update_state_after_fade();
         }
 

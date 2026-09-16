@@ -271,7 +271,7 @@ async fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Reso
                     .expect("replace seamless fixture item");
             }
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

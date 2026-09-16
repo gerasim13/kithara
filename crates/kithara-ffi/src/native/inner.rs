@@ -44,8 +44,8 @@ use crate::{
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
     types::{
-        FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
-        FfiRepeatMode,
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
+        FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
 };
 
@@ -195,11 +195,14 @@ pub(crate) struct NativeInner {
 }
 
 impl NativeInner {
-    pub(crate) fn new(config: FfiPlayerConfig) -> Self {
+    pub(crate) fn new(config: FfiPlayerConfig) -> Result<Self, FfiError> {
         let FfiPlayerConfig {
             key_options,
             store,
             eq_band_count,
+            playback_order,
+            action_at_item_end,
+            crossfade_settings,
         } = config;
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
@@ -221,6 +224,9 @@ impl NativeInner {
         let queue_config = QueueConfig::builder()
             .player(player)
             .store(queue_store)
+            .playback_order(playback_order.try_into()?)
+            .action_at_item_end(action_at_item_end.try_into()?)
+            .crossfade_settings(crossfade_settings.try_into()?)
             .build();
         let queue_owner = super::session::insert(FfiQueue::new(queue_config))
             .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
@@ -233,7 +239,7 @@ impl NativeInner {
         );
         let (key_options, player_headers) = build_initial_key_state(key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
-        Self {
+        Ok(Self {
             downloader,
             store,
             queue_owner,
@@ -245,20 +251,27 @@ impl NativeInner {
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
-        }
+        })
     }
 
-    pub(crate) fn advance_to_next_item(&self) {
+    pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
-        let tracks = self.queue.tracks();
-        let Some(current_idx) = self.queue.current_index() else {
-            return;
-        };
-        let next_idx = current_idx + 1;
-        let Some(next) = tracks.get(next_idx) else {
-            return;
-        };
-        let _ = self.queue.select(next.id, Transition::None);
+        self.queue
+            .next(Transition::None)
+            .map(|_| ())
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
+    }
+
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
+        self.queue
+            .previous(Transition::None)
+            .map(|_| ())
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
@@ -430,7 +443,7 @@ impl NativeInner {
             reason: format!("item index {idx} out of range (len: {})", tracks.len()),
         })?;
         self.queue
-            .select(entry.id, transition.into())
+            .select(entry.id, transition.try_into()?)
             .map_err(|e| match e {
                 QueueError::NotReady(_) => FfiError::NotReady,
                 other => FfiError::Internal {
@@ -494,6 +507,28 @@ impl NativeInner {
         })?;
         self.queue.set_repeat(mode);
         Ok(())
+    }
+
+    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        self.queue.set_playback_order(order.try_into()?);
+        Ok(())
+    }
+
+    pub(crate) fn set_action_at_item_end(
+        &self,
+        action: FfiActionAtItemEnd,
+    ) -> Result<(), FfiError> {
+        self.queue.set_action_at_item_end(action.try_into()?);
+        Ok(())
+    }
+
+    pub(crate) fn set_crossfade_settings(
+        &self,
+        settings: FfiCrossfadeSettings,
+    ) -> Result<(), FfiError> {
+        self.queue
+            .set_crossfade_settings(settings.try_into()?)
+            .map_err(FfiError::from)
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
@@ -568,7 +603,12 @@ impl NativeInner {
 
     delegate::delegate! {
         to self.queue {
-            pub(crate) fn crossfade_duration(&self) -> f32;
+            #[expr($.into())]
+            pub(crate) fn crossfade_settings(&self) -> FfiCrossfadeSettings;
+            #[expr($.into())]
+            pub(crate) fn playback_order(&self) -> FfiPlaybackOrder;
+            #[expr($.into())]
+            pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd;
             #[expr($.unwrap_or(0.0))]
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
@@ -582,7 +622,6 @@ impl NativeInner {
             pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
             pub(crate) fn set_muted(&self, muted: bool);
             #[call(set_default_rate)]
             pub(crate) fn set_playing_rate(&self, rate: f32);
@@ -694,11 +733,10 @@ mod tests {
         let cancel = store.cancel_token();
         let config = |store| FfiPlayerConfig {
             store,
-            key_options: crate::types::FfiKeyOptions::default(),
-            eq_band_count: 10,
+            ..FfiPlayerConfig::for_test()
         };
-        let first = NativeInner::new(config(Arc::clone(&store)));
-        let second = NativeInner::new(config(Arc::clone(&store)));
+        let first = NativeInner::new(config(Arc::clone(&store))).expect("create first player");
+        let second = NativeInner::new(config(Arc::clone(&store))).expect("create second player");
 
         assert!(Arc::ptr_eq(&first.store, &second.store));
         assert!(first.store.handle().is_same(second.store.handle()));
@@ -753,7 +791,7 @@ mod tests {
 
     #[kithara::test]
     fn runtime_key_rules_append_in_registration_order() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
         inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
 
@@ -786,7 +824,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         let token = inner
             .player_headers
@@ -797,7 +835,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_clears_auth_token_when_empty() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         inner.setup_network(String::new());
         assert!(!inner.player_headers.contains_key(AUTH_TOKEN_HEADER));
@@ -805,7 +843,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         // Registration must not run the processor: an unstubbed `Unimock`
         // panics if `setup_hls_aes` calls it.
         inner.setup_hls_aes(Arc::new(Unimock::new(())));
@@ -831,7 +869,7 @@ mod tests {
 
     #[kithara::test]
     fn update_peak_bitrate_remembers_both_limits() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
         let snapshot = *inner.peak_bitrate.lock();
         assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);

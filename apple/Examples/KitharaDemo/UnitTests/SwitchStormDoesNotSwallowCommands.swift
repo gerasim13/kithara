@@ -63,7 +63,7 @@ extension IntegrationRegressionsIOS {
                 !load.isPlayable,
                 "precondition: item \(index + 1) became playable before public next"
             )
-            player.advanceToNextItem()
+            try player.next()
             try await waitForPublicNextPlayback(
                 of: target,
                 player: player,

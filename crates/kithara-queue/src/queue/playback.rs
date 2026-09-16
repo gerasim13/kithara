@@ -1,11 +1,15 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{PlayError, SeekOutcome, SessionDuckingMode};
+use smallvec::SmallVec;
 
 use super::{
     QueueControl,
     types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
-use crate::{error::QueueError, event::TrackStatus};
+use crate::{
+    error::QueueError,
+    event::{AdvanceReason, TrackStatus},
+};
 
 impl<S> QueueControl<S>
 where
@@ -83,6 +87,12 @@ where
     pub fn pause(&self) {
         self.command(|queue| {
             queue.player.pause();
+            let mut phase = queue.lock_pending_select_mut();
+            if let SelectPhase::Pending(mut pending) = *phase {
+                pending.playback = kithara_play::SelectionPlayback::Pause;
+                *phase = SelectPhase::Pending(pending);
+            }
+            drop(phase);
             queue.freeze_cached_position();
         });
     }
@@ -94,6 +104,12 @@ where
     }
 
     fn play_inner(&self) {
+        let mut phase = self.lock_pending_select_mut();
+        if let SelectPhase::Pending(mut pending) = *phase {
+            pending.playback = kithara_play::SelectionPlayback::Play;
+            *phase = SelectPhase::Pending(pending);
+        }
+        drop(phase);
         self.player.play();
 
         let _apply = self.lock_select_apply();
@@ -118,7 +134,9 @@ where
                 }
                 self.override_pending_select(PendingSelect {
                     id,
-                    transition: Transition::None,
+                    settings: Transition::None.settings(self.crossfade_settings()),
+                    playback: kithara_play::SelectionPlayback::Play,
+                    reason: AdvanceReason::UserSelect,
                 });
                 self.promote_pending_load(id);
             }
@@ -153,11 +171,14 @@ where
         // WHY: Superpowered-style resume after end-of-queue: once the last track played to natural EOF the nav cursor ran off the end
         // (`current()` is `None`).
         if self.current().is_none() {
-            let idx = { self.lock_navigation().last_selected_index() };
-            if let Some(idx) = idx
-                && idx < self.len()
-            {
-                self.lock_navigation_mut().select(idx);
+            let id = { self.lock_navigation().last_selected() };
+            if let Some(id) = id {
+                let ids = self
+                    .tracks()
+                    .into_iter()
+                    .map(|track| track.id)
+                    .collect::<SmallVec<[_; 16]>>();
+                self.lock_navigation_mut().select(id, &ids);
                 self.handle_current_item_changed();
             }
         }
@@ -279,20 +300,23 @@ mod tests {
             .tick()
             .expect("BUG: tick returned error in test setup");
 
-        let nav_idx = queue.lock_navigation().current_index();
-        assert_eq!(nav_idx, None, "navigation must not have advanced");
+        assert_eq!(
+            queue.lock_navigation().current(),
+            None,
+            "navigation must not have advanced"
+        );
     }
 
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
         let queue = make_queue();
-        let _a = queue
+        let a = queue
             .append("https://example.com/a.mp3")
             .expect("open queue accepts a track");
         let b = queue
             .append("https://example.com/b.mp3")
             .expect("open queue accepts a track");
-        queue.lock_navigation_mut().select(1);
+        queue.lock_navigation_mut().select(b, &[a, b]);
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();
 
@@ -308,15 +332,18 @@ mod tests {
             .tick()
             .expect("BUG: tick returned error in test setup");
 
-        let nav_idx = queue.lock_navigation().current_index();
-        assert_eq!(nav_idx, None, "stale EOF must not restart the queue");
+        assert_eq!(
+            queue.lock_navigation().current(),
+            None,
+            "stale EOF must not restart the queue"
+        );
         let saw_ended = crate::queue::state::tests::wait_for_queue_event(
             &mut rx,
             |ev| matches!(ev, QueueEvent::QueueEnded),
             200,
         )
         .await;
-        assert!(saw_ended, "stale EOF should re-announce QueueEnded");
+        assert!(!saw_ended, "stale EOF must not duplicate QueueEnded");
     }
 
     #[kithara::test]

@@ -1,6 +1,9 @@
 use kithara::platform::sync::Arc;
 
-use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
+use crate::{
+    asset::FfiAssetStore,
+    types::{FfiActionAtItemEnd, FfiCrossfadeSettings, FfiKeyOptions, FfiPlaybackOrder},
+};
 
 /// FFI-friendly player configuration.
 #[derive(Clone, Debug)]
@@ -12,6 +15,9 @@ pub struct FfiPlayerConfig {
     pub key_options: FfiKeyOptions,
     /// Number of EQ bands (log-spaced). Default: 10.
     pub eq_band_count: u32,
+    pub playback_order: FfiPlaybackOrder,
+    pub action_at_item_end: FfiActionAtItemEnd,
+    pub crossfade_settings: FfiCrossfadeSettings,
 }
 
 #[cfg(test)]
@@ -21,6 +27,14 @@ impl FfiPlayerConfig {
             eq_band_count: 10,
             key_options: FfiKeyOptions::default(),
             store: Arc::new(FfiAssetStore::for_test()),
+            playback_order: FfiPlaybackOrder::Sequential,
+            action_at_item_end: FfiActionAtItemEnd::Advance,
+            crossfade_settings: FfiCrossfadeSettings {
+                duration: 1.0,
+                curve: crate::types::FfiCrossfadeCurve::EqualPower,
+                depth: 1.0,
+                position: 0.5,
+            },
         }
     }
 }

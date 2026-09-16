@@ -198,7 +198,10 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
     push(&mut control, PlayerCmd::SetPaused(false));
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn(item_id)),
+        PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }),
     );
 
     let fading = pump(&mut processor, WARMUP_BLOCKS);
@@ -289,7 +292,10 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
     let second_id = load(&mut control, "b.mp3", constant_quarter);
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn(second_id)),
+        PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: second_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }),
     );
     let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);
     assert!(

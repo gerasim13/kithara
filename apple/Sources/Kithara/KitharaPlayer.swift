@@ -77,10 +77,14 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .trackStatusChanged(itemId: audioId, status: status)
         case .queueEnded:
             return .queueEnded
-        case .crossfadeStarted(let durationSeconds):
-            return .crossfadeStarted(durationSeconds: durationSeconds)
-        case .crossfadeDurationChanged(let seconds):
-            return .crossfadeDurationChanged(seconds: seconds)
+        case .crossfadeStarted(let settings):
+            return .crossfadeStarted(settings: CrossfadeSettings(ffi: settings))
+        case .crossfadeSettingsChanged(let settings):
+            return .crossfadeSettingsChanged(settings: CrossfadeSettings(ffi: settings))
+        case .playbackOrderChanged(let order):
+            return .playbackOrderChanged(order: PlaybackOrder(ffi: order))
+        case .actionAtItemEndChanged(let action):
+            return .actionAtItemEndChanged(action: ActionAtItemEnd(ffi: action))
         case .repeatModeChanged(let mode):
             return .repeatModeChanged(mode: RepeatMode(ffi: mode))
         case .trackAdded,
@@ -345,17 +349,26 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
+        public var playbackOrder: PlaybackOrder
+        public var actionAtItemEnd: ActionAtItemEnd
+        public var crossfadeSettings: CrossfadeSettings
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
-            store: AssetStore = AssetStore()
+            store: AssetStore = AssetStore(),
+            playbackOrder: PlaybackOrder = .sequential,
+            actionAtItemEnd: ActionAtItemEnd = .advance,
+            crossfadeSettings: CrossfadeSettings = .default
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.store = store
+            self.playbackOrder = playbackOrder
+            self.actionAtItemEnd = actionAtItemEnd
+            self.crossfadeSettings = crossfadeSettings
         }
     }
 
@@ -373,9 +386,16 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         let ffiConfig = FfiPlayerConfig(
             store: config.store.inner,
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            eqBandCount: UInt32(config.eqBandCount)
+            eqBandCount: UInt32(config.eqBandCount),
+            playbackOrder: config.playbackOrder.ffi,
+            actionAtItemEnd: config.actionAtItemEnd.ffi,
+            crossfadeSettings: config.crossfadeSettings.ffi
         )
-        self._inner = AudioPlayer(config: ffiConfig)
+        do {
+            self._inner = try AudioPlayer(config: ffiConfig)
+        } catch {
+            preconditionFailure("validated player configuration was rejected: \(error)")
+        }
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
@@ -726,10 +746,28 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         try selectItem(at: index, transition: transition)
     }
 
-    /// Crossfade duration in seconds applied on item transitions.
-    public var crossfadeDuration: Float {
-        get { _inner.crossfadeDuration() }
-        set { _inner.setCrossfadeDuration(seconds: newValue) }
+    public var crossfadeSettings: CrossfadeSettings {
+        CrossfadeSettings(ffi: _inner.crossfadeSettings())
+    }
+
+    public var playbackOrder: PlaybackOrder {
+        PlaybackOrder(ffi: _inner.playbackOrder())
+    }
+
+    public var actionAtItemEnd: ActionAtItemEnd {
+        ActionAtItemEnd(ffi: _inner.actionAtItemEnd())
+    }
+
+    public func setCrossfadeSettings(_ settings: CrossfadeSettings) throws {
+        try _inner.setCrossfadeSettings(settings: settings.ffi)
+    }
+
+    public func setPlaybackOrder(_ order: PlaybackOrder) throws {
+        try _inner.setPlaybackOrder(order: order.ffi)
+    }
+
+    public func setActionAtItemEnd(_ action: ActionAtItemEnd) throws {
+        try _inner.setActionAtItemEnd(action: action.ffi)
     }
 
     // MARK: - Queue navigation
@@ -737,8 +775,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// Skip to the next item in the queue. No-op if already on the
     /// last item or the queue is empty. Mirrors AVQueuePlayer's
     /// `advanceToNextItem`.
-    public func advanceToNextItem() {
-        _inner.advanceToNextItem()
+    public func next() throws {
+        try _inner.advanceToNextItem()
+    }
+
+    public func previous() throws {
+        try _inner.returnToPreviousItem()
     }
 
     /// Stop playback, clear the queue, and reset the current-item

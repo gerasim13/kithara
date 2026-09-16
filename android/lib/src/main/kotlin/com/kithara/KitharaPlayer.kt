@@ -2,11 +2,15 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiActionAtItemEnd
+import com.kithara.ffi.FfiCrossfadeCurve
+import com.kithara.ffi.FfiCrossfadeSettings
 import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
 import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
+import com.kithara.ffi.FfiPlaybackOrder
 import com.kithara.ffi.FfiPlayerStatus
 import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
@@ -55,6 +59,9 @@ class KitharaPlayer(config: Config = Config()) {
         val keyRules: List<KeyRule> = emptyList(),
         /** Shared asset store used by every item created by this player. */
         val store: AssetStore = Kithara.defaultStore,
+        val playbackOrder: PlaybackOrder = PlaybackOrder.Sequential,
+        val actionAtItemEnd: ActionAtItemEnd = ActionAtItemEnd.Advance,
+        val crossfadeSettings: CrossfadeSettings = CrossfadeSettings(),
     )
 
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
@@ -128,12 +135,19 @@ class KitharaPlayer(config: Config = Config()) {
             inner.setPlayingRate(value)
         }
 
-    /** Crossfade duration in seconds applied on item transitions. */
-    var crossfadeDuration: Float
-        get() = inner.crossfadeDuration()
+    var crossfadeSettings: CrossfadeSettings
+        get() = inner.crossfadeSettings().toPublic()
         set(value) {
-            inner.setCrossfadeDuration(value)
+            inner.setCrossfadeSettings(value.toFfi())
         }
+
+    var playbackOrder: PlaybackOrder
+        get() = inner.playbackOrder().toPublic()
+        set(value) { inner.setPlaybackOrder(value.toFfi()) }
+
+    var actionAtItemEnd: ActionAtItemEnd
+        get() = inner.actionAtItemEnd().toPublic()
+        set(value) { inner.setActionAtItemEnd(value.toFfi()) }
 
     /** Volume scalar, usually 0.0 to 1.0. */
     var volume: Float
@@ -213,8 +227,18 @@ class KitharaPlayer(config: Config = Config()) {
      * Skip to the next item in the queue. No-op if already on the last
      * item or the queue is empty.
      */
-    fun advanceToNextItem() {
-        inner.advanceToNextItem()
+    @Throws(KitharaError::class)
+    fun next() {
+        try { inner.advanceToNextItem() } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    @Throws(KitharaError::class)
+    fun previous() {
+        try { inner.returnToPreviousItem() } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
     }
 
     /**
@@ -370,6 +394,15 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.QueueEnded ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
+            is FfiPlayerEvent.CrossfadeSettingsChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.CrossfadeSettingsChanged(event.settings.toPublic()))
+
+            is FfiPlayerEvent.PlaybackOrderChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.PlaybackOrderChanged(event.order.toPublic()))
+
+            is FfiPlayerEvent.ActionAtItemEndChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.ActionAtItemEndChanged(event.action.toPublic()))
+
             // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
             is FfiPlayerEvent.ItemDidFail,
             is FfiPlayerEvent.TimeControlStatusChanged,
@@ -377,7 +410,6 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.CrossfadeDurationChanged,
             is FfiPlayerEvent.TrackAdded,
             is FfiPlayerEvent.TrackRemoved,
             is FfiPlayerEvent.TrackLoadFailed,
@@ -435,7 +467,39 @@ private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
 private fun Transition.toFfi(): FfiTransition = when (this) {
     is Transition.None -> FfiTransition.None
     is Transition.Crossfade -> FfiTransition.Crossfade
-    is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(seconds)
+    is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(settings.toFfi())
+}
+
+private fun CrossfadeSettings.toFfi() = FfiCrossfadeSettings(duration, curve.toFfi(), depth, position)
+private fun FfiCrossfadeSettings.toPublic() = CrossfadeSettings(duration, curve.toPublic(), depth, position)
+private fun CrossfadeCurve.toFfi() = when (this) {
+    CrossfadeCurve.Linear -> FfiCrossfadeCurve.LINEAR
+    CrossfadeCurve.EqualPower -> FfiCrossfadeCurve.EQUAL_POWER
+}
+private fun FfiCrossfadeCurve.toPublic() = when (this) {
+    FfiCrossfadeCurve.LINEAR -> CrossfadeCurve.Linear
+    FfiCrossfadeCurve.EQUAL_POWER -> CrossfadeCurve.EqualPower
+    FfiCrossfadeCurve.UNKNOWN -> throw IllegalStateException("unknown crossfade curve")
+}
+private fun PlaybackOrder.toFfi() = when (this) {
+    PlaybackOrder.Sequential -> FfiPlaybackOrder.SEQUENTIAL
+    PlaybackOrder.Shuffle -> FfiPlaybackOrder.SHUFFLE
+}
+private fun FfiPlaybackOrder.toPublic() = when (this) {
+    FfiPlaybackOrder.SEQUENTIAL -> PlaybackOrder.Sequential
+    FfiPlaybackOrder.SHUFFLE -> PlaybackOrder.Shuffle
+    FfiPlaybackOrder.UNKNOWN -> throw IllegalStateException("unknown playback order")
+}
+private fun ActionAtItemEnd.toFfi() = when (this) {
+    ActionAtItemEnd.Advance -> FfiActionAtItemEnd.ADVANCE
+    ActionAtItemEnd.Pause -> FfiActionAtItemEnd.PAUSE
+    ActionAtItemEnd.None -> FfiActionAtItemEnd.NONE
+}
+private fun FfiActionAtItemEnd.toPublic() = when (this) {
+    FfiActionAtItemEnd.ADVANCE -> ActionAtItemEnd.Advance
+    FfiActionAtItemEnd.PAUSE -> ActionAtItemEnd.Pause
+    FfiActionAtItemEnd.NONE -> ActionAtItemEnd.None
+    FfiActionAtItemEnd.UNKNOWN -> throw IllegalStateException("unknown item-end action")
 }
 
 /**
@@ -476,6 +540,9 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
+        playbackOrder = playbackOrder.toFfi(),
+        actionAtItemEnd = actionAtItemEnd.toFfi(),
+        crossfadeSettings = crossfadeSettings.toFfi(),
     )
 }
 

@@ -97,8 +97,11 @@ impl MixHarness {
                         .select_item_with_crossfade(
                             0,
                             SelectTransition {
-                                autoplay: true,
-                                crossfade_seconds: 0.0,
+                                playback: kithara::play::SelectionPlayback::Play,
+                                crossfade: kithara::play::CrossfadeSettings {
+                                    duration: 0.0,
+                                    ..Default::default()
+                                },
                             },
                         )
                         .expect("select item");

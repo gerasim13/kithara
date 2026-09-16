@@ -121,6 +121,36 @@ struct KitharaPlayerTests {
         #expect(player.status == .unknown)
     }
 
+    @Test("typed queue policy and complete crossfade profile round trip")
+    func typedQueuePolicyRoundTrips() throws {
+        let player = KitharaPlayer()
+        let settings = try CrossfadeSettings(
+            duration: 2.5,
+            curve: .linear,
+            depth: 0.25,
+            position: 0.3
+        )
+        try player.setCrossfadeSettings(settings)
+        try player.setPlaybackOrder(.shuffle)
+        try player.setActionAtItemEnd(.pause)
+        #expect(player.crossfadeSettings == settings)
+        #expect(player.playbackOrder == .shuffle)
+        #expect(player.actionAtItemEnd == .pause)
+    }
+
+    @Test("crossfade settings reject invalid values")
+    func crossfadeSettingsRejectInvalidValues() {
+        #expect(throws: KitharaError.self) {
+            try CrossfadeSettings(duration: -.infinity)
+        }
+        #expect(throws: KitharaError.self) {
+            try CrossfadeSettings(depth: .nan)
+        }
+        #expect(throws: KitharaError.self) {
+            try CrossfadeSettings(position: 1)
+        }
+    }
+
     @Test("command errors are emitted with affected item id")
     func commandErrorsAreEmittedWithAffectedItemId() {
         let player = KitharaPlayer()

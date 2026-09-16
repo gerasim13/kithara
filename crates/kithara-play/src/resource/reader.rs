@@ -697,7 +697,10 @@ mod tests {
             .expect("load first track");
         control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(first_id)))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: first_id,
+                settings: crate::CrossfadeSettings::default(),
+            }))
             .expect("fade in first track");
         control
             .cmd_tx
@@ -743,7 +746,10 @@ mod tests {
             .expect("load next track");
         control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(next_id)))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: next_id,
+                settings: crate::CrossfadeSettings::default(),
+            }))
             .expect("fade in next track");
         assert_eq!(controls.speed(), 1.5);
 

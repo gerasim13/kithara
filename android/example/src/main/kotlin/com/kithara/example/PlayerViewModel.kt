@@ -64,12 +64,12 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         // Force-align Android default with iOS (PlayerViewModel.swift:88) — the
         // native player initializes to 1.0s but the demo expects 5.0s on a fresh
         // install, so the Settings tab shows the same value across platforms.
-        player.crossfadeDuration = 5.0f
+        player.crossfadeSettings = com.kithara.CrossfadeSettings(duration = 5.0f)
         _uiState.update {
             it.copy(
                 volume = player.volume,
                 isMuted = player.isMuted,
-                crossfadeDuration = player.crossfadeDuration,
+                crossfadeDuration = player.crossfadeSettings.duration,
                 eqGains = List(10) { i -> player.getEqGain(i) }
             )
         }
@@ -178,7 +178,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun setCrossfadeDuration(duration: Float) {
-        player.crossfadeDuration = duration
+        player.crossfadeSettings = com.kithara.CrossfadeSettings(duration = duration)
         _uiState.update { it.copy(crossfadeDuration = duration) }
     }
 
@@ -222,7 +222,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun advanceToNextItem() {
-        player.advanceToNextItem()
+        player.next()
     }
 
     fun updatePeakBitrate(wifi: Double, cellular: Double) {

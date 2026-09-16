@@ -121,7 +121,9 @@ class PlayerViewModelBase: ObservableObject {
         isMuted = player.isMuted
         player.playingRate = selectedRate
         eqGains = Array(repeating: 0, count: player.eqBandCount)
-        player.crossfadeDuration = Self.defaultCrossfadeSeconds
+        if let settings = try? CrossfadeSettings(duration: Self.defaultCrossfadeSeconds) {
+            try? player.setCrossfadeSettings(settings)
+        }
         crossfadeDuration = Self.defaultCrossfadeSeconds
 
         for provider in bundledDrmProviders() {
@@ -304,7 +306,7 @@ class PlayerViewModelBase: ObservableObject {
     }
 
     func advanceToNextItem() {
-        player.advanceToNextItem()
+        try? player.next()
     }
 
     func updatePeakBitrate(wifi: Double, cellular: Double) {
@@ -318,7 +320,9 @@ class PlayerViewModelBase: ObservableObject {
     func setCrossfadeDuration(_ seconds: Float) {
         let clamped = min(max(seconds, Self.crossfadeRange.lowerBound), Self.crossfadeRange.upperBound)
         crossfadeDuration = clamped
-        player.crossfadeDuration = clamped
+        if let settings = try? CrossfadeSettings(duration: clamped) {
+            try? player.setCrossfadeSettings(settings)
+        }
     }
 
     // MARK: - Transport

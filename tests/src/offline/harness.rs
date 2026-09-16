@@ -65,8 +65,15 @@ pub async fn offline_queue_fixture_with_options(
     options: OfflinePlayerOptions,
     sample_rate: u32,
 ) -> (OfflinePlayerHarness, QueueControl<TestPools>) {
+    let crossfade_duration = options.crossfade_duration;
     let harness = OfflinePlayerHarness::with_sample_rate(options, sample_rate).await;
-    let config = QueueConfig::builder().player(harness.take_player()).build();
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: crossfade_duration,
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .build();
     let queue = harness.insert_control(Queue::new(config)).await;
     (harness, queue)
 }

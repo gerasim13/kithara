@@ -11,10 +11,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::assets;
 
-use crate::{
-    bufpool_ext::TestPools,
-    loader_fixture::{append_loaded, wait_loaded},
-};
+use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -80,8 +77,6 @@ async fn seek_updates_cached_position_optimistically() {
 /// A again must reload the retained product source and restart playback.
 #[kithara::test(tokio, flash(false))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
-    const TRACK_SECS: f64 = 0.4;
-
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source_a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
@@ -103,12 +98,10 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
         first_onset_frame(&first_pcm, 0.005).is_some(),
         "track A must play through on the first pass"
     );
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
-    wait_loaded(&mut reload_events, id_a).await;
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -126,7 +119,6 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
-    const TRACK_SECS: f64 = 8.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
@@ -157,12 +149,10 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("switch back to track A");
-    wait_loaded(&mut reload_events, id_a).await;
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
     assert!(
@@ -202,7 +192,6 @@ async fn play_button_marks_current_loaded_track_consumed() {
 /// unavailable, so its eventual completion cannot barge into playback.
 #[kithara::test(tokio)]
 async fn reselect_playing_track_cancels_pending_switch() {
-    const TRACK_SECS: f64 = 5.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;

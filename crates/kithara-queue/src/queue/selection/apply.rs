@@ -8,11 +8,8 @@ use tracing::{debug, warn};
 
 use crate::{
     error::QueueError,
-    event::{AdvanceReason, QueueEvent, TrackStatus},
-    queue::{
-        QueueControl,
-        types::{SelectPhase, Transition},
-    },
+    event::{QueueEvent, TrackStatus},
+    queue::{QueueControl, types::SelectPhase},
 };
 
 impl<S> QueueControl<S>
@@ -88,7 +85,7 @@ where
             let selection = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;
-                    Some(pending.transition)
+                    Some(pending)
                 }
                 _ => None,
             };
@@ -96,13 +93,17 @@ where
             selection
         };
 
-        let autoplay = self.autoplay_target.disarm_if_matches(id);
-        let Some(transition) = selection.or_else(|| autoplay.then_some(Transition::None)) else {
+        self.autoplay_target.disarm_if_matches(id);
+        let Some(selection) = selection else {
             return;
         };
-        if let Err(error) =
-            self.select_loaded_item(index, id, transition, AdvanceReason::UserSelect)
-        {
+        if let Err(error) = self.select_loaded_item(
+            index,
+            id,
+            selection.settings,
+            selection.reason,
+            selection.playback,
+        ) {
             warn!(id = id.as_u64(), error = %error, "pending select failed");
         }
     }

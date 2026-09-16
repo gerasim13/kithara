@@ -76,6 +76,11 @@ pool region. When no store is supplied, it builds the store from the exact
 `Queue::set_tracks` must run inside an active tokio runtime because the
 loader uses `tokio::spawn`.
 
+`QueueConfig` owns the initial playback order, item-end action, and complete
+crossfade profile. Their runtime setters update that same queue-owned state;
+repeat remains a separate automatic-EOF rule, and `should_autoplay` applies
+only to the first load.
+
 ## Key Types
 
 [`Queue<S>`] owns a `PlayerImpl<S>` (from `kithara-play`) and composes it with:
@@ -83,7 +88,8 @@ loader uses `tokio::spawn`.
 - an ordered `Vec<TrackEntry>` indexed by stable [`TrackId`]s,
 - an async [`Loader`] (internal) that caps in-flight `Resource::new`
   calls via a `tokio::sync::Semaphore`,
-- [`NavigationState`] for shuffle / repeat / history,
+- [`NavigationState`] for stable-ID sequential or shuffle traversal, repeat,
+  and actual selection history,
 - a `pending_select` slot so `Queue::select(id)` can be called before the
   track has finished loading.
 
@@ -94,9 +100,13 @@ underlying player / audio / hls / file events through a single stream.
 - [`Queue::new(QueueConfig)`] - the orchestrator, generic over the player's
   registered pool schema: CRUD (`append`,
   `insert`, `remove`, `clear`, `set_tracks`), navigation (`select`,
-  `advance_to_next`, `return_to_previous`, shuffle / repeat / `seek`),
+  `next`, `previous`, typed playback order / repeat / item-end action / `seek`),
   playback controls delegated to `PlayerImpl`, and `tick()` to drive the
   player and drain engine events.
+- [`CrossfadeSettings`] — duration, linear or equal-power curve, blend depth,
+  and temporal crossover pivot. Linear controls amplitude and can dip perceived
+  power for unrelated tracks; equal-power approximately preserves uncorrelated
+  power and can raise correlated material.
 - [`TrackSource<S>`] - input to `append` / `insert` / `set_tracks`, either a
   `Uri(String)` (Queue builds a default `ResourceConfig`) or a
   `Config(Box<ResourceConfig>)` (caller-built, for DRM keys / headers /

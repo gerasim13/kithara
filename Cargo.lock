@@ -5488,8 +5488,10 @@ dependencies = [
  "kithara-queue",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "rand 0.10.2",
  "serde",
  "serde_yaml_ng",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]

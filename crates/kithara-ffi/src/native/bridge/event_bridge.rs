@@ -19,8 +19,8 @@ use crate::{
     pools::FfiQueueControl,
     registry::ItemRegistry,
     types::{
-        FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
-        FfiTrackStatus,
+        FfiActionAtItemEnd, FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlaybackOrder,
+        FfiPlayerEvent, FfiRepeatMode, FfiTimeRange, FfiTrackStatus,
     },
 };
 
@@ -113,13 +113,25 @@ impl EventBridge {
                     auto_skipped: *auto_skipped,
                 });
             }
-            QueueEvent::CrossfadeStarted { duration_seconds } => {
+            QueueEvent::CrossfadeStarted { settings } => {
                 observer.on_event(FfiPlayerEvent::CrossfadeStarted {
-                    duration_seconds: *duration_seconds,
+                    settings: (*settings).into(),
                 });
             }
-            QueueEvent::CrossfadeDurationChanged { seconds } => {
-                observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
+            QueueEvent::CrossfadeSettingsChanged { settings } => {
+                observer.on_event(FfiPlayerEvent::CrossfadeSettingsChanged {
+                    settings: (*settings).into(),
+                });
+            }
+            QueueEvent::PlaybackOrderChanged { order } => {
+                observer.on_event(FfiPlayerEvent::PlaybackOrderChanged {
+                    order: FfiPlaybackOrder::from(*order),
+                });
+            }
+            QueueEvent::ActionAtItemEndChanged { action } => {
+                observer.on_event(FfiPlayerEvent::ActionAtItemEndChanged {
+                    action: FfiActionAtItemEnd::from(*action),
+                });
             }
             QueueEvent::RepeatModeChanged { mode } => {
                 observer.on_event(FfiPlayerEvent::RepeatModeChanged {
@@ -399,7 +411,7 @@ mod tests {
         observer::ItemObserver,
         pools,
         pools::{FfiQueue, FfiWorker},
-        types::{FfiItemConfig, FfiItemEvent},
+        types::{FfiCrossfadeSettings, FfiItemConfig, FfiItemEvent},
     };
 
     type QueueEventCase = (QueueEvent, fn(&FfiPlayerEvent) -> bool);
@@ -860,23 +872,33 @@ mod tests {
             }),
             (
                 QueueEvent::CrossfadeStarted {
-                    duration_seconds: 3.5,
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 3.5,
+                        ..Default::default()
+                    },
                 },
                 |event| {
                     matches!(
                         event,
                         FfiPlayerEvent::CrossfadeStarted {
-                            duration_seconds: 3.5
+                            settings: FfiCrossfadeSettings { duration: 3.5, .. }
                         }
                     )
                 },
             ),
             (
-                QueueEvent::CrossfadeDurationChanged { seconds: 4.0 },
+                QueueEvent::CrossfadeSettingsChanged {
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 4.0,
+                        ..Default::default()
+                    },
+                },
                 |event| {
                     matches!(
                         event,
-                        FfiPlayerEvent::CrossfadeDurationChanged { seconds: 4.0 }
+                        FfiPlayerEvent::CrossfadeSettingsChanged {
+                            settings: FfiCrossfadeSettings { duration: 4.0, .. }
+                        }
                     )
                 },
             ),

@@ -309,8 +309,11 @@ fn select_item_out_of_range_returns_typed_error() {
         .select_item_with_crossfade(
             5,
             SelectTransition {
-                autoplay: false,
-                crossfade_seconds: 0.0,
+                playback: kithara_play::SelectionPlayback::Pause,
+                crossfade: kithara_play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..Default::default()
+                },
             },
         )
         .expect_err("must error");
@@ -331,8 +334,11 @@ fn select_item_on_consumed_slot_errors_without_bookkeeping() {
     let result = player.select_item_with_crossfade(
         1,
         SelectTransition {
-            autoplay: false,
-            crossfade_seconds: 0.0,
+            playback: kithara_play::SelectionPlayback::Pause,
+            crossfade: kithara_play::CrossfadeSettings {
+                duration: 0.0,
+                ..Default::default()
+            },
         },
     );
     assert!(result.is_err(), "selecting an emptied slot must fail");

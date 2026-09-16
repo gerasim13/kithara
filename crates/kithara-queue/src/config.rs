@@ -5,7 +5,9 @@ use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_derive::Patch;
 use kithara_platform::CancelToken;
-use kithara_play::PlayerImpl;
+use kithara_play::{CrossfadeSettings, PlayerImpl};
+
+use crate::{ActionAtItemEnd, PlaybackOrder};
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -74,6 +76,15 @@ where
     /// worth of back-steps; the queue's own track list is unbounded.
     #[builder(default = 100)]
     pub max_history_size: usize,
+
+    #[builder(default)]
+    pub playback_order: PlaybackOrder,
+
+    #[builder(default)]
+    pub action_at_item_end: ActionAtItemEnd,
+
+    #[builder(default)]
+    pub crossfade_settings: CrossfadeSettings,
 }
 
 impl<S> fmt::Debug for QueueConfig<S>
@@ -86,6 +97,9 @@ where
             .field("prefetch_duration", &self.prefetch_duration)
             .field("should_autoplay", &self.should_autoplay)
             .field("max_history_size", &self.max_history_size)
+            .field("playback_order", &self.playback_order)
+            .field("action_at_item_end", &self.action_at_item_end)
+            .field("crossfade_settings", &self.crossfade_settings)
             .finish_non_exhaustive()
     }
 }

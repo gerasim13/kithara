@@ -188,10 +188,12 @@ fn run_capture(
         Ok::<_, jlong>(resource)
     })?;
     control.insert(resource, TrackId::allocate(), None);
-    control.select_item(0, true).map_err(|err| {
-        error!(?err, "offline player selection failed");
-        Consts::RC_AUDIO_BUILD
-    })?;
+    control
+        .select_item(0, kithara::play::SelectionPlayback::Play)
+        .map_err(|err| {
+            error!(?err, "offline player selection failed");
+            Consts::RC_AUDIO_BUILD
+        })?;
 
     let mut file = File::create(&output).map_err(|err| {
         error!(?err, path = %output.display(), "output open failed");

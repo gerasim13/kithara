@@ -128,8 +128,8 @@ async fn second_entry_with_the_same_source_owns_its_real_eof() {
     );
     assert_eq!(
         status_of(&queue, first),
-        TrackStatus::Loaded,
-        "the non-playing duplicate must remain loaded"
+        TrackStatus::Consumed,
+        "the initially selected duplicate remains distinct from the entry that reached EOF"
     );
     assert!(
         queue.current().is_none(),

@@ -20,8 +20,8 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc, SeekOutcome, SelectTransition,
+        CrossfadeSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
+        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
     },
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -908,8 +908,11 @@ async fn load_decks(
             player.select_item_with_crossfade(
                 0,
                 SelectTransition {
-                    autoplay: false,
-                    crossfade_seconds: 0.0,
+                    playback: SelectionPlayback::Pause,
+                    crossfade: CrossfadeSettings {
+                        duration: 0.0,
+                        ..Default::default()
+                    },
                 },
             )
         })
