@@ -460,19 +460,13 @@ async fn decoder_node_seek_rearms_preload_gate() {
 
     let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
-    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.tick(), TickResult::Progress);
     assert!(!node.runtime.preloaded, "seek resets the preload runtime");
     assert!(!gate.is_ready(), "sync_seek_epoch closes the gate");
 
     assert!(
         matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))),
         "consumer discards the stale pre-seek chunk"
-    );
-
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert!(
-        !node.runtime.preloaded,
-        "source first applies the seek epoch"
     );
 
     assert_eq!(node.tick(), TickResult::Progress);

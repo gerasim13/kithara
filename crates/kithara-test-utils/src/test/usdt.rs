@@ -6,7 +6,10 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use kithara_platform::sync::{Arc, Notify};
+use kithara_platform::{
+    sync::{Arc, Notify},
+    time::timeout,
+};
 use tracing::{
     Event, Metadata, Subscriber,
     field::{Field, Visit},
@@ -189,17 +192,72 @@ impl Scope {
 
     /// Resolves once the firings recorded so far satisfy `holds`,
     /// re-checking after every newly recorded firing.
+    ///
+    /// The wait carries the watchdog budget, so a condition the product never
+    /// satisfies fails the test with what was recorded instead of parking it
+    /// until the runner kills the binary. The budget is real time, so the
+    /// caller runs under `flash(false)`: a virtual clock jumps the deadline
+    /// while the work it waits on runs on a real-time thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `holds` has not held within that budget.
     pub async fn wait_for<F>(&self, mut holds: F)
     where
         F: FnMut(&[ProbeEvent]) -> bool,
     {
-        loop {
-            let recorded = self.recorded.notified();
-            if holds(lock(&STATE).history()) {
-                return;
+        let budget = crate::hang::default_timeout();
+        let wait = async {
+            loop {
+                let recorded = self.recorded.notified();
+                if holds(lock(&STATE).history()) {
+                    return;
+                }
+                recorded.await;
             }
-            recorded.await;
+        };
+        if timeout(budget, wait).await.is_err() {
+            panic!("{}", Self::unsatisfied_wait(budget));
         }
+    }
+
+    /// Describe a wait that ran out of budget: how long it waited and which
+    /// probes it did see, so the failure names the missing firing.
+    fn unsatisfied_wait(budget: kithara_platform::time::Duration) -> String {
+        let (events, overflowed) = recorded();
+        let mut counts: Vec<(&'static str, usize, ProbeEvent)> = Vec::new();
+        for event in &events {
+            match counts.iter_mut().find(|(probe, ..)| *probe == event.probe) {
+                Some((_, count, latest)) => {
+                    *count += 1;
+                    *latest = *event;
+                }
+                None => counts.push((event.probe, 1, *event)),
+            }
+        }
+        counts.sort_unstable_by_key(|(_, count, _)| std::cmp::Reverse(*count));
+        let seen = counts
+            .iter()
+            .map(|(probe, count, latest)| {
+                let fields = latest
+                    .fields()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{probe} x{count} [{fields}]")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let overflow = if overflowed {
+            " (history overflowed)"
+        } else {
+            ""
+        };
+        format!(
+            "usdt scope waited {budget:?} without its condition holding; \
+             recorded {} firings{overflow}, latest of each: {seen}",
+            events.len()
+        )
     }
 }
 
