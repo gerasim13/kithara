@@ -90,7 +90,6 @@ full OUTPUT:
 
     run_stage lint    just lint fast
     run_stage test    just test
-    # A Linux container has no output device; the hardware e2e lane runs as `apple:e2e`.
     run_stage mutants just test mutants run-all --output "{{ OUTPUT }}/mutants"
 
     echo "=== ci full $RUN_ID done at $(date -u -Iseconds) ==="
