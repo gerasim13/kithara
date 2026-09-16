@@ -186,6 +186,40 @@ async fn repeat_one_natural_advance_keeps_current_track() {
     harness.close().await;
 }
 
+/// Picking a track is itself a request to hear it. The queue starts stopped
+/// and first-load autoplay is off, so the only thing that can open the
+/// transport is the explicit selection.
+#[kithara::test(tokio)]
+async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(
+            QueueConfig::builder().player(harness.take_player()).build(),
+        ))
+        .await;
+    let one = assets::constant_wav_three_1s();
+    let id = append_loaded(&harness, &queue, &one).await;
+
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
+        .expect("select the loaded track");
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    assert!(
+        first_onset_frame(&pcm, 0.005).is_some(),
+        "an explicit selection must start playback from a stopped transport"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 #[kithara::test(tokio)]
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     let harness = OfflinePlayerHarness::with_sample_rate(

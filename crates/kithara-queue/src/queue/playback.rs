@@ -141,7 +141,7 @@ where
                     id,
                     transition: Transition::None,
                     reason: crate::event::AdvanceReason::UserSelect,
-                    autoplay: false,
+                    autoplay: true,
                 });
                 self.override_pending_select(PendingSelect {
                     autoplay: true,

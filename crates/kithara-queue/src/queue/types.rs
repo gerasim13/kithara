@@ -403,14 +403,14 @@ mod tests {
             id: TrackId(5),
             transition: Transition::None,
             reason: crate::event::AdvanceReason::UserSelect,
-            autoplay: false,
+            autoplay: true,
         });
         match phase {
             SelectPhase::Pending(p) => {
                 assert_eq!(p.id, TrackId(5));
                 assert_eq!(p.transition, Transition::None);
                 assert_eq!(p.reason, crate::event::AdvanceReason::UserSelect);
-                assert!(!p.autoplay);
+                assert!(p.autoplay);
             }
             SelectPhase::Idle => panic!("expected Pending"),
         }

@@ -152,17 +152,18 @@ where
         Ok(())
     }
 
-    /// Whether the selection starts playback: a reason that replaces what the
-    /// listener chose keeps the current transport, while an automatic advance
-    /// through the queue always continues the session.
+    /// Whether the selection starts playback: picking a track is itself a
+    /// request to hear it, and an automatic advance through the queue always
+    /// continues the session. A reason that replaces what the listener chose
+    /// keeps the current transport instead.
     fn start_intent(reason: AdvanceReason, was_playing: bool) -> bool {
         match reason {
-            AdvanceReason::UserSelect
-            | AdvanceReason::UserNext
+            AdvanceReason::UserNext
             | AdvanceReason::UserPrev
             | AdvanceReason::RemovedCurrent
             | AdvanceReason::Cancelled => was_playing,
-            AdvanceReason::NaturalEof
+            AdvanceReason::UserSelect
+            | AdvanceReason::NaturalEof
             | AdvanceReason::TrackFailed
             | AdvanceReason::CrossfadePreArm
             | AdvanceReason::Repeat => true,
@@ -209,7 +210,7 @@ mod tests {
                 assert_eq!(pending.id, id);
                 assert_eq!(pending.transition, Transition::None);
                 assert_eq!(pending.reason, AdvanceReason::UserSelect);
-                assert!(!pending.autoplay);
+                assert!(pending.autoplay);
             }
             SelectPhase::Idle => panic!("BUG: select stashes pending entry"),
         }
