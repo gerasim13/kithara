@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A horizontal bar filled from the left to show one fraction.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Meter;
 
 impl Control for Meter {

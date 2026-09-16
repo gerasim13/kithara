@@ -96,6 +96,10 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
+[derivable_view_control]
+enabled = true
+severity = "deny"
+
 [derivable_clone]
 enabled = true
 severity = "deny"

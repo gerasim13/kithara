@@ -3,6 +3,7 @@ use crate::{atoms::bar::preset::PresetItem, builtin};
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The global bar's preset picker.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Preset;
 
 #[cfg(feature = "render")]

@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The deck's position and what is left of the track.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Time;
 
 impl Control for Time {

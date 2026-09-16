@@ -8,14 +8,8 @@ mod config;
 mod event;
 mod phase;
 mod ranged;
+mod ui;
 
-#[cfg(any(
-    feature = "built-default",
-    feature = "event",
-    feature = "patch",
-    feature = "phase",
-    feature = "ranged"
-))]
 use proc_macro::TokenStream;
 
 /// Implements `Default` by calling the type's existing no-input builder.
@@ -34,6 +28,13 @@ use syn::{DeriveInput, Error, parse_macro_input};
 #[proc_macro_derive(Patch, attributes(patch))]
 pub fn patch(input: TokenStream) -> TokenStream {
     config::expand(input)
+}
+
+/// Implements the immediate UI host path shared by draw-only controls.
+#[cfg(feature = "ui")]
+#[proc_macro_derive(ViewControl)]
+pub fn view_control(input: TokenStream) -> TokenStream {
+    ui::view::expand(input)
 }
 
 /// Implements one of Kithara's closed typestate phase traits.

@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// One row of the navigation rail: an icon, a word, and a selected state.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct NavItem {
     pub(crate) icon: IconName,
     pub(crate) label: InternId,

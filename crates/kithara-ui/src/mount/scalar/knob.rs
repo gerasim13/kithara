@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A rotary control dragged along the vertical axis.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Knob {
     pub(crate) label: Option<InternId>,
 }

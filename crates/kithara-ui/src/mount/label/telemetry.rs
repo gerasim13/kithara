@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{module::ScalarFormat, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// One formatted number read from an endpoint.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Telemetry {
     pub(crate) format: ScalarFormat,
     pub(crate) framed: bool,

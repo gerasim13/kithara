@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The wordmark at the head of the global bar.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Brand;
 
 impl Control for Brand {

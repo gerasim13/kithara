@@ -25,7 +25,7 @@ use crate::{
     skin::ColorRole,
 };
 
-pub(super) struct Rendered<'a> {
+pub(crate) struct Rendered<'a> {
     element: Element<'a, UiEvent>,
     align: Horizontal,
 }

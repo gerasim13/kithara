@@ -5,6 +5,7 @@ use crate::{
 };
 
 /// A hairline separating two runs of a bar.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Divider;
 
 impl Control for Divider {

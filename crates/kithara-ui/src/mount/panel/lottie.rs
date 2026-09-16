@@ -8,7 +8,7 @@ use crate::{expand::Binding, ids::InternId, mount::Control, size::SizeSpec, skin
 /// own clock gets an animation without the application owning a timer; one that
 /// binds it to something else scrubs the artwork by hand from the same field.
 /// This is the sheet contract with a drawing in place of a picture.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Lottie<'a> {
     pub(crate) artwork: InternId,
     /// The flag that says which of the two artworks stands. It is an endpoint

@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// An interval with a handle at each end, each writing its own endpoint.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Range;
 
 impl Control for Range {

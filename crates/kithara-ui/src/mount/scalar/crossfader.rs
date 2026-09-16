@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A horizontal fader centred on its midpoint.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Crossfader {
     pub(crate) ticks: bool,
 }

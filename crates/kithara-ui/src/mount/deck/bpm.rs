@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The deck's tempo, editable in place.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Bpm {
     pub(crate) placeholder: Option<InternId>,
 }

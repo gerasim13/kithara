@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// A full-width tab heading one page of a panel.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Tab {
     pub(crate) label: InternId,
 }

@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A row of mutually exclusive segments, one of them picked.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Segmented<'a> {
     pub(crate) items: &'a [InternId],
 }

@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A vertical pair of level bars with a volume cap.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct VuVertical {
     pub(crate) ticks: bool,
 }

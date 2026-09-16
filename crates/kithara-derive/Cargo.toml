@@ -21,6 +21,7 @@ event = []
 patch = []
 phase = []
 ranged = []
+ui = []
 
 [dependencies]
 proc-macro2 = { workspace = true }

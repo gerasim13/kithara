@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// One box of a grid, optionally captioned and optionally picked out.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Cell {
     pub(crate) label: Option<InternId>,
     pub(crate) highlighted: bool,

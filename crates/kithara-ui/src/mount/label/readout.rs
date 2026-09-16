@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A caption with a value beside it, toned by the document.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Readout {
     pub(crate) label: Option<InternId>,
     pub(crate) tone: Tone,

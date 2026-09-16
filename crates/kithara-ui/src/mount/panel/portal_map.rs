@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A tempo axis carrying one arc from the master tempo to each portal target.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct PortalMap;
 
 impl Control for PortalMap {

@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{module::DeckSummaryStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The deck's headline: what is loaded and how it is playing.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Summary {
     pub(crate) style: DeckSummaryStyle,
 }

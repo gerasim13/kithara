@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// One palette colour, shown with its name.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Swatch {
     pub(crate) role: ColorRole,
     pub(crate) label: InternId,

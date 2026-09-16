@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, module::ChipStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A small labelled toggle that reads as a tag.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Chip {
     pub(crate) style: ChipStyle,
     pub(crate) label: InternId,

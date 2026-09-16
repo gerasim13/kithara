@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// Empty room that pushes its neighbours apart.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Spacer;
 
 impl Control for Spacer {

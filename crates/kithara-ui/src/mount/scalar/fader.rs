@@ -3,7 +3,7 @@ use bon::Builder;
 use crate::{ids::InternId, module::FaderStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A rail and a cap, dragged along the rail.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Fader {
     pub(crate) style: FaderStyle,
     pub(crate) label: Option<InternId>,

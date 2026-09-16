@@ -5,7 +5,7 @@ use crate::{
 };
 
 /// A toned dot beside a word.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct StatusDot<'a> {
     pub(crate) label: InternId,
     pub(crate) active: Option<&'a Binding>,

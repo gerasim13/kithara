@@ -10,7 +10,7 @@ use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 /// The endpoint hands over seconds, so a document that binds it to the host's
 /// own clock gets an animation without the application owning a timer; one that
 /// binds it to something else scrubs the sheet by hand from the same field.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl)]
 pub(crate) struct Sprite {
     pub(crate) sheet: InternId,
     /// How long one pass through every frame of the sheet takes.

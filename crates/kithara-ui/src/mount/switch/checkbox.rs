@@ -1,6 +1,7 @@
 use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// A square switch bound to one boolean endpoint.
+#[derive(kithara_derive::ViewControl)]
 pub(crate) struct Checkbox;
 
 impl Control for Checkbox {
