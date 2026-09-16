@@ -9,9 +9,6 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
-[package.metadata.cargo-machete]
-ignored = ["unimock"]
-
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
