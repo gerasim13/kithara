@@ -575,8 +575,6 @@ fn append_deep_coverage(coverage: &mut Vec<ToolCoverage>, args: &AssessArgs) {
         "cargo-dupes",
         "cargo-public-api",
         "cargo-bloat",
-        "e2e-tests",
-        "e2e-resamplers",
         "selenium-tests",
         "feature-gate",
         "cargo-llvm-cov",
@@ -601,10 +599,7 @@ fn append_deep_coverage(coverage: &mut Vec<ToolCoverage>, args: &AssessArgs) {
     ];
     for name in deep_only {
         let excluded_by_profile = args.profile == AssessmentProfile::Product
-            && matches!(
-                name,
-                "e2e-tests" | "e2e-resamplers" | "selenium-tests" | "feature-gate"
-            );
+            && matches!(name, "selenium-tests" | "feature-gate");
         let status = if args.depth == AssessmentDepth::Standard || excluded_by_profile {
             CoverageStatus::NotApplicable
         } else {
