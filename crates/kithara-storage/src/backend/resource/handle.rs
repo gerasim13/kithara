@@ -28,25 +28,38 @@ pub trait ResourcePhase: sealed::Sealed {
 }
 
 /// Writable, in-flight phase: single-owner, not `Clone`.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = ResourcePhase,
+    sealed = sealed::Sealed,
+    data = WriteGuard<D>,
+    generic = D,
+    bound = D: DriverIo,
+    gat
+)]
 pub struct Active;
 /// Sealed, fully-written phase: read-final, reactivatable.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = ResourcePhase,
+    sealed = sealed::Sealed,
+    data = ReadCore<D>,
+    generic = D,
+    bound = D: DriverIo,
+    gat
+)]
 pub struct Committed;
 /// Cloneable read-only view minted from an `Active` or `Committed` handle.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = ResourcePhase,
+    sealed = sealed::Sealed,
+    data = ReadCore<D>,
+    generic = D,
+    bound = D: DriverIo,
+    gat
+)]
 pub struct Reader;
-
-impl sealed::Sealed for Active {}
-impl sealed::Sealed for Committed {}
-impl sealed::Sealed for Reader {}
-
-impl ResourcePhase for Active {
-    type Data<D: DriverIo> = WriteGuard<D>;
-}
-impl ResourcePhase for Committed {
-    type Data<D: DriverIo> = ReadCore<D>;
-}
-impl ResourcePhase for Reader {
-    type Data<D: DriverIo> = ReadCore<D>;
-}
 
 /// Drop-guard payload for the `Active` writer phase. Owns the shared
 /// `ResourceCore` and, if dropped without a successful `commit`/`fail`, marks

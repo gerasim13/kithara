@@ -30,6 +30,7 @@ pub(crate) mod derivable_event;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
 pub(crate) mod derivable_patch;
+pub(crate) mod derivable_phase;
 pub(crate) mod derivable_ranged;
 mod derivable_support;
 pub(crate) mod fat_loop_body;
@@ -73,6 +74,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_patch::DerivablePatch),
+        Box::new(derivable_phase::DerivablePhase),
         Box::new(derivable_deref::DerivableDeref),
         Box::new(derivable_display::DerivableDisplay),
         Box::new(derivable_error::DerivableError),

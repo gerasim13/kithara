@@ -6,13 +6,14 @@
 mod config;
 #[cfg(feature = "event")]
 mod event;
-#[cfg(feature = "ranged")]
+mod phase;
 mod ranged;
 
 #[cfg(any(
     feature = "built-default",
     feature = "event",
     feature = "patch",
+    feature = "phase",
     feature = "ranged"
 ))]
 use proc_macro::TokenStream;
@@ -33,6 +34,13 @@ use syn::{DeriveInput, Error, parse_macro_input};
 #[proc_macro_derive(Patch, attributes(patch))]
 pub fn patch(input: TokenStream) -> TokenStream {
     config::expand(input)
+}
+
+/// Implements one of Kithara's closed typestate phase traits.
+#[cfg(feature = "phase")]
+#[proc_macro_derive(Phase, attributes(phase))]
+pub fn phase(input: TokenStream) -> TokenStream {
+    phase::expand(input)
 }
 
 /// Declares a bounded numeric newtype.

@@ -34,7 +34,7 @@ count printed ahead of it.
 | `style` | `qualified_path_depth` | trades a deep path for the `use` that shortens it |
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_error`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto an existing derive or delegation macro |
 | `idioms` | `derivable_ranged` | detect-only: choose the range and clamp policy at the type declaration |
-| `idioms` | `derivable_built_default`, `derivable_patch` | collapses builder-backed defaults and verbose patch attributes onto the owning derive |
+| `idioms` | `derivable_built_default`, `derivable_patch`, `derivable_phase` | collapses builder-backed defaults, verbose patch attributes, and closed typestate impls onto the owning derive |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
 
 Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds only
