@@ -78,62 +78,6 @@
   <require tools> cargo curl ffmpeg java just make pkg-config tar
   just platform android clippy
   just platform android test --avd Kithara_CI_API_36
-# apple-e2e / branch
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / platforms
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / merge-request
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / quarantine
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / main
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / nightly
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / weekly
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
-# apple-e2e / release
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
-  /usr/bin/xcodebuild -version
-  just test run --lane=e2e --profile ci
-  just test run --lane=e2e-fused --profile ci
-  just test run --lane=e2e-glide --profile ci
 # apple-ios / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen

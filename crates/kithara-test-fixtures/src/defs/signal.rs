@@ -21,6 +21,7 @@ impl Consts {
     const FRAMES_6S_44K1: usize = 264_600;
     const RATE_44K1: u32 = 44_100;
     const RATE_48K: u32 = 48_000;
+    const MONO: u16 = 1;
     const STEREO: u16 = 2;
     /// The sample count occupies the low 36 bits of that field.
     const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
@@ -172,6 +173,17 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    None
+)]
+// The mono counterpart of `sine440_60s`: same tone, same rate, one channel.
+// A source narrower than the device's planes is the case where framing the
+// interleaved read by the plane count instead of the stream doubles playback
+// rate.
+#[case::mono_sine440_60s(
+    Wave::sine(440.0),
+    Consts::RATE_44K1,
+    Consts::MONO,
     Consts::FRAMES_60S_44K1,
     None
 )]
