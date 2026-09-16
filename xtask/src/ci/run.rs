@@ -1093,7 +1093,6 @@ mod tests {
                 ".ci-artifacts/junit/apple-test.xml",
                 ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
-                "target/nextest/ci/junit.xml",
                 "target/xcresult/ios-test.junit.xml",
                 "target/xcresult/swift-test.junit.xml",
             ]
