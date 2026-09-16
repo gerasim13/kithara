@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
-use kithara_events::EventBus;
+use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
@@ -25,6 +25,10 @@ const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448
     Some(frames) => frames,
     None => unreachable!(),
 };
+
+fn default_event_bus_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_EVENT_BUS_CAPACITY).unwrap_or_else(|| unreachable!())
+}
 
 /// Configuration for the player.
 ///
@@ -80,6 +84,10 @@ pub struct PlayerConfig<S> {
     /// Default playback-rate target (1.0 = normal). Default: 1.0.
     #[builder(default = 1.0)]
     pub default_rate: f32,
+    /// Capacity of each event topic when this player creates its root bus.
+    /// An injected [`EventBus`] keeps its own capacity and identity.
+    #[builder(default = default_event_bus_capacity())]
+    pub event_bus_capacity: NonZeroUsize,
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
@@ -156,6 +164,7 @@ mod tests {
         assert!(config.auto_advance_enabled);
         assert!((config.crossfade_duration - 1.0).abs() < f32::EPSILON);
         assert!((config.default_rate - 1.0).abs() < f32::EPSILON);
+        assert_eq!(config.event_bus_capacity.get(), 1024);
         assert!((config.prefetch_duration - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
     }
@@ -173,6 +182,14 @@ mod document_tests {
     use kithara_test_utils::kithara;
 
     use super::{GaplessMode, PlayerConfigPatch, tests::config};
+
+    #[kithara::test(native, flash(false))]
+    fn zero_event_bus_capacity_is_rejected() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("event_bus_capacity: 0\n")
+            .expect_err("zero cannot construct NonZeroUsize");
+
+        assert!(error.to_string().contains("event_bus_capacity"), "{error}");
+    }
 
     /// `slot_ceiling` is not a prefix of any real field (unlike `max_slot`,
     /// which would pass this assertion vacuously because the error message

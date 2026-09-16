@@ -4,7 +4,6 @@
 //! a crate root and delegates to the module that owns each expansion.
 
 mod config;
-#[cfg(feature = "event")]
 mod event;
 mod phase;
 mod ranged;
@@ -27,6 +26,7 @@ pub fn patch(input: TokenStream) -> TokenStream {
     config::expand(input)
 }
 
+#[cfg(feature = "ui")]
 macro_rules! ui_derives {
     () => {
         /// Implements the immediate UI host path shared by draw-only controls.
