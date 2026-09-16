@@ -271,7 +271,7 @@ impl Drop for AudioArtifactTap {
                 clipped,
             )
         };
-        let probes = usdt_trace::events();
+        let (probes, probes_truncated) = usdt_trace::recorded();
         let underruns = UnderrunLedger::from_probes(&probes);
         self.timeline.record_probes(&probes);
         self.timeline.record_underruns(&underruns);
@@ -308,6 +308,7 @@ impl Drop for AudioArtifactTap {
             },
             "timeline_events": self.timeline.events(),
             "underruns": underruns,
+            "probes_truncated": probes_truncated,
             "evidence": self.evidence,
         });
         match self
