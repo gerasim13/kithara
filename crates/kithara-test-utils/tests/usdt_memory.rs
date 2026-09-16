@@ -121,14 +121,15 @@ fn continuous_probes_keep_the_heap_bounded() {
     let before = LIVE.load(Ordering::Relaxed);
     let history = scope();
     let (peak, _) = hammer("unobserved", "history");
-    let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
+    let probes_recorded = 2;
+    let history_bytes = probes_recorded * MAX_EVENTS * size_of::<ProbeEvent>();
     assert!(
         peak >= history_bytes,
         "a scope past MAX_EVENTS must have held the full history, peak {peak} B"
     );
     let history_budget = history_bytes + history_bytes / 2 + STEADY_BUDGET;
     eprintln!(
-        "history: peak +{peak} B for {MAX_EVENTS} events of {} B (budget {history_budget} B)",
+        "history: peak +{peak} B for {MAX_EVENTS} events of each of {probes_recorded} probes at {} B (budget {history_budget} B)",
         size_of::<ProbeEvent>()
     );
     assert!(
