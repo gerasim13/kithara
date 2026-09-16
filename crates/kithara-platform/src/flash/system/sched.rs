@@ -248,7 +248,18 @@ impl Core {
             self.registry.account_woken(&woken);
             return WakeBatch(woken);
         }
-        let Some((&(min, _), _)) = self.sched.timed.iter().next() else {
+        // WHY: A `Thread` park is a POLL INTERVAL (`ThreadGate::wait_timeout` re-checking an edge), not an event the world owes. Letting one
+        // pull the clock to itself prices every wait at one hop per interval - behind a live worker a virtual day costs millions of hops and
+        // burns real seconds. It is a BOUND, never a target: a jump that passes it still wakes it below, and when nothing else carries a
+        // deadline it IS the target - so its timeout always fires and the clock can never freeze.
+        let target = self
+            .sched
+            .timed
+            .iter()
+            .find(|(_, e)| !matches!(e.kind, WaitKind::Thread(_)))
+            .or_else(|| self.sched.timed.iter().next())
+            .map(|(&(deadline, _), _)| deadline);
+        let Some(min) = target else {
             // WHY: Quiescent with NO timed waiter to advance to. Any parked yield-waiter was already drained above (when `timed` is empty the
             // all-`Thread` guard is vacuously true), so reaching here means there is nothing runnable at all: stay put.
             return WakeBatch(Vec::new());
@@ -277,7 +288,8 @@ impl Core {
         self.sched.advance_log.push(min);
         let mut woken: Vec<Wake> = Vec::new();
         while let Some((&(d, _), _)) = self.sched.timed.iter().next() {
-            if d != min {
+            // WHY: `>`, not `!=`: the target skips `Thread` bounds, so a jump can pass several of them at once and every one it passed is due.
+            if d > min {
                 break;
             }
             if let Some((_, entry)) = self.sched.timed.pop_first() {
