@@ -17,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, kithara,
     offline::{OfflineHostHarness, OfflineQueue},
+    usdt_trace,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -90,6 +91,9 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let session = HostConfig::offline(pools.clone())
         .sample_rate(sample_rate)
+        .max_block_frames(
+            NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
+        )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
@@ -131,10 +135,13 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
 
 /// Render `blocks` at the block's own pace: a tight render loop outruns the
 /// decoder and the window fills with zeros, which every oracle here would pass.
+/// A window the feeder starved is refused for the same reason: its silence
+/// reads as a step no parameter made.
 async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
     let block_budget =
         Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
     let mut pcm = Vec::with_capacity(blocks * Consts::BLOCK_FRAMES * Consts::CHANNELS);
+    let trace = usdt_trace::scope();
     for _ in 0..blocks {
         harness
             .run(|deck| deck.tick())
@@ -143,6 +150,15 @@ async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
         pcm.extend(harness.render(Consts::BLOCK_FRAMES).await);
         time::sleep(block_budget).await;
     }
+    let underruns = trace.events_of("pcm_underrun");
+    assert!(
+        underruns.is_empty(),
+        "the feeder starved {} times while observing {blocks} blocks; first at output frame {:?}",
+        underruns.len(),
+        underruns
+            .first()
+            .and_then(|event| event.field("output_start"))
+    );
     pcm
 }
 
@@ -354,6 +370,7 @@ async fn inserting_an_idle_deck_keeps_the_output_stream_closed() {
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .sample_rate(sample_rate)
+        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
