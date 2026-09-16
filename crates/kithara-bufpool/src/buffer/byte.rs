@@ -21,7 +21,23 @@ use crate::PoolError;
 ///     let _ = buffer.into_inner();
 /// }
 /// ```
+#[derive(derive_more::Debug)]
+#[debug("{:?}", _0.value)]
 pub struct ByteBuffer(pub(super) OwnedBuffer<32, Vec<u8>, false>);
+
+impl std::ops::Deref for ByteBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ByteBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl ByteBuffer {
     pub(crate) fn new(inner: OwnedBuffer<32, Vec<u8>, false>) -> Self {

@@ -4,7 +4,23 @@ use super::OwnedBuffer;
 use crate::PoolError;
 
 /// Pooled decoded samples returned to their typed pool on drop.
+#[derive(derive_more::Debug)]
+#[debug("{:?}", _0.value)]
 pub struct SampleBuffer(pub(super) OwnedBuffer<8, Vec<f32>, false>);
+
+impl std::ops::Deref for SampleBuffer {
+    type Target = [f32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SampleBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl SampleBuffer {
     pub(crate) fn new(inner: OwnedBuffer<8, Vec<f32>, false>) -> Self {
