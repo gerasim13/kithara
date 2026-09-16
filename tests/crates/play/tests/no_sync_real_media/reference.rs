@@ -84,6 +84,7 @@ pub(super) async fn capture_references(
                 &mut deck.reference,
                 &mut deck.reference_events,
                 capture.requested_frames,
+                case.source_channels,
             ),
         )
         .await
@@ -112,10 +113,14 @@ async fn read_reference_pcm(
     resource: &mut Resource,
     events: &mut EventReceiver<TestEvent>,
     requested_frames: usize,
+    source_channels: u16,
 ) -> Result<Vec<f32>, String> {
-    if resource.spec().channels != CHANNELS {
+    // The reference decodes the source's channels and reads them into
+    // `CHANNELS` planes, the same shape the engine renders. A source that is
+    // not the one the case declares would compare against the wrong content.
+    if resource.spec().channels != source_channels {
         return Err(format!(
-            "reference has {} channels, expected {CHANNELS}",
+            "reference has {} channels, expected {source_channels}",
             resource.spec().channels,
         ));
     }

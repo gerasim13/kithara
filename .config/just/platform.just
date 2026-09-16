@@ -144,6 +144,7 @@ apple MODE="xcframework" *ARGS:
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
             -resultBundlePath "$bundle" \
+            ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO
         ;;
       integration-regressions)
@@ -174,6 +175,7 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
         log="$TMPDIR/kithara-integration-regressions.log"

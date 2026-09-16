@@ -695,20 +695,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func items()  -> [AudioPlayerItem]
 
-    /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-    func notifyAudioRouteChanged(reason: String) throws
-
     func pause()
 
     func play()
@@ -873,6 +859,30 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
     func volume()  -> Float
+
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+    func notifyAudioRouteChanged(reason: String) throws
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+    func setDuckingMode(mode: FfiDuckingMode) throws
 
 }
 /**
@@ -1074,26 +1084,6 @@ open func items() -> [AudioPlayerItem]  {
             self.uniffiCloneHandle(),$0
     )
 })
-}
-
-    /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(reason),$0
-    )
-}
 }
 
 open func pause()  {try! rustCall() {
@@ -1416,6 +1406,42 @@ open func volume() -> Float  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(reason),$0
+    )
+}
+}
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+open func setDuckingMode(mode: FfiDuckingMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_ducking_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiDuckingMode_lower(mode),$0
+    )
+}
 }
 
 
@@ -5405,6 +5431,92 @@ public func FfiConverterTypeFfiDecoderChangeCause_lower(_ value: FfiDecoderChang
 }
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * How far the whole session output drops under a competing sound.
+ */
+
+public enum FfiDuckingMode: Equatable, Hashable {
+
+    /**
+     * Full level.
+     */
+    case off
+    /**
+     * Lowered to 40%.
+     */
+    case soft
+    /**
+     * Lowered to 20%.
+     */
+    case hard
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDuckingMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDuckingMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDuckingMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDuckingMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .off
+
+        case 2: return .soft
+
+        case 3: return .hard
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDuckingMode, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .off:
+            writeInt(&buf, Int32(1))
+
+
+        case .soft:
+            writeInt(&buf, Int32(2))
+
+
+        case .hard:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDuckingMode_lift(_ buf: RustBuffer) throws -> FfiDuckingMode {
+    return try FfiConverterTypeFfiDuckingMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDuckingMode_lower(_ value: FfiDuckingMode) -> RustBuffer {
+    return FfiConverterTypeFfiDuckingMode.lower(value)
+}
+
+
 
 /**
  * FFI-friendly error type bridging playback failures into platform bindings.
@@ -8573,9 +8685,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 23485) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 14847) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_pause() != 42092) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8652,6 +8761,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 53086) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
