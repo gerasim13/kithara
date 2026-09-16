@@ -157,8 +157,10 @@ where
     /// chunks. A consumer that plans its work per chunk then sees the stream
     /// break up for no reason other than the presence of a resampler, so the
     /// blocks of one input chunk are coalesced back into one output chunk.
+    #[kithara::hang_watchdog]
     fn drain_ready(&mut self) -> DecodeResult<Option<AudioChunk>> {
         loop {
+            hang_tick!();
             let input_frames = self.resampler.input_frames_next();
             if self.input.frames().get() < input_frames {
                 return self.finish_output();
