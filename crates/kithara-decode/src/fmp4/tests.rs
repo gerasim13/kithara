@@ -63,8 +63,10 @@ impl std::io::Read for InstrumentedSource {
 }
 
 impl Seek for InstrumentedSource {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.inner.seek(pos)
+    delegate::delegate! {
+        to self.inner {
+            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64>;
+        }
     }
 }
 

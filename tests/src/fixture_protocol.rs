@@ -134,7 +134,7 @@ pub enum InitMode {
 }
 
 /// Audio source description for packaged fMP4 HLS fixtures.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, derive_more::From)]
 pub enum PackagedAudioSource {
     /// Single procedural signal used for every variant unless overridden.
     Signal(PackagedSignal),
@@ -150,18 +150,6 @@ pub enum PackagedSignal {
     Silence,
     Sine { freq_hz: f64 },
     Sweep { start_hz: f64, end_hz: f64 },
-}
-
-impl From<PackagedSignal> for PackagedAudioSource {
-    fn from(signal: PackagedSignal) -> Self {
-        Self::Signal(signal)
-    }
-}
-
-impl From<Vec<PcmPattern>> for PackagedAudioSource {
-    fn from(patterns: Vec<PcmPattern>) -> Self {
-        Self::PerVariantPcm { patterns }
-    }
 }
 
 /// Per-variant override for packaged audio fixtures.

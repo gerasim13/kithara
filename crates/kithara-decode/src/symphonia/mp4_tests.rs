@@ -44,8 +44,10 @@ impl Read for Source {
 }
 
 impl Seek for Source {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.cursor.seek(pos)
+    delegate::delegate! {
+        to self.cursor {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+        }
     }
 }
 
