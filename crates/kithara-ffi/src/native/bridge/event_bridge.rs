@@ -384,7 +384,7 @@ mod tests {
         events::{EventBus, SlotId, TrackId},
         platform::{
             sync::{Arc, Mutex},
-            tokio::task::spawn_blocking,
+            tokio::{sync::broadcast::error::RecvError, task::spawn_blocking},
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
@@ -902,27 +902,47 @@ mod tests {
         }
     }
 
+    /// Wait for one status on `id`, answering with every other status that
+    /// arrived for it when the wait runs out.
+    ///
+    /// A lagged receiver is not the end of the stream — the bus drops the
+    /// oldest envelopes and keeps delivering — so a wait that ended on it
+    /// would blame the product for a burst the test's own track caused.
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
         timeout_ms: u64,
-    ) -> bool {
+    ) -> Result<(), Vec<TrackStatus>> {
+        let mut seen_statuses = Vec::new();
         let wait = async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
-                if matches!(
-                    event,
-                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
-                        if seen == id && *seen_status == status
-                ) {
-                    return true;
+            loop {
+                match events.recv().await {
+                    Ok(Envelope {
+                        event:
+                            QueueBusEvent::Queue(QueueEvent::TrackStatusChanged {
+                                id: seen,
+                                status: seen_status,
+                            }),
+                        ..
+                    }) if seen == id => {
+                        if seen_status == status {
+                            return true;
+                        }
+                        seen_statuses.push(seen_status);
+                    }
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return false,
                 }
             }
-            false
         };
-        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
-            .await
-            .unwrap_or(false)
+        let arrived =
+            kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait).await;
+        if matches!(arrived, Ok(true)) {
+            Ok(())
+        } else {
+            Err(seen_statuses)
+        }
     }
 
     /// The polling thread drives `Queue::tick`, and a natural EOF on a
@@ -958,10 +978,9 @@ mod tests {
         let id = queue
             .append(track.to_string_lossy().into_owned())
             .expect("open queue accepts a local track");
-        assert!(
-            wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
-            "real local track must load before playback"
-        );
+        if let Err(seen) = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await {
+            panic!("real local track must load before playback; saw {seen:?}");
+        }
         let selecting = queue.clone();
         spawn_blocking(move || selecting.select(id, Transition::None))
             .await
@@ -991,10 +1010,11 @@ mod tests {
         .expect("teardown task completes");
         drop(owner);
 
-        assert!(
-            reload_started,
-            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
-        );
+        if let Err(seen) = reload_started {
+            panic!(
+                "tick after EOF must restart the consumed repeat-one track; status: {status:?}, saw {seen:?}"
+            );
+        }
         assert!(
             joined.is_ok(),
             "polling thread must survive the reload it starts"
