@@ -45,9 +45,6 @@ where
         }
         #[cfg(not(target_arch = "wasm32"))]
         HostCmd::SeekDeck { deck, seconds } => HostReply::Seek(seek_deck(state, deck, seconds)),
-        #[cfg(any(test, feature = "usdt"))]
-        HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
-            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -245,7 +242,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        #[cfg(feature = "usdt")]
         Cmd::SetPlayerMasterVolumes { levels } => {
             match controls::set_player_master_volumes(state, &levels) {
                 Ok(()) => Reply::Ok,
@@ -291,7 +287,6 @@ where
             controls::set_session_ducking(state, mode);
             Reply::Ok
         }
-        Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
         Cmd::SetSessionTempo { tempo } => {
             match transport::set_tempo(state, tempo).and_then(|()| set_root_tempo(state, tempo)) {
                 Ok(()) => Reply::Ok,
@@ -320,6 +315,7 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
+        Cmd::SetSampleRate { sample_rate } => set_sample_rate(state, sample_rate),
         Cmd::QuerySampleRate => {
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate(state))
@@ -519,6 +515,15 @@ pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
     }
 }
 
+/// Moves the output to `sample_rate` through the same restart a route change takes.
+fn set_sample_rate<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    sample_rate: NonZeroU32,
+) -> Reply {
+    state.sample_rate_hint = sample_rate.get();
+    invalidate_audio_route(state, "sample rate change")
+}
+
 pub(super) fn restart_stream<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     sample_rate: u32,
@@ -579,7 +584,6 @@ mod tests {
     use firewheel::{
         FirewheelCtx, StreamInfo, param::smoother::SmootherConfig, processor::FirewheelProcessor,
     };
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::sync::{
@@ -587,7 +591,10 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use kithara_warp::{
         BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis, StretchControls,
     };
@@ -600,7 +607,7 @@ mod tests {
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, MixTap, SessionState},
-            testing::{attach_player, state as test_state},
+            tests::graph::{attach_player, state as test_state},
         },
     };
 

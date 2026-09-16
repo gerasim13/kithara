@@ -13,8 +13,6 @@ mod pool;
 mod region;
 mod ring;
 mod schema;
-#[cfg(feature = "test-utils")]
-pub mod testing;
 
 pub use budget::{OverallBudget, Percent};
 pub use buffer::{ByteBuffer, PooledString, PooledVec, SampleBuffer};

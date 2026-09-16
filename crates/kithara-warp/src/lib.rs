@@ -9,7 +9,7 @@ mod segment;
 mod sync;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
-pub(crate) use kithara_bufpool::testing as test_pools;
+pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};

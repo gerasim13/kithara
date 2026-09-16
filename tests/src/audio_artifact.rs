@@ -17,7 +17,6 @@ use kithara::{
     warp::BeatGridSnapshot,
 };
 use kithara_app::recording::AssetPartSink;
-use kithara_test_utils::probe::capture::{self as probe_capture, Recorder};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -25,6 +24,7 @@ use crate::{
     artifact_timeline::ArtifactTimeline,
     bufpool_ext::{TestPools, pools},
     underrun_ledger::UnderrunLedger,
+    usdt_trace,
 };
 
 const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
@@ -88,7 +88,7 @@ pub struct AudioArtifactTap {
     channels: u16,
     timeline: ArtifactTimeline,
     source_grids: BTreeMap<u64, BeatGridSnapshot>,
-    probes: Recorder,
+    probes: usdt_trace::Scope,
     evidence: BTreeMap<String, Value>,
     pcm: Vec<f32>,
     host_beats: BTreeMap<u64, bool>,
@@ -121,7 +121,7 @@ impl AudioArtifactTap {
             channels,
             timeline: ArtifactTimeline::default(),
             source_grids: BTreeMap::new(),
-            probes: probe_capture::install(),
+            probes: usdt_trace::scope(),
             evidence: BTreeMap::new(),
             pcm: Vec::new(),
             host_beats: BTreeMap::new(),
@@ -188,7 +188,7 @@ impl AudioArtifactTap {
     /// instead of through a bare counter.
     #[must_use]
     pub fn underrun_ledger(&self) -> UnderrunLedger {
-        UnderrunLedger::from_probes(&self.probes.snapshot())
+        UnderrunLedger::from_probes(&self.probes.events())
     }
 
     /// Mark a Host beat at an output frame for the published metronome.
@@ -273,7 +273,7 @@ impl Drop for AudioArtifactTap {
                 clipped,
             )
         };
-        let probes = self.probes.snapshot();
+        let probes = self.probes.events();
         let underruns = UnderrunLedger::from_probes(&probes);
         self.timeline.record_probes(&probes);
         self.timeline.record_underruns(&underruns);

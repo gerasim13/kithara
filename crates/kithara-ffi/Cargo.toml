@@ -81,7 +81,6 @@ kithara = { workspace = true, default-features = false, features = [
     "play",
     "queue",
     "stream",
-    "test-utils",
 ] }
 kithara-audio = { workspace = true }
 kithara-events = { workspace = true }
@@ -132,6 +131,7 @@ kithara = { workspace = true, default-features = false, features = [
     "symphonia",
     "webcodecs",
 ] }
+
 # `resample-rubato` is in `kithara-play`'s default set, so turning defaults off
 # to keep the native device builds lean silently left wasm with
 # `NoResamplerBackend`. A WebAudio context runs at one rate, and every track
@@ -139,7 +139,6 @@ kithara = { workspace = true, default-features = false, features = [
 # is 48 kHz against a 44.1 kHz context — then failed to open with "resampler
 # backend none does not support fixed-ratio mode". rubato is what native plays
 # through, so wasm resamples the same way rather than a cheaper way.
-kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
 js-sys = { workspace = true }
@@ -164,8 +163,9 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["download", "net", "usdt", "signal"] }
-kithara-test-utils = { workspace = true, features = ["mock", "usdt", "hang"] }
+kithara = { workspace = true, features = ["usdt", "download", "net", "signal"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }

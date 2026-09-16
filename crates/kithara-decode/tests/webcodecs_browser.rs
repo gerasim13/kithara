@@ -3,7 +3,6 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
-use kithara_bufpool::testing::{TestPools, pools as default_pools};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, spawn_webcodecs_probe,
@@ -13,7 +12,10 @@ use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_fixtures::signal::{SignalDirection, detect_direction};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools as default_pools},
+    kithara,
+};
 use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;

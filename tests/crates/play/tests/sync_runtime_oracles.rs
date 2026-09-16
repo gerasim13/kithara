@@ -5,9 +5,8 @@ use kithara_integration_tests::{
     cochlea::{
         CochleaReport, continuity_failures, marked_synchronization_failures, time_stretch_failures,
     },
-    kithara,
+    kithara, usdt_trace,
 };
-use kithara_test_utils::probe::capture;
 
 use super::sync_product_matrix::{
     BLOCK_FRAMES, CHANNELS, ONE_DECK, PreparedSources, ProductHarness, SHARED_DEADLINE,
@@ -51,7 +50,7 @@ async fn tempo_retarget_run(
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     let command_output = harness.rendered_frames;
-    let recorder = retarget.then(capture::install);
+    let trace = retarget.then(usdt_trace::scope);
     if retarget {
         harness.set_tempo(ONE_DECK, 132.0, false).await;
     }
@@ -60,18 +59,18 @@ async fn tempo_retarget_run(
             .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize * 2, block_frames)
             .await,
     );
-    let activation_index = recorder.and_then(|recorder| {
+    let activation_index = trace.and_then(|trace| {
         let capture_start = command_output.checked_sub(u64::try_from(command_index).ok()?)?;
-        recorder
-            .snapshot()
+        trace
+            .events()
             .iter()
-            .filter(|event| event.probe_name() == Some("publish"))
+            .filter(|event| event.probe == "publish")
             .filter(|event| {
                 event
-                    .u64("transport_revision")
+                    .field("transport_revision")
                     .is_some_and(|revision| revision > 1)
             })
-            .filter_map(|event| event.u64("output_start"))
+            .filter_map(|event| event.field("output_start"))
             .min()
             .and_then(|output| output.checked_sub(capture_start))
             .and_then(|frames| usize::try_from(frames).ok())
@@ -109,7 +108,7 @@ async fn running_sync_run(
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     let command_output = harness.rendered_frames;
-    let recorder = issue_sync.then(capture::install);
+    let trace = issue_sync.then(usdt_trace::scope);
     if issue_sync {
         harness.request_sync(ONE_DECK).await;
     }
@@ -118,13 +117,13 @@ async fn running_sync_run(
             .capture_frames(ONE_DECK, block_frames * 2, block_frames)
             .await,
     );
-    let activation_index = recorder.as_ref().and_then(|recorder| {
+    let activation_index = trace.as_ref().and_then(|trace| {
         let capture_start = command_output.checked_sub(u64::try_from(command_index).ok()?)?;
-        recorder
-            .snapshot()
+        trace
+            .events()
             .iter()
-            .filter(|event| event.probe_name() == Some("warp_plan_published"))
-            .filter_map(|event| event.u64("activation_output"))
+            .filter(|event| event.probe == "warp_plan_published")
+            .filter_map(|event| event.field("activation_output"))
             .min()
             .and_then(|output| output.checked_sub(capture_start))
             .and_then(|frames| usize::try_from(frames).ok())

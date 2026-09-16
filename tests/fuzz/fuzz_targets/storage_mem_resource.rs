@@ -2,10 +2,10 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
-    bufpool::testing::pools,
     platform::CancelToken,
     storage::{MemResource, StorageResource},
 };
+use kithara_test_utils::bufpool::pools;
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Debug)]

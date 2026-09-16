@@ -20,9 +20,10 @@ use kithara_integration_tests::{
     },
     grid::segment_set,
     kithara,
+    usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
-use kithara_test_utils::probe::{IntoProbeArg, capture as probe_capture, capture::Recorder};
+use kithara_test_utils::probe::IntoProbeArg;
 
 use super::sync_product_matrix::{
     DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, ProductHarness, Provider, SyncCase,
@@ -82,21 +83,21 @@ pub(super) struct TrackSpan {
     source_free_frames: u64,
 }
 
-pub(super) fn spans(recorder: &Recorder) -> BTreeMap<u64, TrackSpan> {
+pub(super) fn spans(events: &[ProbeEvent]) -> BTreeMap<u64, TrackSpan> {
     let mut spans = BTreeMap::new();
-    for event in recorder.events_with_probe("render") {
-        let Some(base) = event.u64("output_base").filter(|base| *base != u64::MAX) else {
+    for event in events.iter().filter(|event| event.probe == "render") {
+        let Some(base) = event.field("output_base").filter(|base| *base != u64::MAX) else {
             continue;
         };
-        let Some(frames) = event.u64("rendered_frames").filter(|frames| *frames > 0) else {
+        let Some(frames) = event.field("rendered_frames").filter(|frames| *frames > 0) else {
             continue;
         };
-        let track = event.u64("track_id").expect("render names its track");
-        let offset = event.u64("range_start").expect("render names its offset");
+        let track = event.field("track_id").expect("render names its track");
+        let offset = event.field("range_start").expect("render names its offset");
         let first = i64::from_probe_arg(base) + i64::from_probe_arg(offset);
         let last = first + i64::try_from(frames).expect("render frame count fits i64");
         let served = event
-            .u64("served_media_frames")
+            .field("served_media_frames")
             .expect("render names its source frontier");
         spans
             .entry(track)
@@ -225,7 +226,7 @@ fn stretch_to(bpm: f64, original: f64) -> f32 {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_rate_persists_into_next_track() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_RATE_PERSISTS,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -242,38 +243,45 @@ async fn seam_rate_persists_into_next_track() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder);
+    let spans = spans(&trace.events());
     let rate_bits = u64::from(Fixture::RATE.to_bits());
-    let smoothed = recorder.events_with_probe("rate_smoothed");
+    let events = trace.events();
+    let smoothed: Vec<_> = events
+        .iter()
+        .filter(|event| event.probe == "rate_smoothed")
+        .collect();
     let requested = smoothed
         .iter()
-        .position(|event| event.u64("target_bits") == Some(rate_bits))
+        .position(|event| event.field("target_bits") == Some(rate_bits))
         .expect("the deck receives the requested rate");
     assert!(
         smoothed[requested..]
             .iter()
-            .all(|event| event.u64("target_bits") == Some(rate_bits)),
+            .all(|event| event.field("target_bits") == Some(rate_bits)),
         "no selection may retarget the deck away from {} after it was requested",
         Fixture::RATE
     );
     let settled = smoothed
         .iter()
-        .position(|event| event.u64("multiplier_bits") == Some(rate_bits))
+        .position(|event| event.field("multiplier_bits") == Some(rate_bits))
         .expect("the owner smoother reaches the requested rate");
     assert!(
         smoothed[settled..]
             .iter()
-            .all(|event| event.u64("multiplier_bits") == Some(rate_bits)),
+            .all(|event| event.field("multiplier_bits") == Some(rate_bits)),
         "the queue seam must keep the deck multiplier at {}",
         Fixture::RATE
     );
     let ramp_deficit: f64 = smoothed[..settled]
         .iter()
-        .filter(|event| event.u64("target_bits") == Some(rate_bits))
+        .filter(|event| event.field("target_bits") == Some(rate_bits))
         .map(|event| {
-            let frames = event.u64("frames").expect("rate_smoothed names its frames") as f64;
+            let frames = event
+                .field("frames")
+                .expect("rate_smoothed names its frames") as f64;
             let multiplier = f32::from_bits(
-                u32::try_from(event.u64("multiplier_bits").expect("multiplier")).expect("f32 bits"),
+                u32::try_from(event.field("multiplier_bits").expect("multiplier"))
+                    .expect("f32 bits"),
             );
             frames * (1.0 - f64::from(multiplier) / f64::from(Fixture::RATE))
         })
@@ -303,7 +311,7 @@ async fn seam_rate_persists_into_next_track() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_OFF,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -319,7 +327,7 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder);
+    let spans = spans(&trace.events());
     let b = spans[&harness.ids[0][1].as_u64()];
     let b_first = b.first - origin;
     let played = usize::try_from((b.last - origin) * i64::from(Fixture::CHANNELS))
@@ -348,7 +356,7 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_honours_the_configured_crossfade_length() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let mut harness = ProductHarness::new_for_provider(
         Fixture::SEAM_FADE_LENGTH,
         Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
@@ -363,7 +371,7 @@ async fn seam_honours_the_configured_crossfade_length() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder);
+    let spans = spans(&trace.events());
     let (a, b) = (
         spans[&harness.ids[0][0].as_u64()],
         spans[&harness.ids[0][1].as_u64()],

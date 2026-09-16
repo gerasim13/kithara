@@ -387,19 +387,18 @@ mod tests {
             tokio::task::spawn_blocking,
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
-        queue::{
-            AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus,
-            test_utils::QueueProbe,
-        },
+        queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
+    use kithara_test_fixtures::assets;
 
     use super::*;
     use crate::{
         core::event_set::ItemBusEvent,
         observer::ItemObserver,
-        pools::{self, FfiQueue, FfiWorker},
+        pools,
+        pools::{FfiQueue, FfiWorker},
         types::{FfiItemConfig, FfiItemEvent},
     };
 
@@ -950,21 +949,24 @@ mod tests {
             .expect("insert task completes")
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
-        let id = queue.register_for_test();
-        queue.mark_played_for_test(id);
         queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
-
         let mut events = queue.subscribe();
-        queue
-            .bus()
-            .publish(QueueBusEvent::Player(PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Leading(TrackRef::new(
-                    id,
-                    SlotId::new(0),
-                    Arc::from(format!("test://memory/{}", id.as_u64())),
-                )),
-            }));
+        let track = assets::sine_wav_a440_10_frames()
+            .path()
+            .expect("the short decoder WAV lives on disk");
+        let id = queue
+            .append(track.to_string_lossy().into_owned())
+            .expect("open queue accepts a local track");
+        assert!(
+            wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
+            "real local track must load before playback"
+        );
+        let selecting = queue.clone();
+        spawn_blocking(move || selecting.select(id, Transition::None))
+            .await
+            .expect("select task completes")
+            .expect("loaded track starts through the real queue lifecycle");
 
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
@@ -977,6 +979,7 @@ mod tests {
         );
 
         let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
             let joined = thread.join();
@@ -990,7 +993,7 @@ mod tests {
 
         assert!(
             reload_started,
-            "tick after EOF must restart the consumed repeat-one track"
+            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
         );
         assert!(
             joined.is_ok(),

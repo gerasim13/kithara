@@ -2,46 +2,33 @@ use std::path::Path;
 
 use anyhow::Result;
 use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind, TraceSource, TraceWriter};
-use kithara_test_utils::probe::capture::Recorder;
 
+use crate::usdt_trace::Scope;
+
+/// Writes `records`, then every probe firing `probes` recorded, in firing order.
 pub fn write(
     path: &Path,
     records: impl IntoIterator<Item = TraceRecord>,
-    probes: &Recorder,
+    probes: &Scope,
 ) -> Result<()> {
     let mut writer = TraceWriter::create(path)?;
     for record in records {
         writer.write(&record)?;
     }
-    let mut events = probes.snapshot();
-    events.sort_by_key(kithara_test_utils::probe::capture::ProbeEvent::seq);
-    for (index, event) in events.into_iter().enumerate() {
+    for (index, event) in probes.events().into_iter().enumerate() {
         let sequence = 10_000 + index as u64;
-        let name = event
-            .caller_fn()
-            .and_then(symbol_name)
-            .or_else(|| event.probe_name().map(str::to_string))
-            .unwrap_or_else(|| "probe".to_string());
-        let mut record = TraceRecord::new(sequence, TraceRecordKind::Event, name);
-        if let (Some(path), Some(line)) = (event.caller_file(), event.caller_line()) {
+        let mut record = TraceRecord::new(sequence, TraceRecordKind::Event, event.probe);
+        if let (Some(path), Some(line)) = (event.file, event.line) {
             record =
                 record.with_source(TraceSource::new(workspace_relative(path), line as usize, 0));
         }
-        if let Some(thread) = event.thread_id() {
-            record = record.with_thread(thread.to_string());
-        }
-        writer.write(&record)?;
+        writer.write(&record.with_thread(format!("{:?}", event.thread)))?;
     }
     writer.finish()
 }
 
-fn symbol_name(symbol: &str) -> Option<String> {
-    let symbol = symbol.split("::{{closure}}").next().unwrap_or(symbol);
-    let (prefix, method) = symbol.rsplit_once("::")?;
-    let owner = prefix.rsplit_once("::").map_or(prefix, |(_, owner)| owner);
-    Some(format!("{owner}::{method}"))
-}
-
+/// Trims a compile-time source path to the workspace-relative form the
+/// architecture graph keys its nodes by.
 fn workspace_relative(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     for marker in ["/crates/", "/tests/", "/xtask/"] {
@@ -50,23 +37,4 @@ fn workspace_relative(path: &str) -> String {
         }
     }
     normalized
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test(native, flash(false))]
-    fn caller_symbol_is_reduced_to_owner_and_method() {
-        assert_eq!(
-            symbol_name("kithara::queue::queue::lifecycle::Queue::append"),
-            Some("Queue::append".to_string())
-        );
-        assert_eq!(
-            symbol_name("kithara::play::worker::run::{{closure}}"),
-            Some("worker::run".to_string())
-        );
-    }
 }

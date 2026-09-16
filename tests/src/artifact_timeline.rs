@@ -6,11 +6,10 @@ use std::{
 use kithara::warp::{
     AssetFrame, Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition,
 };
-use kithara_test_utils::probe::capture::ProbeEvent;
 use num_traits::ToPrimitive;
 use serde::Serialize;
 
-use crate::underrun_ledger::UnderrunLedger;
+use crate::{underrun_ledger::UnderrunLedger, usdt_trace::ProbeEvent};
 
 const WIDTH: u64 = 1_280;
 const LEFT: u64 = 180;
@@ -64,10 +63,10 @@ impl ArtifactTimeline {
 
     pub fn record_probes(&mut self, probes: &[ProbeEvent]) {
         for probe in probes {
-            match probe.probe_name() {
-                Some("render") => self.record_render(probe),
-                Some("pcm_consumed") => self.record_pcm(probe),
-                Some("warp_plan_published") => self.record_warp_plan(probe),
+            match probe.probe {
+                "render" => self.record_render(probe),
+                "pcm_consumed" => self.record_pcm(probe),
+                "warp_plan_published" => self.record_warp_plan(probe),
                 _ => {}
             }
         }
@@ -226,14 +225,14 @@ impl ArtifactTimeline {
     }
 
     fn record_render(&mut self, probe: &ProbeEvent) {
-        let Some(base) = probe.u64("output_base").filter(|base| *base != u64::MAX) else {
+        let Some(base) = probe.field("output_base").filter(|base| *base != u64::MAX) else {
             return;
         };
-        let start = base.saturating_add(probe.u64("range_start").unwrap_or(0));
-        let Some(frames) = probe.u64("rendered_frames").filter(|frames| *frames > 0) else {
+        let start = base.saturating_add(probe.field("range_start").unwrap_or(0));
+        let Some(frames) = probe.field("rendered_frames").filter(|frames| *frames > 0) else {
             return;
         };
-        let track = probe.u64("track_id").unwrap_or(0);
+        let track = probe.field("track_id").unwrap_or(0);
         self.span(
             &format!("track-{track}"),
             start,
@@ -246,17 +245,16 @@ impl ArtifactTimeline {
 
     fn record_pcm(&mut self, probe: &ProbeEvent) {
         let (Some(output_start), Some(output_end), Some(source_start), Some(source_end)) = (
-            probe.u64("output_start"),
-            probe.u64("output_end"),
-            probe.u64("source_start"),
-            probe.u64("source_end"),
+            probe.field("output_start"),
+            probe.field("output_end"),
+            probe.field("source_start"),
+            probe.field("source_end"),
         ) else {
             return;
         };
-        let track = probe.u64("track_id").unwrap_or(0);
-        let revision = probe.u64("render_revision").unwrap_or(0);
+        let revision = probe.field("render_revision").unwrap_or(0);
         self.span(
-            &format!("pcm-track-{track}"),
+            &format!("pcm-revision-{revision}"),
             output_start,
             output_end,
             "presented",
@@ -297,8 +295,8 @@ impl ArtifactTimeline {
 
     fn record_warp_plan(&mut self, probe: &ProbeEvent) {
         let (Some(output), Some(source)) = (
-            probe.u64("activation_output"),
-            probe.u64("activation_source"),
+            probe.field("activation_output"),
+            probe.field("activation_source"),
         ) else {
             return;
         };

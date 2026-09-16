@@ -238,7 +238,6 @@ impl PlayerResource {
         &mut self,
         mut frames: usize,
         context: Option<&RenderContext>,
-        track_id: Option<TrackId>,
     ) -> Option<u64> {
         let mut source_frames = 0u64;
         let mut output_start = 0usize;
@@ -252,7 +251,6 @@ impl PlayerResource {
                 (Some(context), Some(source)) => {
                     kithara::probe_event!(
                         pcm_consumed,
-                        track_id = track_id.map(TrackId::as_u64),
                         render_revision = source.render_revision(),
                         output_start = i64::from(context.output_frames().start)
                             .saturating_add(i64::try_from(output_start).unwrap_or(i64::MAX)),
@@ -305,8 +303,7 @@ impl PlayerResource {
             output_start = context.map_or(0, |context| i64::from(context.output_frames().start)),
             requested_frames = range.len(),
             available_frames = available_frames,
-            source_end = self.last_source_end.map(|source| source.frame()),
-            warp_map_revision = self.last_warp_map_revision
+            source_end = self.last_source_end.map(|source| source.frame())
         );
         for ch in output.iter_mut() {
             ch[range.start + available_frames..range.end].fill(0.0);

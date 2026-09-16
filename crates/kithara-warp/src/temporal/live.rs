@@ -203,7 +203,7 @@ impl RawSnapshot {
             None
         };
         let transport_revision =
-            NonZeroU64::new(self.transport_revision).map(TransportRevision::from_raw);
+            NonZeroU64::new(self.transport_revision).map(TransportRevision::from);
         let context = RenderContext::new(
             SessionFrame::new(self.output_start)..SessionFrame::new(self.output_end),
             sample_rate,
@@ -272,8 +272,7 @@ impl RenderPublisher {
                 transport_revision = context.transport_revision().map_or(0, u64::from),
                 output_start = i64::from(context.output_frames().start),
                 output_end = i64::from(context.output_frames().end),
-                source = frontier.source(),
-                presentation_frame = i64::from(frontier.output())
+                source = frontier.source()
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
             /// Publishes the callback context for preparation without inventing presentation.
@@ -514,7 +513,7 @@ mod tests {
             NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
             None,
             SessionEpoch::new(3),
-            Some(TransportRevision::from_raw(
+            Some(TransportRevision::from(
                 std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
             )),
         )

@@ -50,6 +50,11 @@ impl Check for DeadExports {
 /// production-crate `src/`, and identifier references (prod vs test) from
 /// everywhere. Ignored crates contribute only workspace-qualified references.
 /// Shared by `run` (report) and `fix` (delete).
+///
+/// A file is judged by where it lives, not by which target points at it: a
+/// source file inside a test-only crate's directory stays test code even when
+/// a production-role package declares a target reaching into it, which would
+/// otherwise credit every harness call as a production caller.
 fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     let kinds: HashSet<&str> = cfg.kinds.iter().map(String::as_str).collect();
     let member_ids: HashSet<_> = ctx.metadata.workspace_members.iter().collect();
@@ -62,6 +67,13 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     let workspace_crates: HashSet<String> = members
         .iter()
         .map(|pkg| pkg.name.replace('-', "_"))
+        .collect();
+
+    let test_roots: Vec<PathBuf> = members
+        .iter()
+        .filter(|pkg| classify(pkg, cfg) == Role::TestOnly)
+        .filter_map(|pkg| pkg.manifest_path.parent())
+        .map(|dir| dir.as_std_path().to_path_buf())
         .collect();
 
     let mut refs = Refs::default();
@@ -88,10 +100,12 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                 let Ok(file) = parse_file(&path) else {
                     continue;
                 };
+                let in_test_crate = test_roots.iter().any(|root| path.starts_with(root));
+                let file_in_test = base_in_test || (!qualified_only && in_test_crate);
                 RefCollector {
                     qualified_only,
-                    in_test: base_in_test,
-                    external: role == Role::TestOnly,
+                    in_test: file_in_test,
+                    external: role == Role::TestOnly || in_test_crate,
                     refs: &mut refs,
                     workspace_crates: &workspace_crates,
                     workspace_imports: HashSet::new(),
@@ -100,7 +114,7 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                 }
                 .visit_file(&file);
 
-                if role == Role::Prod && !base_in_test {
+                if role == Role::Prod && !file_in_test {
                     let rel = path
                         .strip_prefix(ctx.workspace_root)
                         .unwrap_or(&path)

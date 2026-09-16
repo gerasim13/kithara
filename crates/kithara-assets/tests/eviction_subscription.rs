@@ -14,9 +14,8 @@ use std::num::NonZeroUsize;
 use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 
 const ROOT_A: &str = "asset_root_a";

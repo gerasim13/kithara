@@ -51,6 +51,18 @@ lanes:integration-regressions:
   script:
     - just ci run linux-integration-regressions
 
+lanes:usdt:
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-integration, rules]
+  stage: lanes
+  timeout: 180 minutes
+  needs: []
+  script:
+    - just ci run linux-usdt
+
 # Linux CI runs in containers with no output device, so `apple:e2e` serves the
 # hardware-dependent e2e lanes.
 

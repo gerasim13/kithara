@@ -139,7 +139,6 @@ impl PlayerNodeProcessor {
                         prepared_seek_epoch,
                         replacement_seek_epoch,
                         transport_seek_epoch,
-                        target_nanos = u64::try_from(target.as_nanos()).unwrap_or(u64::MAX),
                         presented
                     );
                     if presented {

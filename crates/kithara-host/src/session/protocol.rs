@@ -35,10 +35,6 @@ pub(crate) enum HostCmd<S> {
         deck: kithara_warp::BeatGridId,
         seconds: f64,
     },
-    #[cfg(any(test, feature = "usdt"))]
-    RestartOutput {
-        sample_rate: u32,
-    },
     Shutdown,
 }
 

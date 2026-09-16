@@ -379,7 +379,7 @@ async fn track_plays_end_to_end(
     assert_playhead_tracks_renderer(
         end_pos - start_pos,
         cursor_end - cursor_start,
-        ctx.queue.host().spec(),
+        ctx.queue.host().spec().await,
         url,
     );
 

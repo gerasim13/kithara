@@ -456,7 +456,6 @@ impl SlotControl {
         );
         kithara_test_macros::probe_event!(
             targeted_render_snapshot_state,
-            binding_index,
             snapshot_present = u64::from(snapshot.is_some()),
             snapshot_warp_map = snapshot_map.map_or(0, u64::from),
             snapshot_output = snapshot

@@ -53,6 +53,7 @@ use kithara_integration_tests::{
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
     underrun_ledger::UnderrunLedger,
+    usdt_trace,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -63,7 +64,6 @@ use kithara_test_fixtures::{
         signal_mp3_sweep_up_60s,
     },
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use num_traits::ToPrimitive;
 
 pub(super) const BLOCK_FRAMES: usize = 128;
@@ -550,6 +550,8 @@ pub(super) struct ProductHarness {
     pub(super) block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
     pub(super) rendered_frames: u64,
+    /// Records the render commits this harness reads back through USDT.
+    _trace: usdt_trace::Scope,
     /// Host session frame minus captured frame; moves when a stream restart
     /// rescales the Host clock to the new rate.
     session_offset: i64,
@@ -787,6 +789,7 @@ impl ProductHarness {
             .sample_rate(sample_rate)
             .max_block_frames(max_block_frames)
             .build();
+        let trace = usdt_trace::scope();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
@@ -866,6 +869,7 @@ impl ProductHarness {
             .expect("listening tap"),
             server: None,
             paced,
+            _trace: trace,
         };
         harness.wait_loaded(case).await;
         for (index, deck) in harness.decks.iter().enumerate() {
@@ -1434,7 +1438,8 @@ impl ProductHarness {
                 self.session_offset
             ),
         );
-        if let Err(error) = self.host.restart_stream(case.sample_rate).await {
+        let rate = NonZeroU32::new(case.sample_rate).expect("case sample rate must be non-zero");
+        if let Err(error) = self.host.set_sample_rate(rate).await {
             self.failures
                 .push(format!("{}: restart host output rate: {error}", case.id));
         }
@@ -1940,7 +1945,7 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
     const EXPECTED_WARP_MAP_REVISION: u64 = 2;
 
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(control.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
         .hold(124.0);
@@ -2048,33 +2053,29 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     let expected_target_rate_bits =
         ((next_source_frame - selected_source_frame) as f64 / continuous_host_beat_frames) as f32;
     let expected_target_rate_bits = expected_target_rate_bits.to_bits();
-    let probe_events = recorder
-        .snapshot()
+    let probe_events = trace
+        .events()
         .into_iter()
         .filter(|event| {
             matches!(
-                event.probe_name(),
-                Some(
-                    "warp_plan_published"
-                        | "prepared_launch_command_admitted"
-                        | "prepared_launch_seek_begun"
-                        | "prepared_launch_readiness_checked"
-                        | "prepared_render_revision_selected"
-                        | "decoder_seek_epoch_observed"
-                        | "producer_pcm_admitted"
-                        | "scheduled_seek_activated"
-                        | "pcm_consumed"
-                        | "pcm_underrun"
-                )
+                event.probe,
+                "warp_plan_published"
+                    | "prepared_launch_command_admitted"
+                    | "prepared_launch_seek_begun"
+                    | "prepared_launch_readiness_checked"
+                    | "prepared_render_revision_selected"
+                    | "decoder_seek_epoch_observed"
+                    | "producer_pcm_admitted"
+                    | "scheduled_seek_activated"
+                    | "pcm_consumed"
+                    | "pcm_underrun"
             )
         })
         .map(|event| {
             serde_json::json!({
-                "probe": event.probe_name(),
-                "seq": event.seq(),
-                "thread_id": event.thread_id(),
-                "fields": event.fields,
-                "strings": event.string_fields,
+                "probe": event.probe,
+                "thread": format!("{:?}", event.thread),
+                "fields": event.fields().collect::<std::collections::BTreeMap<_, _>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -2267,7 +2268,7 @@ struct TrackStartPickup {
 #[case::house_124_seek_ten(TrackStartPickup { id: "track-start-pickup-124-seek-ten", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: Some(10.0), expected_source_frame: 487_746, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
 #[case::downtempo_96_seek_ten(TrackStartPickup { id: "track-start-pickup-96-seek-ten", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: Some(10.0), expected_source_frame: 510_000, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
 async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: TrackStartPickup) {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(pickup.id, 1, 48_000, OperationOrder::PlaySyncSeek)
         .paused()
         .hold(124.0);
@@ -2321,30 +2322,24 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
             .all(|(expected, actual)| expected.to_bits() == actual.to_bits())
     });
     let underruns = harness.underrun_failures();
-    let events = recorder.snapshot();
+    let events = trace.events();
     let pcm_flow: Vec<_> = events
         .iter()
         .filter(|event| {
             matches!(
-                event.probe_name(),
-                Some(
-                    "producer_pcm_admitted"
-                        | "pcm_reader_admitted"
-                        | "pcm_consumed"
-                        | "pcm_underrun"
-                )
+                event.probe,
+                "producer_pcm_admitted" | "pcm_reader_admitted" | "pcm_consumed" | "pcm_underrun"
             )
         })
         .map(|event| {
             serde_json::json!({
-                "probe": event.probe_name(),
-                "seq": event.seq(),
-                "thread": event.thread_id(),
-                "output_start": event.u64("output_start"),
-                "frames": event.u64("frames"),
-                "requested": event.u64("requested_frames"),
-                "available": event.u64("available_frames"),
-                "source_start": event.u64("source_start"),
+                "probe": event.probe,
+                "thread": format!("{:?}", event.thread),
+                "output_start": event.field("output_start"),
+                "frames": event.field("frames"),
+                "requested": event.field("requested_frames"),
+                "available": event.field("available_frames"),
+                "source_start": event.field("source_start"),
             })
         })
         .collect();
@@ -2371,18 +2366,22 @@ async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: T
     assert!(equal_rate_waveform.unwrap_or(true));
     let plan = events
         .iter()
-        .find(|event| event.probe_name() == Some("warp_plan_published"))
+        .find(|event| event.probe == "warp_plan_published")
         .expect("prepared launch publishes a warp plan");
     assert_eq!(
-        plan.fields["activation_source"],
+        plan.field("activation_source")
+            .expect("the plan names its activation source"),
         pickup.expected_source_frame
     );
-    assert_eq!(plan.fields["activation_output"], pickup.expected_host_onset);
+    assert_eq!(
+        plan.field("activation_output"),
+        Some(pickup.expected_host_onset)
+    );
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "host-seek-plan-destination",
         1,
@@ -2396,11 +2395,11 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
     prepare_fixture_grids(&mut harness, case, &sources).await;
     harness.request_sync(case).await;
     let _ = harness.render(case, harness.block_frames * 2).await;
-    let baseline = recorder.snapshot();
+    let baseline = trace.events();
     let baseline_map = baseline
         .iter()
-        .filter(|event| event.probe_name() == Some("warp_plan_published"))
-        .filter_map(|event| event.u64("warp_map_revision"))
+        .filter(|event| event.probe == "warp_plan_published")
+        .filter_map(|event| event.field("warp_map_revision"))
         .max();
     let deck = harness.decks.remove(0);
     let (deck, outcome) = harness
@@ -2418,37 +2417,36 @@ async fn host_seek_publishes_one_post_command_plan_for_its_decoder_destination()
     };
     let destination_source =
         (destination.as_secs_f64() * f64::from(case.sample_rate)).round() as u64;
-    let post = &recorder.snapshot()[baseline.len()..];
+    let post = &trace.events()[baseline.len()..];
     let plan = post
         .iter()
-        .find(|event| event.probe_name() == Some("warp_plan_published"))
+        .find(|event| event.probe == "warp_plan_published")
         .expect("accepted Host seek publishes its plan before the next tick");
-    assert_eq!(plan.u64("activation_source"), Some(destination_source));
+    assert_eq!(plan.field("activation_source"), Some(destination_source));
     assert!(
         baseline_map.is_none_or(|revision| plan
-            .u64("warp_map_revision")
+            .field("warp_map_revision")
             .is_some_and(|next| next > revision)),
         "Host seek must allocate a new map revision"
     );
     let activation = plan
-        .u64("activation_output")
+        .field("activation_output")
         .expect("Host seek plan has an exact activation");
     harness.play_all().await;
     harness.render_through(case, activation).await;
-    let events = recorder.snapshot();
+    let events = trace.events();
     let adopted = events
         .iter()
         .skip(baseline.len())
         .find(|event| {
-            event.probe_name() == Some("decoder_seek_epoch_observed")
-                && event.u64("adopted") == Some(1)
+            event.probe == "decoder_seek_epoch_observed" && event.field("adopted") == Some(1)
         })
         .expect("Host seek decoder epoch is adopted");
-    let epoch = adopted.u64("current_epoch").expect("adopted epoch");
+    let epoch = adopted.field("current_epoch").expect("adopted epoch");
     assert!(events.iter().skip(baseline.len()).any(|event| {
-        event.probe_name() == Some("producer_pcm_admitted")
-            && event.u64("seek_epoch") == Some(epoch)
-            && event.u64("source_start") == Some(destination_source)
+        event.probe == "producer_pcm_admitted"
+            && event.field("seek_epoch") == Some(epoch)
+            && event.field("source_start") == Some(destination_source)
     }));
 }
 
@@ -2472,7 +2470,7 @@ async fn directed_sync_toggle_matrix(
     #[case] expected_mode: SyncMode,
     #[case] expected_rate: f32,
 ) {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "directed-sync-toggle",
         1,
@@ -2504,11 +2502,11 @@ async fn directed_sync_toggle_matrix(
     let _ = harness
         .capture_frames(case, harness.block_frames * 4, harness.block_frames)
         .await;
-    let baseline = recorder.snapshot();
+    let baseline = trace.events();
     let baseline_map = baseline
         .iter()
-        .filter(|event| event.probe_name() == Some("warp_plan_published"))
-        .filter_map(|event| event.u64("warp_map_revision"))
+        .filter(|event| event.probe == "warp_plan_published")
+        .filter_map(|event| event.field("warp_map_revision"))
         .max();
     let baseline_underruns = harness.player_controls[0]
         .rt_metrics()
@@ -2519,7 +2517,7 @@ async fn directed_sync_toggle_matrix(
         .await
         .pop()
         .expect("one-deck toggle returns one typed admission");
-    let post = &recorder.snapshot()[baseline.len()..];
+    let post = &trace.events()[baseline.len()..];
     match expected_mode {
         SyncMode::Off => {
             let SyncAdmission::Preparing {
@@ -2532,15 +2530,15 @@ async fn directed_sync_toggle_matrix(
             };
             assert!(
                 !post.iter().any(|event| matches!(
-                    event.probe_name(),
-                    Some("prepared_sync_acknowledged") | Some("deck_grid_off_published")
+                    event.probe,
+                    "prepared_sync_acknowledged" | "deck_grid_off_published"
                 )),
                 "Free cannot acknowledge or publish Off before worker adoption"
             );
             let status = harness
                 .render_until_free_off(case, operation, topology, warp_map)
                 .await;
-            let events = recorder.snapshot();
+            let events = trace.events();
             let post = &events[baseline.len()..];
             assert!(
                 matches!(status, SyncStatusSnapshot::Off { .. }),
@@ -2548,34 +2546,34 @@ async fn directed_sync_toggle_matrix(
             );
             let installed_index = post
                 .iter()
-                .position(|event| event.probe_name() == Some("free_adoption_installed"))
+                .position(|event| event.probe == "free_adoption_installed")
                 .expect("worker commits the reserved Free request");
             let installed = &post[installed_index];
-            assert_eq!(installed.u64("operation"), Some(u64::from(operation)));
-            assert_eq!(installed.u64("warp_map"), Some(u64::from(warp_map)));
+            assert_eq!(installed.field("operation"), Some(u64::from(operation)));
+            assert_eq!(installed.field("warp_map"), Some(u64::from(warp_map)));
             let activation = post
                 .iter()
                 .find(|event| {
-                    event.probe_name() == Some("free_adoption_activation")
-                        && event.u64("operation") == Some(u64::from(operation))
-                        && event.u64("warp_map") == Some(u64::from(warp_map))
+                    event.probe == "free_adoption_activation"
+                        && event.field("operation") == Some(u64::from(operation))
+                        && event.field("warp_map") == Some(u64::from(warp_map))
                 })
                 .expect("installed request publishes its exact worker geometry");
-            assert!(activation.u64("source").is_some());
-            assert!(activation.u64("output").is_some());
+            assert!(activation.field("source").is_some());
+            assert!(activation.field("output").is_some());
             let ack_index = post
                 .iter()
                 .position(|event| {
-                    event.probe_name() == Some("prepared_sync_acknowledged")
-                        && event.u64("free") == Some(1)
-                        && event.u64("warp_map_revision") == Some(u64::from(warp_map))
+                    event.probe == "prepared_sync_acknowledged"
+                        && event.field("free") == Some(1)
+                        && event.field("warp_map_revision") == Some(u64::from(warp_map))
                 })
                 .expect("the adopted Free map is acknowledged");
             let off_index = post
                 .iter()
                 .position(|event| {
-                    event.probe_name() == Some("deck_grid_off_published")
-                        && event.u64("warp_map_revision") == Some(u64::from(warp_map))
+                    event.probe == "deck_grid_off_published"
+                        && event.field("warp_map_revision") == Some(u64::from(warp_map))
                 })
                 .expect("the adopted Free map publishes Off");
             let target_pcm_index = post
@@ -2583,9 +2581,9 @@ async fn directed_sync_toggle_matrix(
                 .enumerate()
                 .skip(installed_index + 1)
                 .find(|(_, event)| {
-                    event.probe_name() == Some("pcm_consumed")
+                    event.probe == "pcm_consumed"
                         && event
-                            .u64("render_revision")
+                            .field("render_revision")
                             .is_some_and(|revision| revision >> u32::BITS == u64::from(warp_map))
                 })
                 .map(|(index, _)| index)
@@ -2600,10 +2598,10 @@ async fn directed_sync_toggle_matrix(
                 let pre_publication = post[..off_index]
                     .iter()
                     .rev()
-                    .find(|event| event.probe_name() == Some("deck_render_context"))
+                    .find(|event| event.probe == "deck_render_context")
                     .expect("the acknowledgement callback sampled its pre-publication context");
                 assert_eq!(
-                    pre_publication.u64("mode"),
+                    pre_publication.field("mode"),
                     Some(2),
                     "the acknowledgement callback may still carry HostSync before Off publishes"
                 );
@@ -2616,57 +2614,57 @@ async fn directed_sync_toggle_matrix(
             post.iter()
                 .skip(off_index)
                 .find(|event| {
-                    event.probe_name() == Some("deck_render_context")
-                        && event.u64("mode") == Some(0)
-                        && event.u64("rate_bits") == Some(u64::from(expected_rate.to_bits()))
+                    event.probe == "deck_render_context"
+                        && event.field("mode") == Some(0)
+                        && event.field("rate_bits") == Some(u64::from(expected_rate.to_bits()))
                 })
                 .expect("Free publishes the exact manual Off render context");
             let first_rate_index = post
                 .iter()
                 .position(|event| {
-                    event.probe_name() == Some("rate_applied")
-                        && event.u64("applied_rate_bits")
+                    event.probe == "rate_applied"
+                        && event.field("applied_rate_bits")
                             == Some(u64::from(expected_rate.to_bits()))
                 })
                 .expect("the published Off rate reaches the renderer");
             let first_rate = &post[first_rate_index];
             let rate_revision = first_rate
-                .u64("request_revision")
+                .field("request_revision")
                 .expect("rate application carries its revision");
             let normal_rate = post
                 .iter()
                 .skip(first_rate_index + 1)
                 .find(|event| {
-                    event.probe_name() == Some("rate_applied")
-                        && event.u64("applied_rate_bits")
+                    event.probe == "rate_applied"
+                        && event.field("applied_rate_bits")
                             == Some(u64::from(expected_rate.to_bits()))
-                        && event.u64("request_revision") == Some(rate_revision)
+                        && event.field("request_revision") == Some(rate_revision)
                 })
                 .expect("Free keeps the exact Off rate and revision after its carrier quantum");
             let normal_source = normal_rate
-                .u64("source_start")
+                .field("source_start")
                 .expect("normal Off rate application carries its source boundary");
             assert!(
                 !post
                     .iter()
-                    .any(|event| event.probe_name() == Some("decoder_seek_epoch_observed")),
+                    .any(|event| event.probe == "decoder_seek_epoch_observed"),
                 "Free retains the resident decoder without a seek"
             );
-            let events = recorder.snapshot();
+            let events = trace.events();
             let (reader_index, reader_source) = events
                 .iter()
                 .enumerate()
                 .skip(baseline.len())
                 .find_map(|(index, event)| {
-                    if event.probe_name() == Some("pcm_reader_admitted")
+                    if event.probe == "pcm_reader_admitted"
                         && event
-                            .u64("render_revision")
+                            .field("render_revision")
                             .is_some_and(|revision| revision >> u32::BITS == u64::from(warp_map))
                         && event
-                            .u64("source_start")
+                            .field("source_start")
                             .is_some_and(|source| source >= normal_source)
                     {
-                        event.u64("source_start").map(|source| (index, source))
+                        event.field("source_start").map(|source| (index, source))
                     } else {
                         None
                     }
@@ -2683,20 +2681,20 @@ async fn directed_sync_toggle_matrix(
             let mut run = None;
             let mut target_consumed_index = None;
             for _ in 0..callbacks {
-                let current = recorder.snapshot();
+                let current = trace.events();
                 for (index, event) in current.iter().enumerate().skip(event_cursor) {
-                    if event.probe_name() != Some("pcm_consumed")
+                    if event.probe != "pcm_consumed"
                         || event
-                            .u64("render_revision")
+                            .field("render_revision")
                             .is_none_or(|revision| revision >> u32::BITS != u64::from(warp_map))
                     {
                         continue;
                     }
                     let Some((source_start, source_end, output_start, output_end)) = event
-                        .u64("source_start")
-                        .zip(event.u64("source_end"))
-                        .zip(event.u64("output_start"))
-                        .zip(event.u64("output_end"))
+                        .field("source_start")
+                        .zip(event.field("source_end"))
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
                         .map(|(((source_start, source_end), output_start), output_end)| {
                             (source_start, source_end, output_start, output_end)
                         })
@@ -2753,33 +2751,32 @@ async fn directed_sync_toggle_matrix(
             };
             let plans: Vec<_> = post
                 .iter()
-                .filter(|event| event.probe_name() == Some("warp_plan_published"))
+                .filter(|event| event.probe == "warp_plan_published")
                 .collect();
             assert_eq!(plans.len(), 1, "one command publishes one correlated plan");
             let plan = plans[0];
-            assert_eq!(plan.u64("warp_map_revision"), Some(u64::from(warp_map)));
+            assert_eq!(plan.field("warp_map_revision"), Some(u64::from(warp_map)));
             assert!(baseline_map.is_none_or(|previous| {
-                plan.u64("warp_map_revision")
+                plan.field("warp_map_revision")
                     .is_some_and(|next| next > previous)
             }));
             let activation = plan
-                .u64("activation_output")
+                .field("activation_output")
                 .expect("planned map has an output activation");
             harness.render_through(case, activation).await;
             harness.settle(case, 4).await;
-            let events = recorder.snapshot();
+            let events = trace.events();
             let adopted = events
                 .iter()
                 .skip(baseline.len())
                 .find(|event| {
-                    event.probe_name() == Some("decoder_seek_epoch_observed")
-                        && event.u64("adopted") == Some(1)
+                    event.probe == "decoder_seek_epoch_observed"
+                        && event.field("adopted") == Some(1)
                 })
                 .expect("the command-correlated decoder epoch is adopted");
-            let epoch = adopted.u64("current_epoch").expect("adopted epoch");
+            let epoch = adopted.field("current_epoch").expect("adopted epoch");
             assert!(events.iter().skip(baseline.len()).any(|event| {
-                event.probe_name() == Some("pcm_reader_admitted")
-                    && event.u64("seek_epoch") == Some(epoch)
+                event.probe == "pcm_reader_admitted" && event.field("seek_epoch") == Some(epoch)
             }));
         }
     }
@@ -2799,21 +2796,21 @@ async fn directed_sync_toggle_matrix(
         "{start:?} -> {expected_mode:?} must not add a PCM underrun"
     );
     if expected_mode != SyncMode::Off {
-        let events = recorder.snapshot();
+        let events = trace.events();
         let consumed = events
             .iter()
             .skip(baseline.len())
             .rev()
-            .find(|event| event.probe_name() == Some("pcm_consumed"))
+            .find(|event| event.probe == "pcm_consumed")
             .expect("post-command output carries an attributed PCM span");
         let source_frames = consumed
-            .u64("source_end")
+            .field("source_end")
             .expect("PCM source end")
-            .saturating_sub(consumed.u64("source_start").expect("PCM source start"));
+            .saturating_sub(consumed.field("source_start").expect("PCM source start"));
         let output_frames = consumed
-            .u64("output_end")
+            .field("output_end")
             .expect("PCM output end")
-            .saturating_sub(consumed.u64("output_start").expect("PCM output start"));
+            .saturating_sub(consumed.field("output_start").expect("PCM output start"));
         let rate = source_frames as f32 / output_frames as f32;
         assert!(
             (rate - expected_rate).abs() < 0.02,
@@ -2826,7 +2823,7 @@ async fn directed_sync_toggle_matrix(
 #[case::grid_before_play(true)]
 #[case::grid_after_play(false)]
 async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "late-grid-track-start-124",
         1,
@@ -2863,31 +2860,27 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
         .iter()
         .position(|sample| *sample != 0.0)
         .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits"));
-    let probe_events = recorder
-        .snapshot()
+    let probe_events = trace
+        .events()
         .into_iter()
         .filter(|event| {
             matches!(
-                event.probe_name(),
-                Some(
-                    "warp_plan_published"
-                        | "prepared_launch_command_admitted"
-                        | "prepared_launch_seek_begun"
-                        | "prepared_launch_readiness_checked"
-                        | "decoder_seek_epoch_observed"
-                        | "producer_pcm_admitted"
-                        | "scheduled_seek_activated"
-                        | "pcm_consumed"
-                        | "pcm_underrun"
-                )
+                event.probe,
+                "warp_plan_published"
+                    | "prepared_launch_command_admitted"
+                    | "prepared_launch_seek_begun"
+                    | "prepared_launch_readiness_checked"
+                    | "decoder_seek_epoch_observed"
+                    | "producer_pcm_admitted"
+                    | "scheduled_seek_activated"
+                    | "pcm_consumed"
+                    | "pcm_underrun"
             )
         })
         .map(|event| {
             serde_json::json!({
-                "probe": event.probe_name(),
-                "seq": event.seq(),
-                "fields": event.fields,
-                "strings": event.string_fields,
+                "probe": event.probe,
+                "fields": event.fields().collect::<std::collections::BTreeMap<_, _>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -2904,7 +2897,7 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "disable-paused-late-grid",
         1,
@@ -2944,16 +2937,16 @@ async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
             .any(|sample| *sample != 0.0)
     );
     assert!(
-        !recorder
-            .snapshot()
+        !trace
+            .events()
             .iter()
-            .any(|event| event.probe_name() == Some("prepared_launch_seek_begun"))
+            .any(|event| event.probe == "prepared_launch_seek_begun")
     );
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "disable-admitted-late-grid",
         1,
@@ -2974,16 +2967,17 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
         Ok(SyncAdmission::Prepared { .. })
     ));
     let _ = harness.render(case, harness.block_frames).await;
-    let admitted = recorder
-        .snapshot()
+    let admitted = trace
+        .events()
         .into_iter()
         .find(|event| {
-            event.probe_name() == Some("prepared_launch_command_admitted")
-                && event.fields["armed"] == 1
+            event.probe == "prepared_launch_command_admitted" && event.field("armed") == Some(1)
         })
         .expect("prepared launch is admitted before Disable");
-    let old_epoch = admitted.fields["seek_epoch"];
-    let events_before_disable = recorder.snapshot().len();
+    let old_epoch = admitted
+        .field("seek_epoch")
+        .expect("the admitted launch names its seek epoch");
+    let events_before_disable = trace.events().len();
     let served_target = harness.player_controls[0]
         .position_seconds()
         .expect("active track exposes its served-media position before Disable");
@@ -2998,47 +2992,48 @@ async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
             .iter()
             .any(|sample| *sample != 0.0)
     );
-    let after_disable = &recorder.snapshot()[events_before_disable..];
+    let after_disable = &trace.events()[events_before_disable..];
     assert!(after_disable.iter().any(|event| {
-        event.probe_name() == Some("prepared_launch_cancelled")
-            && event.fields["item_id"] == harness.ids[0][0].as_u64()
-            && event.fields["prepared_seek_epoch"] == old_epoch
-            && event.fields["replacement_seek_epoch"] != old_epoch
-            && event.fields["presented"] == 1
+        event.probe == "prepared_launch_cancelled"
+            && event.field("item_id") == Some(harness.ids[0][0].as_u64())
+            && event.field("prepared_seek_epoch") == Some(old_epoch)
+            && event.field("replacement_seek_epoch") != Some(old_epoch)
+            && event.field("presented") == Some(1)
     }));
     let replacement_epoch = after_disable
         .iter()
         .find(|event| {
-            event.probe_name() == Some("prepared_launch_cancelled")
-                && event.fields["prepared_seek_epoch"] == old_epoch
-                && event.fields["presented"] == 1
+            event.probe == "prepared_launch_cancelled"
+                && event.field("prepared_seek_epoch") == Some(old_epoch)
+                && event.field("presented") == Some(1)
         })
         .expect("Disable presents its replacement prepared seek")
-        .fields["replacement_seek_epoch"];
+        .field("replacement_seek_epoch")
+        .expect("the cancellation names its replacement epoch");
     assert!(!after_disable.iter().any(|event| {
-        event.probe_name() == Some("prepared_launch_readiness_checked")
-            && event.fields["expected_activation"] == 69_677
+        event.probe == "prepared_launch_readiness_checked"
+            && event.field("expected_activation") == Some(69_677)
     }));
     assert!(!after_disable.iter().any(|event| {
-        event.probe_name() == Some("scheduled_seek_activated")
-            && event.fields["seek_epoch"] == old_epoch
+        event.probe == "scheduled_seek_activated" && event.field("seek_epoch") == Some(old_epoch)
     }));
-    let events = recorder.snapshot();
+    let events = trace.events();
     assert!(events.iter().any(|event| {
-        event.probe_name() == Some("producer_pcm_admitted")
-            && event.fields["seek_epoch"] == old_epoch
+        event.probe == "producer_pcm_admitted" && event.field("seek_epoch") == Some(old_epoch)
     }));
     assert!(!events.iter().any(|event| {
-        event.probe_name() == Some("pcm_reader_admitted") && event.fields["seek_epoch"] == old_epoch
+        event.probe == "pcm_reader_admitted" && event.field("seek_epoch") == Some(old_epoch)
     }));
     let replacement_pcm = events
         .iter()
         .find(|event| {
-            event.probe_name() == Some("pcm_reader_admitted")
-                && event.fields["seek_epoch"] == replacement_epoch
+            event.probe == "pcm_reader_admitted"
+                && event.field("seek_epoch") == Some(replacement_epoch)
         })
         .expect("Disable admits replacement PCM");
-    let replacement_source_start = replacement_pcm.fields["source_start"];
+    let replacement_source_start = replacement_pcm
+        .field("source_start")
+        .expect("replacement PCM names its source start");
     let source_tolerance = u64::try_from(harness.block_frames)
         .expect("fixture block size fits source-frame tolerance");
     assert!(
@@ -3123,7 +3118,7 @@ async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "normal-pause-resume",
         1,
@@ -3172,16 +3167,16 @@ async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
         .capture_frames(case, 8_000, harness.block_frames)
         .await;
     assert!(lane_samples(&after, 0).iter().any(|sample| *sample != 0.0));
-    let consumed = recorder
-        .snapshot()
+    let consumed = trace
+        .events()
         .into_iter()
-        .filter(|event| event.probe_name() == Some("pcm_consumed"))
+        .filter(|event| event.probe == "pcm_consumed")
         .map(|event| {
             serde_json::json!({
-                "output_start": event.fields["output_start"],
-                "output_end": event.fields["output_end"],
-                "source_start": event.fields["source_start"],
-                "source_end": event.fields["source_end"],
+                "output_start": event.field("output_start"),
+                "output_end": event.field("output_end"),
+                "source_start": event.field("source_start"),
+                "source_end": event.field("source_end"),
             })
         })
         .collect::<Vec<_>>();
@@ -3442,7 +3437,7 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
     const NEXT_OUTPUT_FRAME: u64 = 116_129;
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
 
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SyncCase::running(
         "scenario-1-single-deck-prepared-launch",
         1,
@@ -3554,33 +3549,29 @@ async fn scenario_1_single_deck_prepared_launch_reaches_real_pcm(
         .count();
     let (markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
     let underruns = harness.underrun_failures();
-    let probe_events = recorder
-        .snapshot()
+    let probe_events = trace
+        .events()
         .into_iter()
         .filter(|event| {
             matches!(
-                event.probe_name(),
-                Some(
-                    "warp_plan_published"
-                        | "prepared_launch_command_admitted"
-                        | "prepared_launch_seek_begun"
-                        | "prepared_launch_readiness_checked"
-                        | "decoder_seek_epoch_observed"
-                        | "decoder_seek_epoch_backpressured"
-                        | "producer_pcm_admitted"
-                        | "scheduled_seek_activated"
-                        | "pcm_consumed"
-                        | "pcm_underrun"
-                )
+                event.probe,
+                "warp_plan_published"
+                    | "prepared_launch_command_admitted"
+                    | "prepared_launch_seek_begun"
+                    | "prepared_launch_readiness_checked"
+                    | "decoder_seek_epoch_observed"
+                    | "decoder_seek_epoch_backpressured"
+                    | "producer_pcm_admitted"
+                    | "scheduled_seek_activated"
+                    | "pcm_consumed"
+                    | "pcm_underrun"
             )
         })
         .map(|event| {
             serde_json::json!({
-                "probe": event.probe_name(),
-                "seq": event.seq(),
-                "thread_id": event.thread_id(),
-                "fields": event.fields,
-                "strings": event.string_fields,
+                "probe": event.probe,
+                "thread": format!("{:?}", event.thread),
+                "fields": event.fields().collect::<std::collections::BTreeMap<_, _>>(),
             })
         })
         .collect::<Vec<_>>();

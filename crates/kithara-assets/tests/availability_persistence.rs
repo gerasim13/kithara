@@ -12,12 +12,11 @@ use std::{fs, num::NonZeroUsize, path::Path};
 use kithara_assets::{
     AcquisitionResult, AssetStore, FlushHub, FlushPolicy, ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{
     CancelToken, thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 use tempfile::tempdir;
 

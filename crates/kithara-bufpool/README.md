@@ -90,8 +90,6 @@ fn build() -> Result<(), PoolError> {
 ## Features
 
 - `perf` — enables `hotpath` instrumentation on pool hot paths.
-- `test-utils` — exposes the application-shaped `testing::TestPools` schema for
-  workspace test harnesses.
 
 ## Integration
 

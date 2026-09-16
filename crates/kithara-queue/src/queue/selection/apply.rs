@@ -3,13 +3,16 @@ use std::sync::PoisonError;
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::tokio::task;
-use kithara_play::{Resource, SelectTransition};
+use kithara_play::Resource;
 use tracing::{debug, warn};
 
 use crate::{
     error::QueueError,
-    event::{QueueEvent, TrackStatus},
-    queue::{QueueControl, types::SelectPhase},
+    event::{AdvanceReason, QueueEvent, TrackStatus},
+    queue::{
+        QueueControl,
+        types::{SelectPhase, Transition},
+    },
 };
 
 impl<S> QueueControl<S>
@@ -77,12 +80,12 @@ where
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 
-        let pending_select = {
+        let selection = {
             let mut phase = self
                 .pending_select
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let result = match *phase {
+            let selection = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;
                     Some(pending)
@@ -90,39 +93,19 @@ where
                 _ => None,
             };
             drop(phase);
-            result
+            selection
         };
 
-        let Some(pending) = pending_select else {
+        let armed = self.autoplay_target.disarm_if_matches(id);
+        let Some((transition, reason, autoplay)) = selection
+            .map(|pending| (pending.transition, pending.reason, pending.autoplay))
+            .or_else(|| armed.then_some((Transition::None, AdvanceReason::UserSelect, true)))
+        else {
             return;
         };
-        let transition = pending.transition;
-        let was_playing = self.player.is_playing();
-        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-        if was_playing && crossfade > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                duration_seconds: crossfade,
-            });
-        }
-        if let Err(error) = self.select_player_item(
-            index,
-            SelectTransition {
-                autoplay: pending.autoplay,
-                crossfade_seconds: crossfade,
-            },
-        ) {
+        if let Err(error) = self.select_loaded_item(index, id, transition, reason, autoplay) {
             warn!(id = id.as_u64(), error = %error, "pending select failed");
-            return;
         }
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .select(index);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
-            id: Some(id),
-            reason: pending.reason,
-        });
-        self.tracks.set_status(id, TrackStatus::Consumed);
     }
 
     pub(super) fn watch_apply(

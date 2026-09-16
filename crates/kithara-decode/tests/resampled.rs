@@ -7,10 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use kithara_bufpool::{
-    HasPool,
-    testing::{TestPools, pools as default_pools},
-};
+use kithara_bufpool::HasPool;
 use kithara_decode::{
     DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
 };
@@ -27,7 +24,10 @@ use kithara_test_fixtures::unit_fixtures::{
     poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
     resampled_wav_seek, trim_silence,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools as default_pools},
+    kithara,
+};
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;

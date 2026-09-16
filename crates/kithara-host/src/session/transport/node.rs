@@ -9,7 +9,7 @@ use firewheel::{
     },
 };
 use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
-use kithara_test_utils::kithara::rtsan_forbid_blocking;
+use kithara_test_utils::kithara;
 use kithara_warp::{RenderContext, SessionFrame};
 use triple_buffer::{Output, triple_buffer};
 
@@ -119,7 +119,7 @@ impl AudioNode for SessionTransportNode {
 pub(crate) struct SessionTransportProcessor;
 
 impl AudioNodeProcessor for SessionTransportProcessor {
-    #[rtsan_forbid_blocking]
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,

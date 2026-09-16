@@ -79,10 +79,6 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
             }
             // WHY: Event-driven idle wait (no bounded poll). `signal()` sets `pending` and notifies; shutdown cancels and `notify_all`s - both
             // wake this wait, so a periodic re-check is unnecessary.
-            #[cfg(test)]
-            if let Some(sender) = wait.idle_park.lock().take() {
-                sender.send(()).ok();
-            }
             guard = wait.cv.wait(guard);
         }
         drop(guard);

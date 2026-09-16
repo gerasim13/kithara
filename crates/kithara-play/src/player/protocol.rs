@@ -635,13 +635,16 @@ where
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use kithara_warp::SyncMemberKind;
 
     use super::*;
-    use crate::{GroupState, PlayWorker, PlayWorkerConfig, mock, player::PlayerConfig};
+    use crate::{
+        GroupState, PlayWorker, PlayWorkerConfig, mock,
+        player::PlayerConfig,
+        test_pools::{TestPools, pools},
+    };
 
     fn player() -> PlayerImpl<TestPools> {
         PlayerImpl::new(

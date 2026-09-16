@@ -680,7 +680,7 @@ mod tests {
         ));
         assert!(asset_path.is_file());
         assert!(availability.contains_range(&key, 0..4));
-        assert!(pins.contains(asset_root));
+        assert!(pins.snapshot().contains(asset_root));
         assert_eq!(
             lru.eviction_candidates(
                 &EvictConfig {

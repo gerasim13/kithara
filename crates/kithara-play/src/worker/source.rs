@@ -470,8 +470,7 @@ where
                 warp_map = u64::from(installed.warp_map),
                 track = installed.item.as_u64(),
                 load = u64::from(installed.load),
-                transport = u64::from(installed.transport),
-                decode_epoch = installed.decode_epoch
+                transport = u64::from(installed.transport)
             );
             kithara_test_macros::probe_event!(
                 free_adoption_activation,
@@ -838,34 +837,6 @@ mod tests {
             )
             .build();
         let warp = Warp::new((), &config);
-        let renderer = warp.renderer(spec, pools.clone());
-        let drain = EffectDrain::new(effects.len(), pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        WarpSource::new(
-            source,
-            WarpSourceParts {
-                warp: renderer,
-                effects,
-                drain,
-                spec,
-                pools: pools.clone(),
-                free_adoption: None,
-                region_plan: Arc::default(),
-            },
-        )
-    }
-
-    fn source_stage_with_config<T>(
-        pools: &PoolRegion<TestPools>,
-        source: T,
-        effects: Vec<Box<dyn AudioEffect>>,
-        spec: AudioSpec,
-        config: &kithara_warp::WarpConfig,
-    ) -> WarpSource<T, TestPools>
-    where
-        T: AudioSource<Chunk = AudioChunk>,
-    {
-        let warp = Warp::new((), config);
         let renderer = warp.renderer(spec, pools.clone());
         let drain = EffectDrain::new(effects.len(), pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));

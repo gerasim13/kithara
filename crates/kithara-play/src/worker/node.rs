@@ -245,8 +245,8 @@ where
                 self.port.push_direct(fetch);
                 if let Some((epoch, source_start, frames, render_revision)) = admitted_pcm {
                     kithara::probe_event!(
-                        producer_pcm_admitted,
-                        seek_epoch = epoch,
+                        chunk_admitted,
+                        epoch,
                         source_start,
                         frames,
                         render_revision

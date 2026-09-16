@@ -41,8 +41,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_with_flash_path(attr, item, &quote!(::kithara_platform::flash))
 }
 
-pub(crate) fn expand_facade(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_with_flash_path(attr, item, &quote!(::kithara::platform::flash))
+/// Variant reached through `kithara_test_utils::kithara`, whose generated paths
+/// resolve through the `kithara_platform` re-export of that crate.
+pub(crate) fn expand_test_utils(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_with_flash_path(
+        attr,
+        item,
+        &quote!(::kithara_test_utils::kithara_platform::flash),
+    )
 }
 
 fn expand_with_flash_path(

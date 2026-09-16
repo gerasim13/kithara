@@ -7,8 +7,7 @@ mod common;
 
 use common::{WINDOW, f_measure, fixture, load_golden, load_pcm_fixture, report};
 use kithara_beat::{SpectralBeats, Tempo};
-use kithara_bufpool::testing::pools;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::cast::ToPrimitive;
 
 const MIN_F: f64 = 0.85;

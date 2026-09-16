@@ -1,21 +1,18 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use kithara_audio::{
-    AudioLaneEvent, AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason,
+    AudioRead, AudioSource, ChunkOutcome, Fetch, PreloadGate, TrackStep, WaitingReason,
 };
-use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
-    thread::{park_timeout, sleep as thread_sleep},
-    time::{Duration, Instant, timeout as platform_timeout},
+    thread,
+    time::{Duration, timeout as platform_timeout},
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo};
-use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
+use kithara_stream::{SeekControl, SeekObserve, SeekState};
 use kithara_test_utils::kithara;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worker, WorkerConfig};
 
-use super::*;
+use super::{tests::prepared_node, *};
 use crate::{
     test_pools::{Pools, pools, sample_buffer},
     worker::scheduler::ServiceClass,
@@ -48,20 +45,6 @@ impl MockSource {
             cursor: 0,
             ready: true,
             should_panic: false,
-        }
-    }
-
-    fn not_ready(pools: Pools, chunks: usize) -> Self {
-        Self {
-            ready: false,
-            ..Self::new(pools, chunks)
-        }
-    }
-
-    fn panicking(pools: Pools) -> Self {
-        Self {
-            should_panic: true,
-            ..Self::new(pools, 100)
         }
     }
 }
@@ -118,54 +101,30 @@ impl AudioSource for FailingSource {
     }
 }
 
-fn make_node<S>(
+async fn make_node<S>(
     source: S,
     ringbuf_capacity: usize,
     preload_chunks: usize,
 ) -> (
     DecoderNode<S>,
-    impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
+    impl FnMut() -> Option<()> + Send + 'static,
     Arc<PreloadGate>,
 )
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
-    let (port, pop) = ProducerPort::probe(ringbuf_capacity);
-    let preload_gate = Arc::new(PreloadGate::default());
     let seek_obs = source.seek_observe();
     let seek_epoch = seek_obs.epoch();
-    let node = DecoderNode {
-        seek_obs,
-        source,
-        port,
-        preload_chunks,
-        emit: Arc::new(DeferredBus::<AudioLaneEvent>::new(EventBus::new(8), 8)),
-        playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
-        preload_gate: Arc::clone(&preload_gate),
-        runtime: DecoderRuntime {
-            seek_epoch,
-            ..Default::default()
-        },
-        engine_load: None,
+    let (mut node, mut audio) =
+        prepared_node(source, ringbuf_capacity, preload_chunks.max(1)).await;
+    node.seek_obs = seek_obs;
+    node.runtime.seek_epoch = seek_epoch;
+    let preload_gate = Arc::clone(&node.preload_gate);
+    let pop = move || match audio.next_chunk() {
+        Ok(ChunkOutcome::Chunk(_)) => Some(()),
+        Ok(ChunkOutcome::Pending { .. } | ChunkOutcome::Eof { .. }) | Err(_) => None,
     };
     (node, pop, preload_gate)
-}
-
-fn wait_for_chunks(
-    pop: &mut impl FnMut() -> Option<Fetch<AudioChunk>>,
-    count: usize,
-    timeout: Duration,
-) -> usize {
-    let start = Instant::now();
-    let mut received = 0;
-    while received < count && start.elapsed() < timeout {
-        if pop().is_some() {
-            received += 1;
-        } else {
-            thread_sleep(Duration::from_millis(1));
-        }
-    }
-    received
 }
 
 struct PlaybackScheduler {
@@ -199,10 +158,6 @@ impl PlaybackScheduler {
         }
     }
 
-    fn unregister(&self, task: TaskHandle) {
-        drop(task);
-    }
-
     fn wake_handle(&self) -> kithara_worker::Wake {
         self.dispatcher.wake_handle()
     }
@@ -216,14 +171,6 @@ fn test_scheduler() -> PlaybackScheduler {
     )
 }
 
-fn scheduler_with_capacity(capacity: usize) -> PlaybackScheduler {
-    PlaybackScheduler::start(
-        "kithara-play-worker-capacity-test".into(),
-        CancelToken::never(),
-        std::num::NonZeroUsize::new(capacity).expect("test capacity is non-zero"),
-    )
-}
-
 fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S>) -> TaskHandle
 where
     S: AudioSource<Chunk = AudioChunk>,
@@ -231,94 +178,6 @@ where
     handle
         .register(node)
         .expect("test playback task must register")
-}
-
-#[kithara::test]
-fn worker_delivers_chunks() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 10), 32, 3);
-    let _id = register(&handle, node);
-
-    let received = wait_for_chunks(&mut pop, 5, Duration::from_secs(5));
-    assert!(received >= 5, "expected at least 5 chunks, got {received}");
-}
-
-#[kithara::test]
-fn worker_multi_track_round_robin() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
-    let _id_a = register(&handle, node_a);
-    let _id_b = register(&handle, node_b);
-
-    let a = wait_for_chunks(&mut pop_a, 3, Duration::from_secs(5));
-    let b = wait_for_chunks(&mut pop_b, 3, Duration::from_secs(5));
-    assert!(a >= 3, "track A expected at least 3 chunks, got {a}");
-    assert!(b >= 3, "track B expected at least 3 chunks, got {b}");
-}
-
-#[kithara::test]
-fn worker_skips_not_ready_tracks() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::not_ready(pools.clone(), 10), 32, 1);
-    let _id_a = register(&handle, node_a);
-    let _id_b = register(&handle, node_b);
-
-    thread_sleep(Duration::from_millis(100));
-
-    let a = wait_for_chunks(&mut pop_a, 1, Duration::from_millis(100));
-    let b = wait_for_chunks(&mut pop_b, 1, Duration::from_millis(50));
-    assert!(a >= 1, "ready track should receive chunks");
-    assert_eq!(b, 0, "not-ready track should receive nothing");
-}
-
-#[kithara::test]
-fn worker_overflow_on_full_ringbuf() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 5), 1, 1);
-    let _id = register(&handle, node);
-
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "should have at least one chunk");
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "overflow slot should have been flushed");
-}
-
-#[kithara::test]
-fn worker_panic_isolation() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node_a, _, _) = make_node(MockSource::panicking(pools.clone()), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
-    let _id_a = register(&handle, node_a);
-    let _id_b = register(&handle, node_b);
-
-    let b = wait_for_chunks(&mut pop_b, 3, Duration::from_secs(5));
-    assert!(b >= 3, "sibling should survive a node panic, got {b}");
-}
-
-#[kithara::test]
-fn worker_seek_enters_pending_reset() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let source = MockSource::new(pools.clone(), 100);
-    let seek = Arc::clone(&source.seek);
-    let (node, mut pop, _) = make_node(source, 32, 1);
-    let _id = register(&handle, node);
-
-    assert!(wait_for_chunks(&mut pop, 2, Duration::from_secs(5)) >= 2);
-    let _ = seek.begin(Duration::from_secs(10));
-    handle.wake_handle().wake();
-    thread_sleep(Duration::from_millis(100));
-    assert!(
-        wait_for_chunks(&mut pop, 1, Duration::from_secs(5)) >= 1,
-        "decoding should resume after seek"
-    );
 }
 
 #[kithara::test(tokio)]
@@ -331,7 +190,7 @@ async fn worker_preload_gate_fires(
 ) {
     let pools = pools();
     let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), chunks), 32, preload);
+    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), chunks), 32, preload).await;
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
@@ -343,7 +202,7 @@ async fn worker_preload_gate_fires(
 #[kithara::test(tokio)]
 async fn worker_preload_gate_fires_on_failure() {
     let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(FailingSource::default(), 32, 8);
+    let (node, _pop, gate) = make_node(FailingSource::default(), 32, 8).await;
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
@@ -358,7 +217,7 @@ async fn worker_preload_gate_reopens_after_seek() {
     let handle = test_scheduler();
     let source = MockSource::new(pools.clone(), 10);
     let seek = Arc::clone(&source.seek);
-    let (node, _pop, gate) = make_node(source, 32, 1);
+    let (node, _pop, gate) = make_node(source, 32, 1).await;
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
@@ -372,117 +231,43 @@ async fn worker_preload_gate_reopens_after_seek() {
         .expect("post-seek gate must reopen");
 }
 
-#[kithara::test]
-fn worker_unregister_removes_track() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 100), 32, 1);
-    let id = register(&handle, node);
+/// Scheduler contracts observed through the product's `chunk_admitted` and
+/// `scheduler_pass` probes.
+#[cfg(feature = "usdt")]
+mod probed {
+    use kithara_test_utils::test::usdt::{ProbeEvent, Scope, scope};
 
-    assert!(wait_for_chunks(&mut pop, 2, Duration::from_secs(5)) >= 2);
-    handle.unregister(id);
-    thread_sleep(Duration::from_millis(50));
-    while pop().is_some() {}
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_none(), "no chunks should arrive after unregister");
-}
+    use super::*;
 
-#[kithara::test]
-fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
-    let pools = pools();
-    let handle = scheduler_with_capacity(2);
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1);
-
-    let id_a = register(&handle, node_a);
-    let id_b = register(&handle, node_b);
-    assert_eq!(wait_for_chunks(&mut pop_a, 1, Duration::from_secs(1)), 1);
-    assert_eq!(wait_for_chunks(&mut pop_b, 1, Duration::from_secs(1)), 1);
-
-    handle.unregister(id_a);
-    let (node_c, _, _) = make_node(MockSource::new(pools.clone(), 1), 1, 1);
-    let id_c = handle
-        .register(node_c)
-        .expect("unregister must release capacity");
-
-    while pop_b().is_some() {}
-    handle.wake_handle().wake();
-    assert_eq!(
-        wait_for_chunks(&mut pop_b, 1, Duration::from_secs(1)),
-        1,
-        "unregistering one task must not stop its sibling"
-    );
-
-    handle.unregister(id_b);
-    handle.unregister(id_c);
-}
-
-#[kithara::test]
-fn shared_worker_blocking_track_does_not_starve_producing_track() {
-    let pools = pools();
-    struct BlockingSource {
-        seek_obs: Arc<dyn SeekObserve>,
-        blocking: Arc<AtomicBool>,
-    }
-
-    impl AudioSource for BlockingSource {
-        type Chunk = AudioChunk;
-
-        fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            if self.blocking.load(Ordering::Relaxed) {
-                thread_sleep(Duration::from_millis(10));
+    impl MockSource {
+        fn not_ready(pools: Pools, chunks: usize) -> Self {
+            Self {
+                ready: false,
+                ..Self::new(pools, chunks)
             }
-            TrackStep::Blocked(WaitingReason::Waiting)
         }
 
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
+        fn panicking(pools: Pools) -> Self {
+            Self {
+                should_panic: true,
+                ..Self::new(pools, 100)
+            }
         }
     }
 
-    let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 32, 0);
-    let _id_a = register(&handle, node_a);
-
-    let blocking = Arc::new(AtomicBool::new(true));
-    let blocking_source = BlockingSource {
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        blocking: Arc::clone(&blocking),
-    };
-    let (node_b, _pop_b, _) = make_node(blocking_source, 32, 0);
-    let _id_b = register(&handle, node_b);
-
-    thread_sleep(Duration::from_millis(500));
-    let mut got_a = 0;
-    while pop_a().is_some() {
-        got_a += 1;
-    }
-    assert!(
-        got_a >= 11,
-        "producing track was starved: got {got_a} chunks"
-    );
-
-    blocking.store(false, Ordering::Relaxed);
-}
-
-#[kithara::test]
-fn shared_worker_sync_blocking_step_starves_other_tracks() {
-    let pools = pools();
-    const SOURCE_CHUNKS: u32 = 1000;
-    const POLL_BUDGET: u32 = 600;
-    const BLOCK_MS: u64 = 10;
-
-    struct SlowDecodeSource {
+    /// Source that always produces, so its node competes for every pass.
+    struct EndlessSource {
         pools: Pools,
         seek_obs: Arc<dyn SeekObserve>,
-        block_ms: u64,
+        /// Time each step holds the shared worker thread before producing.
+        step: Duration,
     }
 
-    impl AudioSource for SlowDecodeSource {
+    impl AudioSource for EndlessSource {
         type Chunk = AudioChunk;
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            thread_sleep(Duration::from_millis(self.block_ms));
+            thread::sleep(self.step);
             TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
         }
 
@@ -491,40 +276,285 @@ fn shared_worker_sync_blocking_step_starves_other_tracks() {
         }
     }
 
-    let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(
-        MockSource::new(pools.clone(), SOURCE_CHUNKS as usize),
-        32,
-        0,
-    );
-    let _id_a = register(&handle, node_a);
-
-    let slow_source = SlowDecodeSource {
-        pools: pools.clone(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        block_ms: BLOCK_MS,
-    };
-    let (node_b, mut pop_b, _) = make_node(slow_source, 32, 0);
-    let _id_b = register(&handle, node_b);
-
-    let mut delivered = 0u32;
-    let mut polls = 0u32;
-    let mut deepest_poll = 0u32;
-
-    while delivered < SOURCE_CHUNKS && polls < POLL_BUDGET {
-        let mut this_poll = 0u32;
-        while pop_a().is_some() {
-            delivered += 1;
-            this_poll += 1;
-        }
-        deepest_poll = deepest_poll.max(this_poll);
-        while pop_b().is_some() {}
-        polls += 1;
-        park_timeout(Duration::from_millis(5));
+    /// Source that never has data, so its node waits on every pass.
+    struct WaitingSource {
+        seek_obs: Arc<dyn SeekObserve>,
+        /// Time each step holds the shared worker thread before waiting.
+        step: Duration,
     }
 
-    assert!(
-        delivered >= SOURCE_CHUNKS,
-        "fast track drained {delivered} of {SOURCE_CHUNKS} chunks in {polls} polls; deepest poll {deepest_poll}, peer blocked {BLOCK_MS}ms"
-    );
+    impl AudioSource for WaitingSource {
+        type Chunk = AudioChunk;
+
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            thread::sleep(self.step);
+            TrackStep::Blocked(WaitingReason::Waiting)
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
+        }
+    }
+
+    fn new_seek() -> Arc<dyn SeekObserve> {
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>
+    }
+
+    fn is(event: &ProbeEvent, probe: &str) -> bool {
+        event.probe == probe
+    }
+
+    fn pass_field(event: &ProbeEvent, field: &str) -> u64 {
+        event
+            .field(field)
+            .expect("scheduler_pass carries its counts")
+    }
+
+    /// Waits for a chunk admission recorded after `seen` probes.
+    async fn admitted_after(trace: &Scope, handle: &PlaybackScheduler, seen: usize) {
+        handle.wake_handle().wake();
+        trace
+            .wait_for(|events| events[seen..].iter().any(|e| is(e, "chunk_admitted")))
+            .await;
+    }
+
+    /// Waits for a scheduler pass recorded after `seen` probes that satisfies `holds`.
+    async fn pass_after<F>(trace: &Scope, handle: &PlaybackScheduler, seen: usize, holds: F)
+    where
+        F: Fn(&ProbeEvent) -> bool,
+    {
+        handle.wake_handle().wake();
+        trace
+            .wait_for(|events| {
+                events[seen..]
+                    .iter()
+                    .any(|e| is(e, "scheduler_pass") && holds(e))
+            })
+            .await;
+    }
+
+    async fn receive_chunks<P>(trace: &Scope, handle: &PlaybackScheduler, pop: &mut P, count: usize)
+    where
+        P: FnMut() -> Option<()>,
+    {
+        let mut received = 0;
+        loop {
+            let seen = trace.events().len();
+            while received < count && pop().is_some() {
+                received += 1;
+            }
+            if received == count {
+                return;
+            }
+            admitted_after(trace, handle, seen).await;
+        }
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_delivers_chunks() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 10), 32, 3).await;
+        let _id = register(&handle, node);
+
+        receive_chunks(&trace, &handle, &mut pop, 5).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_multi_track_round_robin() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1).await;
+        let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1).await;
+        let _id_a = register(&handle, node_a);
+        let _id_b = register(&handle, node_b);
+
+        receive_chunks(&trace, &handle, &mut pop_a, 3).await;
+        receive_chunks(&trace, &handle, &mut pop_b, 3).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_skips_not_ready_tracks() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1).await;
+        let (node_b, mut pop_b, _) =
+            make_node(MockSource::not_ready(pools.clone(), 10), 32, 1).await;
+        let _id_a = register(&handle, node_a);
+        let _id_b = register(&handle, node_b);
+
+        receive_chunks(&trace, &handle, &mut pop_a, 1).await;
+        pass_after(&trace, &handle, 0, |pass| pass_field(pass, "waiting") >= 1).await;
+        assert!(pop_b().is_none(), "not-ready track should receive nothing");
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_overflow_on_full_ringbuf() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 5), 1, 1).await;
+        let _id = register(&handle, node);
+
+        receive_chunks(&trace, &handle, &mut pop, 1).await;
+        let seen = trace.events().len();
+        pass_after(&trace, &handle, seen, |pass| {
+            pass_field(pass, "backpressured") >= 1
+        })
+        .await;
+        receive_chunks(&trace, &handle, &mut pop, 1).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_panic_isolation() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node_a, _, _) = make_node(MockSource::panicking(pools.clone()), 32, 1).await;
+        let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1).await;
+        let _id_a = register(&handle, node_a);
+        let _id_b = register(&handle, node_b);
+
+        receive_chunks(&trace, &handle, &mut pop_b, 3).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_seek_enters_pending_reset() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let source = MockSource::new(pools.clone(), 100);
+        let seek = Arc::clone(&source.seek);
+        let (node, mut pop, _) = make_node(source, 32, 1).await;
+        let _id = register(&handle, node);
+
+        receive_chunks(&trace, &handle, &mut pop, 2).await;
+        let epoch = seek.begin(Duration::from_secs(10));
+        let seen = trace.events().len();
+        handle.wake_handle().wake();
+        trace
+            .wait_for(|events| {
+                events[seen..]
+                    .iter()
+                    .any(|e| is(e, "chunk_admitted") && e.field("epoch") == Some(epoch))
+            })
+            .await;
+        receive_chunks(&trace, &handle, &mut pop, 1).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn worker_unregister_removes_track() {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 100), 32, 1).await;
+        let id = register(&handle, node);
+
+        receive_chunks(&trace, &handle, &mut pop, 2).await;
+        let seen = trace.events().len();
+        drop(id);
+        pass_after(&trace, &handle, seen, |pass| {
+            pass_field(pass, "active") == 0
+        })
+        .await;
+        while pop().is_some() {}
+        let seen = trace.events().len();
+        pass_after(&trace, &handle, seen, |_| true).await;
+        assert!(pop().is_none(), "no chunks should arrive after unregister");
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    async fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
+        let trace = scope();
+        let pools = pools();
+        let handle = PlaybackScheduler::start(
+            "kithara-play-worker-capacity-test".into(),
+            CancelToken::never(),
+            std::num::NonZeroUsize::new(2).expect("test capacity is non-zero"),
+        );
+        let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1).await;
+        let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1).await;
+
+        let id_a = register(&handle, node_a);
+        let id_b = register(&handle, node_b);
+        receive_chunks(&trace, &handle, &mut pop_a, 1).await;
+        receive_chunks(&trace, &handle, &mut pop_b, 1).await;
+
+        drop(id_a);
+        let (node_c, _, _) = make_node(MockSource::new(pools.clone(), 1), 1, 1).await;
+        let id_c = handle
+            .register(node_c)
+            .expect("unregister must release capacity");
+
+        while pop_b().is_some() {}
+        receive_chunks(&trace, &handle, &mut pop_b, 1).await;
+
+        drop(id_b);
+        drop(id_c);
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    #[case::instant_step(Duration::ZERO)]
+    #[case::sync_blocking_step(Duration::from_millis(10))]
+    async fn shared_worker_waiting_track_does_not_starve_producing_track(#[case] step: Duration) {
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 32, 0).await;
+        let _id_a = register(&handle, node_a);
+        let (node_b, _pop_b, _) = make_node(
+            WaitingSource {
+                seek_obs: new_seek(),
+                step,
+            },
+            32,
+            0,
+        )
+        .await;
+        let _id_b = register(&handle, node_b);
+
+        pass_after(&trace, &handle, 0, |pass| pass_field(pass, "waiting") >= 1).await;
+        receive_chunks(&trace, &handle, &mut pop_a, 64).await;
+    }
+
+    #[kithara::test(tokio, flash(false))]
+    #[case::instant_step(Duration::ZERO)]
+    #[case::sync_blocking_step(Duration::from_millis(10))]
+    async fn shared_worker_endless_producer_does_not_starve_other_tracks(#[case] step: Duration) {
+        const SOURCE_CHUNKS: usize = 1000;
+
+        let trace = scope();
+        let pools = pools();
+        let handle = test_scheduler();
+        let (node_a, mut pop_a, _) =
+            make_node(MockSource::new(pools.clone(), SOURCE_CHUNKS), 32, 0).await;
+        let _id_a = register(&handle, node_a);
+        let (node_b, mut pop_b, _) = make_node(
+            EndlessSource {
+                pools: pools.clone(),
+                seek_obs: new_seek(),
+                step,
+            },
+            32,
+            0,
+        )
+        .await;
+        let _id_b = register(&handle, node_b);
+
+        let mut delivered = 0;
+        loop {
+            let seen = trace.events().len();
+            while pop_a().is_some() {
+                delivered += 1;
+            }
+            while pop_b().is_some() {}
+            if delivered == SOURCE_CHUNKS {
+                return;
+            }
+            admitted_after(&trace, &handle, seen).await;
+        }
+    }
 }

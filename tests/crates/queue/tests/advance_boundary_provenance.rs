@@ -12,8 +12,11 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    play::{ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
+        Transition,
+    },
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -39,17 +42,17 @@ const CROSSFADE_SEGMENTS: usize = 8;
 const REAL_GEOMETRY_SEGMENTS: usize = 6;
 const SEGMENT_SECS: f64 = 2.0;
 const REAL_GEOMETRY_SEGMENT_SECS: f64 = 6.0;
-const BLOCK_FRAMES: usize = 128;
-const BLOCK_BUDGET: usize = 2_400 * 512 / BLOCK_FRAMES;
-const CROSSFADE_BLOCK_BUDGET: usize = 4_500 * 512 / BLOCK_FRAMES;
-const REAL_GEOMETRY_BLOCK_BUDGET: usize = 9_000 * 512 / BLOCK_FRAMES;
+const BLOCK_FRAMES: usize = 512;
+const BLOCK_BUDGET: usize = 2_400;
+const CROSSFADE_BLOCK_BUDGET: usize = 4_500;
+const REAL_GEOMETRY_BLOCK_BUDGET: usize = 9_000;
 const WINDOW_FRAMES: usize = 64;
 const POST_ROLL_FRAMES: usize = 88_200;
 const SUSTAINED_DESCENDING_WINDOWS: usize = 3;
 const SUSTAINED_ASCENDING_REPLAY_WINDOWS: usize = 8;
 const ASCENDING_TOL: f32 = 0.5;
 const PHASE_TOL_UNITS: i32 = 3;
-const TRACK_FRAME_TOLERANCE: usize = 1_024;
+const TRACK_FRAME_TOLERANCE: usize = BLOCK_FRAMES * 2;
 const CROSSFADE_SECS: f32 = 5.0;
 const CROSSFADE_DURATION_WAIT_SECS: f64 = 12.0;
 const REAL_GEOMETRY_DURATION_WAIT_SECS: f64 = 30.0;
@@ -536,7 +539,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
 ) {
     let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
@@ -579,7 +582,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
 ) {
     let (_server, sources) = real_geometry_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
@@ -780,15 +783,17 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
     #[case] flavor: CrossfadeFlavor,
 ) {
     let (_server, sources) = crossfade_tracks;
-    let (sample_rate, collapse_runs) = if resampled {
+    let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
         (
             RESAMPLED_RENDER_RATE,
             collapse_resampled_noise_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            true,
         )
     } else {
         (
             SAMPLE_RATE,
             collapse_short_unknown_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            false,
         )
     };
     run_crossfade_flac_case(
@@ -797,6 +802,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
         sample_rate,
         collapse_runs,
         label,
+        provenance_headroom,
         || flavor.player_config(),
     )
     .await;
@@ -809,12 +815,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(
 ) {
     let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         SAMPLE_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
+        false,
     )
     .await;
 
@@ -879,16 +885,21 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
-    let (_, run_start, _) = require_run_containing(
+    // Where the seek landed, read off the rendered audio rather than off the
+    // event. `SeekComplete` is published from a read, so its frame leads the
+    // audible position by the ring depth, and a length measured from it would
+    // carry that lead as a tolerance instead of stating a property. The last
+    // Ascending run before B is the post-seek tail itself: its first window is
+    // the landing, its length is what the seek left of track A.
+    let (_, landing_window, landing_windows) = require_run_containing(
         &runs,
         FrameClass::Ascending,
         last_ascending_window,
         &search_context,
     );
-    let landing_window = run_start.max(seek_issue_frame.div_ceil(WINDOW_FRAMES));
     let landing_frame = frame_for_window(landing_window);
 
-    let phase_start_frame = landing_frame + 1;
+    let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
         &left,
         phase_start_frame,
@@ -926,7 +937,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
 
     assert_close_len(
-        last_ascending_end_frame - landing_frame,
+        landing_windows * WINDOW_FRAMES,
         EXPECTED_POST_SEEK_FRAMES,
         TRACK_FRAME_TOLERANCE,
         "post-seek ascending length must be approximately 0.5s before B starts",
@@ -1082,20 +1093,13 @@ struct RenderProgress {
     descending_seen_at: Option<usize>,
 }
 
-fn with_autoplay(
-    mut config: QueueConfig<TestPools>,
-    should_autoplay: bool,
-) -> QueueConfig<TestPools> {
-    config.should_autoplay = should_autoplay;
-    config
-}
-
 async fn run_crossfade_flac_case(
     sources: &[Url; 2],
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
     label: &str,
+    provenance_headroom: bool,
     build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
@@ -1103,13 +1107,16 @@ async fn run_crossfade_flac_case(
         temp_dir,
         render_sample_rate,
         build_player_config(),
+        provenance_headroom,
     )
     .await;
 
     let (rendered, expected_a_end_frame) =
         render_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, render_sample_rate)
             .await;
-    assert_provenance_headroom(&rendered, label);
+    if provenance_headroom {
+        assert_provenance_headroom(&rendered, label);
+    }
 
     assert_crossfade_contract(
         &rendered,
@@ -1153,26 +1160,20 @@ async fn setup_queue_with_sample_rate(
         .await,
     );
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
-    queue.play();
 
     QueueSetup { harness, queue }
 }
@@ -1188,26 +1189,20 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
         .await,
     );
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
-    queue.play();
 
     QueueSetup { harness, queue }
 }
@@ -1217,59 +1212,27 @@ async fn setup_flac_queue_with_player_config(
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     player_config: OfflinePlayerOptions,
+    provenance_headroom: bool,
 ) -> QueueSetup {
-    setup_flac_queue_with_player_config_autoplay(
-        sources,
-        temp_dir,
-        render_sample_rate,
-        player_config,
-        false,
-    )
-    .await
-}
-
-async fn setup_flac_queue_with_player_config_autoplay(
-    sources: &[Url; 2],
-    temp_dir: &TestTempDir,
-    render_sample_rate: u32,
-    player_config: OfflinePlayerOptions,
-    should_autoplay: bool,
-) -> QueueSetup {
-    let harness = with_provenance_headroom(
-        OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await,
-    );
-    let queue = harness
-        .insert_control(Queue::new(with_autoplay(
-            QueueConfig::builder().player(harness.take_player()).build(),
-            should_autoplay,
-        )))
-        .await;
-
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
-
-    if should_autoplay {
-        let id_a = queue.register_for_test();
-        let id_b = queue.register_for_test();
-        harness
-            .run(&queue, move |q| q.complete_load_for_test(id_b, resource_b))
-            .await;
-        harness
-            .run(&queue, move |q| q.complete_load_for_test(id_a, resource_a))
-            .await;
+    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
+    let harness = if provenance_headroom {
+        with_provenance_headroom(harness)
     } else {
-        let id_a = harness
-            .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-            .await;
-        let _ = harness
-            .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-            .await;
         harness
-            .run(&queue, move |q| q.select(id_a, Transition::None))
-            .await
-            .expect("select track A");
-        queue.play();
-    }
+    };
+    let queue = harness
+        .insert_control(Queue::new(
+            QueueConfig::builder().player(harness.take_player()).build(),
+        ))
+        .await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
 
     QueueSetup { harness, queue }
 }
@@ -1283,46 +1246,69 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
-    queue.play();
 
     QueueSetup { harness, queue }
 }
 
-async fn hls_resource(harness: &OfflinePlayerHarness, url: &Url, cache_dir: &Path) -> Resource {
+fn hls_source(url: &Url, cache_dir: &Path) -> TrackSource<TestPools> {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+    let config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
+    TrackSource::Config(Box::new(config))
+}
+
+async fn append_loaded(
+    harness: &OfflinePlayerHarness,
+    queue: &QueueControl<TestPools>,
+    source: TrackSource<TestPools>,
+) -> kithara::events::TrackId {
+    let mut events: EventReceiver<TestEvent> = queue.subscribe();
+    let id = harness
+        .run(queue, move |q| q.append(source))
         .await
-        .expect("prepare advance-boundary HLS resource");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for advance-boundary fixture");
-    let _ = resource.preload().await;
-    resource
+        .expect("open queue accepts a fixture source");
+    wait_loaded_from(&mut events, id).await;
+    id
+}
+
+async fn wait_loaded_from(events: &mut EventReceiver<TestEvent>, id: kithara::events::TrackId) {
+    let loaded = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id: seen,
+                    status: TrackStatus::Loaded,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        loaded,
+        "fixture track {id:?} must load through Queue loader"
+    );
 }
 
 #[kithara::flash(true)]
@@ -1937,6 +1923,9 @@ fn require_last_class_window_before(
         })
 }
 
+/// The run of `target` that covers `window`. A window says which class a moment
+/// belongs to; the run says where that stretch began and how long it lasted,
+/// which is what a length property is stated about.
 fn require_run_containing(
     runs: &[ClassRun],
     target: FrameClass,

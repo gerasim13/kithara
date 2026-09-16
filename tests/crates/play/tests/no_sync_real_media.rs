@@ -27,7 +27,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::PackagedSignal,
-    memory_asset_store, offline::OfflineHostHarness,
+    memory_asset_store, offline::OfflineHostHarness, usdt_trace,
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
@@ -35,7 +35,7 @@ use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::AudioRole;
 #[cfg(not(target_os = "android"))]
 use oracle::{AudioLevelReport, MatchedMixReport, SampleContinuityReport};
-use reference::capture_references;
+use reference::{ReferenceCapture, capture_references};
 use runtime::{Deck, DeckObservation, EventPolicy};
 #[cfg(not(target_os = "android"))]
 use serde::Serialize;
@@ -156,6 +156,7 @@ struct ArtifactManifest<'a> {
     requested_frames: usize,
     captured_frames: usize,
     capture_start_positions_secs: &'a [f64],
+    reference_captures: &'a [ReferenceCapture],
     reference_path: &'static str,
     direct_reference_gain: f32,
     runtime_deck_gain: f32,
@@ -282,9 +283,14 @@ async fn run_case(
 ) -> Vec<String> {
     let pool_region = pools();
     let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
+    let max_block_frames =
+        NonZeroU32::new(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
+            .expect("block frames must be non-zero");
+    let _trace = usdt_trace::scope();
     let host = OfflineHostHarness::new(
         HostConfig::offline(pool_region.clone())
             .sample_rate(sample_rate)
+            .max_block_frames(max_block_frames)
             .build(),
     )
     .await
@@ -321,7 +327,7 @@ async fn run_case(
     let direct_references = capture_references(case, &mut decks, &final_mix, &mut failures).await;
     let direct_reference_pcm = direct_references
         .iter()
-        .map(Vec::as_slice)
+        .map(|reference| reference.pcm.as_slice())
         .collect::<Vec<_>>();
     let matched_mix = oracle::assess_matched_mix(
         case.label,
@@ -352,7 +358,7 @@ async fn run_case(
                 &format!("direct-reference-{deck_index}"),
                 AudioRole::DirectReference,
                 case.host_rate,
-                reference,
+                &reference.pcm,
             )
         })
         .collect::<Vec<_>>();
@@ -398,6 +404,7 @@ async fn run_case(
             requested_frames: final_mix.requested_frames,
             captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
             capture_start_positions_secs: &final_mix.start_positions_secs,
+            reference_captures: &direct_references,
             reference_path: "independent resource decoder and host resampler",
             direct_reference_gain: 1.0,
             runtime_deck_gain: mix_level,
@@ -416,7 +423,7 @@ async fn run_case(
             .map(|(deck_index, reference)| {
                 (
                     format!("direct-reference-{deck_index}"),
-                    reference.as_slice(),
+                    reference.pcm.as_slice(),
                 )
             })
             .collect::<Vec<_>>();

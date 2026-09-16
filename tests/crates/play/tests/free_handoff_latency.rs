@@ -4,9 +4,9 @@ use ::kithara::{
     signal::{render_rate_revision, render_warp_map_revision},
     warp::{SyncAdmission, SyncIntent},
 };
-use kithara_test_utils::{
+use kithara_integration_tests::{
     kithara,
-    probe::capture::{self as probe_capture, ProbeEvent},
+    usdt_trace::{self, ProbeEvent},
 };
 
 use super::sync_product_matrix::{
@@ -19,12 +19,12 @@ const CALLBACK_FRAMES: usize = 128;
 
 fn target_revision(event: &ProbeEvent, warp_map: u64) -> Option<u64> {
     event
-        .u64("render_revision")
+        .field("render_revision")
         .filter(|revision| render_warp_map_revision(*revision) == warp_map)
 }
 
 async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
-    let recorder = probe_capture::install();
+    let trace = usdt_trace::scope();
     let case = SEQUENTIAL_SYNC;
     let sources = prepared_sources(Provider::Synthetic).await;
     let mut harness = ProductHarness::new_for_block(case, &sources, 0, CALLBACK_FRAMES).await;
@@ -45,7 +45,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
         let _ = harness.render(case, CALLBACK_FRAMES).await;
     }
 
-    let baseline = recorder.snapshot().len();
+    let baseline = trace.events().len();
     let baseline_underruns = harness.player_controls[0]
         .rt_metrics()
         .map_or(0, |metrics| metrics.underruns());
@@ -59,17 +59,17 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
     let warp_map = u64::from(warp_map);
 
     for _ in 0..16 {
-        let events = recorder.snapshot();
+        let events = trace.events();
         let post = &events[baseline..];
         if post.iter().any(|event| {
-            event.probe_name() == Some("prepared_sync_acknowledged")
-                && event.u64("free") == Some(1)
-                && event.u64("warp_map_revision") == Some(warp_map)
+            event.probe == "prepared_sync_acknowledged"
+                && event.field("free") == Some(1)
+                && event.field("warp_map_revision") == Some(warp_map)
         }) {
             for _ in 0..4 {
                 let _ = harness.render(case, CALLBACK_FRAMES).await;
             }
-            let events = recorder.snapshot();
+            let events = trace.events();
             let post = &events[baseline..];
             let current_underruns = harness.player_controls[0]
                 .rt_metrics()
@@ -80,8 +80,7 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
                     .enumerate()
                     .filter_map(|(index, event)| {
                         matches!(
-                            event.probe_name(),
-                            Some(
+                            event.probe,
                                 "free_adoption_installed"
                                     | "free_adoption_activation"
                                     | "producer_pcm_admitted"
@@ -91,21 +90,20 @@ async fn free_events(target_only: bool) -> (Vec<ProbeEvent>, u64, u64) {
                                     | "prepared_sync_acknowledged"
                                     | "render_revision_floor"
                                     | "pcm_revision_discarded"
-                            )
                         )
                         .then(|| {
                             format!(
                                 "{index}:{}:track={:?}:out={:?}..{:?}:frames={:?}:revision={:?}:map={:?}:source_end={:?}:available={:?}:floor={:?}",
-                                event.probe_name().unwrap_or("unknown"),
-                                event.u64("track_id"),
-                                event.u64("output_start"),
-                                event.u64("output_end"),
-                                event.u64("frames"),
-                                event.u64("render_revision"),
-                                event.u64("warp_map_revision"),
-                                event.u64("source_end"),
-                                event.u64("available_frames"),
-                                event.u64("revision")
+                                event.probe,
+                                event.field("track_id"),
+                                event.field("output_start"),
+                                event.field("output_end"),
+                                event.field("frames"),
+                                event.field("render_revision"),
+                                event.field("warp_map_revision"),
+                                event.field("source_end"),
+                                event.field("available_frames"),
+                                event.field("revision")
                             )
                         })
                     })
@@ -131,15 +129,14 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
     let installed = events
         .iter()
         .position(|event| {
-            event.probe_name() == Some("free_adoption_installed")
-                && event.u64("warp_map") == Some(warp_map)
+            event.probe == "free_adoption_installed" && event.field("warp_map") == Some(warp_map)
         })
         .expect("WarpSource installs Free through the production worker");
     let produced = events
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > installed && event.probe_name() == Some("producer_pcm_admitted"))
+            (index > installed && event.probe == "producer_pcm_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })
@@ -148,13 +145,13 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > produced.0 && event.probe_name() == Some("pcm_reader_admitted"))
+            (index > produced.0 && event.probe == "pcm_reader_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })
         .expect("the target producer chunk reaches RingConsumer");
     let target_frames = events[produced.0]
-        .u64("frames")
+        .field("frames")
         .expect("producer records target PCM width");
     assert!(
         (1..=QUANTUM_FRAMES as u64).contains(&target_frames),
@@ -165,7 +162,7 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
         "the ring preserves the target packed map/rate revision"
     );
     assert_eq!(
-        events[admitted.0].u64("frames"),
+        events[admitted.0].field("frames"),
         Some(target_frames),
         "the reader admits the exact producer PCM width"
     );
@@ -175,9 +172,9 @@ async fn free_warp_to_ring_preserves_target_pcm_and_bounds_queued_reader_admissi
     );
     let queued_old_frames = events[produced.0 + 1..admitted.0]
         .iter()
-        .filter(|event| event.probe_name() == Some("pcm_reader_admitted"))
-        .filter(|event| event.u64("render_revision") != Some(produced.1))
-        .map(|event| event.u64("frames").expect("reader records PCM width"))
+        .filter(|event| event.probe == "pcm_reader_admitted")
+        .filter(|event| event.field("render_revision") != Some(produced.1))
+        .map(|event| event.field("frames").expect("reader records PCM width"))
         .sum::<u64>();
     let bound = u64::try_from((RING_CHUNKS - 1) * QUANTUM_FRAMES).expect("fixture bound fits u64");
     assert!(
@@ -192,19 +189,16 @@ async fn free_handoff_default_nonblocking_has_no_post_request_underrun() {
     let track_id = events
         .iter()
         .find_map(|event| {
-            (event.probe_name() == Some("free_adoption_installed")
-                && event.u64("warp_map") == Some(warp_map))
-            .then(|| event.u64("track"))
-            .flatten()
+            (event.probe == "free_adoption_installed" && event.field("warp_map") == Some(warp_map))
+                .then(|| event.field("track"))
+                .flatten()
         })
         .expect("Free identifies the adopted target track");
     let target = events
         .iter()
         .enumerate()
         .find(|(_, event)| {
-            event.probe_name() == Some("pcm_consumed")
-                && event.u64("track_id") == Some(track_id)
-                && target_revision(event, warp_map).is_some()
+            event.probe == "pcm_consumed" && target_revision(event, warp_map).is_some()
         })
         .expect("the adopted target reaches RT");
     let mut contiguous_frames = 0_u64;
@@ -214,15 +208,14 @@ async fn free_handoff_default_nonblocking_has_no_post_request_underrun() {
         .enumerate()
         .skip(target.0)
         .find_map(|(index, event)| {
-            if event.probe_name() != Some("pcm_consumed")
-                || event.u64("track_id") != Some(track_id)
+            if event.probe != "pcm_consumed"
                 || target_revision(event, warp_map) != target_revision(target.1, warp_map)
             {
                 return None;
             }
             let (start, end) = event
-                .u64("output_start")
-                .zip(event.u64("output_end"))
+                .field("output_start")
+                .zip(event.field("output_end"))
                 .expect("target output range");
             if previous_end != Some(start) {
                 contiguous_frames = 0;
@@ -234,7 +227,7 @@ async fn free_handoff_default_nonblocking_has_no_post_request_underrun() {
         .expect("the adopted target presents 128 contiguous output frames");
     assert!(
         !events[..=complete_index].iter().any(|event| {
-            event.probe_name() == Some("pcm_underrun") && event.u64("track_id") == Some(track_id)
+            event.probe == "pcm_underrun" && event.field("track_id") == Some(track_id)
         }),
         "the nonblocking adopted track must not underrun from Free request through 128 target frames"
     );
@@ -251,17 +244,16 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (event.probe_name() == Some("free_adoption_installed")
-                && event.u64("warp_map") == Some(warp_map))
-            .then(|| event.u64("track").map(|track_id| (index, track_id)))
-            .flatten()
+            (event.probe == "free_adoption_installed" && event.field("warp_map") == Some(warp_map))
+                .then(|| event.field("track").map(|track_id| (index, track_id)))
+                .flatten()
         })
         .expect("WarpSource installs the target Free adoption");
     let produced = events
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > installed && event.probe_name() == Some("producer_pcm_admitted"))
+            (index > installed && event.probe == "producer_pcm_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })
@@ -270,7 +262,7 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .iter()
         .enumerate()
         .find_map(|(index, event)| {
-            (index > produced.0 && event.probe_name() == Some("pcm_reader_admitted"))
+            (index > produced.0 && event.probe == "pcm_reader_admitted")
                 .then(|| target_revision(event, warp_map).map(|revision| (index, revision)))
                 .flatten()
         })
@@ -280,9 +272,8 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .enumerate()
         .find(|(index, event)| {
             *index > admitted.0
-                && event.probe_name() == Some("pcm_consumed")
+                && event.probe == "pcm_consumed"
                 && target_revision(event, warp_map) == Some(produced.1)
-                && event.u64("track_id") == Some(track_id)
         })
         .expect("PlayerResource consumes the admitted target PCM");
     let render = events
@@ -290,25 +281,26 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .enumerate()
         .find(|(index, event)| {
             if *index <= consumed.0
-                || event.probe_name() != Some("render")
-                || event.u64("track_id") != Some(track_id)
+                || event.probe != "render"
+                || event.field("track_id") != Some(track_id)
             {
                 return false;
             }
             let Some((render_start, render_end)) = event
-                .u64("output_base")
-                .zip(event.u64("range_start"))
-                .zip(event.u64("range_end"))
-                .and_then(|((base, start), end)| {
-                    base.checked_add(start).zip(base.checked_add(end))
+                .field("output_base")
+                .zip(event.field("range_start"))
+                .zip(event.field("rendered_frames"))
+                .and_then(|((base, start), frames)| {
+                    let render_start = base.checked_add(start)?;
+                    Some((render_start, render_start.checked_add(frames)?))
                 })
             else {
                 return false;
             };
             consumed
                 .1
-                .u64("output_start")
-                .zip(consumed.1.u64("output_end"))
+                .field("output_start")
+                .zip(consumed.1.field("output_end"))
                 .is_some_and(|(start, end)| render_start <= start && end <= render_end)
         })
         .expect("the owning track render callback contains the first target PCM span");
@@ -317,17 +309,16 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .enumerate()
         .find(|(index, event)| {
             *index > render.0
-                && event.probe_name() == Some("prepared_sync_acknowledged")
-                && event.u64("free") == Some(1)
-                && event.u64("warp_map_revision") == Some(warp_map)
+                && event.probe == "prepared_sync_acknowledged"
+                && event.field("free") == Some(1)
+                && event.field("warp_map_revision") == Some(warp_map)
         })
         .expect("acknowledgement follows actual RT consumption, not the producer cursor");
     let handoff = events
         .iter()
         .enumerate()
         .find(|(_, event)| {
-            event.probe_name() == Some("free_adoption_activation")
-                && event.u64("warp_map") == Some(warp_map)
+            event.probe == "free_adoption_activation" && event.field("warp_map") == Some(warp_map)
         })
         .expect("the worker records the Free handoff output origin");
     assert!(
@@ -340,15 +331,14 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
     assert_eq!(Some(produced.1), target_revision(consumed.1, warp_map));
     assert!(
         !events[produced.0 + 1..consumed.0].iter().any(|event| {
-            event.probe_name() == Some("pcm_revision_discarded")
-                && event.u64("revision") == Some(produced.1)
+            event.probe == "pcm_revision_discarded" && event.field("revision") == Some(produced.1)
         }),
         "the target revision is never discarded before RT presents it"
     );
     let consumed_frames = consumed
         .1
-        .u64("output_end")
-        .zip(consumed.1.u64("output_start"))
+        .field("output_end")
+        .zip(consumed.1.field("output_start"))
         .map(|(end, start)| end.saturating_sub(start))
         .expect("RT probe records the presented output range");
     assert!(
@@ -358,14 +348,12 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
     let target_frames_at_ack = events[consumed.0..acknowledged.0]
         .iter()
         .filter(|event| {
-            event.probe_name() == Some("pcm_consumed")
-                && target_revision(event, warp_map) == Some(produced.1)
-                && event.u64("track_id") == Some(track_id)
+            event.probe == "pcm_consumed" && target_revision(event, warp_map) == Some(produced.1)
         })
         .map(|event| {
             event
-                .u64("output_end")
-                .zip(event.u64("output_start"))
+                .field("output_end")
+                .zip(event.field("output_start"))
                 .map(|(end, start)| end.saturating_sub(start))
                 .expect("target output range")
         })
@@ -377,14 +365,13 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         .enumerate()
         .skip(consumed.0)
         .find_map(|(index, event)| {
-            if event.probe_name() != Some("pcm_consumed")
-                || target_revision(event, warp_map) != Some(produced.1)
+            if event.probe != "pcm_consumed" || target_revision(event, warp_map) != Some(produced.1)
             {
                 return None;
             }
             let (start, end) = event
-                .u64("output_start")
-                .zip(event.u64("output_end"))
+                .field("output_start")
+                .zip(event.field("output_end"))
                 .expect("target output range");
             if previous_end != Some(start) {
                 contiguous_frames = 0;
@@ -395,18 +382,18 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
         })
         .expect("four deterministic callbacks present 128 contiguous target frames");
     let full_target_end = events[complete_index]
-        .u64("output_end")
+        .field("output_end")
         .expect("full target completion has an output end");
     let admitted_source_frames = events[admitted.0..=complete_index]
         .iter()
         .filter(|event| {
-            event.probe_name() == Some("pcm_reader_admitted")
+            event.probe == "pcm_reader_admitted"
                 && target_revision(event, warp_map) == Some(produced.1)
         })
         .map(|event| {
             event
-                .u64("source_end")
-                .zip(event.u64("source_start"))
+                .field("source_end")
+                .zip(event.field("source_start"))
                 .map(|(end, start)| end.saturating_sub(start))
                 .expect("reader admission source range")
         })
@@ -417,7 +404,7 @@ async fn free_ring_to_rt_admits_consumes_and_acknowledges_the_same_target_pcm() 
     );
     let activation_output = handoff
         .1
-        .u64("output")
+        .field("output")
         .expect("Free handoff records its output origin");
     assert!(
         full_target_end.saturating_sub(activation_output)

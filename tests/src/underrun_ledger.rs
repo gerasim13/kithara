@@ -2,8 +2,9 @@
 
 use std::ops::Range;
 
-use kithara_test_utils::probe::capture::ProbeEvent;
 use serde::Serialize;
+
+use crate::usdt_trace::ProbeEvent;
 
 /// One `pcm_underrun` probe with the fields a silence interval needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -13,8 +14,6 @@ pub struct UnderrunEvent {
     pub requested_frames: u64,
     pub available_frames: u64,
     pub source_end: Option<u64>,
-    pub warp_map_revision: Option<u64>,
-    pub seq: Option<u64>,
 }
 
 impl UnderrunEvent {
@@ -31,13 +30,11 @@ impl UnderrunEvent {
 
     fn from_probe(probe: &ProbeEvent) -> Option<Self> {
         Some(Self {
-            track_id: probe.u64("track_id"),
-            output_start: probe.u64("output_start")?,
-            requested_frames: probe.u64("requested_frames")?,
-            available_frames: probe.u64("available_frames")?,
-            source_end: probe.u64("source_end"),
-            warp_map_revision: probe.u64("warp_map_revision"),
-            seq: probe.seq(),
+            track_id: probe.field("track_id"),
+            output_start: probe.field("output_start")?,
+            requested_frames: probe.field("requested_frames")?,
+            available_frames: probe.field("available_frames")?,
+            source_end: probe.field("source_end"),
         })
     }
 }
@@ -68,7 +65,7 @@ impl UnderrunLedger {
         let mut ledger = Self::default();
         for probe in probes
             .iter()
-            .filter(|probe| probe.probe_name() == Some(UnderrunEvent::PROBE))
+            .filter(|probe| probe.probe == UnderrunEvent::PROBE)
         {
             match UnderrunEvent::from_probe(probe) {
                 Some(event) => ledger.events.push(event),
@@ -110,37 +107,66 @@ impl UnderrunLedger {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::usdt_trace;
 
-    fn probe(fields: &[(&'static str, u64)]) -> ProbeEvent {
-        ProbeEvent {
-            fields: fields.iter().copied().collect(),
-            string_fields: HashMap::from([("probe", UnderrunEvent::PROBE.to_owned())]),
-            at: ::kithara::platform::time::Instant::now(),
-            target: "kithara_play_probe".to_owned(),
+    /// Fire one `pcm_underrun` the way the feeder does, through the probe wire.
+    fn fire(fields: &[(&'static str, u64)]) {
+        fire_named(UnderrunEvent::PROBE, fields);
+    }
+
+    fn fire_named(probe: &'static str, fields: &[(&'static str, u64)]) {
+        let value = |name: &str| {
+            fields
+                .iter()
+                .find_map(|(key, value)| (*key == name).then_some(*value))
+        };
+        match (
+            value("track_id"),
+            value("output_start"),
+            value("requested_frames"),
+            value("available_frames"),
+        ) {
+            (track_id, Some(output_start), Some(requested), Some(available)) => tracing::event!(
+                target: "kithara_play_probe",
+                tracing::Level::TRACE,
+                probe = probe,
+                track_id = track_id,
+                output_start = output_start,
+                requested_frames = requested,
+                available_frames = available
+            ),
+            (track_id, None, Some(requested), Some(available)) => tracing::event!(
+                target: "kithara_play_probe",
+                tracing::Level::TRACE,
+                probe = probe,
+                track_id = track_id,
+                requested_frames = requested,
+                available_frames = available
+            ),
+            _ => panic!("fixture names the fill counts"),
         }
     }
 
     #[kithara::test]
     fn a_starved_block_is_read_at_the_frames_it_silenced() {
-        let ledger = UnderrunLedger::from_probes(&[
-            probe(&[
-                ("track_id", 3),
-                ("output_start", 1_000),
-                ("requested_frames", 128),
-                ("available_frames", 28),
-            ]),
-            probe(&[
-                ("track_id", 3),
-                ("output_start", 1_128),
-                ("requested_frames", 128),
-                ("available_frames", 0),
-            ]),
+        let trace = usdt_trace::scope();
+        fire(&[
+            ("track_id", 3),
+            ("output_start", 1_000),
+            ("requested_frames", 128),
+            ("available_frames", 28),
         ]);
+        fire(&[
+            ("track_id", 3),
+            ("output_start", 1_128),
+            ("requested_frames", 128),
+            ("available_frames", 0),
+        ]);
+
+        let ledger = UnderrunLedger::from_probes(&trace.events());
 
         assert_eq!(ledger.unparsed, 0);
         assert_eq!(ledger.events[0].silence(), 1_028..1_128);
@@ -158,11 +184,14 @@ mod tests {
 
     #[kithara::test]
     fn a_probe_without_an_interval_is_counted_not_placed_at_frame_zero() {
-        let ledger = UnderrunLedger::from_probes(&[probe(&[
+        let trace = usdt_trace::scope();
+        fire(&[
             ("track_id", 3),
             ("requested_frames", 128),
             ("available_frames", 0),
-        ])]);
+        ]);
+
+        let ledger = UnderrunLedger::from_probes(&trace.events());
 
         assert!(ledger.events.is_empty());
         assert_eq!(ledger.unparsed, 1);
@@ -170,41 +199,57 @@ mod tests {
 
     #[kithara::test]
     fn probes_of_another_name_are_not_underruns() {
-        let mut other = probe(&[
-            ("track_id", 3),
-            ("output_start", 64),
-            ("requested_frames", 128),
-            ("available_frames", 0),
-        ]);
-        other
-            .string_fields
-            .insert("probe", "pcm_consumed".to_owned());
+        let trace = usdt_trace::scope();
+        fire_named(
+            "pcm_consumed",
+            &[
+                ("track_id", 3),
+                ("output_start", 64),
+                ("requested_frames", 128),
+                ("available_frames", 0),
+            ],
+        );
 
-        let ledger = UnderrunLedger::from_probes(&[other]);
+        let ledger = UnderrunLedger::from_probes(&trace.events());
 
         assert_eq!(ledger, UnderrunLedger::default());
     }
 
     #[kithara::test]
     fn a_block_that_delivered_every_frame_silences_nothing() {
-        let ledger = UnderrunLedger::from_probes(&[probe(&[
+        let trace = usdt_trace::scope();
+        fire(&[
             ("track_id", 3),
             ("output_start", 64),
             ("requested_frames", 128),
             ("available_frames", 128),
-        ])]);
+        ]);
+
+        let ledger = UnderrunLedger::from_probes(&trace.events());
 
         assert!(ledger.events[0].silence().is_empty());
     }
 
     #[kithara::test]
     fn a_probe_without_a_track_stays_untracked() {
-        let ledger = UnderrunLedger::from_probes(&[probe(&[
+        let trace = usdt_trace::scope();
+        fire(&[
             ("output_start", 64),
             ("requested_frames", 128),
             ("available_frames", 64),
-        ])]);
+        ]);
+        let ledger = UnderrunLedger::from_probes(&trace.events());
 
-        assert_eq!(ledger.tracks()[0].track_id, None);
+        assert_eq!(ledger.unparsed, 0);
+        assert_eq!(
+            ledger.tracks(),
+            [UnderrunTrack {
+                track_id: None,
+                underruns: 1,
+                silenced_frames: 64,
+                first_output_frame: 128,
+                last_output_frame: 192,
+            }]
+        );
     }
 }

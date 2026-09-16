@@ -351,7 +351,6 @@ impl PlayerTrack {
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
         let range_start = range.start;
-        let range_end = range.end;
         let outcome = self.render_inner(context, scratch_bufs, mix_bufs, range, sink);
         let rendered_frames = match outcome {
             TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
@@ -364,7 +363,6 @@ impl PlayerTrack {
             track_id = self.item_id.as_u64(),
             output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
             range_start,
-            range_end,
             rendered_frames,
             served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
         );

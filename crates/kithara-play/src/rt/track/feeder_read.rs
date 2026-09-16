@@ -300,8 +300,7 @@ impl PlayerResource {
                 self.apply_activation_blend(output, range.start, frames_to_write);
             }
 
-            let Some(source_frames) = self.consume_source(frames_to_write, context, track_id)
-            else {
+            let Some(source_frames) = self.consume_source(frames_to_write, context) else {
                 metrics.record_decode_error();
                 self.failed = true;
                 self.last_source_end = None;

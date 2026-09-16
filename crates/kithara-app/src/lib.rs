@@ -23,5 +23,7 @@ pub mod tracing_init;
 mod wave_cache;
 pub mod waveform;
 
+pub use baked::secret;
+
 #[cfg(feature = "gui")]
 pub mod gui;

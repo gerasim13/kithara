@@ -52,21 +52,6 @@ impl ProducerPort {
         self.scheduled_seek.as_ref()
     }
 
-    /// Create an isolated port and a consumer probe for unit tests.
-    #[cfg(any(test, feature = "usdt"))]
-    pub fn probe(
-        capacity: usize,
-    ) -> (
-        Self,
-        impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
-    ) {
-        let (outlet, mut inlet) = crate::runtime::connect(capacity, None);
-        let (_trash_outlet, trash_inlet) = crate::runtime::connect(capacity + 2, None);
-        (Self::new(outlet, trash_inlet, capacity), move || {
-            inlet.try_pop()
-        })
-    }
-
     /// Reclaim spent chunks outside the checked producer core.
     pub fn recycle(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}
@@ -151,7 +136,9 @@ mod tests {
     fn scheduled_seek_activates_only_after_old_ring_is_full() {
         let state = Arc::new(SeekState::new());
         let preload_gate = Arc::new(PreloadGate::default());
-        let (mut port, mut pop) = ProducerPort::probe(1);
+        let (outlet, mut inlet) = crate::runtime::connect(1, None);
+        let (_trash_outlet, trash_inlet) = crate::runtime::connect(3, None);
+        let mut port = ProducerPort::new(outlet, trash_inlet, 1);
         port.install_scheduled_seek(ScheduledSeekActivator::new(&SeekHandleParts {
             bus: EventBus::new(8),
             peer_wake: None,
@@ -174,7 +161,10 @@ mod tests {
         let _ = port.scheduled_seek().map(ScheduledSeekActivator::activate);
         assert_eq!(state.epoch(), epoch);
         assert_eq!(state.target(), Some(Duration::from_secs(5)));
-        assert!(matches!(pop(), Some(Fetch::NaturalEof { epoch: 0 })));
+        assert!(matches!(
+            inlet.try_pop(),
+            Some(Fetch::NaturalEof { epoch: 0 })
+        ));
     }
 }
 

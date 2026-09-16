@@ -246,7 +246,7 @@ nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
 default_count = 50
-max_count = 100
+max_count = 1000
 test_threads = "num-cpus"
 max_test_threads = 256
 # A directory of this run's own, inside the checkout it builds. Sharing the
@@ -1211,6 +1211,99 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
+[test.lanes.usdt-play]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "play",
+]
+default_features = ["kithara-play-tests/usdt"]
+default_flash = false
+suffix_args = [
+  "-E",
+  "test(/rate_response::live_rate_change_reaches_presented_pcm_within_response_budget/)",
+]
+owns = ["tests/crates/play/tests/rate_response.rs"]
+
+[test.lanes.usdt-play-scheduler]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play",
+  "--cargo-profile",
+  "test-release",
+  "--lib",
+]
+default_features = ["kithara-play/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/worker::node::scheduler_tests::probed::/)"]
+owns = ["crates/kithara-play/src/worker/node/scheduler_tests.rs"]
+
+[test.lanes.usdt-hls]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "hls",
+]
+default_features = ["kithara-hls-tests/usdt"]
+default_flash = false
+suffix_args = [
+  "-E",
+  "test(/hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently/)",
+]
+owns = ["tests/crates/hls/tests/hls_variant_playlists_concurrent.rs"]
+
+[test.lanes.usdt-hls-stress]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "hls_stress",
+]
+default_features = ["kithara-hls-tests/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/stress_seek_audio::stress_seek_audio_hls/)"]
+owns = ["tests/crates/hls/tests/stress_seek_audio.rs"]
+
+[test.lanes.usdt-queue]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-queue-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "queue",
+]
+default_features = ["kithara-queue-tests/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/(full_playthrough_census|flac_swallow_fixture)/)"]
+owns = [
+  "tests/crates/queue/tests/full_playthrough_census.rs",
+  "tests/crates/queue/tests/flac_swallow_fixture.rs",
+]
+
 # The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
 # Naming the browser in the lane itself, rather than leaving it to whatever
@@ -2065,6 +2158,54 @@ steps = [
   ], label = "support suites this push touches" },
 ]
 role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+[ext.ci.lanes.linux-usdt]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-play",
+    "--profile",
+    "ci",
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-play-scheduler",
+    "--profile",
+    "ci",
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls-stress",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-queue",
+    "--profile",
+    "ci",
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch"]
 timeout_minutes = 60
 

@@ -151,9 +151,11 @@ impl LoadGeneration {
     PartialEq,
     PartialOrd,
     derive_more::Display,
+    derive_more::From,
     derive_more::Into,
 )]
 #[display("{_0}")]
+#[from(NonZeroU64)]
 #[into(u64)]
 #[repr(transparent)]
 pub struct TransportRevision(NonZeroU64);
@@ -169,10 +171,6 @@ impl TransportRevision {
     #[must_use]
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN)
-    }
-
-    pub(crate) const fn from_raw(value: NonZeroU64) -> Self {
-        Self(value)
     }
 }
 

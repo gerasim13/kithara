@@ -63,10 +63,9 @@ pub struct DownloaderConfig {
 #[cfg(all(test, not(miri)))]
 mod tests {
     use kithara_abr::AbrSettings;
-    use kithara_bufpool::testing::pools as test_pools;
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{CancelToken, time::Duration};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::pools as test_pools, kithara};
 
     use super::{DownloaderConfig, DownloaderConfigPatch};
 

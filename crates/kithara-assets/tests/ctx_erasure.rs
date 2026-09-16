@@ -16,9 +16,8 @@ use kithara_assets::{
     AcquisitionResult, AssetStore, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
     StorageBackend, WriteSide,
 };
-use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 use tempfile::tempdir;
 

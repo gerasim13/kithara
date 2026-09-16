@@ -142,6 +142,16 @@ public enum RepeatMode: Sendable, Equatable {
     case unknown
 }
 
+/// How far the whole session output drops under a competing sound.
+public enum DuckingMode: Sendable, Equatable {
+    /// Full level.
+    case off
+    /// Lowered to 40%.
+    case soft
+    /// Lowered to 20%.
+    case hard
+}
+
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
 /// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
@@ -260,6 +270,19 @@ extension TimeControlStatus {
         case .paused: self = .paused
         case .waitingToPlay: self = .waitingToPlay
         case .playing: self = .playing
+        }
+    }
+}
+
+extension DuckingMode {
+    var ffi: FfiDuckingMode {
+        switch self {
+        case .off:
+            .off
+        case .soft:
+            .soft
+        case .hard:
+            .hard
         }
     }
 }

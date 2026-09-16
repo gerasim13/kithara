@@ -3,8 +3,6 @@ use kithara_events::TrackId;
 use kithara_play::SelectTransition;
 use kithara_warp::AssetFrame;
 
-#[cfg(test)]
-use super::types::SelectPhase;
 use super::{
     QueueControl,
     types::{PendingSelect, Transition},
@@ -55,9 +53,8 @@ where
         transition: Transition,
         reason: AdvanceReason,
     ) -> Result<(), QueueError> {
-        let _apply = self.lock_select_apply();
         let autoplay = Self::start_intent(reason, self.player.is_playing());
-        self.select_with_start_intent_admitted(id, transition, reason, autoplay)
+        self.select_with_start_intent(id, transition, reason, autoplay)
     }
 
     pub(in crate::queue) fn select_with_start_intent(
@@ -68,18 +65,16 @@ where
         autoplay: bool,
     ) -> Result<(), QueueError> {
         let _apply = self.lock_select_apply();
-        self.select_with_start_intent_admitted(id, transition, reason, autoplay)
+        self.select_with_reason_locked(id, transition, reason, autoplay)
     }
 
-    fn select_with_start_intent_admitted(
+    pub(super) fn select_with_reason_locked(
         &self,
         id: TrackId,
         transition: Transition,
         reason: AdvanceReason,
         autoplay: bool,
     ) -> Result<(), QueueError> {
-        // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
-        // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let (index, status) = {
             let guard = self.lock_tracks();
             guard
@@ -98,26 +93,7 @@ where
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                let was_playing = self.player.is_playing();
-                let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-                if was_playing && crossfade > 0.0 {
-                    self.bus.publish(QueueEvent::CrossfadeStarted {
-                        duration_seconds: crossfade,
-                    });
-                }
-                self.select_player_item(
-                    index,
-                    SelectTransition {
-                        autoplay,
-                        crossfade_seconds: crossfade,
-                    },
-                )?;
-                self.lock_navigation_mut().select(index);
-                self.bus.publish(QueueEvent::CurrentTrackAdvance {
-                    reason,
-                    id: Some(id),
-                });
-                self.set_status(id, TrackStatus::Consumed);
+                self.select_loaded_item(index, id, transition, reason, autoplay)?;
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
@@ -131,11 +107,6 @@ where
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
-                if let Some(result) =
-                    self.try_replant_test_resource(id, index, transition, reason, autoplay)
-                {
-                    return result;
-                }
                 let source = self.tracks.source(id).ok_or(QueueError::NotReady(id))?;
                 self.override_pending_select(PendingSelect {
                     id,
@@ -150,6 +121,40 @@ where
         }
     }
 
+    pub(in crate::queue) fn select_loaded_item(
+        &self,
+        index: usize,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+        autoplay: bool,
+    ) -> Result<(), QueueError> {
+        let was_playing = self.player.is_playing();
+        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+        if was_playing && crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
+        }
+        self.select_player_item(
+            index,
+            SelectTransition {
+                autoplay,
+                crossfade_seconds: crossfade,
+            },
+        )?;
+        self.lock_navigation_mut().select(index);
+        self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            reason,
+            id: Some(id),
+        });
+        self.set_status(id, TrackStatus::Consumed);
+        Ok(())
+    }
+
+    /// Whether the selection starts playback: a reason that replaces what the
+    /// listener chose keeps the current transport, while an automatic advance
+    /// through the queue always continues the session.
     fn start_intent(reason: AdvanceReason, was_playing: bool) -> bool {
         match reason {
             AdvanceReason::UserSelect
@@ -169,7 +174,7 @@ where
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::types::SelectPhase, *};
     use crate::{
         event::QueueEvent,
         queue::state::tests::{make_queue, wait_for_queue_event},
