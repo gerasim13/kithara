@@ -2155,35 +2155,35 @@ steps = [
     "--lane=usdt-play",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-play-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
