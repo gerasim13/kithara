@@ -29,40 +29,57 @@ extension IntegrationRegressionsIOS {
                 && abs(player.currentRate - 1) < 0.05
         }
 
-        let normalAdvance = try await measureMediaTimeAdvance(player)
+        let normalMeasurement = try await measureMediaTimeAdvance(player)
         try #require(
-            normalAdvance > 0,
+            normalMeasurement.mediaAdvance > 0,
             "precondition: media time did not advance during the rate-1.0 window"
         )
 
-        // Deliberately not waiting on `currentRate` here: the live rate and the
-        // target rate are separate values, and blocking on the live one would
-        // turn this trap into a timeout instead of a measurement of the symptom
-        // QA reported — playback speed that ignores the requested rate.
-        player.playingRate = 2
+        // `playingRate` is the accepted target. `currentRate` remains a
+        // separate live transport fact and is checked after the media window.
+        let requestedRate = 2.0
+        player.playingRate = Float(requestedRate)
         try #require(
-            abs(player.playingRate - 2) < 0.05,
+            abs(Double(player.playingRate) - requestedRate) < 0.05,
             """
             precondition: the player did not accept a playing rate of \
-            2.0; it reports \(player.playingRate)
+            \(requestedRate); it reports \(player.playingRate)
             """
         )
-        let fastAdvance = try await measureMediaTimeAdvance(player)
-
+        let fastMeasurement = try await measureMediaTimeAdvance(player)
         #expect(
-            fastAdvance >= normalAdvance * 1.5,
+            abs(Double(player.currentRate) - requestedRate) < 0.05,
             """
-            changing playingRate from 1.0 to 2.0 while playing \
-            advanced media time by only \(fastAdvance)s versus \
-            \(normalAdvance)s over equal wall-clock windows
+            playingRate reports the accepted target \(player.playingRate), \
+            but currentRate reports the live rate \(player.currentRate)
+            """
+        )
+
+        let observedRate = fastMeasurement.mediaVelocity / normalMeasurement.mediaVelocity
+        let rateTolerance = 0.2
+        #expect(
+            abs(observedRate - requestedRate) <= rateTolerance,
+            """
+            requested \(requestedRate)x playback, but normalized media \
+            velocity changed by \(observedRate)x; normal window advanced \
+            \(normalMeasurement.mediaAdvance)s in \
+            \(normalMeasurement.elapsedSeconds)s, fast window advanced \
+            \(fastMeasurement.mediaAdvance)s in \
+            \(fastMeasurement.elapsedSeconds)s; tolerance is +/-\(rateTolerance)x
             """
         )
     }
 
-    private func measureMediaTimeAdvance(_ player: KitharaPlayer) async throws -> TimeInterval {
-        let start = player.currentTime
+    private func measureMediaTimeAdvance(
+        _ player: KitharaPlayer
+    ) async throws -> MediaTimeMeasurement {
+        let clock = ContinuousClock()
+        let wallStart = clock.now
+        let mediaStart = player.currentTime
         try await Task.sleep(nanoseconds: 2_000_000_000)
-        return player.currentTime - start
+        let mediaAdvance = player.currentTime - mediaStart
+        let elapsed = wallStart.duration(to: clock.now)
+        return MediaTimeMeasurement(mediaAdvance: mediaAdvance, elapsed: elapsed)
     }
 
     private func waitForRateFact(
@@ -77,6 +94,19 @@ extension IntegrationRegressionsIOS {
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+}
+
+private struct MediaTimeMeasurement {
+    let mediaAdvance: TimeInterval
+    let elapsed: Duration
+
+    var elapsedSeconds: TimeInterval {
+        elapsed / Duration.seconds(1)
+    }
+
+    var mediaVelocity: TimeInterval {
+        mediaAdvance / elapsedSeconds
     }
 }
 
