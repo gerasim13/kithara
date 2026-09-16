@@ -113,8 +113,7 @@ pub(super) struct InnerIndex {
     /// never named in the manifest ahead of its own bytes.
     pub(super) pending_durability: DashSet<PathBuf>,
     /// Disk-backed persist target. Set once via
-    /// `AvailabilityIndex::enable_persistence`; later flushes reuse
-    /// the cached `Atomic<MmapDriver>` handle. Native only.
+    /// `AvailabilityIndex::enable_persistence`. Native only.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) persist: OnceLock<super::disk::AvailabilityPersist>,
 }
@@ -462,12 +461,12 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::{CancelToken, time::Duration};
-    use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::index::persistence::IndexFile;
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn availability_default_is_empty() {
@@ -688,15 +687,9 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_snapshot_and_seed_roundtrip() {
         let dir = TempDir::new().unwrap();
-        let res: MmapResource = Resource::open(
-            CancelToken::never(),
-            MmapOptions::for_path(dir.path().join("availability.bin"))
-                .initial_len(4096)
-                .mode(OpenMode::ReadWrite)
-                .build(),
-        )
-        .unwrap();
-        let atomic = Atomic::new(res);
+        let file = IndexFile::new(dir.path().join("availability.bin"));
+        let pools = crate::test_pools::pools();
+        let mut buf = crate::test_pools::byte_buffer(&pools);
 
         let idx1 = AvailabilityIndex::new();
         let k1 = ResourceKey::relative("test_asset", "file1");
@@ -714,10 +707,10 @@ mod tests {
         // `.tmp` was never renamed).
         idx1.record_write(&k3, 0..10);
 
-        idx1.persist_to(&atomic).unwrap();
+        idx1.persist_to(&file).unwrap();
 
         let idx2 = AvailabilityIndex::new();
-        idx2.load_from(&atomic).unwrap();
+        idx2.load_from(&file, &mut buf).unwrap();
 
         assert!(idx2.contains_range(&k1, 0..10));
         assert_eq!(idx2.final_len(&k2), Some(50));
@@ -731,36 +724,25 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn schema_empty_resource_loads_empty() {
         let dir = TempDir::new().unwrap();
-        let res: MmapResource = Resource::open(
-            CancelToken::never(),
-            MmapOptions::for_path(dir.path().join("availability.bin"))
-                .mode(OpenMode::ReadWrite)
-                .build(),
-        )
-        .unwrap();
-        let atomic = Atomic::new(res);
+        let file = IndexFile::new(dir.path().join("availability.bin"));
+        let pools = crate::test_pools::pools();
+        let mut buf = crate::test_pools::byte_buffer(&pools);
 
         let idx = AvailabilityIndex::new();
-        idx.load_from(&atomic).unwrap();
+        idx.load_from(&file, &mut buf).unwrap();
         assert!(idx.inner.assets.load().is_empty());
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn schema_corrupt_payload_loads_empty() {
         let dir = TempDir::new().unwrap();
-        let res: MmapResource = Resource::open(
-            CancelToken::never(),
-            MmapOptions::for_path(dir.path().join("availability.bin"))
-                .initial_len(4096)
-                .mode(OpenMode::ReadWrite)
-                .build(),
-        )
-        .unwrap();
-        let atomic = Atomic::new(res);
-        atomic.write_all(b"not valid bytes").unwrap();
+        let file = IndexFile::new(dir.path().join("availability.bin"));
+        let pools = crate::test_pools::pools();
+        let mut buf = crate::test_pools::byte_buffer(&pools);
+        std::fs::write(dir.path().join("availability.bin"), b"not valid bytes").unwrap();
 
         let idx = AvailabilityIndex::new();
-        idx.load_from(&atomic).unwrap();
+        idx.load_from(&file, &mut buf).unwrap();
         assert!(idx.inner.assets.load().is_empty());
     }
 }

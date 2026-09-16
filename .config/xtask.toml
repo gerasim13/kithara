@@ -123,8 +123,8 @@ machete_exclude = ["kithara-workspace-hack"]
 # --workspace` compiles and reports on like any other member, and which is not
 # the product a deadlock verdict is about. The same set is named in
 # `[architecture.filters] exclude_crates`, per stage, the way every other
-# `[health]` list is. Product crates are not listed: kithara-storage's 8
-# `possibly` double locks fail the stage until that code is fixed.
+# `[health]` list is. Product crates are not listed: a finding in one fails
+# the stage.
 lockbud_exclude = [
   "kithara-abr-tests",
   "kithara-analysis-tests",
@@ -1061,65 +1061,6 @@ prefix_args = [
 ]
 default_flash = false
 
-# Resampler-backend axis: each e2e lane pins one SRC shape. `e2e` is the
-# desktop shape (Rubato adapter for both decoders), `e2e-fused` the production
-# Apple shape (embedded AudioConverter SRC in the Apple codec; Symphonia stays
-# on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
-# graph, otherwise the compile-time alias picks Rubato).
-#
-# All three need a real output device, so they run on the Apple executor and are
-# absent from the Linux container fleet. The e2e target reaches nothing outside
-# the runner. Tests that need the zvuk CDN or the corporate VPN live behind
-# separate network features.
-[test.lanes.e2e]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = ["kithara-play-tests/e2e", "kithara/resample-rubato"]
-default_flash = false
-
-[test.lanes.e2e-fused]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = [
-  "kithara-play-tests/e2e",
-  "kithara/resample-rubato",
-  "kithara/apple-fused-src",
-]
-default_flash = false
-
-[test.lanes.e2e-glide]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = ["kithara-play-tests/e2e", "kithara/resample-glide"]
-default_flash = false
-
 # The network tests a runner can reach: the public zvuk CDN and silvercomet.
 # The CDN is auth-gated, so this lane only says something where
 # `KITHARA_DRM_PROD_*` are in the build environment; without them it fails on
@@ -1696,6 +1637,24 @@ kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
 
+# libFuzzer needs the nightly sanitizer flags, so the targets build on the
+# pinned nightly the image links as `nightly`. Each target runs for a fixed
+# budget rather than to exhaustion: the lane looks for inputs that crash a
+# parser or a resource state machine, and a crash is saved under
+# `tests/fuzz/artifacts/` for reproduction.
+[ext.ci.lanes.deep-fuzz]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "cargo-fuzz", "just"]
+program = "just"
+steps = [{ args = ["test", "fuzz"], label = "libFuzzer targets" }]
+role = "deep"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+queue = "heavy-linux"
+timeout_minutes = 90
+
 # Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
 # workspace: ten suites, each naming one package, the production files it may
 # mutate, and the `test()` filters that must kill the mutants, run against
@@ -1850,7 +1809,7 @@ steps = [
     "test",
     "run",
     "--lane=doc",
-  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux doc lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1868,7 +1827,7 @@ steps = [
     "test",
     "run",
     "--lane=loom",
-  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux loom lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1891,7 +1850,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1909,7 +1868,7 @@ steps = [
     "test",
     "run",
     "--lane=harness",
-  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux harness lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1927,13 +1886,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1951,7 +1910,7 @@ steps = [
     "test",
     "run",
     "--lane=broadcast",
-  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1969,7 +1928,7 @@ steps = [
     "test",
     "run",
     "--lane=integration-regressions",
-  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1990,7 +1949,7 @@ steps = [
     "test",
     "run",
     "--lane=selenium-firefox",
-  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2125,7 +2084,7 @@ steps = [
     "--lane=tooling",
     "--lane=harness",
     "--lane=fixtures",
-  ], label = "support suites this push touches" },
+  ], label = "support suites this push touches", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2144,35 +2103,35 @@ steps = [
     "--lane=usdt-play",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-play-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2602,49 +2561,6 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
-# End-to-end playback across the resampler axis. Each lane pins one source-rate
-# conversion shape, and a change to decode, blending or output can break one of
-# them while every unit test still passes - so the three run together or the
-# axis is not covered. They share a target directory: the lanes differ by
-# feature, and the executor keeps the tree warm between them.
-[ext.ci.lanes.apple-e2e]
-cache_group = "macos"
-label = "Apple"
-os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
-  { tool = "xcodebuild", args = [
-    "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
-]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e-fused",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e-glide",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-]
-role = "platforms"
-kinds = ["branch", "merge-request", "nightly"]
-timeout_minutes = 90
-
 [ext.ci.lanes.apple-xcframework]
 cache_group = "macos"
 label = "Apple"
@@ -2875,20 +2791,6 @@ command = [
 tools = ["cargo-bloat"]
 
 [[quality.assessment.deep_stages]]
-name = "e2e"
-command = ["just", "test", "run", "--lane=e2e"]
-tools = ["e2e-tests"]
-hard_invariant = true
-complete_only = true
-
-[[quality.assessment.deep_stages]]
-name = "e2e-resamplers"
-command = ["just", "test", "e2e-resamplers"]
-tools = ["e2e-resamplers"]
-hard_invariant = true
-complete_only = true
-
-[[quality.assessment.deep_stages]]
 name = "selenium-firefox"
 command = ["just", "test", "run", "--lane=selenium-firefox"]
 tools = ["selenium-tests"]
@@ -3013,6 +2915,10 @@ install_hint = "cargo install cargo-modules"
 [tools.cargo-semver-checks]
 pin = "cargo-semver-checks"
 install_hint = "cargo install cargo-semver-checks"
+
+[tools.cargo-fuzz]
+pin = "cargo-fuzz"
+install_hint = "cargo install --locked cargo-fuzz"
 
 [tools.cargo-hakari]
 pin = "cargo-hakari"

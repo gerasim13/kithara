@@ -171,6 +171,17 @@ impl DriverIo for MmapDriver {
         Ok(Some(to_read))
     }
 
+    fn release_backing(&self) -> StorageResult<()> {
+        let mut mmap_guard = self.mmap.lock();
+        if let MmapState::Active(mmap) = &*mmap_guard {
+            mmap.flush()?;
+        }
+        *mmap_guard = MmapState::Empty;
+        drop(mmap_guard);
+        self.committed.store(None);
+        Ok(())
+    }
+
     /// Flush the written pages and stop, keeping the active mapping. The
     /// caller renames the file and reopens on its canonical path, so the
     /// snapshot this would have published is dead on arrival — and the live

@@ -5067,6 +5067,7 @@ name = "kithara-ffi-web-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "gloo-timers",
+ "js-sys",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
@@ -5141,7 +5142,6 @@ name = "kithara-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "hls_m3u8",
  "kithara",
  "kithara-test-utils",
  "kithara-workspace-hack",

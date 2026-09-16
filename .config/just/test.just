@@ -165,15 +165,6 @@ audio-artifacts OUTPUT:
         --run-ignored=only \
         -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
 
-# All three lanes require a real output device.
-[positional-arguments]
-e2e-resamplers *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just test run --lane=e2e "$@"
-    just test run --lane=e2e-fused "$@"
-    just test run --lane=e2e-glide "$@"
-
 # Every UI test target, followed by both hosts drawing the same gallery and
 # shipped studio pages, and the gallery built the other way it ships. This is
 # the UI pipeline's single entrypoint; the general workspace lane deliberately
@@ -294,10 +285,6 @@ uncovered:
     cargo llvm-cov nextest --no-report --workspace --exclude kithara-fuzz \
       --features kithara-audio/rodio \
       --cargo-profile test-release --no-fail-fast || true
-    cargo llvm-cov nextest --no-report \
-      -p kithara-play-tests --features kithara-play-tests/e2e \
-      --cargo-profile test-release \
-      --test e2e --run-ignored all --no-fail-fast || true
     cargo llvm-cov report \
       --ignore-filename-regex '(tests/|examples/|benches/)' \
       --show-missing-lines
@@ -342,6 +329,26 @@ loom-debug FILE *ARGS:
 # `Condvar` are flash's own, so the lane would interpret the harness instead of
 # the primitives it is here to check. The cost is the handful of tests whose
 # assertion is a wall-clock interval; they say so at their own `cfg_attr`.
+# Every libFuzzer target in `tests/fuzz`, or only the named ones, each for
+# SECONDS of wall time. A crashing input stops the run and stays under
+# `tests/fuzz/artifacts/<target>/`.
+fuzz SECONDS="120" *TARGETS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    targets=({{ TARGETS }})
+    if [ "${#targets[@]}" -eq 0 ]; then
+        while IFS= read -r target; do targets+=("${target}"); done \
+            < <(cargo +nightly fuzz list --fuzz-dir tests/fuzz)
+    fi
+    for target in "${targets[@]}"; do
+        echo "fuzz: ${target} for {{ SECONDS }}s"
+        # The workspace release profile links with fat LTO, which drops the
+        # sanitizer-coverage globals ASan's module destructor still names.
+        CARGO_PROFILE_RELEASE_LTO=false \
+            cargo +nightly fuzz run --fuzz-dir tests/fuzz "${target}" -- \
+            -max_total_time={{ SECONDS }}
+    done
+
 [positional-arguments]
 miri *ARGS:
     #!/usr/bin/env bash

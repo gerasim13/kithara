@@ -18,7 +18,7 @@ impl SignalAsset {
     pub const AAC_SINE440_60S_256K: Self = Self::new("signal_aac_sine440_60s_256k", "aac");
     pub const AAC_SINE440_60S_320K: Self = Self::new("signal_aac_sine440_60s_320k", "aac");
     /// Every asset the `/signal` route can serve.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::WAV_SAW_1S,
         Self::WAV_SILENCE_1S,
         Self::WAV_SINE440_120MS,
@@ -33,6 +33,7 @@ impl SignalAsset {
         Self::MP3_SAW_6S,
         Self::MP3_SAW_DOWN_6S,
         Self::MP3_SINE1K_48K_1S,
+        Self::MP3_MONO_SINE440_60S,
         Self::MP3_SINE440_60S,
         Self::MP3_SINE440_60S_128K,
         Self::MP3_SINE440_60S_192K,
@@ -73,6 +74,7 @@ impl SignalAsset {
     pub const M4A_SINE440_60S_256K: Self = Self::new("signal_m4a_sine440_60s_256k", "m4a");
     pub const M4A_SINE440_60S_320K: Self = Self::new("signal_m4a_sine440_60s_320k", "m4a");
     pub const MP3_CLICKS126_30S: Self = Self::new("signal_mp3_clicks126_30s", "mp3");
+    pub const MP3_MONO_SINE440_60S: Self = Self::new("signal_mp3_mono_sine440_60s", "mp3");
     pub const MP3_SAW_1S: Self = Self::new("signal_mp3_saw_1s", "mp3");
     pub const MP3_SAW_2S: Self = Self::new("signal_mp3_saw_2s", "mp3");
     pub const MP3_SAW_2S_320K: Self = Self::new("signal_mp3_saw_2s_320k", "mp3");
