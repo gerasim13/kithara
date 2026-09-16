@@ -4,6 +4,7 @@ mod wire {
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
+    use kithara_signal::FaderValue;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
@@ -115,7 +116,7 @@ mod wire {
         SetPlayerSlotVolume {
             player_id: PlayerId,
             slot: SlotId,
-            volume: f32,
+            volume: FaderValue,
         },
         SetPlayerEqGain {
             band: usize,
@@ -471,7 +472,7 @@ mod handle {
             &self,
             player_id: PlayerId,
             slot: SlotId,
-            volume: f32,
+            volume: kithara_signal::FaderValue,
         ) -> Result<(), PlayError> {
             self.exec_ok(Cmd::SetPlayerSlotVolume {
                 player_id,

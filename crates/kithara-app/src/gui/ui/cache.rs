@@ -278,7 +278,7 @@ impl ViewCache {
 impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
-        self.tempo = format!("{:+.1}%", ts.tempo);
+        self.tempo = format!("{:+.1}%", f32::from(ts.tempo));
         self.bpm = format_bpm(analysis_bpm(&deck.ui), ts.speed());
         self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);

@@ -18,7 +18,7 @@ use crate::{
             minimum_table_width, table_content_height,
         },
         tree::face::Tree,
-        wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
+        wave::zoom_math::{Zoom, window_bounds, zoom_for_wheel},
     },
     draw::Rect,
     engine::{Descriptor, ScrollConfig},
@@ -119,7 +119,7 @@ pub(crate) enum HostedControlPlan {
 pub(crate) struct HeroWindow {
     end: f32,
     progress: f32,
-    scale: f32,
+    scale: Zoom,
     start: f32,
     wheel_non_positive: f32,
     wheel_positive: f32,
@@ -130,15 +130,15 @@ impl HeroWindow {
     /// read it from.
     #[cfg(test)]
     fn at(progress: f32, zoom: f32) -> Self {
-        let scale = clamp_zoom(zoom);
+        let scale = Zoom::from(zoom);
         let visible = window_bounds(progress, scale);
         Self {
             scale,
             progress,
             start: visible.start,
             end: visible.end,
-            wheel_positive: zoom_for_wheel(scale, 1.0),
-            wheel_non_positive: zoom_for_wheel(scale, 0.0),
+            wheel_positive: zoom_for_wheel(scale, 1.0).into(),
+            wheel_non_positive: zoom_for_wheel(scale, 0.0).into(),
         }
     }
 
@@ -148,15 +148,15 @@ impl HeroWindow {
             Some(ReadValue::Scalar(value)) => value.as_(),
             _ => 0.0,
         };
-        let scale = clamp_zoom(ctx.wave_zoom(zoom));
+        let scale = ctx.wave_zoom(zoom);
         let visible = window_bounds(progress, scale);
         Self {
             scale,
             progress,
             start: visible.start,
             end: visible.end,
-            wheel_positive: zoom_for_wheel(scale, 1.0),
-            wheel_non_positive: zoom_for_wheel(scale, 0.0),
+            wheel_positive: zoom_for_wheel(scale, 1.0).into(),
+            wheel_non_positive: zoom_for_wheel(scale, 0.0).into(),
         }
     }
 
@@ -269,7 +269,7 @@ impl HostedControlPlan {
                 let window = window.get();
                 descriptors.push(Descriptor::hero_wave(
                     path.clone(),
-                    window.scale,
+                    window.scale.into(),
                     window.progress,
                     window.visible(),
                     window.wheel_positive,

@@ -1,4 +1,10 @@
+use kithara_ui::render::{Zoom, zoom_in, zoom_out};
 use num_traits::cast::AsPrimitive;
+
+fn zoom_from_f64(value: f64) -> Zoom {
+    let value: f32 = value.as_();
+    value.into()
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -16,18 +22,14 @@ pub(crate) struct DeckTransport {
     duration_secs: f64,
     #[field(get, vis = "pub(crate)")]
     position_secs: f64,
-    #[field(get, vis = "pub(crate)")]
-    zoom: f64,
+    zoom: Zoom,
 }
 
 impl DeckTransport {
     const BARS_PER_LOOP: f64 = 4.0;
     const BEATS_PER_BAR: f64 = 4.0;
     const MAX_CUES: usize = 4;
-    const MAX_ZOOM: f64 = 0.5;
-    const MIN_ZOOM: f64 = 0.015;
     const SECS_PER_MINUTE: f64 = 60.0;
-    const ZOOM_FACTOR: f64 = 0.7;
 
     pub(crate) fn new(
         bpm: f32,
@@ -40,7 +42,7 @@ impl DeckTransport {
         Self {
             duration_secs,
             position_secs,
-            zoom,
+            zoom: zoom_from_f64(zoom),
             bpm: f64::from(bpm),
             cues: cues.to_vec(),
             loop_anchor: loop_region[0],
@@ -61,8 +63,8 @@ impl DeckTransport {
             Some("jump-forward") => self.jump_bars(1.0),
             Some("loop") => self.toggle_loop(),
             Some("reverse") => self.reverse = !self.reverse,
-            Some("zoom-in") => self.zoom = (self.zoom * Self::ZOOM_FACTOR).max(Self::MIN_ZOOM),
-            Some("zoom-out") => self.zoom = (self.zoom / Self::ZOOM_FACTOR).min(Self::MAX_ZOOM),
+            Some("zoom-in") => self.zoom = zoom_in(self.zoom),
+            Some("zoom-out") => self.zoom = zoom_out(self.zoom),
             _ => return false,
         }
         true
@@ -99,8 +101,12 @@ impl DeckTransport {
         self.loop_region = None;
     }
 
-    pub(crate) const fn set_zoom(&mut self, zoom: f64) {
-        self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+    pub(crate) fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = zoom_from_f64(zoom);
+    }
+
+    pub(crate) fn zoom(&self) -> f64 {
+        f64::from(f32::from(self.zoom))
     }
 
     fn toggle_loop(&mut self) {
@@ -247,12 +253,15 @@ mod tests {
         let mut transport = transport();
 
         transport.activate("modules/deck/transport/zoom-out");
-        assert_eq!(transport.zoom(), Consts::ZOOM / DeckTransport::ZOOM_FACTOR);
+        assert_eq!(
+            transport.zoom(),
+            f64::from(f32::from(zoom_out(zoom_from_f64(Consts::ZOOM))))
+        );
         transport.set_zoom(0.49);
         transport.activate("modules/deck/transport/zoom-out");
-        assert_eq!(transport.zoom(), DeckTransport::MAX_ZOOM);
+        assert_eq!(transport.zoom(), f64::from(f32::from(Zoom::MAX)));
         transport.set_zoom(0.016);
         transport.activate("modules/deck/transport/zoom-in");
-        assert_eq!(transport.zoom(), DeckTransport::MIN_ZOOM);
+        assert_eq!(transport.zoom(), f64::from(f32::from(Zoom::MIN)));
     }
 }

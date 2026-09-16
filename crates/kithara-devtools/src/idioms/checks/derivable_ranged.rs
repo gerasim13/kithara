@@ -2,7 +2,7 @@ use std::fs;
 
 use anyhow::Result;
 use syn::{
-    Expr, ExprMethodCall, Fields, ImplItem, ItemImpl, Lit, Path, Token, Type, UnOp,
+    Expr, ExprMethodCall, Fields, ImplItem, ItemImpl, Lit, Path, RangeLimits, Token, Type, UnOp,
     punctuated::Punctuated,
     visit::{self, Visit},
 };
@@ -210,7 +210,9 @@ impl RangeScan<'_> {
                 .start
                 .as_deref()
                 .zip(range.end.as_deref())
-                .is_some_and(|(start, end)| self.pair(start, end)),
+                .is_some_and(|(start, end)| {
+                    matches!(range.limits, RangeLimits::Closed(_)) && self.pair(start, end)
+                }),
             Expr::Paren(paren) => self.range(&paren.expr),
             Expr::Group(group) => self.range(&group.expr),
             _ => false,
@@ -343,6 +345,14 @@ mod tests {
             ),
             (
                 "impl Value { fn new(v: f32, hi: f32) -> Self { Self(v.clamp(0.0, hi)) } }",
+                0,
+            ),
+            (
+                "impl Value { fn new(v: f32) -> Self { Self(v.max(0.001)) } }",
+                0,
+            ),
+            (
+                "impl Value { fn new(v: f32) -> bool { (0.0..2.0).contains(&v) } }",
                 0,
             ),
             (

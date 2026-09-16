@@ -6,6 +6,7 @@ use firewheel::{
 };
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
+use kithara_signal::FaderValue;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -539,7 +540,7 @@ pub(super) mod controls {
         state: &mut SessionState<B, S>,
         player_id: PlayerId,
         slot: SlotId,
-        volume: f32,
+        volume: FaderValue,
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
         if !deck_at(state, idx)?.started {
@@ -554,7 +555,7 @@ pub(super) mod controls {
             return Err(SessionError::SlotNotFound(slot));
         };
         let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
-        slot_nodes.volume_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
+        slot_nodes.volume_memo.volume = Volume::Linear(volume.into());
         let mut queue = fw_ctx.event_queue(slot_nodes.volume_node_id);
         slot_nodes.volume_memo.update_memo(&mut queue);
         Ok(())

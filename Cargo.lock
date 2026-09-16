@@ -5795,9 +5795,11 @@ dependencies = [
  "fast-interleave",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
+ "kithara-derive",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
 ]
 
 [[package]]

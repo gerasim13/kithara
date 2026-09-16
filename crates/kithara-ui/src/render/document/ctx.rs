@@ -190,13 +190,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
     /// The zoom a waveform is drawn at, or the default when nothing answers.
     #[must_use]
-    pub fn wave_zoom(self, zoom: Option<&Binding>) -> f32 {
+    pub fn wave_zoom(self, zoom: Option<&Binding>) -> crate::render::Zoom {
         zoom.and_then(|binding| self.read(binding))
             .and_then(|value| match value {
-                ReadValue::Scalar(value) => Some(value.as_()),
+                ReadValue::Scalar(value) => Some(AsPrimitive::<f32>::as_(value)),
                 _ => None,
             })
-            .unwrap_or(DEFAULT_ZOOM)
+            .map_or_else(
+                || crate::render::Zoom::from(DEFAULT_ZOOM),
+                crate::render::Zoom::from,
+            )
     }
 }
 
