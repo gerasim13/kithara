@@ -18,11 +18,14 @@ proc-macro = true
 built-default = []
 default = []
 event = []
+enum-str = []
+mirror = []
 patch = []
 phase = []
 ranged = []
 skin-walk = []
 ui = []
+variants = []
 
 [dependencies]
 proc-macro2 = { workspace = true }
@@ -46,3 +49,11 @@ workspace = true
 [[test]]
 name = "ranged"
 required-features = ["ranged"]
+
+[[test]]
+name = "mirror"
+required-features = ["mirror"]
+
+[[test]]
+name = "vocabulary"
+required-features = ["enum-str", "variants"]

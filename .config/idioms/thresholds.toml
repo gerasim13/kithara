@@ -88,6 +88,18 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
+[derivable_mirror]
+enabled = true
+severity = "deny"
+
+[derivable_enum_str]
+enabled = true
+severity = "deny"
+
+[derivable_variants]
+enabled = true
+severity = "deny"
+
 [derivable_skin_walk]
 enabled = true
 severity = "deny"

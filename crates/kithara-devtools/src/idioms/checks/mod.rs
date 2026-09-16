@@ -27,11 +27,13 @@ pub(crate) mod derivable_debug;
 pub(crate) mod derivable_delegation;
 pub(crate) mod derivable_deref;
 pub(crate) mod derivable_display;
+pub(crate) mod derivable_enum_str;
 pub(crate) mod derivable_error;
 pub(crate) mod derivable_event;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
 pub(crate) mod derivable_into_probe_arg;
+pub(crate) mod derivable_mirror;
 pub(crate) mod derivable_node_control;
 pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
@@ -39,6 +41,7 @@ pub(crate) mod derivable_ranged;
 pub(crate) mod derivable_retained;
 pub(crate) mod derivable_skin_walk;
 mod derivable_support;
+pub(crate) mod derivable_variants;
 pub(crate) mod derivable_view_control;
 pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
@@ -93,7 +96,10 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_event::DerivableEvent),
         Box::new(derivable_getter::DerivableGetter),
         Box::new(derivable_into_probe_arg::DerivableIntoProbeArg),
+        Box::new(derivable_mirror::DerivableMirror),
         Box::new(derivable_node_control::DerivableNodeControl),
+        Box::new(derivable_enum_str::DerivableEnumStr),
+        Box::new(derivable_variants::DerivableVariants),
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),

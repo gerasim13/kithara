@@ -1,5 +1,5 @@
 use iced::{
-    Event, Point, Rectangle,
+    Event, Rectangle,
     advanced::{InputMethod as IcedInputMethod, input_method, input_method::Purpose},
     keyboard::{
         self, Event as KeyboardEvent,
@@ -10,10 +10,9 @@ use iced::{
 use input_method::Event as InputMethodEvent;
 
 use super::{
-    CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, PointerPhase, Scroll,
+    Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, PointerPhase, Scroll,
     mouse as mouse_input,
 };
-use crate::draw::{Pt, Rect};
 
 pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
     match event {
@@ -117,52 +116,22 @@ pub(crate) fn hit(bounds: Rectangle, cursor: Cursor) -> Hit {
     Hit::new(cursor.position().map(Into::into), bounds.into())
 }
 
-impl From<Point> for Pt {
-    fn from(point: Point) -> Self {
-        Self {
-            x: point.x,
-            y: point.y,
-        }
-    }
-}
-
-impl From<Rectangle> for Rect {
-    fn from(rectangle: Rectangle) -> Self {
-        Self {
-            h: rectangle.height,
-            w: rectangle.width,
-            x: rectangle.x,
-            y: rectangle.y,
-        }
-    }
-}
-
-impl From<CursorShape> for mouse::Interaction {
-    fn from(shape: CursorShape) -> Self {
-        match shape {
-            CursorShape::None => Self::None,
-            CursorShape::Grab => Self::Grab,
-            CursorShape::Grabbing => Self::Grabbing,
-            CursorShape::Pointer => Self::Pointer,
-            CursorShape::ResizeDiagonalDown => Self::ResizingDiagonallyDown,
-            CursorShape::ResizeDiagonalUp => Self::ResizingDiagonallyUp,
-            CursorShape::ResizeH => Self::ResizingHorizontally,
-            CursorShape::ResizeV => Self::ResizingVertically,
-            CursorShape::Text => Self::Text,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use iced::keyboard::{
-        self, Location, Modifiers as IcedModifiers,
-        key::{Named, Physical},
+    use iced::{
+        Point,
+        keyboard::{
+            self, Location, Modifiers as IcedModifiers,
+            key::{Named, Physical},
+        },
     };
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::interact::{MOUSE, PointerButton, PointerInput};
+    use crate::{
+        draw::Pt,
+        interact::{CursorShape, MOUSE, PointerButton, PointerInput},
+    };
 
     #[kithara::test]
     fn key_press_and_release_preserve_key_and_all_modifiers() {

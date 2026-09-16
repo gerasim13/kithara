@@ -5201,6 +5201,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-audio",
+ "kithara-derive",
  "kithara-events",
  "kithara-file",
  "kithara-hls",

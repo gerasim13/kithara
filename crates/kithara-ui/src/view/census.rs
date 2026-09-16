@@ -9,26 +9,18 @@ use crate::{
 };
 
 /// What one press writes into the state it names.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, kithara_derive::Mirror)]
+#[mirror(from_ref = Write)]
 #[non_exhaustive]
 pub enum ViewWrite<'a> {
-    Flag(ViewSet),
-    Page(&'a str),
+    Flag(#[mirror(copy)] ViewSet),
+    Page(#[mirror(as_ref)] &'a str),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Write {
     Flag(ViewSet),
     Page(String),
-}
-
-impl<'a> From<&'a Write> for ViewWrite<'a> {
-    fn from(write: &'a Write) -> Self {
-        match write {
-            Write::Flag(set) => Self::Flag(*set),
-            Write::Page(page) => Self::Page(page),
-        }
-    }
 }
 
 /// Where one page-turning state stood when a screen was compiled.

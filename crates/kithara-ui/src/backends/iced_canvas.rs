@@ -407,28 +407,6 @@ impl OutlinePen for IcedOutline<'_> {
     }
 }
 
-impl From<Rgba> for Color {
-    fn from(color: Rgba) -> Self {
-        Self {
-            a: color.a,
-            b: color.b,
-            g: color.g,
-            r: color.r,
-        }
-    }
-}
-
-impl From<Color> for Rgba {
-    fn from(color: Color) -> Self {
-        Self {
-            a: color.a,
-            b: color.b,
-            g: color.g,
-            r: color.r,
-        }
-    }
-}
-
 impl From<Pt> for Point {
     fn from(point: Pt) -> Self {
         Self::new(point.x, point.y)

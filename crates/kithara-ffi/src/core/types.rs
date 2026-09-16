@@ -7,7 +7,7 @@ use kithara::{
         ItemStatus, PlayError, PlayerStatus, RouteChangeReason, SessionDuckingMode,
         StretchBackendKind, TimeControlStatus, TimeRange,
     },
-    queue::{AdvanceReason, QueueRepeatMode, RepeatMode, TrackStatus as TS, Transition},
+    queue::{AdvanceReason, QueueRepeatMode, RepeatMode, Transition},
     stream::{AudioCodec, ContainerFormat},
 };
 use kithara_audio::{
@@ -145,7 +145,8 @@ pub struct FfiItemConfig {
 }
 
 /// FFI-friendly mirror of [`PlayerStatus`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = PlayerStatus)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiPlayerStatus {
     Unknown,
@@ -153,18 +154,9 @@ pub enum FfiPlayerStatus {
     Failed,
 }
 
-impl From<PlayerStatus> for FfiPlayerStatus {
-    fn from(s: PlayerStatus) -> Self {
-        match s {
-            PlayerStatus::ReadyToPlay => Self::ReadyToPlay,
-            PlayerStatus::Failed => Self::Failed,
-            PlayerStatus::Unknown => Self::Unknown,
-        }
-    }
-}
-
 /// FFI-friendly mirror of [`ItemStatus`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = ItemStatus)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiItemStatus {
     Unknown,
@@ -172,18 +164,9 @@ pub enum FfiItemStatus {
     Failed,
 }
 
-impl From<ItemStatus> for FfiItemStatus {
-    fn from(s: ItemStatus) -> Self {
-        match s {
-            ItemStatus::ReadyToPlay => Self::ReadyToPlay,
-            ItemStatus::Failed => Self::Failed,
-            ItemStatus::Unknown => Self::Unknown,
-        }
-    }
-}
-
 /// FFI-friendly mirror of [`TimeControlStatus`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = TimeControlStatus)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTimeControlStatus {
     Paused,
@@ -191,21 +174,12 @@ pub enum FfiTimeControlStatus {
     Playing,
 }
 
-impl From<TimeControlStatus> for FfiTimeControlStatus {
-    fn from(s: TimeControlStatus) -> Self {
-        match s {
-            TimeControlStatus::WaitingToPlay => Self::WaitingToPlay,
-            TimeControlStatus::Playing => Self::Playing,
-            TimeControlStatus::Paused => Self::Paused,
-        }
-    }
-}
-
 /// Track lifecycle state for a queued item.
 ///
 /// Emitted by the native engine as the queue loads, plays, consumes,
 /// fails, or cancels an item.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = kithara::queue::TrackStatus)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
     /// The item is known to the queue but loading has not started.
@@ -217,6 +191,7 @@ pub enum FfiTrackStatus {
     /// The item is loaded and ready for playback.
     Loaded,
     /// Loading or playback failed with a native error message.
+    #[mirror(tuple)]
     Failed { reason: String },
     /// The item has already been consumed by playback.
     Consumed,
@@ -224,21 +199,8 @@ pub enum FfiTrackStatus {
     Cancelled,
 }
 
-impl From<kithara::queue::TrackStatus> for FfiTrackStatus {
-    fn from(s: kithara::queue::TrackStatus) -> Self {
-        match s {
-            TS::Loading => Self::Loading,
-            TS::Slow => Self::Slow,
-            TS::Loaded => Self::Loaded,
-            TS::Failed(reason) => Self::Failed { reason },
-            TS::Consumed => Self::Consumed,
-            TS::Cancelled => Self::Cancelled,
-            TS::Pending => Self::Pending,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = AdvanceReason)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiAdvanceReason {
     NaturalEof,
@@ -250,42 +212,19 @@ pub enum FfiAdvanceReason {
     RemovedCurrent,
     Repeat,
     Cancelled,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<AdvanceReason> for FfiAdvanceReason {
-    fn from(value: AdvanceReason) -> Self {
-        match value {
-            AdvanceReason::NaturalEof => Self::NaturalEof,
-            AdvanceReason::CrossfadePreArm => Self::CrossfadePreArm,
-            AdvanceReason::UserSelect => Self::UserSelect,
-            AdvanceReason::UserNext => Self::UserNext,
-            AdvanceReason::UserPrev => Self::UserPrev,
-            AdvanceReason::TrackFailed => Self::TrackFailed,
-            AdvanceReason::RemovedCurrent => Self::RemovedCurrent,
-            AdvanceReason::Repeat => Self::Repeat,
-            AdvanceReason::Cancelled => Self::Cancelled,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = QueueRepeatMode)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiRepeatMode {
     Off,
     One,
     All,
+    #[mirror(skip)]
     Unknown,
-}
-
-impl From<QueueRepeatMode> for FfiRepeatMode {
-    fn from(value: QueueRepeatMode) -> Self {
-        match value {
-            QueueRepeatMode::Off => Self::Off,
-            QueueRepeatMode::One => Self::One,
-            QueueRepeatMode::All => Self::All,
-        }
-    }
 }
 
 impl From<RepeatMode> for FfiRepeatMode {
@@ -300,7 +239,8 @@ impl From<RepeatMode> for FfiRepeatMode {
 }
 
 /// How far the whole session output drops under a competing sound.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(into = SessionDuckingMode)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiDuckingMode {
     /// Full level.
@@ -309,16 +249,6 @@ pub enum FfiDuckingMode {
     Soft,
     /// Lowered to 20%.
     Hard,
-}
-
-impl From<FfiDuckingMode> for SessionDuckingMode {
-    fn from(value: FfiDuckingMode) -> Self {
-        match value {
-            FfiDuckingMode::Off => Self::Off,
-            FfiDuckingMode::Soft => Self::Soft,
-            FfiDuckingMode::Hard => Self::Hard,
-        }
-    }
 }
 
 impl TryFrom<FfiRepeatMode> for RepeatMode {
@@ -334,7 +264,8 @@ impl TryFrom<FfiRepeatMode> for RepeatMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = RouteChangeReason)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiRouteChangeReason {
     Unknown,
@@ -347,22 +278,8 @@ pub enum FfiRouteChangeReason {
     RouteConfigurationChange,
 }
 
-impl From<RouteChangeReason> for FfiRouteChangeReason {
-    fn from(value: RouteChangeReason) -> Self {
-        match value {
-            RouteChangeReason::NewDeviceAvailable => Self::NewDeviceAvailable,
-            RouteChangeReason::OldDeviceUnavailable => Self::OldDeviceUnavailable,
-            RouteChangeReason::CategoryChange => Self::CategoryChange,
-            RouteChangeReason::Override => Self::Override,
-            RouteChangeReason::WakeFromSleep => Self::WakeFromSleep,
-            RouteChangeReason::NoSuitableRouteForCategory => Self::NoSuitableRouteForCategory,
-            RouteChangeReason::RouteConfigurationChange => Self::RouteConfigurationChange,
-            RouteChangeReason::Unknown => Self::Unknown,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = StretchBackendKind)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiStretchBackendKind {
     Signalsmith,
@@ -370,33 +287,15 @@ pub enum FfiStretchBackendKind {
     Unknown,
 }
 
-impl From<StretchBackendKind> for FfiStretchBackendKind {
-    fn from(value: StretchBackendKind) -> Self {
-        match value {
-            StretchBackendKind::Signalsmith => Self::Signalsmith,
-            StretchBackendKind::Bungee => Self::Bungee,
-            StretchBackendKind::Unknown => Self::Unknown,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = EvictReason)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiEvictReason {
     QuotaBytes,
     QuotaAssets,
     Displaced,
+    #[mirror(skip)]
     Unknown,
-}
-
-impl From<EvictReason> for FfiEvictReason {
-    fn from(value: EvictReason) -> Self {
-        match value {
-            EvictReason::QuotaBytes => Self::QuotaBytes,
-            EvictReason::QuotaAssets => Self::QuotaAssets,
-            EvictReason::Displaced => Self::Displaced,
-        }
-    }
 }
 
 /// FFI-friendly time range (seconds-based).
@@ -488,7 +387,8 @@ pub enum FfiPlayerEvent {
 /// [`FfiTransition::Crossfade`] to use the player's configured
 /// duration (typical for auto-advance and Next/Prev buttons), or
 /// [`FfiTransition::CrossfadeWith`] to override per-call.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, kithara_derive::Mirror)]
+#[mirror(into = Transition)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTransition {
     None,
@@ -496,17 +396,8 @@ pub enum FfiTransition {
     CrossfadeWith { seconds: f32 },
 }
 
-impl From<FfiTransition> for Transition {
-    fn from(t: FfiTransition) -> Self {
-        match t {
-            FfiTransition::None => Self::None,
-            FfiTransition::Crossfade => Self::Crossfade,
-            FfiTransition::CrossfadeWith { seconds } => Self::CrossfadeWith { seconds },
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = AudioCodec)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiAudioCodecKind {
     AacLc,
@@ -519,27 +410,12 @@ pub enum FfiAudioCodecKind {
     Alac,
     Pcm,
     Adpcm,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<AudioCodec> for FfiAudioCodecKind {
-    fn from(value: AudioCodec) -> Self {
-        match value {
-            AudioCodec::AacLc => Self::AacLc,
-            AudioCodec::AacHe => Self::AacHe,
-            AudioCodec::AacHeV2 => Self::AacHeV2,
-            AudioCodec::Mp3 => Self::Mp3,
-            AudioCodec::Flac => Self::Flac,
-            AudioCodec::Vorbis => Self::Vorbis,
-            AudioCodec::Opus => Self::Opus,
-            AudioCodec::Alac => Self::Alac,
-            AudioCodec::Pcm => Self::Pcm,
-            AudioCodec::Adpcm => Self::Adpcm,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = ContainerFormat)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiContainerKind {
     Mp4,
@@ -552,46 +428,23 @@ pub enum FfiContainerKind {
     Ogg,
     Caf,
     Mkv,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<ContainerFormat> for FfiContainerKind {
-    fn from(value: ContainerFormat) -> Self {
-        match value {
-            ContainerFormat::Mp4 => Self::Mp4,
-            ContainerFormat::Fmp4 => Self::Fmp4,
-            ContainerFormat::MpegTs => Self::MpegTs,
-            ContainerFormat::MpegAudio => Self::MpegAudio,
-            ContainerFormat::Adts => Self::Adts,
-            ContainerFormat::Flac => Self::Flac,
-            ContainerFormat::Wav => Self::Wav,
-            ContainerFormat::Ogg => Self::Ogg,
-            ContainerFormat::Caf => Self::Caf,
-            ContainerFormat::Mkv => Self::Mkv,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = DecoderBackend)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiDecoderBackend {
     Symphonia,
     Apple,
     Android,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<DecoderBackend> for FfiDecoderBackend {
-    fn from(value: DecoderBackend) -> Self {
-        match value {
-            DecoderBackend::Symphonia => Self::Symphonia,
-            DecoderBackend::Apple => Self::Apple,
-            DecoderBackend::Android => Self::Android,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = DecoderChangeCause)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiDecoderChangeCause {
     Initial,
@@ -600,42 +453,23 @@ pub enum FfiDecoderChangeCause {
     SeekRecreate,
     Recovery,
     HostRateChange,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<DecoderChangeCause> for FfiDecoderChangeCause {
-    fn from(value: DecoderChangeCause) -> Self {
-        match value {
-            DecoderChangeCause::Initial => Self::Initial,
-            DecoderChangeCause::VariantSwitch => Self::VariantSwitch,
-            DecoderChangeCause::FormatBoundary => Self::FormatBoundary,
-            DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
-            DecoderChangeCause::Recovery => Self::Recovery,
-            DecoderChangeCause::HostRateChange => Self::HostRateChange,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = DecodeErrorClass)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiDecodeErrorClass {
     Interrupted,
     VariantChange,
     Other,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<DecodeErrorClass> for FfiDecodeErrorClass {
-    fn from(value: DecodeErrorClass) -> Self {
-        match value {
-            DecodeErrorClass::Interrupted => Self::Interrupted,
-            DecodeErrorClass::VariantChange => Self::VariantChange,
-            DecodeErrorClass::Other => Self::Other,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = DecodeErrorKind)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiDecodeErrorKind {
     Io,
@@ -651,106 +485,58 @@ pub enum FfiDecodeErrorKind {
     BackendStatus,
     Interrupted,
     Backend,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<DecodeErrorKind> for FfiDecodeErrorKind {
-    fn from(value: DecodeErrorKind) -> Self {
-        match value {
-            DecodeErrorKind::Io => Self::Io,
-            DecodeErrorKind::UnsupportedCodec => Self::UnsupportedCodec,
-            DecodeErrorKind::UnsupportedContainer => Self::UnsupportedContainer,
-            DecodeErrorKind::InvalidData => Self::InvalidData,
-            DecodeErrorKind::SeekFailed => Self::SeekFailed,
-            DecodeErrorKind::SeekOutOfRange => Self::SeekOutOfRange,
-            DecodeErrorKind::Parse => Self::Parse,
-            DecodeErrorKind::ProbeFailed => Self::ProbeFailed,
-            DecodeErrorKind::BackendUnavailable => Self::BackendUnavailable,
-            DecodeErrorKind::InvalidSampleRate => Self::InvalidSampleRate,
-            DecodeErrorKind::BackendStatus => Self::BackendStatus,
-            DecodeErrorKind::Interrupted => Self::Interrupted,
-            DecodeErrorKind::Backend => Self::Backend,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = FrameDomain)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiFrameDomain {
     Source,
     Output,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<FrameDomain> for FfiFrameDomain {
-    fn from(value: FrameDomain) -> Self {
-        match value {
-            FrameDomain::Source => Self::Source,
-            FrameDomain::Output => Self::Output,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = ResamplerKind)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiResamplerKind {
     Rubato,
     Apple,
     Glide,
     None,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<ResamplerKind> for FfiResamplerKind {
-    fn from(value: ResamplerKind) -> Self {
-        match value {
-            ResamplerKind::Rubato => Self::Rubato,
-            ResamplerKind::Apple => Self::Apple,
-            ResamplerKind::Glide => Self::Glide,
-            ResamplerKind::None => Self::None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = PlaybackResamplerKind)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiPlaybackResamplerKind {
     Rubato,
     Glide,
     None,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<PlaybackResamplerKind> for FfiPlaybackResamplerKind {
-    fn from(value: PlaybackResamplerKind) -> Self {
-        match value {
-            PlaybackResamplerKind::Rubato => Self::Rubato,
-            PlaybackResamplerKind::Glide => Self::Glide,
-            PlaybackResamplerKind::None => Self::None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = TrackFailureKind)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackFailureKind {
     Decode,
-    RecreateFailed { offset: u64 },
+    RecreateFailed {
+        offset: u64,
+    },
     SourceCancelled,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<TrackFailureKind> for FfiTrackFailureKind {
-    fn from(value: TrackFailureKind) -> Self {
-        match value {
-            TrackFailureKind::Decode => Self::Decode,
-            TrackFailureKind::RecreateFailed { offset } => Self::RecreateFailed { offset },
-            TrackFailureKind::SourceCancelled => Self::SourceCancelled,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = CancelReason)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiCancelReason {
     EpochCancel,
@@ -759,72 +545,37 @@ pub enum FfiCancelReason {
     BeforeStart,
 }
 
-impl From<CancelReason> for FfiCancelReason {
-    fn from(value: CancelReason) -> Self {
-        match value {
-            CancelReason::EpochCancel => Self::EpochCancel,
-            CancelReason::PeerCancel => Self::PeerCancel,
-            CancelReason::DownloaderShutdown => Self::DownloaderShutdown,
-            CancelReason::BeforeStart => Self::BeforeStart,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = TotalBytesSource)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTotalBytesSource {
     CommittedLen,
     ContentLength,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<TotalBytesSource> for FfiTotalBytesSource {
-    fn from(value: TotalBytesSource) -> Self {
-        match value {
-            TotalBytesSource::CommittedLen => Self::CommittedLen,
-            TotalBytesSource::ContentLength => Self::ContentLength,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = KeyFailureStage)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiKeyFailureStage {
     Network,
     BodyCollect,
     Processor,
     Missing,
+    #[mirror(skip)]
     Unknown,
 }
 
-impl From<KeyFailureStage> for FfiKeyFailureStage {
-    fn from(value: KeyFailureStage) -> Self {
-        match value {
-            KeyFailureStage::Network => Self::Network,
-            KeyFailureStage::BodyCollect => Self::BodyCollect,
-            KeyFailureStage::Processor => Self::Processor,
-            KeyFailureStage::Missing => Self::Missing,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(from = KeySource)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiKeySource {
     Network,
     DiskCache,
     MemCache,
+    #[mirror(skip)]
     Unknown,
-}
-
-impl From<KeySource> for FfiKeySource {
-    fn from(value: KeySource) -> Self {
-        match value {
-            KeySource::Network => Self::Network,
-            KeySource::DiskCache => Self::DiskCache,
-            KeySource::MemCache => Self::MemCache,
-        }
-    }
 }
 
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].

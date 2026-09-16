@@ -1,71 +1,3 @@
-use crate::expand::ControlSpec;
-
-/// Names every [`ControlSpec`] variant once, and derives both the whole set and
-/// the per-value name from that one list. The generated match is exhaustive, so
-/// a new variant stops compiling here rather than quietly leaving a document
-/// census, a gallery page, or the application short by one control.
-macro_rules! control_kinds {
-    ($($variant:ident),+ $(,)?) => {
-        impl ControlSpec {
-            /// Every control a document can name.
-            pub const KINDS: &'static [&'static str] = &[$(stringify!($variant)),+];
-
-            /// The document name of this control.
-            pub const fn kind(&self) -> &'static str {
-                match self {
-                    $(ControlSpec::$variant { .. } => stringify!($variant),)+
-                }
-            }
-        }
-    };
-}
-
-control_kinds!(
-    Bpm,
-    Brand,
-    Button,
-    Cell,
-    Checkbox,
-    Chip,
-    ContextBar,
-    Crossfader,
-    Custom,
-    DeckSummary,
-    Divider,
-    Fader,
-    Glyph,
-    Knob,
-    Lottie,
-    Meter,
-    NavItem,
-    PortalMap,
-    PresetSelector,
-    Range,
-    Readout,
-    Scalar,
-    Segmented,
-    Select,
-    SettingsButton,
-    Shader,
-    Spacer,
-    Sprite,
-    StatusDot,
-    Swatch,
-    TabLarge,
-    Table,
-    Text,
-    Time,
-    TitleBar,
-    Toggle,
-    Tree,
-    Vis,
-    VuStereo,
-    VuVertical,
-    Wave,
-    WindowControls,
-    WindowDrag,
-);
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -73,6 +5,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::expand::ControlSpec;
 
     #[kithara::test]
     fn no_control_is_named_twice() {

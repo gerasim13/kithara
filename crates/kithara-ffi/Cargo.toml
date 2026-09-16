@@ -83,6 +83,7 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
 ] }
 kithara-audio = { workspace = true }
+kithara-derive = { workspace = true, features = ["mirror"] }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
