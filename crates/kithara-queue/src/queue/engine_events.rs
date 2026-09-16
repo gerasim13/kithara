@@ -42,8 +42,14 @@ where
 
     fn handle_prefetch_requested(&self) {
         let Some(next) = self.next_selectable_entry() else {
+            eprintln!("DIAG prefetch no_next");
             return;
         };
+        eprintln!(
+            "DIAG prefetch next={} status={:?}",
+            next.id.as_u64(),
+            next.status
+        );
         if !matches!(next.status, TrackStatus::Consumed) {
             return;
         }
@@ -140,6 +146,7 @@ where
             return;
         }
         if self.consume_armed_advance(track.id, pos, dur) {
+            eprintln!("DIAG eof consumed_armed");
             return;
         }
         if !item.is_leading() {
@@ -169,6 +176,13 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, "ItemDidPlayToEnd received");
+        eprintln!(
+            "DIAG eof track={} pos={pos} dur={dur} leading={} paused={} current_none={}",
+            track.id.as_u64(),
+            item.is_leading(),
+            self.is_paused(),
+            self.current().is_none()
+        );
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
             return;

@@ -62,6 +62,13 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
+        eprintln!(
+            "DIAG select id={} index={index} cur={:?} playing={} has_res={} status={status:?} reason={reason:?}",
+            id.as_u64(),
+            self.player.current_index(),
+            self.player.is_playing(),
+            self.player.item_has_resource(index)
+        );
         // WHY: a natural end has already played the current entry out, whatever
         // `is_playing` still reports while the render thread cleans up. Repeat-one
         // re-selects that entry at EOF and must reload it, never skip it.
