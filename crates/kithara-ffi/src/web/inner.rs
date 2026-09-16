@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
-    queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
+    queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
 use crate::{
@@ -344,7 +344,7 @@ impl WasmInner {
         self.send(WorkerCmd::SelectQueue {
             id,
             request_id,
-            transition: Transition::from(transition),
+            transition: transition.try_into()?,
         });
         Ok(())
     }
@@ -370,7 +370,7 @@ impl WasmInner {
         &self,
         settings: FfiCrossfadeSettings,
     ) -> Result<(), FfiError> {
-        let typed: kithara_play::CrossfadeSettings = settings.try_into()?;
+        let typed: kithara::play::CrossfadeSettings = settings.try_into()?;
         self.try_send(WorkerCmd::SetCrossfade(typed))?;
         *self.crossfade_settings.lock() = settings;
         Ok(())

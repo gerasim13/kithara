@@ -2,7 +2,6 @@ use super::AudioPlayer;
 use crate::types::{FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder};
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl AudioPlayer {
     /// Advance to the next item, or do nothing at queue exhaustion.
     ///

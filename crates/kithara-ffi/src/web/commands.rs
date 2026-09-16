@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use kithara::{
-    play::SessionDuckingMode,
+    play::{CrossfadeSettings, SessionDuckingMode},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
-use kithara_play::CrossfadeSettings;
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///

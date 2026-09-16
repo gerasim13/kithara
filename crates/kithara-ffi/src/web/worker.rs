@@ -16,7 +16,7 @@ use kithara::{
         PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
-    queue::{QueueConfig, TrackId},
+    queue::{QueueConfig, TrackId, Transition},
 };
 
 use crate::{
@@ -117,7 +117,7 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(kithara_play::CrossfadeSettings {
+        let _ = queue.set_crossfade_settings(kithara::play::CrossfadeSettings {
             duration: CROSSFADE_SECONDS,
             ..Default::default()
         });
