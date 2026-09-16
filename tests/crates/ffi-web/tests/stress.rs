@@ -241,6 +241,14 @@ thread_local! {
     static STAGES: RefCell<[u64; 4]> = const { RefCell::new([0; 4]) };
 }
 
+thread_local! {
+    static STAGE_MARK: RefCell<[f64; 4]> = const { RefCell::new([0.0; 4]) };
+}
+
+thread_local! {
+    static STAGE_SPAN: RefCell<[f64; 3]> = const { RefCell::new([0.0; 3]) };
+}
+
 /// Drain the bus into per-stage counters, so a stalled seek says how far it
 /// got: a request that never reaches `SeekApplied` is stuck before the
 /// decoder, one that never reaches `OutputCommitted` is stuck after it.
@@ -255,6 +263,14 @@ fn drain_stages(rx: &mut kithara::events::EventReceiver<TestEvent>) {
                 _ => continue,
             };
             STAGES.with(|s| s.borrow_mut()[slot] += 1);
+            let now = Date::now();
+            STAGE_MARK.with(|m| {
+                let mut m = m.borrow_mut();
+                m[slot] = now;
+                if slot > 0 && m[slot - 1] > 0.0 {
+                    STAGE_SPAN.with(|d| d.borrow_mut()[slot - 1] += now - m[slot - 1]);
+                }
+            });
         }
     }
 }
@@ -271,6 +287,17 @@ fn stage_line(label: &str) {
             "STAGES"
         );
         *s = [0; 4];
+    });
+    STAGE_SPAN.with(|d| {
+        let mut d = d.borrow_mut();
+        warn!(
+            label,
+            request_to_applied_ms = d[0],
+            applied_to_decode_ms = d[1],
+            decode_to_output_ms = d[2],
+            "SPANS"
+        );
+        *d = [0.0; 3];
     });
 }
 
