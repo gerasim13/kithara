@@ -60,24 +60,13 @@ where
 /// derived equality cannot forget one. The picture is compared as well, because
 /// that answers the other question: a key that moved without changing the
 /// drawing must not cost a tessellation.
+#[derive_where::derive_where(Default)]
 pub(crate) struct Marks<Key>
 where
     Key: PartialEq,
 {
     geometry: Cache,
     kept: RefCell<CachedValue<Option<Key>, DrawList>>,
-}
-
-impl<Key> Default for Marks<Key>
-where
-    Key: PartialEq,
-{
-    fn default() -> Self {
-        Self {
-            geometry: Cache::default(),
-            kept: RefCell::default(),
-        }
-    }
 }
 
 impl<Key> Marks<Key>

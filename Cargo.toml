@@ -344,6 +344,7 @@ criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"
 delegate = "0.13"
+derive-where = "1.7"
 derive_more = { version = "2.1", features = ["deref", "display", "from", "into"] }
 
 # fast interleave/deinterleave

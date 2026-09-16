@@ -2306,6 +2306,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive-where"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e2b94854e8576378ccda7c8de8a66ed8b4e8acbd2c50ec3418ea6c8aaf4b567"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4636,6 +4647,7 @@ dependencies = [
  "bon",
  "bytes",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "kithara-audio",
@@ -5389,6 +5401,7 @@ dependencies = [
  "arc-swap",
  "bon",
  "delegate",
+ "derive-where",
  "fieldwork",
  "firewheel",
  "firewheel-web-audio",
@@ -5958,6 +5971,7 @@ dependencies = [
  "clap",
  "criterion",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "futures-lite",
