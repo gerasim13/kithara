@@ -909,7 +909,12 @@ mod tests {
         timeout_ms: u64,
     ) -> bool {
         let wait = async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
+            loop {
+                let event = match events.recv().await {
+                    Ok(Envelope { event, .. }) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return false,
+                };
                 if matches!(
                     event,
                     QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
@@ -918,7 +923,6 @@ mod tests {
                     return true;
                 }
             }
-            false
         };
         kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
             .await
