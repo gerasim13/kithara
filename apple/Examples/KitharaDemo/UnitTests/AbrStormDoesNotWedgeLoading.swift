@@ -56,6 +56,9 @@ extension IntegrationRegressionsIOS {
             facts.firstApplied == 0,
             "precondition: initial applied variant must be 0, got \(facts.applied)"
         )
+        try await waitForAbrFact("playback to start before runtime ABR changes", facts: facts) {
+            player.currentTime > 0
+        }
 
         let caps: [Double] = [96_000, 256_000, 512_000, 512_000]
         for round in 0..<10 {

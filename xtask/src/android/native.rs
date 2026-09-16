@@ -426,12 +426,13 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
         let packages = BTreeSet::from(["kithara-audio".to_owned()]);
         let extra = art_nextest_list_extra("aarch64-linux-android", &packages);
         let (flags, tail) = extra.split_at(extra.len() - 2);
+        let features = crate::android::device_features(crate::BuildProfile::Debug);
         assert_eq!(
             flags,
             [
                 "--no-default-features",
                 "--features",
-                crate::android::device_features(crate::BuildProfile::Debug),
+                features.as_str(),
                 "--tests",
                 "--target",
                 "aarch64-linux-android",

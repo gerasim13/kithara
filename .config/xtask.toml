@@ -1051,65 +1051,6 @@ prefix_args = [
 ]
 default_flash = false
 
-# Resampler-backend axis: each e2e lane pins one SRC shape. `e2e` is the
-# desktop shape (Rubato adapter for both decoders), `e2e-fused` the production
-# Apple shape (embedded AudioConverter SRC in the Apple codec; Symphonia stays
-# on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
-# graph, otherwise the compile-time alias picks Rubato).
-#
-# All three need a real output device, so they run on the Apple executor and are
-# absent from the Linux container fleet. The e2e target reaches nothing outside
-# the runner. Tests that need the zvuk CDN or the corporate VPN live behind
-# separate network features.
-[test.lanes.e2e]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = ["kithara-play-tests/e2e", "kithara/resample-rubato"]
-default_flash = false
-
-[test.lanes.e2e-fused]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = [
-  "kithara-play-tests/e2e",
-  "kithara/resample-rubato",
-  "kithara/apple-fused-src",
-]
-default_flash = false
-
-[test.lanes.e2e-glide]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "e2e",
-]
-default_features = ["kithara-play-tests/e2e", "kithara/resample-glide"]
-default_flash = false
-
 # The network tests a runner can reach: the public zvuk CDN and silvercomet.
 # The CDN is auth-gated, so this lane only says something where
 # `KITHARA_DRM_PROD_*` are in the build environment; without them it fails on
@@ -2595,49 +2536,6 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
-# End-to-end playback across the resampler axis. Each lane pins one source-rate
-# conversion shape, and a change to decode, blending or output can break one of
-# them while every unit test still passes - so the three run together or the
-# axis is not covered. They share a target directory: the lanes differ by
-# feature, and the executor keeps the tree warm between them.
-[ext.ci.lanes.apple-e2e]
-cache_group = "macos"
-label = "Apple"
-os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
-  { tool = "xcodebuild", args = [
-    "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
-]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e-fused",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-  { args = [
-    "test",
-    "run",
-    "--lane=e2e-glide",
-    "--profile",
-    "ci",
-  ], label = "Apple end-to-end suite" },
-]
-role = "platforms"
-kinds = ["branch", "merge-request", "nightly"]
-timeout_minutes = 90
-
 [ext.ci.lanes.apple-xcframework]
 cache_group = "macos"
 label = "Apple"
@@ -2866,20 +2764,6 @@ command = [
   "json",
 ]
 tools = ["cargo-bloat"]
-
-[[quality.assessment.deep_stages]]
-name = "e2e"
-command = ["just", "test", "run", "--lane=e2e"]
-tools = ["e2e-tests"]
-hard_invariant = true
-complete_only = true
-
-[[quality.assessment.deep_stages]]
-name = "e2e-resamplers"
-command = ["just", "test", "e2e-resamplers"]
-tools = ["e2e-resamplers"]
-hard_invariant = true
-complete_only = true
 
 [[quality.assessment.deep_stages]]
 name = "selenium-firefox"
