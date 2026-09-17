@@ -69,7 +69,7 @@ impl CrossfadeSettings {
                 value: self.depth,
             });
         }
-        if !self.position.is_finite() || !(0.0..1.0).contains(&self.position) {
+        if !self.position.is_finite() || self.position <= 0.0 || self.position >= 1.0 {
             return Err(PlayError::InvalidParameter {
                 name: "crossfade.position".into(),
                 value: self.position,
