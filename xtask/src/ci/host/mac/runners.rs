@@ -620,7 +620,7 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString};
 
     use super::*;
-    use crate::ci::{config::fixture, host::testing::install_double};
+    use crate::ci::{config::fixture, host::mac::testing::install_double};
 
     /// The budget has to leave the host a core. It is derived rather than
     /// written down because the two numbers drifted apart the one time they

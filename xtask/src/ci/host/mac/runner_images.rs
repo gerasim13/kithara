@@ -432,7 +432,7 @@ impl RunnerManager<'_> {
             address,
             &format!(
                 "export PATH={path}; \
-                 {shared}/kithara-tools/kithara-ci ci host --config \
+                 {shared}/kithara-tools/kithara-ci ci host mac --config \
                  {shared}/kithara-tools/mac-host.toml --pins \
                  {shared}/kithara-tools/pins.toml guest-prepare"
             ),

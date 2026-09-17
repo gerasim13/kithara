@@ -124,6 +124,7 @@ mod tests {
         let mut argv = vec![
             "xtask",
             "ci",
+            "host",
             "linux",
             "--config",
             "/etc/kithara-ci/linux-host.toml",

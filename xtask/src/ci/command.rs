@@ -8,7 +8,6 @@ use super::{
     host::HostArgs,
     image::ImageArgs,
     lane::{direct::LaneArgs, select::LanesArgs},
-    linux::LinuxArgs,
     run::RunArgs,
     verdict::VerdictArgs,
 };
@@ -25,7 +24,7 @@ enum CiCommand {
     Cache(CacheArgs),
     /// Reconcile the public GitHub and private `GitLab` repositories.
     Bridge(BridgeArgs),
-    /// Provision and maintain the dedicated CI host.
+    /// Provision and maintain a CI machine: its images, runners and agents.
     Host(HostArgs),
     /// Build the pinned container images a CI machine runs jobs in.
     Image(ImageArgs),
@@ -33,8 +32,6 @@ enum CiCommand {
     Lane(LaneArgs),
     /// Render the jobs a role runs for one pipeline kind.
     Lanes(LanesArgs),
-    /// Provision and maintain a Linux CI machine and its runners.
-    Linux(LinuxArgs),
     /// Execute one repository CI lane.
     Run(RunArgs),
     /// Record what the default branch fails, and hold a run that fails more.
@@ -48,7 +45,6 @@ pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
             | CiCommand::Bridge(_)
             | CiCommand::Host(_)
             | CiCommand::Image(_)
-            | CiCommand::Linux(_)
             | CiCommand::Verdict(_)
     )
 }
@@ -59,7 +55,6 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
         CiCommand::Bridge(args) => super::bridge::run(args),
         CiCommand::Host(args) => super::host::run(args),
         CiCommand::Image(args) => super::image::run(args),
-        CiCommand::Linux(args) => super::linux::run(args),
         CiCommand::Verdict(args) => super::verdict::run(args),
         CiCommand::Run(_) | CiCommand::Lane(_) | CiCommand::Lanes(_) => {
             bail!("repository CI lanes require a workspace")
@@ -73,7 +68,6 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         | CiCommand::Bridge(_)
         | CiCommand::Host(_)
         | CiCommand::Image(_)
-        | CiCommand::Linux(_)
         | CiCommand::Verdict(_) => run_standalone(args),
         CiCommand::Run(args) => super::run::run(args, ctx),
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),

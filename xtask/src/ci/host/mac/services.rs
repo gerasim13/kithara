@@ -279,7 +279,7 @@ impl<'a> ServiceInstaller<'a> {
         // the GUI domain the agents live in. The cleanup agent on this host
         // ran once an hour for days from an older definition while the file
         // beside it asked for every five minutes.
-        info!("maintenance agents staged; load them with `ci host activate` as the CI user");
+        info!("maintenance agents staged; load them with `ci host mac activate` as the CI user");
         Ok(())
     }
 

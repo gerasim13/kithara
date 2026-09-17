@@ -1203,7 +1203,7 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
 
     use super::*;
-    use crate::ci::{config::fixture, host::testing::install_double};
+    use crate::ci::{config::fixture, host::mac::testing::install_double};
 
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();

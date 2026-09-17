@@ -24,5 +24,5 @@ linux:image:
   timeout: 90 minutes
   needs: []
   script:
-    - just ci host build-linux-image docker/ci.Dockerfile
-    - just ci host smoke-linux
+    - just ci host mac build-linux-image docker/ci.Dockerfile
+    - just ci host mac smoke-linux

@@ -172,7 +172,7 @@ fn cleanup_unit(keep: &[&str]) -> String {
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={executable} ci linux --config {config} cleanup{keep}\n",
+         ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
         executable = LAYOUT.executable,
         config = LINUX_CONFIG_PATH,
         keep = keep
@@ -268,8 +268,8 @@ fn unit(
          RuntimeDirectory=kithara-ci\n\
          RuntimeDirectoryMode=0700\n\
          RuntimeDirectoryPreserve=yes\n\n\
-         ExecStartPre={executable} ci linux --config {config} firewall\n\
-         ExecStartPre={executable} ci linux --config {config} configure --runner {name} \
+         ExecStartPre={executable} ci host linux --config {config} firewall\n\
+         ExecStartPre={executable} ci host linux --config {config} configure --runner {name} \
          --env-file {env_file}\n",
         name = runner.name,
         config = LINUX_CONFIG_PATH,
@@ -366,7 +366,7 @@ mod tests {
         Cli,
         ci::{
             config::fixture,
-            linux::{permissions, profile::tests::host_fixture},
+            host::linux::{permissions, profile::tests::host_fixture},
         },
     };
 

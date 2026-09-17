@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn build_cache_budget_uses_the_profile_storage_root() {
-        let host = crate::ci::linux::profile::tests::host_fixture();
+        let host = crate::ci::host::linux::profile::tests::host_fixture();
         let expected: Vec<_> = std::iter::once(host.cache_root.join("lanes"))
             .chain(
                 host.runners
