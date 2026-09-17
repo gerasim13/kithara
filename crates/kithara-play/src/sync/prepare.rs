@@ -254,6 +254,152 @@ pub(super) fn align_member(
     })
 }
 
+/// The owner-axis window a waiting member may enter through.
+///
+/// `earliest` is the first frame the deck can make the member audible on, and
+/// `deadline` the last frame the entry still serves, such as the frame the
+/// outgoing track starts its fade on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EntryWindow {
+    pub(crate) earliest: SessionFrame,
+    pub(crate) deadline: SessionFrame,
+}
+
+/// Places a waiting member's first downbeat on a downbeat of the owner grid.
+///
+/// The entry takes the last owner downbeat the window closes on, so a member
+/// enters as late as the deadline allows; a window too short to hold a
+/// downbeat takes the first downbeat after it, because entering off the bar
+/// would break the phase the group exists to keep.
+pub(super) fn enter_member(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    window: EntryWindow,
+    source_cue: Option<Beat>,
+) -> Result<MemberAlignment, MapRegion> {
+    let origin = MapPosition::Asset(AssetFrame::default());
+    if member.state() != BeatGridState::Complete {
+        return Err(MapRegion::point(origin));
+    }
+    let BeatGridQuery::Resolved(first) =
+        member.beat_at_or_next(MapPoint::new(member.stamp(), origin))
+    else {
+        return Err(MapRegion::point(origin));
+    };
+    let first =
+        whole_beat(*first.value().value(), false).ok_or_else(|| MapRegion::point(origin))?;
+    let member_meter = match member.meter_at(MapPoint::new(member.stamp(), first)) {
+        BeatGridQuery::Resolved(meter) => Some(*meter.value()),
+        _ => None,
+    };
+    let member_beat = match (source_cue, member_meter) {
+        (Some(cue), _) => cue,
+        (None, Some(meter)) => {
+            next_downbeat(first, meter, false).ok_or_else(|| MapRegion::point(origin))?
+        }
+        (None, None) => first,
+    };
+    let BeatGridQuery::Resolved(position) =
+        member.position_at(MapPoint::new(member.stamp(), member_beat))
+    else {
+        return Err(MapRegion::point(origin));
+    };
+    let MapPosition::Asset(source_frame) = *position.value().value() else {
+        return Err(MapRegion::point(origin));
+    };
+    let source_frame = f64::from(source_frame)
+        .round()
+        .to_u64()
+        .ok_or_else(|| MapRegion::point(origin))?;
+    let phase = source_cue
+        .and(member_meter)
+        .map(|member_meter| (member_beat, member_meter));
+    let owner_beat = entry_beat(owner, window, member_meter, phase)?;
+    let target = MapPoint::new(owner.stamp(), owner_beat);
+    let BeatGridQuery::Resolved(position) = owner.position_at(target) else {
+        return Err(MapRegion::point(MapPosition::Session(window.deadline)));
+    };
+    let MapPosition::Session(activation) = *position.value().value() else {
+        return Err(MapRegion::point(MapPosition::Session(window.deadline)));
+    };
+    Ok(MemberAlignment {
+        alignment: BeatAlignment::new(MapPoint::new(member.stamp(), member_beat), target),
+        activation,
+        activation_beat: SessionBeat::new(f64::from(owner_beat))
+            .map_err(|_| MapRegion::point(MapPosition::Session(activation)))?,
+        source: output_source(member, owner, source_frame)
+            .ok_or_else(|| MapRegion::point(MapPosition::Session(activation)))?,
+    })
+}
+
+/// The owner downbeat a waiting member enters on.
+///
+/// A session grid publishes beats without a meter, so the bar the entry lands
+/// on is the member's bar carried onto the owner's beats. A member without a
+/// meter of its own enters on any whole beat, its every beat being a downbeat.
+fn entry_beat(
+    owner: &BeatGridSnapshot,
+    window: EntryWindow,
+    member_meter: Option<Meter>,
+    phase: Option<(Beat, Meter)>,
+) -> Result<Beat, MapRegion> {
+    let earliest = MapPosition::Session(window.earliest);
+    let BeatGridQuery::Resolved(earliest_beat) =
+        owner.beat_at(MapPoint::new(owner.stamp(), earliest))
+    else {
+        return Err(MapRegion::point(earliest));
+    };
+    let earliest_beat = whole_beat(*earliest_beat.value().value(), false)
+        .ok_or_else(|| MapRegion::point(earliest))?;
+    let meter = match owner.meter_at(MapPoint::new(owner.stamp(), earliest_beat)) {
+        BeatGridQuery::Resolved(meter) => Some(*meter.value()),
+        _ => member_meter,
+    };
+    let opening = match meter {
+        Some(meter) => phase_at_or_after(earliest_beat, meter, phase)
+            .ok_or_else(|| MapRegion::point(earliest))?,
+        None => earliest_beat,
+    };
+    let deadline = MapPosition::Session(window.deadline);
+    let BeatGridQuery::Resolved(deadline_beat) =
+        owner.beat_at(MapPoint::new(owner.stamp(), deadline))
+    else {
+        return Err(MapRegion::point(deadline));
+    };
+    let deadline_beat = f64::from(*deadline_beat.value().value()).floor();
+    let deadline_beat = Beat::new(deadline_beat).map_err(|_| MapRegion::point(deadline))?;
+    let latest = match meter {
+        Some(meter) => phase_at_or_before(deadline_beat, meter, phase)
+            .ok_or_else(|| MapRegion::point(deadline))?,
+        None => deadline_beat,
+    };
+    Ok(if f64::from(latest) < f64::from(opening) {
+        opening
+    } else {
+        latest
+    })
+}
+
+/// The first owner beat at or after `beat` carrying the entry phase.
+///
+/// An entry without a member cue lands on a downbeat; an entry that carries one
+/// keeps the cue's own bar phase, as an audible alignment does.
+fn phase_at_or_after(beat: Beat, meter: Meter, phase: Option<(Beat, Meter)>) -> Option<Beat> {
+    match phase {
+        Some((member_beat, member_meter)) => matching_phase(beat, meter, member_beat, member_meter),
+        None => next_downbeat(beat, meter, false),
+    }
+}
+
+/// The last owner beat at or before `beat` carrying the entry phase.
+fn phase_at_or_before(beat: Beat, meter: Meter, phase: Option<(Beat, Meter)>) -> Option<Beat> {
+    let forward = phase_at_or_after(beat, meter, phase)?;
+    if f64::from(forward) <= f64::from(beat) {
+        return Some(forward);
+    }
+    Beat::new(f64::from(forward) - f64::from(meter.beats_per_bar())).ok()
+}
+
 /// Acquires phase for an audible, unmapped member by a forward seek.
 ///
 /// The activation is the first owner beat preparation can reach; the cue is

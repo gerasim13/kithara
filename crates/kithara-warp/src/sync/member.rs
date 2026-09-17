@@ -12,6 +12,10 @@ use crate::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint};
 /// the group arms it. An armed member is audible and follows the owner's tempo
 /// and phase.
 ///
+/// Three owners arm a member: the deck arms the track it starts playing, the
+/// group arms the member whose prepared entry the renderer locks, and the
+/// parent group arms a nested group through [`TopologyOperation::Arm`].
+///
 /// The state belongs to the edge between a group and one member, so a nested
 /// group carries its own arm in its parent independently of how its members
 /// are armed inside it.

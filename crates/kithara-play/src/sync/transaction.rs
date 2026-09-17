@@ -1,15 +1,15 @@
 use kithara_warp::{
-    BeatGridId, BeatGridSnapshot, BeatsPerMinute, LoadGeneration, MapPosition, MapRegion,
-    SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected,
+    Beat, BeatGridId, BeatGridSnapshot, BeatsPerMinute, LoadGeneration, MapPosition, MapRegion,
+    MemberArm, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected,
     SyncStatusSnapshot, TopologyRevision, TopologyStamp, TransportRevision, WarpMapRevision,
 };
 
 use super::{
     TempoSource,
     prepare::{
-        AlignmentPolicy, FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs,
-        align_member, handoff_member,
+        AlignmentPolicy, EntryWindow, FreePreparing, MemberAlignment, PreparedDisposition,
+        PreparedSync, PreparedSyncs, align_member, enter_member, handoff_member,
     },
     topology::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
@@ -266,10 +266,13 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
             operation,
         ));
     };
-    let Some(member) = slots.members.iter_mut().find_map(|member| match member {
+    let Some(member) = slots.members.iter().find_map(|member| match member {
         SyncMember::Grid {
-            alignment, grid, ..
-        } if grid.id() == *target => Some((alignment, grid.snapshot())),
+            alignment,
+            arm,
+            grid,
+            ..
+        } if grid.id() == *target => Some((*alignment, *arm, grid.snapshot())),
         SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
     }) else {
         return Err(SyncRejected::new(
@@ -280,8 +283,16 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
             operation,
         ));
     };
-    let (alignment_slot, member_grid) = member;
-    let previous_alignment = *alignment_slot;
+    let (previous_alignment, arm, member_grid) = member;
+    if arm == MemberArm::Waiting {
+        return Err(SyncRejected::new(
+            SyncError::MemberNotArmed {
+                group_id: grid.id(),
+                member_id: *target,
+            },
+            operation,
+        ));
+    }
     let aligned = if *cause == kithara_warp::ReconcileCause::TempoRetargeted {
         handoff_member(grid, &member_grid, previous_alignment, *source)
     } else {
@@ -303,19 +314,85 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         Ok(aligned) => aligned,
         Err(required) => return deferred(grid, &mut slots, operation, required),
     };
-    let Some(warp_map) = slots.warp_map.checked_next() else {
-        return Err(SyncRejected::new(
-            SyncError::WarpMapRevisionExhausted {
+    match commit_alignment(grid, &mut slots, *target, aligned) {
+        Ok(admission) => Ok(admission),
+        Err(error) => Err(SyncRejected::new(error, operation)),
+    }
+}
+
+/// Prepares the entry of one waiting member inside the window its owner allows.
+///
+/// The deck owns the deadline: it knows the frame its audible track starts its
+/// crossfade on, and the group only places the entry on a downbeat no later
+/// than that.
+pub(super) fn prepare_entry<G: SyncGroup<NestedGroup = G>>(
+    grid: &BeatGridSnapshot,
+    mut slots: GroupSlots<'_, G>,
+    target: BeatGridId,
+    window: EntryWindow,
+    source_cue: Option<Beat>,
+) -> Result<SyncAdmission, EntryRefusal> {
+    let Some((arm, member_grid)) = slots.members.iter().find_map(|member| match member {
+        SyncMember::Grid { arm, grid, .. } if grid.id() == target => Some((*arm, grid.snapshot())),
+        SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
+    }) else {
+        return Err(SyncError::MemberNotFound {
+            group_id: grid.id(),
+            member_id: target,
+        }
+        .into());
+    };
+    if arm == MemberArm::Armed {
+        return Err(SyncError::MemberAlreadyArmed {
+            group_id: grid.id(),
+            member_id: target,
+        }
+        .into());
+    }
+    match enter_member(grid, &member_grid, window, source_cue) {
+        Ok(aligned) => Ok(commit_alignment(grid, &mut slots, target, aligned)?),
+        Err(required) => Err(EntryRefusal::Geometry(required)),
+    }
+}
+
+/// Why a waiting member could not prepare its entry.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EntryRefusal {
+    /// The group refused the member this entry named.
+    #[error(transparent)]
+    Group(#[from] SyncError),
+    /// The grid coverage the entry needs is not published yet.
+    #[error("entry needs grid coverage over {0:?}")]
+    Geometry(MapRegion),
+}
+
+/// Records one member's new alignment and the map prepared to carry it.
+fn commit_alignment<G: SyncGroup<NestedGroup = G>>(
+    grid: &BeatGridSnapshot,
+    slots: &mut GroupSlots<'_, G>,
+    target: BeatGridId,
+    aligned: MemberAlignment,
+) -> Result<SyncAdmission, SyncError> {
+    let Some(slot) = slots.members.iter().position(|member| match member {
+        SyncMember::Grid { grid, .. } => grid.id() == target,
+        SyncMember::Group { .. } => false,
+    }) else {
+        return Err(SyncError::MemberNotFound {
+            group_id: grid.id(),
+            member_id: target,
+        });
+    };
+    let warp_map =
+        slots
+            .warp_map
+            .checked_next()
+            .ok_or_else(|| SyncError::WarpMapRevisionExhausted {
                 group_id: grid.id(),
-            },
-            operation,
-        ));
-    };
-    let operation_id = match take_operation(grid.id(), slots.next_operation) {
-        Ok(operation_id) => operation_id,
-        Err(error) => return Err(SyncRejected::new(error, operation)),
-    };
-    *alignment_slot = Some(aligned.alignment);
+            })?;
+    let operation_id = take_operation(grid.id(), slots.next_operation)?;
+    if let SyncMember::Grid { alignment, .. } = &mut slots.members[slot] {
+        *alignment = Some(aligned.alignment);
+    }
     *slots.warp_map = warp_map;
     *slots.unavailable = None;
     *slots.waiting = None;
@@ -326,7 +403,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         activation: aligned.activation,
         activation_beat: aligned.activation_beat,
         source: aligned.source,
-        target: *target,
+        target,
         disposition: PreparedDisposition::Lock,
     });
     Ok(SyncAdmission::Prepared {

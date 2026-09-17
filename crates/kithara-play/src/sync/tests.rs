@@ -3,17 +3,17 @@ use std::num::NonZeroU32;
 use kithara_events::TrackId;
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridQuery,
-    BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker,
-    BeatOrdinal, BeatsPerMinute, FrameUncertainty, LoadGeneration, MapAxis, MapPoint, MapPosition,
-    MapSegment, MemberArm, Meter, MeterFacts, PresentationFrontier, RateTarget, ReconcileCause,
-    RenderContext, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
-    SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
-    TransportRevision,
+    AlignmentSource, AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGrid, BeatGridId,
+    BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable,
+    BeatMarker, BeatOrdinal, BeatsPerMinute, FrameUncertainty, LoadGeneration, MapAxis, MapPoint,
+    MapPosition, MapSegment, MemberArm, Meter, MeterFacts, PresentationFrontier, RateTarget,
+    ReconcileCause, RenderContext, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis,
+    SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError,
+    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
+    TopologyOperation, TransportRevision,
 };
 
-use super::{GroupState, host_seek};
+use super::{GroupState, host_seek, prepare::EntryWindow};
 use crate::player::PlayerMember;
 
 fn session_grid(
@@ -875,7 +875,7 @@ fn synced_deck() -> GroupState<PlayerMember> {
 fn an_attached_member_waits_until_the_group_arms_it() {
     let mut group = fixture_group();
     let track = BeatGridId::allocate().expect("invariant: track grid id is available");
-    attach_grid(&mut group, asset_grid(track, 96_000, 24_000));
+    attach_waiting_grid(&mut group, asset_grid(track, 96_000, 24_000));
     assert_eq!(member_arm(&group, track), MemberArm::Waiting);
 
     transact_topology(&mut group, TopologyOperation::Arm { member: track });
@@ -967,7 +967,15 @@ fn member_arm(group: &GroupState<PlayerMember>, target: BeatGridId) -> MemberArm
         .arm()
 }
 
+/// Attaches a grid as the member the deck plays, which the deck arms at once.
 fn attach_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
+    let member = grid.id();
+    attach_waiting_grid(group, grid);
+    group.arm_audible(member);
+}
+
+/// Attaches a grid the group has not armed, as a queued track enters waiting.
+fn attach_waiting_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
     let base = group.topology().expect("topology").stamp();
     let _ = group
         .transact(SyncOperation::Topology {
@@ -1035,6 +1043,267 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
 }
 
+/// A four-four track grid, so bar phase is observable in the entry window.
+fn four_four_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(4).expect("fixture meter is valid");
+    asset_grid_with_meter(
+        id,
+        frames,
+        beat_frames,
+        Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+    )
+}
+
+#[kithara::test]
+fn a_waiting_member_enters_on_the_last_owner_downbeat_the_deadline_allows() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    let admission = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            None,
+        )
+        .expect("a waiting member enters inside its window");
+    let prepared = group.prepared().get(track).expect("entry map");
+
+    assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+    assert_eq!(prepared.activation, SessionFrame::new(192_000));
+    assert_eq!(prepared.source, 0);
+}
+
+#[kithara::test]
+fn a_window_too_short_for_a_downbeat_enters_on_the_first_one_after_it() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    let _ = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(194_000),
+                deadline: SessionFrame::new(200_000),
+            },
+            None,
+        )
+        .expect("a short window still enters on a downbeat");
+    let prepared = group.prepared().get(track).expect("entry map");
+
+    assert_eq!(prepared.activation, SessionFrame::new(288_000));
+}
+
+#[kithara::test]
+fn a_waiting_member_has_nothing_to_reconcile() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    let (load, transport) = group.generations();
+    let refusal = group
+        .transact(SyncOperation::Reconcile {
+            target: track,
+            load,
+            transport,
+            cause: ReconcileCause::GridAvailable,
+            source: AlignmentSource::Prepared(frontier_at_zero()),
+            source_cue: None,
+        })
+        .expect_err("a waiting member is not reconciled");
+
+    let (error, _): (SyncError, SyncOperation<PlayerMember>) = refusal.into();
+    assert!(
+        matches!(error, SyncError::MemberNotArmed { member_id, .. } if member_id == track),
+        "got {error:?}"
+    );
+}
+
+#[kithara::test]
+fn the_track_the_deck_plays_without_an_entry_is_armed_at_once() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    group.arm_audible(track);
+
+    assert_eq!(member_arm(&group, track), MemberArm::Armed);
+    let _ = reconcile(&mut group, track, ReconcileCause::GridAvailable);
+}
+
+#[kithara::test]
+fn a_track_the_handover_makes_current_keeps_its_prepared_entry() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+    let _ = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            None,
+        )
+        .expect("a waiting member enters inside its window");
+    let entry = group.prepared().get(track);
+
+    group.arm_audible(track);
+
+    assert_eq!(group.prepared().get(track), entry);
+    assert_eq!(member_arm(&group, track), MemberArm::Waiting);
+}
+
+#[kithara::test]
+fn an_entry_without_reachable_geometry_spends_no_operation_identity() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let partial = BeatGridSnapshot::segments(
+        track,
+        BeatGridRevision::first(),
+        BeatGridState::Building,
+        asset_segments(480_000, 24_000, None),
+    )
+    .expect("a building grid is valid");
+    attach_waiting_grid(&mut group, partial);
+    let before = group.status();
+
+    let refusal = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            None,
+        )
+        .expect_err("a building grid carries no entry geometry");
+
+    assert!(
+        matches!(refusal, super::EntryRefusal::Geometry(_)),
+        "got {refusal:?}"
+    );
+    assert_eq!(group.status(), before);
+    assert!(group.prepared().is_empty());
+}
+
+#[kithara::test]
+fn a_waiting_member_with_a_cue_enters_on_the_cue_bar_phase() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    let _ = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            Some(Beat::new(2.0).expect("cue beat")),
+        )
+        .expect("a cued member enters inside its window");
+    let prepared = group.prepared().get(track).expect("entry map");
+
+    assert_eq!(prepared.activation, SessionFrame::new(240_000));
+    assert_eq!(prepared.source, 48_000);
+}
+
+#[kithara::test]
+fn an_entry_placed_past_a_moved_deadline_is_discarded() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+    let _ = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            None,
+        )
+        .expect("a waiting member enters inside its window");
+
+    group.discard_stale_entry(
+        track,
+        EntryWindow {
+            earliest: SessionFrame::new(0),
+            deadline: SessionFrame::new(100_000),
+        },
+    );
+
+    assert!(group.prepared().get(track).is_none());
+}
+
+#[kithara::test]
+fn entering_arms_the_member_that_reached_presentation() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+    let SyncAdmission::Prepared {
+        operation,
+        warp_map,
+        ..
+    } = group
+        .prepare_entry(
+            track,
+            EntryWindow {
+                earliest: SessionFrame::new(0),
+                deadline: SessionFrame::new(250_000),
+            },
+            None,
+        )
+        .expect("a waiting member enters inside its window")
+    else {
+        panic!("an entry prepares a map");
+    };
+    assert_eq!(member_arm(&group, track), MemberArm::Waiting);
+    let (load, transport) = group.generations();
+    let applied = SyncApplied::builder()
+        .group(group.snapshot().stamp())
+        .load(load)
+        .frontier(frontier_at_zero())
+        .operation(operation)
+        .topology(group.topology().expect("topology").stamp())
+        .transport(transport)
+        .warp_map(warp_map)
+        .build();
+
+    let status = group.acknowledge(applied).expect("acknowledged");
+
+    assert!(matches!(status, SyncStatusSnapshot::Locked { .. }));
+    assert_eq!(member_arm(&group, track), MemberArm::Armed);
+}
+
+#[kithara::test]
+fn an_armed_member_refuses_a_second_entry() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+
+    let refusal = group.prepare_entry(
+        track,
+        EntryWindow {
+            earliest: SessionFrame::new(0),
+            deadline: SessionFrame::new(250_000),
+        },
+        None,
+    );
+
+    assert!(matches!(
+        refusal,
+        Err(super::EntryRefusal::Group(
+            SyncError::MemberAlreadyArmed { member_id, .. }
+        )) if member_id == track
+    ));
+}
+
 #[kithara::test]
 fn each_member_keeps_its_own_prepared_map() {
     let mut group = synced_deck();
@@ -1043,8 +1312,8 @@ fn each_member_keeps_its_own_prepared_map() {
     attach_grid(&mut group, asset_grid(first, 480_000, 24_000));
     attach_grid(&mut group, asset_grid(second, 480_000, 36_000));
 
-    reconcile(&mut group, first, ReconcileCause::GridAvailable);
-    reconcile(&mut group, second, ReconcileCause::GridAvailable);
+    let _ = reconcile(&mut group, first, ReconcileCause::GridAvailable);
+    let _ = reconcile(&mut group, second, ReconcileCause::GridAvailable);
 
     let prepared_first = group.prepared().get(first).expect("first member's map");
     let prepared_second = group.prepared().get(second).expect("second member's map");
@@ -1082,7 +1351,7 @@ fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
     let settled_member = BeatGridId::allocate().expect("grid id");
     attach_grid(&mut group, asset_grid(prepared_member, 480_000, 24_000));
     attach_grid(&mut group, asset_grid(settled_member, 480_000, 36_000));
-    reconcile(&mut group, prepared_member, ReconcileCause::GridAvailable);
+    let _ = reconcile(&mut group, prepared_member, ReconcileCause::GridAvailable);
 
     let faster = anchor(2.5);
 

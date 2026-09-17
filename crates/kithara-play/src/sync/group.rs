@@ -6,18 +6,18 @@ mod tests;
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    AssetFrame, BeatEstimate, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
-    BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute,
+    AlignmentSource, AssetFrame, Beat, BeatEstimate, BeatGrid, BeatGridId, BeatGridQuery,
+    BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute,
     DEFAULT_TEMPO_SMOOTHING_SECONDS, LoadGeneration, MapAxis, MapPoint, MapPosition, MapRegion,
-    SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission,
+    MemberArm, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission,
     SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent, SyncMember,
     SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
     TopologyRevision, TopologyStamp, TransportRevision, WarpMapRevision,
 };
 
 use super::{
-    DeckGrid, TempoSource,
-    prepare::{FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs},
+    DeckGrid, EntryRefusal, TempoSource,
+    prepare::{self, EntryWindow, FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs},
     topology::materialize_topology,
     transaction,
 };
@@ -515,6 +515,122 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
     }
 
+    /// Marks the member whose prepared map the renderer has locked.
+    ///
+    /// Locking is what arms a member: the map it waited on is now the map the
+    /// renderer plays, so the next reconciliation follows its tempo and phase
+    /// instead of placing it on a downbeat again.
+    fn arm_member(&mut self, target: BeatGridId) {
+        for member in &mut self.members {
+            if let SyncMember::Grid { arm, grid, .. } = member
+                && grid.id() == target
+            {
+                *arm = MemberArm::Armed;
+            }
+        }
+    }
+
+    /// Drops the entry a waiting member prepared against a stale deadline.
+    ///
+    /// The deadline moves whenever another track becomes audible, and an entry
+    /// placed past the new deadline would never sound.
+    pub(crate) fn discard_stale_entry(&mut self, target: BeatGridId, window: EntryWindow) {
+        let stale = self
+            .prepared
+            .get(target)
+            .is_some_and(|prepared| prepared.activation > window.deadline);
+        if stale && self.is_waiting(target) {
+            self.prepared.remove(target);
+        }
+    }
+
+    /// Arms the member the deck has just made audible without an entry map.
+    ///
+    /// A track the deck starts playing outside a prepared entry - the first
+    /// track of a queue, or one a listener selects by hand - has no map to
+    /// lock, so the deck arms it directly. A track that holds a prepared entry
+    /// keeps it and arms when the renderer locks it, because re-arming here
+    /// would drop the map the queue handover is about to play.
+    pub(crate) fn arm_audible(&mut self, target: BeatGridId) {
+        if self.prepared.get(target).is_none() && self.is_waiting(target) {
+            self.arm_member(target);
+        }
+    }
+
+    /// Whether this group holds `target` as a member it does not yet follow.
+    fn is_waiting(&self, target: BeatGridId) -> bool {
+        self.members.iter().any(|member| {
+            matches!(member, SyncMember::Grid { arm, grid, .. }
+                if *arm == MemberArm::Waiting && grid.id() == target)
+        })
+    }
+
+    /// The window a waiting member may enter through, in owner frames.
+    ///
+    /// `audible` is the member the deck currently plays and `fade_source` the
+    /// frame of its own stream where the crossfade begins, so the deadline is
+    /// that frame carried onto the owner axis. The window opens where the
+    /// control response budget lands, because an entry the decoder cannot
+    /// reach is one the renderer drops in silence.
+    pub(crate) fn entry_window(
+        &self,
+        audible: BeatGridId,
+        fade_source: u64,
+        source: AlignmentSource,
+    ) -> Option<EntryWindow> {
+        let member = self.members.iter().find_map(|member| match member {
+            SyncMember::Grid { grid, .. } if grid.id() == audible => Some(grid.snapshot()),
+            SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
+        })?;
+        let carry = |source_frame| {
+            prepare::output_at_source(
+                source.frontier(),
+                source.playback_rate(),
+                source_frame,
+                member.axis(),
+                self.grid.axis(),
+            )
+        };
+        Some(EntryWindow {
+            earliest: carry(source.preparation_source())?,
+            deadline: carry(fade_source)?,
+        })
+    }
+
+    /// Prepares the entry of one waiting member inside `window`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the group's refusal when the member is absent, already armed,
+    /// or its geometry is not resolvable yet.
+    pub(crate) fn prepare_entry(
+        &mut self,
+        target: BeatGridId,
+        window: EntryWindow,
+        source_cue: Option<Beat>,
+    ) -> Result<SyncAdmission, EntryRefusal> {
+        transaction::prepare_entry(
+            &self.grid,
+            transaction::GroupSlots {
+                next_operation: &mut self.next_operation,
+                unavailable: &mut self.unavailable,
+                waiting: &mut self.waiting,
+                mode: &mut self.mode,
+                tempo: &mut self.tempo,
+                generations: &mut self.generations,
+                warp_map: &mut self.warp_map,
+                preparing: &mut self.preparing,
+                prepared: &mut self.prepared,
+                locked: &mut self.locked,
+                topology_revision: &mut self.topology_revision,
+                members: &mut self.members,
+            },
+            target,
+            window,
+            source_cue,
+        )
+    }
+
     /// Adopts a successor produced by [`Self::reanchored_prepared`].
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
         self.warp_map = successor.warp_map;
@@ -683,6 +799,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
             self.locked = None;
         } else {
             self.locked = Some(given);
+            self.arm_member(prepared.target);
         }
         self.prepared.remove(prepared.target);
         Ok(if prepared.disposition == PreparedDisposition::Free {

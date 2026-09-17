@@ -484,9 +484,9 @@ where
 
     fn tick(&mut self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)?;
-        self.acknowledge_prepared()
-            .map(|_| ())
-            .map_err(PlayError::from)
+        let status = self.acknowledge_prepared();
+        self.prepare_pending_entries();
+        status.map(|_| ()).map_err(PlayError::from)
     }
 }
 

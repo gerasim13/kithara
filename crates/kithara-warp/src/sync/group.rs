@@ -115,6 +115,22 @@ pub enum SyncError {
         group_id: BeatGridId,
         member_id: BeatGridId,
     },
+    /// The member already entered the group, so it cannot enter again.
+    #[error("member {member_id} in group {group_id} is already armed")]
+    MemberAlreadyArmed {
+        /// Group holding the member.
+        group_id: BeatGridId,
+        /// Member the operation named.
+        member_id: BeatGridId,
+    },
+    /// The member is still waiting to enter, so it has nothing to reconcile.
+    #[error("member {member_id} in group {group_id} is waiting to enter")]
+    MemberNotArmed {
+        /// Group holding the member.
+        group_id: BeatGridId,
+        /// Member the operation named.
+        member_id: BeatGridId,
+    },
     /// A group policy does not admit this category of direct member.
     #[error("member {member_id} in group {group_id} has kind {given:?}, expected {expected:?}")]
     InvalidMemberKind {

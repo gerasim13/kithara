@@ -40,7 +40,9 @@ where
     /// and reconciles the track onto the deck.
     ///
     /// A first publication allocates the grid identity and attaches it; a later
-    /// one replaces the member under the next revision.
+    /// one replaces the member under the next revision. A queued track the deck
+    /// does not play yet stops there and its admission is the topology change,
+    /// because only the deck's entry preparation places a waiting member.
     ///
     /// # Errors
     ///
@@ -81,7 +83,7 @@ where
         } else {
             TopologyOperation::Attach { member }
         };
-        let _ = self.transact_sync(SyncOperation::Topology {
+        let attached = self.transact_sync(SyncOperation::Topology {
             base,
             operations: Box::new([operation]),
         })?;
@@ -96,6 +98,9 @@ where
         );
         self.replan_track(item);
         self.runtime.retire_presented_source_cue(item);
+        if self.runtime.core.items.current_item_id() != Some(item) {
+            return Ok(attached);
+        }
         let prepared_launch = self.await_prepared_launch(item, &snapshot);
         self.reconcile_item_grid(item, cause, None, prepared_launch)
             .map_err(|rejected| {
@@ -108,19 +113,7 @@ where
             })
     }
 
-    pub(crate) fn reconcile_current_grid(
-        &mut self,
-        cause: ReconcileCause,
-        source: Option<AlignmentSource>,
-        prepared_launch: bool,
-    ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
-        let Some(item) = self.runtime.core.items.current_item_id() else {
-            return Ok(None);
-        };
-        self.reconcile_item_grid(item, cause, source, prepared_launch)
-    }
-
-    fn reconcile_item_grid(
+    pub(super) fn reconcile_item_grid(
         &mut self,
         item: TrackId,
         cause: ReconcileCause,
@@ -406,7 +399,7 @@ where
     }
 }
 
-fn source_cue_beat(grid: &BeatGridSnapshot, cue: AssetFrame) -> Option<Beat> {
+pub(super) fn source_cue_beat(grid: &BeatGridSnapshot, cue: AssetFrame) -> Option<Beat> {
     let point = MapPoint::new(grid.stamp(), MapPosition::Asset(cue));
     let BeatGridQuery::Resolved(beat) = grid.beat_at_or_next(point) else {
         return None;
@@ -416,7 +409,7 @@ fn source_cue_beat(grid: &BeatGridSnapshot, cue: AssetFrame) -> Option<Beat> {
 
 /// One output-frame coordinate on the grid's own axis, rounded to a whole
 /// frame because every position sync compares is a whole frame.
-fn native_frame(output_frame: u64, axis: MapAxis, output_rate: NonZeroU32) -> u64 {
+pub(super) fn native_frame(output_frame: u64, axis: MapAxis, output_rate: NonZeroU32) -> u64 {
     axis.native_frame(output_frame, output_rate)
         .round()
         .to_u64()

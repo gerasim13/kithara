@@ -12,6 +12,7 @@ pub(crate) use group::host_seek;
 pub(crate) use prepare::PreparedSync;
 pub(crate) use projection::DeckGrid;
 pub use tempo::TempoSource;
+pub(crate) use transaction::EntryRefusal;
 
 #[cfg(test)]
 mod tests;
