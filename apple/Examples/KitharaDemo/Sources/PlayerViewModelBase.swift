@@ -47,7 +47,7 @@ class PlayerViewModelBase: ObservableObject {
     @Published var currentTrackId: TrackId?
     @Published var volume: Float = 1.0
     @Published var isMuted = false
-    @Published var selectedRate: Float = 1.0
+    @Published var selectedRate: Float = PlayerViewModelBase.defaultRate
     @Published var eqGains: [Float] = []
     @Published var currentVariantLabel: String?
     @Published var discoveredVariants: [(index: UInt32, label: String)] = []
@@ -84,7 +84,8 @@ class PlayerViewModelBase: ObservableObject {
             config: KitharaPlayer.Config(
                 keyRules: rules,
                 store: AssetStore(root: defaultCacheDir),
-                crossfadeDuration: defaultCrossfadeSeconds
+                crossfadeDuration: defaultCrossfadeSeconds,
+                playingRate: defaultRate
             )
         )
     }
@@ -143,7 +144,6 @@ class PlayerViewModelBase: ObservableObject {
     init() {
         volume = player.volume
         isMuted = player.isMuted
-        player.playingRate = selectedRate
         eqGains = Array(repeating: 0, count: player.eqBandCount)
         crossfadeDuration = player.crossfadeDuration
 
@@ -289,6 +289,7 @@ class PlayerViewModelBase: ObservableObject {
     // MARK: - Rate
 
     static let availableRates: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    static let defaultRate: Float = 1.0
 
     func setRate(_ rate: Float) {
         selectedRate = rate

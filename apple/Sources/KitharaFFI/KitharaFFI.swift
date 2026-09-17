@@ -776,6 +776,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func setObserver(observer: PlayerObserver)
 
+    /**
+     * Replace the playback-rate target at runtime. The initial value
+     * belongs in
+     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
+     */
     func setPlayingRate(rate: Float)
 
     /**
@@ -1254,6 +1259,11 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 }
 }
 
+    /**
+     * Replace the playback-rate target at runtime. The initial value
+     * belongs in
+     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
+     */
 open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
@@ -4060,9 +4070,10 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  * FFI-friendly player configuration.
  *
  * Carries the player's whole initial state: every field is applied while
- * [`crate::player::AudioPlayer::new`] constructs the engine, so a caller
- * never has to follow the constructor with a setup call to reach the state
- * it wanted from the start.
+ * [`crate::player::AudioPlayer::new`] constructs the engine through the
+ * same runtime setters (`setup_hls_aes_with_rule`, `setup_network`,
+ * `set_crossfade_duration`, `set_playing_rate`), so a caller never has to follow the
+ * constructor with a setup call to reach the state it wanted from the start.
  */
 public struct FfiPlayerConfig {
     /**
@@ -4091,6 +4102,12 @@ public struct FfiPlayerConfig {
      * [`crate::player::AudioPlayer::set_crossfade_duration`].
      */
     public let crossfadeDuration: Float
+    /**
+     * Initial playback-rate target (1.0 = normal). Callers that have no
+     * opinion pass [`default_playing_rate`]; change it later through
+     * [`crate::player::AudioPlayer::set_playing_rate`].
+     */
+    public let playingRate: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4115,12 +4132,18 @@ public struct FfiPlayerConfig {
          * Initial crossfade window in seconds. Callers that have no opinion
          * pass [`default_crossfade_duration`]; change it later through
          * [`crate::player::AudioPlayer::set_crossfade_duration`].
-         */crossfadeDuration: Float) {
+         */crossfadeDuration: Float,
+        /**
+         * Initial playback-rate target (1.0 = normal). Callers that have no
+         * opinion pass [`default_playing_rate`]; change it later through
+         * [`crate::player::AudioPlayer::set_playing_rate`].
+         */playingRate: Float) {
         self.store = store
         self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
         self.authToken = authToken
         self.crossfadeDuration = crossfadeDuration
+        self.playingRate = playingRate
     }
 
 
@@ -4143,7 +4166,8 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf),
                 authToken: FfiConverterString.read(from: &buf),
-                crossfadeDuration: FfiConverterFloat.read(from: &buf)
+                crossfadeDuration: FfiConverterFloat.read(from: &buf),
+                playingRate: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -4153,6 +4177,7 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
         FfiConverterString.write(value.authToken, into: &buf)
         FfiConverterFloat.write(value.crossfadeDuration, into: &buf)
+        FfiConverterFloat.write(value.playingRate, into: &buf)
     }
 }
 
@@ -8696,6 +8721,17 @@ public func defaultCrossfadeDuration() -> Float  {
     )
 })
 }
+/**
+ * Playback rate a player starts with when the caller has no opinion.
+ * Re-exports the engine-owned [`kithara::play::DEFAULT_PLAYING_RATE`] for
+ * the same reason as [`default_crossfade_duration`].
+ */
+public func defaultPlayingRate() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_default_playing_rate($0
+    )
+})
+}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8740,6 +8776,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_default_crossfade_duration() != 51240) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_default_playing_rate() != 53814) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
@@ -8898,7 +8937,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 11047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {

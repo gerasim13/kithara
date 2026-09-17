@@ -238,10 +238,9 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
                 ),
                 authToken = readZvukAuthToken(application).orEmpty(),
                 crossfadeDuration = DEFAULT_CROSSFADE_SECONDS,
+                playingRate = _uiState.value.selectedRate,
             ),
-        ).apply {
-            playingRate = _uiState.value.selectedRate
-        }
+        )
     }
 
     private fun itemFor(trackId: String): KitharaPlayerItem? =

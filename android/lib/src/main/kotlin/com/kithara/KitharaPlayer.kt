@@ -13,6 +13,7 @@ import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
 import com.kithara.ffi.defaultCrossfadeDuration
+import com.kithara.ffi.defaultPlayingRate
 import com.kithara.ffi.drmLowercaseHexSalt
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +80,11 @@ class KitharaPlayer(config: Config = Config()) {
          * later through [crossfadeDuration].
          */
         val crossfadeDuration: Float = defaultCrossfadeDuration(),
+        /**
+         * Playback-rate target applied from construction (1.0 = normal).
+         * Replace it later through [playingRate].
+         */
+        val playingRate: Float = defaultPlayingRate(),
     )
 
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
@@ -140,7 +146,8 @@ class KitharaPlayer(config: Config = Config()) {
     /**
      * Target playback speed used by [play]. While the player is
      * playing, [rate] equals this; on pause [rate] falls to `0`.
-     * Mirrors the iOS `AudioPlayerProtocol.playingRate`.
+     * Mirrors the iOS `AudioPlayerProtocol.playingRate`. The initial
+     * value belongs in [Config.playingRate].
      */
     var playingRate: Float
         get() = inner.playingRate()
@@ -484,6 +491,7 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
         eqBandCount = eqBandCount.toUInt(),
         authToken = authToken,
         crossfadeDuration = crossfadeDuration,
+        playingRate = playingRate,
     )
 }
 

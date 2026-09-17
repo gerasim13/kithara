@@ -7,7 +7,7 @@ use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
 /// Carries the player's whole initial state: every field is applied while
 /// [`crate::player::AudioPlayer::new`] constructs the engine through the
 /// same runtime setters (`setup_hls_aes_with_rule`, `setup_network`,
-/// `set_crossfade_duration`), so a caller never has to follow the
+/// `set_crossfade_duration`, `set_playing_rate`), so a caller never has to follow the
 /// constructor with a setup call to reach the state it wanted from the start.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -28,6 +28,19 @@ pub struct FfiPlayerConfig {
     /// pass [`default_crossfade_duration`]; change it later through
     /// [`crate::player::AudioPlayer::set_crossfade_duration`].
     pub crossfade_duration: f32,
+    /// Initial playback-rate target (1.0 = normal). Callers that have no
+    /// opinion pass [`default_playing_rate`]; change it later through
+    /// [`crate::player::AudioPlayer::set_playing_rate`].
+    pub playing_rate: f32,
+}
+
+/// Playback rate a player starts with when the caller has no opinion.
+/// Re-exports the engine-owned [`kithara::play::DEFAULT_PLAYING_RATE`] for
+/// the same reason as [`default_crossfade_duration`].
+#[must_use]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn default_playing_rate() -> f32 {
+    kithara::play::DEFAULT_PLAYING_RATE
 }
 
 /// Crossfade window a player starts with when the caller has no opinion.
@@ -49,6 +62,7 @@ impl FfiPlayerConfig {
             store: Arc::new(FfiAssetStore::for_test()),
             auth_token: String::new(),
             crossfade_duration: kithara::play::DEFAULT_CROSSFADE_DURATION,
+            playing_rate: kithara::play::DEFAULT_PLAYING_RATE,
         }
     }
 }

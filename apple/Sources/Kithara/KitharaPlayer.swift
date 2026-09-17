@@ -244,7 +244,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Target playback speed used by ``play()``. Mirrors the iOS
     /// `playingRate`: while playing, ``rate`` equals
-    /// this value; on pause, ``rate`` falls to `0`.
+    /// this value; on pause, ``rate`` falls to `0`. The initial value
+    /// belongs in ``Config/playingRate``.
     public var playingRate: Float {
         get { _inner.playingRate() }
         set { _inner.setPlayingRate(rate: newValue) }
@@ -359,6 +360,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         /// Crossfade window in seconds applied from construction. Replace
         /// it later through ``KitharaPlayer/crossfadeDuration``.
         public var crossfadeDuration: Float
+        /// Playback-rate target applied from construction (1.0 = normal).
+        /// Replace it later through ``KitharaPlayer/playingRate``.
+        public var playingRate: Float
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
@@ -367,13 +371,15 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             keyRules: [KeyRule] = [],
             store: AssetStore = AssetStore(),
             authToken: String = "",
-            crossfadeDuration: Float = defaultCrossfadeDuration()
+            crossfadeDuration: Float = defaultCrossfadeDuration(),
+            playingRate: Float = defaultPlayingRate()
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.store = store
             self.authToken = authToken
             self.crossfadeDuration = crossfadeDuration
+            self.playingRate = playingRate
         }
     }
 
@@ -384,7 +390,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             keyOptions: FfiKeyOptions(rules: config.keyRules.map { $0.toFfi() }),
             eqBandCount: UInt32(config.eqBandCount),
             authToken: config.authToken,
-            crossfadeDuration: config.crossfadeDuration
+            crossfadeDuration: config.crossfadeDuration,
+            playingRate: config.playingRate
         )
         self._inner = AudioPlayer(config: ffiConfig)
 

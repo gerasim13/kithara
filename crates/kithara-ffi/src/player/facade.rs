@@ -244,6 +244,9 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
+    /// Replace the playback-rate target at runtime. The initial value
+    /// belongs in
+    /// [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
     pub fn set_playing_rate(&self, rate: f32) {
         self.inner.set_playing_rate(rate);
     }

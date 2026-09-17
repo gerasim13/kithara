@@ -175,6 +175,7 @@ impl NativeInner {
             eq_band_count,
             auth_token,
             crossfade_duration,
+            playing_rate,
         } = config;
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
@@ -224,6 +225,7 @@ impl NativeInner {
         }
         inner.setup_network(auth_token);
         inner.set_crossfade_duration(crossfade_duration);
+        inner.set_playing_rate(playing_rate);
         inner
     }
 
@@ -865,6 +867,20 @@ mod tests {
                 .map(|header| header.value().clone())
                 .as_deref(),
             Some("token-from-config")
+        );
+    }
+
+    #[kithara::test]
+    fn configured_playing_rate_applies_at_construction() {
+        let inner = NativeInner::new(FfiPlayerConfig {
+            playing_rate: 1.5,
+            ..FfiPlayerConfig::for_test()
+        });
+
+        assert!(
+            (inner.playing_rate() - 1.5).abs() < f32::EPSILON,
+            "configured playing rate must reach the engine, got {}",
+            inner.playing_rate()
         );
     }
 
