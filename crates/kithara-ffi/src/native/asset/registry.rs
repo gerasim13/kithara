@@ -17,7 +17,7 @@ pub enum FfiAssetLayoutTarget {
 
 /// Rust-owned registry of protocol-specific asset layouts.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-#[derive(derive_more::Debug)]
+#[derive(Default, derive_more::Debug)]
 pub struct FfiAssetLayoutRegistry {
     #[debug(skip)]
     inner: Mutex<AssetLayoutRegistry>,
@@ -53,14 +53,6 @@ impl FfiAssetLayoutRegistry {
             }
         };
         drop(replaced);
-    }
-}
-
-impl Default for FfiAssetLayoutRegistry {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(AssetLayoutRegistry::default()),
-        }
     }
 }
 

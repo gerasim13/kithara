@@ -53,6 +53,14 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
+[derivable_default]
+enabled = true
+severity = "deny"
+
+[derivable_serialize]
+enabled = true
+severity = "deny"
+
 [derivable_getter]
 enabled = true
 severity = "deny"

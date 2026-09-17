@@ -24,6 +24,7 @@ pub(crate) mod derivable_clone;
 pub(crate) mod derivable_control;
 pub(crate) mod derivable_control_painter;
 pub(crate) mod derivable_debug;
+pub(crate) mod derivable_default;
 pub(crate) mod derivable_delegation;
 pub(crate) mod derivable_deref;
 pub(crate) mod derivable_display;
@@ -39,6 +40,7 @@ pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
 pub(crate) mod derivable_ranged;
 pub(crate) mod derivable_retained;
+pub(crate) mod derivable_serialize;
 pub(crate) mod derivable_skin_walk;
 mod derivable_support;
 pub(crate) mod derivable_variants;
@@ -83,9 +85,11 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_control_painter::DerivableControlPainter),
         Box::new(derivable_built_default::DerivableBuiltDefault),
         Box::new(derivable_debug::DerivableDebug),
+        Box::new(derivable_default::DerivableDefault),
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_retained::DerivableRetained),
+        Box::new(derivable_serialize::DerivableSerialize),
         Box::new(derivable_skin_walk::DerivableSkinWalk),
         Box::new(derivable_patch::DerivablePatch),
         Box::new(derivable_phase::DerivablePhase),
