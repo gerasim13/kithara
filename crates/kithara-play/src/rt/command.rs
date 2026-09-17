@@ -34,7 +34,10 @@ impl PlayerNodeProcessor {
             // WHY: Slot-wide: the re-base releases the natural-end hold on every loaded track, including the ones this seek does not move.
             track.observe_seek_epoch(seek_epoch);
             match track.state() {
-                TrackState::FadingIn | TrackState::Playing => {
+                TrackState::FadingIn => {
+                    track.seek(seconds);
+                }
+                TrackState::Playing => {
                     track.seek(seconds);
                     track.play();
                 }

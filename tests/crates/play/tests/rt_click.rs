@@ -32,6 +32,13 @@ const SETTLE_BLOCKS: usize = 40;
 const MAX_STEP: f32 = 0.01;
 const EXACT: f32 = 1.0e-6;
 
+fn crossfade(duration: f32) -> kithara::play::CrossfadeSettings {
+    kithara::play::CrossfadeSettings {
+        duration,
+        ..kithara::play::CrossfadeSettings::default()
+    }
+}
+
 fn spec() -> AudioSpec {
     AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
@@ -200,7 +207,7 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
         &mut control,
         PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: crossfade(FADE_SECONDS),
         }),
     );
 
@@ -294,7 +301,7 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
         &mut control,
         PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: second_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: crossfade(FADE_SECONDS / 10.0),
         }),
     );
     let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);
