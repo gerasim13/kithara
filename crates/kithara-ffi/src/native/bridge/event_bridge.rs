@@ -909,27 +909,23 @@ mod tests {
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog]
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
-        timeout_ms: u64,
     ) -> bool {
-        let wait = async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
-                if matches!(
-                    event,
-                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
-                        if seen == id && *seen_status == status
-                ) {
-                    return true;
-                }
+        while let Ok(Envelope { event, .. }) = events.recv().await {
+            if matches!(
+                event,
+                QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                    if seen == id && *seen_status == status
+            ) {
+                return true;
             }
-            false
-        };
-        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
-            .await
-            .unwrap_or(false)
+            hang_tick!();
+        }
+        false
     }
 
     struct Discard;
@@ -986,7 +982,7 @@ mod tests {
         .expect("host setup task completes");
         let queue = owner.control().clone();
         assert!(
-            wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
+            wait_for_status(&mut events, id, TrackStatus::Loaded).await,
             "real local track must load before playback"
         );
         let selecting = queue.clone();
@@ -1021,7 +1017,7 @@ mod tests {
             host
         });
 
-        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending).await;
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let mut host = renderer.await.expect("render task completes");
