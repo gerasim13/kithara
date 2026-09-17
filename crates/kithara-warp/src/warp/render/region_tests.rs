@@ -66,7 +66,14 @@ fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
-    render_on_grid(backend, speed, plan, source, (SyncMode::HostSync, 1.0))
+    render_on_grid(
+        backend,
+        speed,
+        plan,
+        source,
+        (SyncMode::HostSync, 1.0),
+        None,
+    )
 }
 
 #[kithara::hang_watchdog]
@@ -76,6 +83,7 @@ fn render_on_grid(
     plan: Option<RegionPlan>,
     source: &[f32],
     grid: (SyncMode, f64),
+    swap: Option<(usize, RegionPlan)>,
 ) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
@@ -104,8 +112,14 @@ fn render_on_grid(
     let mut fx = warp.renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
+    let mut swap = swap;
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
+        if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at)) {
+            if let Some((_, plan)) = swap.take() {
+                warp.region_plan().install(Some(Arc::new(plan)));
+            }
+        }
         let output = fx.render(chunk(&pools, data, offset));
         fx.prepare(spec());
         if let Some(o) = output {
@@ -418,7 +432,7 @@ fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
     ] {
         let plan =
             RegionPlan::new(spec().sample_rate, vec![seg(0, frames, 2.0)]).expect("120 BPM asset");
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, (mode, bps));
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, (mode, bps), None);
         let clicks = click_positions(&mono(&output));
         assert_eq!(clicks.len(), BARS, "every source beat survives {mode:?}");
         for pair in clicks.windows(2) {
@@ -428,5 +442,113 @@ fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
                 "{mode:?}: beat interval {actual}, expected {interval}"
             );
         }
+    }
+}
+
+/// Each queue tempo reaches the Host grid: an asset declared at its own tempo
+/// renders beats at the Host beat interval scaled by `asset_bps / host_bps`,
+/// whatever the manual speed asks for.
+///
+/// The Host grid stands at `HOST_BPS`, and every case names an asset tempo the
+/// acceptance queue carries, so a rate derived from the wrong member's tempo
+/// moves the interval away from its case by more than the shared tolerance.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn host_sync_stretches_each_asset_tempo_onto_the_host_grid(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
+    const HOST_BPM: f64 = 100.0;
+    const HOST_BPS: f64 = 2.0;
+    const QUEUE_BPM: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
+
+    let frames = NOMINAL * BARS;
+    let source = warp_nominal_clicks;
+    for bpm in QUEUE_BPM {
+        let asset_bps = HOST_BPS * bpm / HOST_BPM;
+        let plan = RegionPlan::new(spec().sample_rate, vec![seg(0, frames, asset_bps)])
+            .expect("asset tempo is a valid region");
+        let output = render_on_grid(
+            backend,
+            0.5,
+            Some(plan),
+            &source,
+            (SyncMode::HostSync, HOST_BPS),
+            None,
+        );
+        let clicks = click_positions(&mono(&output));
+        assert_eq!(clicks.len(), BARS, "every source beat survives {bpm} BPM");
+        let interval = f64_of(NOMINAL) * bpm / HOST_BPM;
+        let tolerance = interval / 20.0;
+        for pair in clicks.windows(2) {
+            let actual = f64_of(pair[1] - pair[0]);
+            assert!(
+                (actual - interval).abs() <= tolerance,
+                "{bpm} BPM asset on a {HOST_BPM} BPM Host: beat interval {actual}, expected {interval}"
+            );
+        }
+    }
+}
+
+/// A renderer that takes a second plan renders the incoming tempo, not the one
+/// it held before: the beats fed after the swap keep the second plan's interval.
+///
+/// A slot outlives the item loaded into it, so the tempo of a departed item must
+/// not survive in the renderer that served it.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
+    const HOST_BPM: f64 = 100.0;
+    const HOST_BPS: f64 = 2.0;
+    const LEAVING_BPM: f64 = 124.0;
+    const ARRIVING_BPM: f64 = 140.0;
+
+    let frames = NOMINAL * BARS;
+    let source = warp_nominal_clicks;
+    let switch_at = NOMINAL * BARS / 2;
+    let plan_of = |bpm: f64| {
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![seg(0, frames, HOST_BPS * bpm / HOST_BPM)],
+        )
+        .expect("asset tempo is a valid region")
+    };
+    let output = render_on_grid(
+        backend,
+        1.0,
+        Some(plan_of(LEAVING_BPM)),
+        &source,
+        (SyncMode::HostSync, HOST_BPS),
+        Some((switch_at, plan_of(ARRIVING_BPM))),
+    );
+    let clicks = click_positions(&mono(&output));
+    assert_eq!(
+        clicks.len(),
+        BARS,
+        "every source beat survives the plan swap"
+    );
+
+    let arriving = f64_of(NOMINAL) * ARRIVING_BPM / HOST_BPM;
+    let leaving = f64_of(NOMINAL) * LEAVING_BPM / HOST_BPM;
+    let tolerance = arriving / 20.0;
+    let fed_before_swap = switch_at / NOMINAL;
+    for (index, pair) in clicks.windows(2).enumerate().skip(fed_before_swap) {
+        let actual = f64_of(pair[1] - pair[0]);
+        assert!(
+            (actual - arriving).abs() <= tolerance,
+            "beat interval {index} after the swap is {actual}, expected {arriving} \
+             (the departed {LEAVING_BPM} BPM plan renders {leaving})"
+        );
     }
 }
