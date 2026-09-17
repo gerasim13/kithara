@@ -970,7 +970,7 @@ mod tests {
         queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
         let mut events = queue.subscribe();
-        let track = assets::sine_wav_a440_10_frames()
+        let track = assets::sine_wav_a440_10000_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
         let id = queue
