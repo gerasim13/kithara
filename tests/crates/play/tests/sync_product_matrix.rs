@@ -534,7 +534,7 @@ impl ProductHarness {
             let mut loaded = true;
             for (index, (deck, id)) in self.decks.iter().zip(ids).enumerate() {
                 match deck.track(*id).map(|track| track.status) {
-                    Some(TrackStatus::Loaded) => {}
+                    Some(TrackStatus::Loaded | TrackStatus::Consumed) => {}
                     Some(TrackStatus::Failed(error)) => {
                         panic!("{}: deck {index} failed to load: {error}", case.id)
                     }

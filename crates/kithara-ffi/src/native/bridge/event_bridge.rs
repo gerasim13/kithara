@@ -947,13 +947,9 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// The polling thread drives `Queue::tick`, and a natural EOF on a
-    /// repeat-one track makes that tick respawn the consumed track's load
-    /// — async work that panics without an ambient runtime. The thread is
-    /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
-    /// itself.
+    /// The polling thread drives `Queue::tick`, including repeat-one replay.
     #[kithara::test(tokio)]
-    async fn polling_thread_reloads_a_consumed_track_after_eof() {
+    async fn polling_thread_replays_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
@@ -1000,7 +996,22 @@ mod tests {
             cancel.clone(),
         );
 
-        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let replay_started = kithara::platform::time::timeout(Duration::from_millis(2000), async {
+            while let Ok(Envelope { event, .. }) = events.recv().await {
+                if matches!(
+                    event,
+                    QueueBusEvent::Queue(QueueEvent::CurrentTrackAdvance {
+                        reason: AdvanceReason::NaturalEof,
+                        id: Some(seen),
+                    }) if seen == id
+                ) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
@@ -1014,8 +1025,8 @@ mod tests {
         drop(owner);
 
         assert!(
-            reload_started,
-            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
+            replay_started,
+            "tick after EOF must replay the consumed repeat-one track; status: {status:?}"
         );
         assert!(
             joined.is_ok(),

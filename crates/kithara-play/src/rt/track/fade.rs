@@ -74,8 +74,13 @@ impl TrackFade {
                 Direction::In => gains.1,
                 Direction::Out => gains.0,
             };
-            *out_l = in_l.mul_add(gain, *out_l);
-            *out_r = in_r.mul_add(gain, *out_r);
+            if gain == 1.0 {
+                *out_l += in_l;
+                *out_r += in_r;
+            } else if gain != 0.0 {
+                *out_l = in_l.mul_add(gain, *out_l);
+                *out_r = in_r.mul_add(gain, *out_r);
+            }
             self.frame = self.frame.saturating_add(1);
         }
         self.settled = self.frame >= self.frames;
