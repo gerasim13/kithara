@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use tracing::error;
+use tracing::{error, info};
 
 use super::{
     runners::RunnerManager,
@@ -105,7 +105,7 @@ pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
     runners.smoke_linux()?;
     runners.activate()?;
-    provision.done("mac");
+    info!(platform = "mac", "host provisioned from this commit");
     Ok(())
 }
 

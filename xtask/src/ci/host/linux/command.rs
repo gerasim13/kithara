@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use tracing::info;
 
 use super::{
     cleanup, compose, firewall,
@@ -98,7 +99,7 @@ pub(in crate::ci::host) fn provision(
         image::build_pinned(process, image, &pins)?;
     }
     provision.as_root("linux", "install-services")?;
-    provision.done("linux");
+    info!(platform = "linux", "host provisioned from this commit");
     Ok(())
 }
 

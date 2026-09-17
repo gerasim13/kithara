@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
 
 use crate::ci::process::Process;
 
@@ -49,10 +48,6 @@ impl Provision<'_> {
                      `<runner user> ALL=(root) NOPASSWD: {executable} ci host {platform} *`"
                 )
             })
-    }
-
-    pub(super) fn done(&self, platform: &str) {
-        info!(platform, "host provisioned from this commit");
     }
 }
 
