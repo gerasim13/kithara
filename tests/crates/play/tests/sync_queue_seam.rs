@@ -15,8 +15,8 @@ use kithara::{
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
     cochlea::{
-        CochleaReport, marked_synchronization_failures, synchronization_failures,
-        time_stretch_failures,
+        CochleaReport, host_beat_alignment_failures, marked_rhythm_markers,
+        marked_synchronization_failures, synchronization_failures, time_stretch_failures,
     },
     grid::segment_set,
     kithara,
@@ -50,6 +50,43 @@ impl Fixture {
     const TRACK_GRID: SyncCase =
         SyncCase::queued("track_grid", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
     const HOUSE_ANALYSIS: &str = "rhythm_expected_analysis_house_124_aligned";
+    const HOST_BPM: f64 = 100.0;
+    /// Five tracks whose authored tempos straddle the Host tempo, in
+    /// alternating direction so every seam changes the stretch ratio.
+    const FIVE_TEMPOS: &[(&str, &str, f64)] = &[
+        (Self::RHYTHM_HOUSE_124, Self::HOUSE_ANALYSIS, 124.0),
+        (
+            "rhythm_wav_downtempo_96_aligned",
+            "rhythm_expected_analysis_downtempo_96_aligned",
+            96.0,
+        ),
+        (
+            Self::RHYTHM_TECHNO_132,
+            "rhythm_expected_analysis_techno_132_aligned",
+            132.0,
+        ),
+        (
+            "rhythm_wav_trip_hop_74_aligned",
+            "rhythm_expected_analysis_trip_hop_74_aligned",
+            74.0,
+        ),
+        (
+            "rhythm_wav_breakbeat_140_aligned",
+            "rhythm_expected_analysis_breakbeat_140_aligned",
+            140.0,
+        ),
+    ];
+    const FIVE_TRACK_NAMES: &[&str] = &[
+        Self::RHYTHM_HOUSE_124,
+        "rhythm_wav_downtempo_96_aligned",
+        Self::RHYTHM_TECHNO_132,
+        "rhythm_wav_trip_hop_74_aligned",
+        "rhythm_wav_breakbeat_140_aligned",
+    ];
+    const FIVE_TRACK_QUEUE: SyncCase =
+        SyncCase::queued("five_track_queue", Self::SAMPLE_RATE, 5, Self::FADE_SECS)
+            .hold(Self::HOST_BPM)
+            .paused();
     const ANALYSIS_FINGERPRINT: &str = "rhythm-fixture:v1";
 }
 
@@ -542,4 +579,130 @@ async fn a_building_track_grid_defers_until_it_completes() {
         matches!(complete, SyncAdmission::Prepared { .. }),
         "the completed revision replaces the building one and is prepared, got {complete:?}"
     );
+}
+
+/// Every exact beat marker in `pcm[start..end]` (capture frames) lands on a
+/// Host beat of the same span, and every Host beat at least one beat inside
+/// the span carries a marker, so a track that drifts or falls silent fails.
+fn host_locked_failures(
+    harness: &ProductHarness,
+    label: &str,
+    pcm: &[f32],
+    origin: u64,
+    start: u64,
+    end: u64,
+) -> Vec<String> {
+    let channels = usize::from(Fixture::CHANNELS);
+    let at = |frame: u64| usize::try_from(frame - origin).expect("frame fits usize") * channels;
+    let host_beats = harness
+        .host_beats_in(start..end)
+        .into_iter()
+        .map(|frame| usize::try_from(frame - start).expect("beat fits usize"))
+        .collect::<Vec<_>>();
+    let slice = &pcm[at(start)..at(end)];
+    let mut failures = host_beat_alignment_failures(
+        label,
+        slice,
+        Fixture::CHANNELS,
+        Fixture::SAMPLE_RATE,
+        &host_beats,
+    );
+    let (markers, _) = marked_rhythm_markers(slice, Fixture::CHANNELS, Fixture::SAMPLE_RATE);
+    let beat = usize::try_from(bar_frames(Fixture::HOST_BPM) / 4).expect("beat fits usize");
+    let span = usize::try_from(end - start).expect("span fits usize");
+    failures.extend(
+        host_beats
+            .iter()
+            .filter(|frame| **frame >= beat && **frame + beat <= span)
+            .filter(|frame| !markers.contains(frame))
+            .map(|frame| format!("{label}: Host beat at frame {frame} carries no beat marker")),
+    );
+    failures
+}
+
+/// A synced deck playing a five-track queue in five tempos: every track, and
+/// both tracks inside every crossfade, keep the Host tempo and beat phase.
+#[kithara::test(tokio, timeout(Duration::from_secs(600)))]
+async fn a_synced_queue_holds_every_track_on_the_host_grid_through_crossfades() {
+    let case = Fixture::FIVE_TRACK_QUEUE;
+    let mut harness =
+        ProductHarness::new_for_provider(case, Provider::Rhythm(Fixture::FIVE_TRACK_NAMES), 0)
+            .await;
+    harness.request_sync(case).await;
+    for (index, (wav, analysis, _)) in Fixture::FIVE_TEMPOS.iter().enumerate() {
+        let admission = harness
+            .publish_track_grid(
+                0,
+                harness.ids[0][index],
+                asset_grid(wav, analysis),
+                BeatGridState::Complete,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("publish `{wav}` grid: {error}"));
+        assert!(
+            !matches!(admission, SyncAdmission::Unavailable { .. }),
+            "`{wav}` grid is admitted, got {admission:?}"
+        );
+    }
+    harness.play_all().await;
+    let origin = harness.rendered_frames;
+    let frames: f64 = Fixture::FIVE_TEMPOS
+        .iter()
+        .map(|(wav, _, bpm)| track_len(wav) as f64 * bpm / Fixture::HOST_BPM)
+        .sum();
+    let pcm = harness
+        .capture_frames(
+            case,
+            frames.ceil() as usize + 4 * Fixture::SAMPLE_RATE as usize,
+            harness.block_frames,
+        )
+        .await;
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+    let spans = spans(&usdt_trace::events());
+    let capture = |session: i64| {
+        u64::try_from(session - harness.session_frame(0)).expect("span on capture axis")
+    };
+    let bar = u64::try_from(bar_frames(Fixture::HOST_BPM)).expect("bar fits u64");
+    let mut failures = Vec::new();
+    let mut previous: Option<TrackSpan> = None;
+    for (index, (wav, _, bpm)) in Fixture::FIVE_TEMPOS.iter().enumerate() {
+        let span = *spans
+            .get(&harness.ids[0][index].as_u64())
+            .unwrap_or_else(|| panic!("track {index} `{wav}` never rendered"));
+        let (first, last) = (capture(span.first).max(origin), capture(span.last));
+        assert!(
+            index == 0 || capture(span.first) >= origin,
+            "track {index} `{wav}` rendered before the capture"
+        );
+        assert!(
+            first + 2 * bar < last,
+            "track {index} `{wav}` has no body between its seams"
+        );
+        let body = (first + bar, last - bar);
+        failures.extend(host_locked_failures(
+            &harness,
+            &format!("track {index} `{wav}` ({bpm} bpm) body"),
+            &pcm,
+            origin,
+            body.0,
+            body.1,
+        ));
+        if let Some(previous) = previous {
+            let (fade_start, fade_end) = (first, capture(previous.last));
+            assert!(
+                fade_start < fade_end,
+                "track {index} `{wav}` does not crossfade into its predecessor"
+            );
+            failures.extend(host_locked_failures(
+                &harness,
+                &format!("crossfade into track {index} `{wav}`"),
+                &pcm,
+                origin,
+                fade_start,
+                fade_end,
+            ));
+        }
+        previous = Some(span);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

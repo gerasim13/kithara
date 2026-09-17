@@ -216,7 +216,7 @@ impl SyncCase {
         self
     }
 
-    const fn hold(mut self, bpm: f64) -> Self {
+    pub(super) const fn hold(mut self, bpm: f64) -> Self {
         self.ride = TempoRide::Hold(bpm);
         self
     }
@@ -993,7 +993,7 @@ impl ProductHarness {
     }
 
     /// Host session frame at a captured frame.
-    fn session_frame(&self, capture: u64) -> i64 {
+    pub(super) fn session_frame(&self, capture: u64) -> i64 {
         i64::try_from(capture)
             .unwrap_or(i64::MAX)
             .saturating_add(self.session_offset)
@@ -1364,6 +1364,11 @@ impl ProductHarness {
         self.host
             .with(move |host| host.publish_track_grid(target, item, segments, state))
             .await
+    }
+
+    /// Host beats recorded inside `frames` of the capture axis.
+    pub(super) fn host_beats_in(&self, frames: std::ops::Range<u64>) -> Vec<u64> {
+        self.tap.host_beats_in(frames)
     }
 
     pub(super) fn mark(&mut self, label: &str) {
