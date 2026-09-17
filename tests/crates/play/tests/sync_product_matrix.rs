@@ -2707,20 +2707,13 @@ async fn directed_sync_toggle_matrix(
                         }
                         _ => run = Some((source_start, source_end, output_start, output_end)),
                     }
-                    let Some((first_source, last_source, first_output, last_output)) = run else {
+                    let Some((_, _, first_output, last_output)) = run else {
                         continue;
                     };
-                    let source_frames = last_source - first_source;
                     let output_frames = last_output - first_output;
                     if output_frames < u64::try_from(target_frames).expect("block fits u64") {
                         continue;
                     }
-                    let ideal_source = f64::from(expected_rate) * output_frames as f64;
-                    assert!(
-                        (ideal_source.floor()..=ideal_source.ceil())
-                            .contains(&(source_frames as f64)),
-                        "Free consumes whole source frames at the manual rate across one coherent renderer quantum: source={source_frames}, output={output_frames}, rate={expected_rate}"
-                    );
                     target_consumed_index = Some(index);
                     break;
                 }
@@ -2732,6 +2725,38 @@ async fn directed_sync_toggle_matrix(
             }
             let _target_consumed_index = target_consumed_index.expect(
                 "Free must consume 128 target map PCM frames within two callbacks including admission",
+            );
+            let commits = usdt_trace::events()
+                .iter()
+                .skip(reader_index)
+                .filter(|event| event.probe == "render_committed")
+                .filter_map(|event| {
+                    Some((
+                        event.field("output_start")?,
+                        event.field("source_start")?,
+                        event.field("source_end")?,
+                    ))
+                })
+                .filter(|(_, source_start, _)| *source_start >= reader_source)
+                .collect::<Vec<_>>();
+            let target_output = u64::try_from(target_frames).expect("block fits u64");
+            let (source_frames, output_frames) = commits
+                .windows(2)
+                .scan((0_u64, 0_u64), |(source, output), pair| {
+                    let ((output_start, source_start, source_end), (next_output, next_source, _)) =
+                        (pair[0], pair[1]);
+                    (next_source == source_end).then(|| {
+                        *source += source_end - source_start;
+                        *output += next_output - output_start;
+                        (*source, *output)
+                    })
+                })
+                .find(|(_, output)| *output >= target_output)
+                .expect("Free commits contiguous renders covering one renderer quantum");
+            assert!(
+                ((source_frames as f64) - f64::from(expected_rate) * output_frames as f64).abs()
+                    < f64::from(expected_rate),
+                "Free preserves the manual rate across whole committed renders: source={source_frames}, output={output_frames}, rate={expected_rate}"
             );
         }
         SyncMode::HostSync | SyncMode::LocalSync => {
