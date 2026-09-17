@@ -76,7 +76,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
     writeln!(yaml, "\nservices:")?;
 
     for (index, runner) in host.runners.iter().enumerate() {
-        let unit = container(host, runner, cpuset(index, runner.cpus, cores), pins);
+        let unit = container(host, runner, cpuset(index, runner.cpus, cores), pins)?;
         writeln!(
             yaml,
             "  {name}:\n    \
