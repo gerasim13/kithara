@@ -970,7 +970,7 @@ mod tests {
         queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
         let mut events = queue.subscribe();
-        let track = assets::sine_wav_a440_10000_frames()
+        let track = assets::sine_wav_a440_100_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
         let id = queue
@@ -980,11 +980,6 @@ mod tests {
             wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
             "real local track must load before playback"
         );
-        let selecting = queue.clone();
-        spawn_blocking(move || selecting.select(id, Transition::None))
-            .await
-            .expect("select task completes")
-            .expect("loaded track starts through the real queue lifecycle");
 
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
@@ -995,6 +990,12 @@ mod tests {
             Arc::new(Mutex::new(None)),
             cancel.clone(),
         );
+
+        let selecting = queue.clone();
+        spawn_blocking(move || selecting.select(id, Transition::None))
+            .await
+            .expect("select task completes")
+            .expect("loaded track starts through the real queue lifecycle");
 
         let replay_started = kithara::platform::time::timeout(Duration::from_millis(2000), async {
             while let Ok(Envelope { event, .. }) = events.recv().await {
