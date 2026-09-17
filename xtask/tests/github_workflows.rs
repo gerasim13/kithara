@@ -2263,3 +2263,34 @@ fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
         );
     }
 }
+
+/// Provisioning writes to the machine that serves the fleet, so it is never
+/// something a push starts: it is started by hand, on the machine itself, and
+/// one pass at a time.
+#[test]
+fn the_host_provisions_itself_only_when_someone_asks_it_to() {
+    let workflow = github_workflow("host.yml");
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    let triggers: BTreeSet<&str> = triggers
+        .keys()
+        .map(|key| key.as_str().expect("a trigger is named"))
+        .collect();
+    assert_eq!(triggers, BTreeSet::from(["workflow_dispatch"]));
+
+    let job = workflow_job(workflow_jobs(&workflow), "provision");
+    // A throwaway runner container holds neither the Docker daemon that keeps
+    // the images nor the systemd that owns the units.
+    assert_eq!(
+        mapping_field(job, "runs-on").as_str(),
+        Some("${{ vars.KITHARA_HOST_RUNNER_LABEL }}")
+    );
+    assert_eq!(
+        workflow_concurrency(&workflow)
+            .get("cancel-in-progress")
+            .and_then(Value::as_bool),
+        Some(false),
+        "a second pass would rebuild what the first is installing against"
+    );
+}

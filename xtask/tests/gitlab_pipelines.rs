@@ -863,3 +863,34 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
         Some(false)
     );
 }
+
+/// The same contract on the Mac mini: provisioning runs on a protected kind
+/// and only when the run asks for it. A merge-request or quarantine ref
+/// carries code no one has reviewed, and this writes to the machine every
+/// lane depends on.
+#[test]
+fn the_mac_host_provisions_itself_only_from_a_protected_ref_that_asks() {
+    let config = GitlabConfig::load(workspace_root());
+    let rules = config.definition("host:provision")["rules"]
+        .as_sequence()
+        .expect("job rules");
+    assert_eq!(
+        rules[0]["if"].as_str(),
+        Some("$KITHARA_PROVISION != \"1\""),
+        "the opt-in is what the first rule tests"
+    );
+    assert_eq!(rules[0]["when"].as_str(), Some("never"));
+
+    let kinds: BTreeSet<&str> = rules[1..]
+        .iter()
+        .filter_map(|rule| rule.get("if").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        kinds,
+        BTreeSet::from([
+            "$KITHARA_PIPELINE_KIND == \"main\"",
+            "$KITHARA_PIPELINE_KIND == \"nightly\"",
+            "$KITHARA_PIPELINE_KIND == \"release\"",
+        ])
+    );
+}

@@ -31,10 +31,38 @@ those installed copies.
 
 The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base, every tool version arrives as a build
-argument. A new tag is not deployed until this host rebuilds the image and
-reruns `configure-runners` and `activate` from a checkout of the commit carrying
-the pin. The runner never pulls this local-only tag and declares the tag it
-provisioned, which `xtask ci run` checks against the pin.
+argument. The runners name the floating tag — `kithara-ci:linux-latest` and
+its siblings — never the pin, so a pin bump cannot strand a lane on an image
+nobody built: the pin says what to build, the floating tag says what to run,
+and whatever builds an image moves the tag onto it.
+
+## Provisioning
+
+`ci host provision` is the roll-out, run on the machine it provisions and
+reading everything from the commit it runs on. The macOS host reinstalls its
+services, rewrites its runner configuration, makes sure the pinned Linux image
+is present and reloads its agents; a Linux host builds the images its profile
+asks for and installs its units. Every step is idempotent — an image that is
+already there is only retagged — so a run costs seconds when nothing moved.
+
+Neither pipeline runs it on a push. On GitLab it is `host:provision`, which
+takes `KITHARA_PROVISION=1` on a `main`, `nightly` or `release` run; on GitHub
+it is the `Host` workflow, started by hand. Provisioning writes to the machine
+every lane depends on, and a merge-request or quarantine ref carries code no
+one has reviewed yet.
+
+Three things are granted once, by hand, and nothing in a pipeline can grant
+them:
+
+- A non-ephemeral runner on the Linux host itself, labelled by
+  `KITHARA_HOST_RUNNER_LABEL`, with the Docker daemon and `systemctl` in
+  reach. The fleet's own runners are throwaway containers that have neither.
+- The steps that own root-owned files re-run this executable under `sudo -n`,
+  which never prompts. A line in `/etc/sudoers.d/kithara-ci` granting the
+  runner user that one command — and nothing else — is what lets them run;
+  the step's own failure message spells it out.
+- A Rust toolchain on the provisioning host, because the pass is this
+  executable built from the checkout.
 
 ## GitLab runners
 
