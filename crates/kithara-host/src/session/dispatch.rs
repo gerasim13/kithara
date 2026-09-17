@@ -372,7 +372,7 @@ pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -
     if let Err(err) = transport::publish_rendered_session(state) {
         return Reply::Err(err);
     }
-    transport::acknowledge_prepared_decks(state);
+    transport::advance_prepared_decks(state);
     Reply::Ok
 }
 

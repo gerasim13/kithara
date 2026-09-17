@@ -971,7 +971,7 @@ fn member_arm(group: &GroupState<PlayerMember>, target: BeatGridId) -> MemberArm
 fn attach_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
     let member = grid.id();
     attach_waiting_grid(group, grid);
-    group.arm_audible(member);
+    group.arm_deck_track(member);
 }
 
 /// Attaches a grid the group has not armed, as a queued track enters waiting.
@@ -1130,7 +1130,7 @@ fn the_track_the_deck_plays_without_an_entry_is_armed_at_once() {
     let track = BeatGridId::allocate().expect("grid id");
     attach_waiting_grid(&mut group, four_four_grid(track, 480_000, 24_000));
 
-    group.arm_audible(track);
+    group.arm_deck_track(track);
 
     assert_eq!(member_arm(&group, track), MemberArm::Armed);
     let _ = reconcile(&mut group, track, ReconcileCause::GridAvailable);
@@ -1153,7 +1153,7 @@ fn a_track_the_handover_makes_current_keeps_its_prepared_entry() {
         .expect("a waiting member enters inside its window");
     let entry = group.prepared().get(track);
 
-    group.arm_audible(track);
+    group.arm_deck_track(track);
 
     assert_eq!(group.prepared().get(track), entry);
     assert_eq!(member_arm(&group, track), MemberArm::Waiting);

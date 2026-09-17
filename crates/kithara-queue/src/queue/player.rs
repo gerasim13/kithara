@@ -82,6 +82,7 @@ where
                 state: BeatGridState,
             ) -> Result<SyncAdmission, SyncError>;
             fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
+            fn prepare_pending_entries(&mut self);
         }
     }
 

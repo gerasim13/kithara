@@ -544,14 +544,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
     }
 
-    /// Arms the member the deck has just made audible without an entry map.
+    /// Arms the member the deck holds as its own track without an entry map.
     ///
-    /// A track the deck starts playing outside a prepared entry - the first
+    /// A track the deck takes up outside a prepared entry - the first
     /// track of a queue, or one a listener selects by hand - has no map to
     /// lock, so the deck arms it directly. A track that holds a prepared entry
     /// keeps it and arms when the renderer locks it, because re-arming here
     /// would drop the map the queue handover is about to play.
-    pub(crate) fn arm_audible(&mut self, target: BeatGridId) {
+    pub(crate) fn arm_deck_track(&mut self, target: BeatGridId) {
         if self.prepared.get(target).is_none() && self.is_waiting(target) {
             self.arm_member(target);
         }

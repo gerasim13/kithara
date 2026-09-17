@@ -1,14 +1,21 @@
 use std::num::NonZeroU32;
 
-use kithara_warp::{AlignmentSource, MapAxis, ReconcileCause, SyncAdmission, SyncRejected};
+use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
+use kithara_warp::{
+    AlignmentSource, MapAxis, ReconcileCause, SyncAdmission, SyncRejected, WarpMap,
+};
 use num_traits::ToPrimitive;
+use tracing::warn;
 
 use super::PlayerImpl;
 use crate::{
     api::TrackId,
+    bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition},
     player::{
-        core::grids::{native_frame, source_cue_beat},
+        core::grids::{native_frame, source_cue_beat, source_duration},
         protocol::PlayerMember,
+        state::TrackGrid,
     },
     sync::EntryRefusal,
 };
@@ -83,12 +90,91 @@ where
                 .items
                 .initial_source_cue(item)
                 .and_then(|cue| source_cue_beat(&grid.snapshot, cue));
-            if let Err(EntryRefusal::Geometry(required)) =
-                self.sync.prepare_entry(grid.id, window, cue)
-            {
-                tracing::debug!(?required, member = %grid.id, "queued track has no entry geometry");
+            match self.sync.prepare_entry(grid.id, window, cue) {
+                Ok(_) => {
+                    if let Some(prepared) = self.sync.prepared().get(grid.id) {
+                        self.deliver_prepared_map(item, &grid, prepared, true);
+                    }
+                }
+                Err(EntryRefusal::Geometry(required)) => {
+                    tracing::debug!(?required, member = %grid.id, "queued track has no entry geometry");
+                }
+                Err(EntryRefusal::Group(error)) => {
+                    tracing::debug!(%error, member = %grid.id, "queued track refused its entry");
+                }
             }
         }
+    }
+
+    /// Carries one prepared map of `item` into the renderer.
+    ///
+    /// The track's region plan holds the map for the decoder, and the
+    /// scheduled seek carries the source frame the map activates on. A track
+    /// the deck has yet to play enters as a launch, so the renderer starts it
+    /// on its activation instead of seeking an audible stream.
+    pub(super) fn deliver_prepared_map(
+        &self,
+        item: TrackId,
+        grid: &TrackGrid,
+        prepared: crate::sync::prepare::PreparedSync,
+        launch: bool,
+    ) {
+        self.install_prepared_plan(item, grid, prepared);
+        kithara::probe_event!(
+            prepared_map_delivered,
+            item = item.as_u64(),
+            launch = u64::from(launch),
+            warp_map_revision = u64::from(prepared.warp_map),
+            activation_source = prepared.source,
+            activation_output = i64::from(prepared.activation)
+        );
+        let Some(slot) = self.runtime.slot() else {
+            return;
+        };
+        let disposition = if launch {
+            ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+                activation: prepared.activation,
+                warp_map: prepared.warp_map,
+            })
+        } else {
+            ScheduledSeekDisposition::SeekOnly {
+                activation: prepared.activation,
+            }
+        };
+        if let Err(error) = self.runtime.core.engine.schedule_track_seek(
+            slot,
+            item,
+            source_duration(
+                prepared.source,
+                self.runtime.core.engine.output_sample_rate(),
+            ),
+            disposition,
+        ) {
+            warn!(%error, %item, "prepared map has no scheduled seek");
+        }
+    }
+
+    /// Installs the track's region plan activated by `prepared`.
+    pub(super) fn install_prepared_plan(
+        &self,
+        item: TrackId,
+        grid: &TrackGrid,
+        prepared: crate::sync::prepare::PreparedSync,
+    ) {
+        let plan = grid
+            .segments
+            .region_plan()
+            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
+            .ok()
+            .map(|plan| {
+                let activation = WarpMap::identity(prepared.warp_map).reanchor(
+                    prepared.source,
+                    prepared.activation,
+                    prepared.activation_beat,
+                );
+                Arc::new(plan.with_activation(activation))
+            });
+        self.runtime.core.items.set_track_plan(item, plan);
     }
 
     pub(crate) fn reconcile_current_grid(
@@ -100,9 +186,6 @@ where
         let Some(item) = self.runtime.core.items.current_item_id() else {
             return Ok(None);
         };
-        if let Some(grid) = self.runtime.core.items.track_grid(item) {
-            self.sync.arm_audible(grid.id);
-        }
         self.reconcile_item_grid(item, cause, source, prepared_launch)
     }
 

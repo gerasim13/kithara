@@ -236,6 +236,10 @@ impl PlayerMember {
     pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
         Err(SyncError::OwnerUnavailable)
     }
+
+    /// Entry preparation needs the player runtime, which the Host-owned wasm
+    /// member does not reach.
+    pub const fn prepare_pending_entries(&mut self) {}
 }
 
 impl BeatGrid for PlayerMember {

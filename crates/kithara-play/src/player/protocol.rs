@@ -54,6 +54,13 @@ pub trait Player:
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
+    /// Prepares the entry of every queued track the deck does not play yet.
+    ///
+    /// The owner moves the session axis, so the deadline a waiting track has
+    /// to enter by moves with it: the entries are planned on the owner's pass
+    /// over its decks, beside the acknowledgement of what the deck plays.
+    fn prepare_pending_entries(&mut self);
+
     /// Records the parent's committed session anchor; a deck under
     /// `HostSync` republishes its session grid on it.
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
@@ -335,6 +342,10 @@ where
         self.make_control().close()
     }
 
+    fn prepare_pending_entries(&mut self) {
+        Self::prepare_pending_entries(self);
+    }
+
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
         Self::commit_session_anchor(self, anchor)
     }
@@ -486,9 +497,9 @@ where
 
     fn tick(&mut self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)?;
-        let status = self.acknowledge_prepared();
-        self.prepare_pending_entries();
-        status.map(|_| ()).map_err(PlayError::from)
+        Player::acknowledge_prepared(self)
+            .map(|_| ())
+            .map_err(PlayError::from)
     }
 }
 

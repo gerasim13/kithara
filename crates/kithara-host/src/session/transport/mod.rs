@@ -9,7 +9,7 @@ mod tests;
 
 pub(crate) use commit::SessionGridGeneration;
 pub(crate) use control::{
-    RouteRestartStatus, SessionTransportState, acknowledge_prepared_decks, prepare_route_restart,
+    RouteRestartStatus, SessionTransportState, advance_prepared_decks, prepare_route_restart,
     publish_rendered_session, seek, set_playing, set_tempo, snapshot,
 };
 pub use event::TransportEvent;

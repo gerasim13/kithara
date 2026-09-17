@@ -130,7 +130,8 @@ impl RenderPass {
         let mut prepared_launch_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
         let tracks = targets.tracks;
-        let prepared_ready = prepared_launch_ready(tracks, context, frames, is_playing);
+        let prepared_ready = prepared_launch_ready(tracks, context, frames);
+        let launching_from_stop = prepared_ready.is_some() && !is_playing;
         let is_playing = is_playing || prepared_ready.is_some();
         self.update_gate(is_playing, prepared_ready.is_some());
         // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
@@ -150,31 +151,18 @@ impl RenderPass {
             ch_buffer.fill(0.0);
         }
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
-        let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
-            tracks
-                .iter()
-                .map(|(idx, track)| (idx, track.state()))
-                .collect();
-        let active_tracks: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> =
-            loaded_tracks
-                .iter()
-                .enumerate()
-                .filter(|(_, (slot, state))| {
-                    state.is_playing()
-                        || prepared_ready.is_some_and(|(prepared, _)| prepared == *slot)
-                })
-                .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
-                .collect();
-        let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
-        for (loaded_idx, _, _) in &active_tracks {
-            active_slots[*loaded_idx] = true;
-        }
+        let BlockTracks {
+            loaded: loaded_tracks,
+            active: active_tracks,
+            active_slots,
+        } = BlockTracks::of(tracks, prepared_ready);
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
 
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
         {
-            if prepared_ready.is_some_and(|(slot, _)| slot != *track_handle) {
+            if launching_from_stop && prepared_ready.is_some_and(|(slot, _)| slot != *track_handle)
+            {
                 continue;
             }
             if skip_tracks[track_idx] {
@@ -201,7 +189,7 @@ impl RenderPass {
                 outcome
             };
 
-            if *was_leading && prepared_ready.is_none() {
+            if *was_leading && !launching_from_stop {
                 if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
@@ -396,26 +384,69 @@ impl RenderPass {
     }
 }
 
+/// The tracks one render block works on.
+struct BlockTracks {
+    /// Every loaded track with the state it entered the block in.
+    loaded: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]>,
+    /// The loaded tracks that sound in this block.
+    active: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]>,
+    /// Which arena slot each sounding track holds.
+    active_slots: [bool; PlayerNodeProcessor::MAX_TRACKS],
+}
+
+impl BlockTracks {
+    /// A track sounds when it already plays, and a prepared launch sounds
+    /// from the block its activation lands in.
+    fn of(
+        tracks: &TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+        prepared_ready: Option<(TrackSlot, usize)>,
+    ) -> Self {
+        let loaded: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> = tracks
+            .iter()
+            .map(|(idx, track)| (idx, track.state()))
+            .collect();
+        let active: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> = loaded
+            .iter()
+            .enumerate()
+            .filter(|(_, (slot, state))| {
+                state.is_playing() || prepared_ready.is_some_and(|(prepared, _)| prepared == *slot)
+            })
+            .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
+            .collect();
+        let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
+        for (loaded_idx, _, _) in &active {
+            active_slots[*loaded_idx] = true;
+        }
+        Self {
+            loaded,
+            active,
+            active_slots,
+        }
+    }
+}
+
+/// The launch this block starts, when one is due.
+///
+/// A queue holds one prepared launch per waiting track, so two can come due
+/// in the same block. The earliest activation - the shortest prefix of
+/// silence before it - is the one this block starts; the other stays due and
+/// starts from the block its own activation lands in.
 fn prepared_launch_ready(
     tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     context: Option<&RenderContext>,
     frames: usize,
-    is_playing: bool,
 ) -> Option<(TrackSlot, usize)> {
-    (!is_playing)
-        .then(|| {
-            context.and_then(|context| {
-                tracks.iter_mut().find_map(|(slot, track)| {
-                    match track.prepared_launch_readiness(context, frames) {
-                        PreparedLaunchReadiness::Ready { prefix_frames } => {
-                            Some((slot, prefix_frames))
-                        }
-                        PreparedLaunchReadiness::NotReady => None,
-                    }
-                })
-            })
-        })
-        .flatten()
+    context.and_then(|context| {
+        tracks
+            .iter_mut()
+            .filter_map(
+                |(slot, track)| match track.prepared_launch_readiness(context, frames) {
+                    PreparedLaunchReadiness::Ready { prefix_frames } => Some((slot, prefix_frames)),
+                    PreparedLaunchReadiness::NotReady => None,
+                },
+            )
+            .min_by_key(|(_, prefix_frames)| *prefix_frames)
+    })
 }
 
 const fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {

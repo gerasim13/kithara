@@ -118,6 +118,8 @@ impl PlayerMember {
             ///
             /// Returns the deck's acknowledgement error.
             pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
+            /// Prepares the entry of every track the deck holds but does not play.
+            pub fn prepare_pending_entries(&mut self);
         }
     }
 }

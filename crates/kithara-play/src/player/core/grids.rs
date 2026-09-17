@@ -7,7 +7,6 @@ use kithara_warp::{
     BeatGridSnapshot, BeatGridState, MapAxis, MapPoint, MapPosition, MemberArm,
     PresentationFrontier, ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError,
     SyncGroup, SyncMember, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
-    WarpMap,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -15,7 +14,7 @@ use tracing::warn;
 use super::PlayerImpl;
 use crate::{
     api::TrackId,
-    bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition, channels::ScheduledSeekReanchor},
+    bridge::{PreparedLaunchIdentity, channels::ScheduledSeekReanchor},
     player::{protocol::PlayerMember, state::TrackGrid},
 };
 
@@ -113,6 +112,12 @@ where
             })
     }
 
+    /// Reconciles the deck's own track onto the group and carries the map the
+    /// group prepares into the renderer.
+    ///
+    /// The deck owns the track it holds, so the member is armed here: only a
+    /// queued track that has yet to reach the deck enters through a prepared
+    /// entry instead.
     pub(super) fn reconcile_item_grid(
         &mut self,
         item: TrackId,
@@ -123,6 +128,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return Ok(None);
         };
+        self.sync.arm_deck_track(grid.id);
         let (load, transport) = {
             let sync = &self.sync;
             sync.generations()
@@ -185,53 +191,12 @@ where
                 activation_source = prepared.source,
                 activation_output = i64::from(prepared.activation)
             );
-            self.install_prepared_plan(item, &grid, prepared);
-
-            if let Some(slot) = self.runtime.slot() {
-                let _ = self.runtime.core.engine.schedule_track_seek(
-                    slot,
-                    item,
-                    source_duration(prepared.source, output_rate),
-                    if prepared_launch {
-                        ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
-                            activation: prepared.activation,
-                            warp_map: prepared.warp_map,
-                        })
-                    } else {
-                        ScheduledSeekDisposition::SeekOnly {
-                            activation: prepared.activation,
-                        }
-                    },
-                );
-                if prepared_source_cue {
-                    self.arm_prepared_launch_while_playing(slot, item);
-                }
+            self.deliver_prepared_map(item, &grid, prepared, prepared_launch);
+            if prepared_source_cue && let Some(slot) = self.runtime.slot() {
+                self.arm_prepared_launch_while_playing(slot, item);
             }
         }
         Ok(Some(admission))
-    }
-
-    /// Installs the track's region plan activated by `prepared`.
-    fn install_prepared_plan(
-        &self,
-        item: TrackId,
-        grid: &TrackGrid,
-        prepared: crate::sync::prepare::PreparedSync,
-    ) {
-        let plan = grid
-            .segments
-            .region_plan()
-            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-            .ok()
-            .map(|plan| {
-                let activation = WarpMap::identity(prepared.warp_map).reanchor(
-                    prepared.source,
-                    prepared.activation,
-                    prepared.activation_beat,
-                );
-                Arc::new(plan.with_activation(activation))
-            });
-        self.runtime.core.items.set_track_plan(item, plan);
     }
 
     /// Arms a scheduled prepared launch while the player is playing.
@@ -417,7 +382,10 @@ pub(super) fn native_frame(output_frame: u64, axis: MapAxis, output_rate: NonZer
 }
 
 /// The media position of output-rate `source` frames.
-fn source_duration(source: u64, output_rate: NonZeroU32) -> kithara_platform::time::Duration {
+pub(super) fn source_duration(
+    source: u64,
+    output_rate: NonZeroU32,
+) -> kithara_platform::time::Duration {
     let sample_rate = u64::from(output_rate.get());
     kithara_platform::time::Duration::from_secs(source / sample_rate)
         + kithara_platform::time::Duration::from_nanos(

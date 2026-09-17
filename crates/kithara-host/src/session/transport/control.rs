@@ -495,7 +495,7 @@ fn refresh_observation<B: AudioBackend, S>(
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
     publish_observed_session(state, observation)?;
-    acknowledge_prepared_decks(state);
+    advance_prepared_decks(state);
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
@@ -563,9 +563,15 @@ fn deliver_session_anchor<B: AudioBackend, S>(
     state.delivered_anchor = Some(anchor);
 }
 
-pub(crate) fn acknowledge_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
+/// Advances the synchronization of every deck the Host owns.
+///
+/// A deck acknowledges the map it has rendered up to and plans the entry of
+/// the tracks it holds but does not play, both against the session axis this
+/// pass leaves behind.
+pub(crate) fn advance_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
     let mut freed: Vec<BeatGridId> = Vec::new();
     for deck in state.root.nested_groups_mut() {
+        deck.prepare_pending_entries();
         match deck.acknowledge_prepared() {
             Ok(Some(kithara_warp::SyncStatusSnapshot::Off { .. })) => freed.push(deck.id()),
             Ok(Some(_)) | Ok(None) => {}
