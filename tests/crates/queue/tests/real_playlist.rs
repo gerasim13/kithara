@@ -406,7 +406,7 @@ where
         }
     })
     .await;
-    res.unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
+    res.ok().flatten()
 }
 
 /// Drive the shipped playlist (all its URLs, including DRM) end-
@@ -574,7 +574,14 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                     Duration::from_secs(20),
                 )
                 .await
-                .ok_or_else(|| "timeout on auto-advance".to_string())?;
+                .ok_or_else(|| {
+                    format!(
+                        "timeout on auto-advance from {near_end:.2}s of {dur:.2}s: current={:?}, pos={:?}, next={:?}",
+                        ctx.queue.current().map(|entry| (entry.id, entry.status)),
+                        ctx.queue.position_seconds(),
+                        ctx.queue.track(ids[i + 1]).map(|entry| entry.status),
+                    )
+                })?;
                 }
                 Ok(())
             }

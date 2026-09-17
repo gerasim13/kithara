@@ -11,6 +11,7 @@ use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
 use kithara_stream::{PlayheadState, SeekState, SourceError as StreamSourceError, StreamType};
+#[cfg(test)]
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -32,22 +33,6 @@ struct Consts;
 impl Consts {
     const DEFAULT_EXTENSION: &'static str = "bin";
     const MAX_EXTENSION_LEN: usize = 16;
-}
-
-#[derive(Default)]
-struct TmpClaimProgress {
-    last_len: Option<Option<u64>>,
-}
-
-impl TmpClaimProgress {
-    const fn observe(&mut self, len: Option<u64>) -> bool {
-        let stalled = matches!(
-            (self.last_len, len),
-            (Some(Some(previous)), Some(current)) if previous == current
-        );
-        self.last_len = Some(len);
-        stalled
-    }
 }
 
 struct RemoteFileOpen {
@@ -345,36 +330,26 @@ where
     /// `TmpClaimed` only ever names a *live* holder - a crashed-out
     /// process releases its advisory lock to the OS, and the next
     /// `AtomicChunked::open` reclaims that tmp - so this loop is
-    /// guaranteed to terminate. `#[kithara::hang_watchdog]` still covers
-    /// a live sibling that stops making progress: it keeps writing, so
-    /// the tmp grows, and only a frozen tmp counts as no-progress -
-    /// otherwise a second consumer of the same URL (e.g. waveform
-    /// analysis alongside the player) would panic on any download
-    /// longer than the watchdog timeout.
-    #[kithara::hang_watchdog]
+    /// guaranteed to terminate and carries no watchdog of its own. A
+    /// watchdog here could only read the tmp's length, and a holder that
+    /// has filled the playback buffer stops growing it while staying
+    /// perfectly alive: the disk store is that buffer, not a cache racing
+    /// to completion. Judging the holder by those bytes turned a paced
+    /// download into a reported hang. The caller's own deadline is what
+    /// bounds this wait.
     async fn create_remote_wait_for_claim(
         url: Url,
         config: FileConfig<S>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, StreamSourceError> {
         let poll_interval = config.tmp_claim_poll_interval;
-        let mut progress = TmpClaimProgress::default();
         loop {
             if cancel.is_cancelled() {
                 return Err(StreamSourceError::Cancelled);
             }
             match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
-                Ok(src) => {
-                    hang_reset!();
-                    return Ok(src);
-                }
-                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(tmp)))) => {
-                    let len = std::fs::metadata(&tmp).ok().map(|m| m.len());
-                    if progress.observe(len) {
-                        hang_tick!();
-                    } else {
-                        hang_reset!();
-                    }
+                Ok(src) => return Ok(src),
+                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
                     tokio::select! {
                         biased;
                         () = cancel.cancelled() => return Err(StreamSourceError::Cancelled),
@@ -524,12 +499,5 @@ mod tests {
 
         assert!(matches!(result, Err(StreamSourceError::Cancelled)));
         drop(holder);
-    }
-
-    #[kithara::test]
-    fn absent_first_tmp_observation_is_not_a_stall() {
-        let mut progress = TmpClaimProgress::default();
-
-        assert!(!progress.observe(None));
     }
 }

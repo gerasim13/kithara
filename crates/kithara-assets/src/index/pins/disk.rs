@@ -2,7 +2,6 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
     path::PathBuf,
     sync::{
         OnceLock,
@@ -12,50 +11,42 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_bufpool::ByteBuffer;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
-use kithara_storage::{Atomic, MmapDriver, StorageError};
+use kithara_platform::sync::{Arc, Mutex};
+use kithara_storage::StorageError;
 use rkyv::rancor::Error;
 
 use super::core::{PinCounts, PinsIndex, PinsInner};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::persistence::{init_atomic, open_existing, schema::PinsIndexFile},
+    index::persistence::{IndexFile, schema::PinsIndexFile},
 };
 
 pub(super) struct PinsPersist {
-    cancel: CancelToken,
     /// One writer at a time for `pins.bin`: the snapshot and the atomic
     /// rename that publishes it are one step.
     writing: Mutex<()>,
-    res: OnceLock<Atomic<MmapDriver>>,
-    path: PathBuf,
+    file: IndexFile,
 }
 
 impl PinsIndex {
     /// Construct a disk-backed index rooted at `path`.
     ///
-    /// If the file already exists and is non-empty, it is opened and
-    /// hydrated synchronously. Otherwise the disk file is **not**
-    /// materialised — it appears the first time [`PinsIndex::add`]
-    /// or [`PinsIndex::remove`] flush a real change.
-    pub fn with_persist_at(path: PathBuf, cancel: CancelToken, buffer: ByteBuffer) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, buffer);
+    /// An existing file is read and hydrated synchronously. Otherwise the
+    /// disk file is **not** materialised — it appears the first time
+    /// [`PinsIndex::add`] or [`PinsIndex::remove`] flush a real change.
+    #[must_use]
+    pub fn with_persist_at(path: PathBuf, mut buffer: ByteBuffer) -> Self {
+        let file = IndexFile::new(path);
+        let initial = read_pins(&file, &mut buffer).unwrap_or_else(|e| {
+            tracing::debug!("read existing pins.bin failed: {e}");
+            DashMap::new()
+        });
         Self {
             inner: Arc::new(PinsInner {
                 pins: initial,
                 persist: Some(PinsPersist {
-                    path,
-                    cancel,
                     writing: Mutex::new(()),
-                    res: opened.map_or_else(OnceLock::new, |a| {
-                        let cell = OnceLock::new();
-                        cell.set(a)
-                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
-                        cell
-                    }),
+                    file,
                 }),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
@@ -81,32 +72,9 @@ impl PinsInner {
         };
         let _writing = persist.writing.lock();
         let snapshot = self.durable_roots();
-        let atomic = init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_pins(atomic, &snapshot, durable)?;
+        write_pins(&persist.file, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
-    }
-}
-
-fn hydrate_existing(
-    path: &std::path::Path,
-    cancel: &CancelToken,
-    mut buffer: ByteBuffer,
-) -> (DashMap<String, PinCounts>, Option<Atomic<MmapDriver>>) {
-    let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
-    if !nonempty {
-        return (DashMap::new(), None);
-    }
-    match open_existing(path, cancel) {
-        Ok(res) => {
-            let atomic = Atomic::new(res);
-            let initial = read_pins(&atomic, &mut buffer).unwrap_or_default();
-            (initial, Some(atomic))
-        }
-        Err(e) => {
-            tracing::debug!("open existing pins.bin failed: {e}");
-            (DashMap::new(), None)
-        }
     }
 }
 
@@ -119,35 +87,19 @@ const fn hydrated_counts() -> PinCounts {
     }
 }
 
-fn read_pins(
-    res: &Atomic<MmapDriver>,
-    buf: &mut ByteBuffer,
-) -> AssetsResult<DashMap<String, PinCounts>> {
-    let Some(len) = res.len() else {
-        buf.clear();
-        return Ok(DashMap::new());
-    };
-    let len = usize::try_from(len).map_err(|error| {
-        AssetsError::Storage(StorageError::Failed(format!(
-            "pins index len does not fit usize: {error}"
-        )))
-    })?;
-    buf.ensure_len(len)?;
-    let n = res.read_at(0, &mut buf[..len])?;
-    buf.truncate(n);
-
-    if n == 0 {
+fn read_pins(file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<DashMap<String, PinCounts>> {
+    file.read_into(buf)?;
+    if buf.is_empty() {
         return Ok(DashMap::new());
     }
 
-    let archived =
-        match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, Error>(&buf[..n]) {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::debug!("Failed to validate pins index: {}", e);
-                return Ok(DashMap::new());
-            }
-        };
+    let archived = match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, Error>(buf) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::debug!("Failed to validate pins index: {}", e);
+            return Ok(DashMap::new());
+        }
+    };
 
     let pinned = archived
         .pinned
@@ -158,22 +110,17 @@ fn read_pins(
     Ok(pinned)
 }
 
-fn write_pins(res: &Atomic<MmapDriver>, pins: &[String], durable: bool) -> AssetsResult<()> {
+fn write_pins(file: &IndexFile, pins: &[String], durable: bool) -> AssetsResult<()> {
     let mut map = BTreeMap::new();
     for pin in pins {
         map.insert(pin.clone(), true);
     }
-    let file = PinsIndexFile {
+    let index = PinsIndexFile {
         version: 1,
         pinned: map,
     };
 
-    let bytes = rkyv::to_bytes::<Error>(&file)
+    let bytes = rkyv::to_bytes::<Error>(&index)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    if durable {
-        res.write_all_durable(&bytes)?;
-    } else {
-        res.write_all(&bytes)?;
-    }
-    Ok(())
+    file.write(&bytes, durable)
 }

@@ -45,24 +45,6 @@ impl<D: DriverIo> Atomic<D> {
     /// # Errors
     /// Propagates filesystem errors and the inner commit error.
     pub fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        self.write_all_inner(data, false)
-    }
-
-    /// Write the whole payload atomically AND durably: like [`Atomic::write_all`]
-    /// but also `sync_data`s the temp file before the atomic rename. Returns
-    /// only after the bytes are physically on disk.
-    ///
-    /// For memory-backed inners (no filesystem path) durability is meaningless;
-    /// the call falls back to the same passthrough as `write_all`.
-    ///
-    /// # Errors
-    /// Propagates filesystem errors from temp creation, write, `sync_data`,
-    /// rename, or the inner's post-rename commit.
-    pub fn write_all_durable(&self, data: &[u8]) -> StorageResult<()> {
-        self.write_all_inner(data, true)
-    }
-
-    fn write_all_inner(&self, data: &[u8], durable: bool) -> StorageResult<()> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.inner.path() {
             let path = path.to_path_buf();
@@ -78,11 +60,8 @@ impl<D: DriverIo> Atomic<D> {
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-            if durable {
-                tmp.as_file()
-                    .sync_data()
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic sync_data: {e}")))?;
-            }
+            // WHY: The inner still maps the canonical path, and Windows refuses to replace a mapped file; the commit below reopens it.
+            self.inner.release_backing_in_place()?;
 
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
@@ -90,7 +69,6 @@ impl<D: DriverIo> Atomic<D> {
             return self.inner.commit_in_place(Some(data.len() as u64));
         }
 
-        let _ = durable;
         self.inner.reactivate_in_place()?;
         self.inner.write_at(0, data)?;
         self.inner.commit_in_place(Some(data.len() as u64))

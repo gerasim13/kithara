@@ -13,7 +13,7 @@ use arc_swap::ArcSwap;
 use fs4::{FileExt, TryLockError};
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use crate::{
@@ -153,6 +153,11 @@ pub struct AtomicChunked<D: DriverIo> {
     /// successful `commit`. `Drop` / `fail` use a still-set value to remove
     /// the orphaned temp file. Dropping the claim releases its lock.
     claim: Mutex<Option<TmpClaim>>,
+    /// Held shared by every read that mints a view and uses it, and exclusively
+    /// by `commit` from releasing the inner's mapping until the reopened inner
+    /// is in place — so no read lands on a released inner. Blocking waits stay
+    /// outside it: the commit they wait for needs it exclusively.
+    handover: RwLock<()>,
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
@@ -202,6 +207,10 @@ impl<D: DriverIo> AtomicChunked<D> {
         // WHY: Sealing skips the driver's snapshot: it would map the temp file that the rename below retires. The claim's own handle then
         // trims the surplus reservation and forces the bytes down, so the canonical path can only ever appear fully durable.
         self.inner.load().seal_in_place(final_len)?;
+        let _handover = self.handover.write();
+        // WHY: The seal leaves the inner mapping on the temp file alive, and Windows refuses to resize or rename a mapped file, so the
+        // handle goes before the bytes move. The factory below reopens on the canonical path.
+        self.inner.load().release_backing_in_place()?;
 
         if let Some(len) = final_len
             && file.metadata().is_ok_and(|m| m.len() > len)
@@ -231,7 +240,7 @@ impl<D: DriverIo> AtomicChunked<D> {
 
     /// Whether the given range is fully covered by available data.
     pub fn contains_range(&self, range: Range<u64>) -> bool {
-        self.read_view().contains_range(range)
+        self.read_settled(|view| view.contains_range(range))
     }
 
     /// Mark the resource failed and remove the orphaned temp file.
@@ -245,7 +254,7 @@ impl<D: DriverIo> AtomicChunked<D> {
 
     /// First gap in available data starting at `from`, up to `limit`.
     pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.read_view().next_gap(from, limit)
+        self.read_settled(|view| view.next_gap(from, limit))
     }
 
     /// Open a fresh chunked-atomic resource at `canonical_path`.
@@ -310,6 +319,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             canonical_path,
             inner: ArcSwap::from_pointee(inner),
             claim: Mutex::new(Some(claim)),
+            handover: RwLock::default(),
             factory: Some(Box::new(factory)),
         })
     }
@@ -324,6 +334,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             canonical_path,
             inner: ArcSwap::from_pointee(inner),
             claim: Mutex::default(),
+            handover: RwLock::default(),
             factory: None,
             barrier: Barrier::Inline,
         }
@@ -339,7 +350,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.read_view().read_at(offset, buf)
+        self.read_settled(|view| view.read_at(offset, buf))
     }
 
     /// Read the writer's own in-flight bytes from the active working storage,
@@ -350,7 +361,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.read_view().read_inflight_at(offset, buf)
+        self.read_settled(|view| view.read_inflight_at(offset, buf))
     }
 
     /// Read the entire resource into a caller buffer; returns bytes read.
@@ -358,7 +369,24 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        self.read_view().read_into(buf)
+        self.read_settled(|view| view.read_into(buf))
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.read_settled(ResourceRead::len)
+    }
+
+    /// Current runtime status.
+    pub fn status(&self) -> ResourceStatus {
+        self.read_settled(ResourceRead::status)
+    }
+
+    /// Run a non-blocking read against a view that no commit is retiring.
+    fn read_settled<R>(&self, read: impl FnOnce(&ResourceReader<D>) -> R) -> R {
+        let _handover = self.handover.read();
+        read(&self.read_view())
     }
 
     /// Wait until the given byte range is available.
@@ -391,15 +419,6 @@ impl<D: DriverIo> AtomicChunked<D> {
             #[expr($ == Some(0))]
             #[call(len)]
             pub fn is_empty(&self) -> bool;
-            /// Committed length, if known.
-            #[must_use]
-            #[expr($.len())]
-            #[call(read_view)]
-            pub fn len(&self) -> Option<u64>;
-            /// Current runtime status.
-            #[expr($.status())]
-            #[call(read_view)]
-            pub fn status(&self) -> ResourceStatus;
         }
         to self.inner.load() {
             /// Reactivate the inner for continued writing.

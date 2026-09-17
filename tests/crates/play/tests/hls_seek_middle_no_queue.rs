@@ -114,7 +114,7 @@ async fn render_until_gate_requested(
     const BATCH: u32 = 16;
     for _ in 0..Consts::GATE_REQUEST_TICKS {
         for _ in 0..BATCH {
-            let _ = player.render(Consts::BLOCK_FRAMES);
+            player.render(Consts::BLOCK_FRAMES).await;
         }
         let position = player.position();
         assert!(
