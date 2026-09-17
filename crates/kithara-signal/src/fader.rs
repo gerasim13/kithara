@@ -1,4 +1,5 @@
 use kithara_derive::Ranged;
+use serde as _;
 
 /// A normalized fader coordinate, distinct from linear signal amplitude.
 #[derive(Clone, Copy, Debug, PartialEq, Ranged)]

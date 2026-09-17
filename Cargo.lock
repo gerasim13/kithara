@@ -4646,7 +4646,6 @@ name = "kithara-assets-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "bytes",
- "derive_more",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-dylib",

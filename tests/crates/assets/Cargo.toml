@@ -27,7 +27,6 @@ kithara-test-dylib = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 bytes = { workspace = true }
-derive_more = { workspace = true }
 rkyv = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
