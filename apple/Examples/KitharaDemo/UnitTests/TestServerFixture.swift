@@ -37,6 +37,17 @@ enum TestServerFixture {
         }
     }
 
+    /// How an MP3 fixture records its own playback length. Mirrors the
+    /// server's `Mp3Shape`.
+    enum Mp3Shape: String, Encodable, Sendable {
+        /// The asset exactly as encoded: a leading Xing/Info frame carries the
+        /// frame count. Also the only shape a non-MP3 asset has.
+        case tagged
+        /// The same audio with that frame dropped, so the stream's byte length
+        /// is the only record of its duration.
+        case headerless
+    }
+
     enum Content: Encodable, Sendable {
         case htmlError
         case status(code: UInt16)
@@ -46,9 +57,9 @@ enum TestServerFixture {
         /// multi-megabyte body is rejected by the request-body limit.
         case asset(name: String)
         /// Serve one body the fixture generator produces, named the way
-        /// ``signal(_:)`` names it. Generated bodies have no path under
-        /// `assets/`, so they need their own case.
-        case signal(name: String)
+        /// ``signal(_:)`` names it, in `shape`. Generated bodies have no path
+        /// under `assets/`, so they need their own case.
+        case signal(name: String, shape: Mp3Shape)
 
         private enum CodingKeys: String, CodingKey {
             case kind
@@ -56,6 +67,7 @@ enum TestServerFixture {
             case base64
             case contentType = "content_type"
             case name
+            case shape
         }
 
         func encode(to encoder: Encoder) throws {
@@ -73,9 +85,10 @@ enum TestServerFixture {
             case let .asset(name):
                 try container.encode("asset", forKey: .kind)
                 try container.encode(name, forKey: .name)
-            case let .signal(name):
+            case let .signal(name, shape):
                 try container.encode("signal", forKey: .kind)
                 try container.encode(name, forKey: .name)
+                try container.encode(shape, forKey: .shape)
             }
         }
     }
@@ -164,6 +177,21 @@ enum TestServerFixture {
     /// URL of one generated body, named `{accessor}.{ext}`.
     static func signal(_ name: String) throws -> URL {
         try url("signal/\(name.trimmingCharacters(in: CharacterSet(charactersIn: "/")))")
+    }
+
+    /// The generated body `name` served in `shape`, over a range-capable route.
+    ///
+    /// `tagged` keeps the plain `/signal/*` URL so existing traps are
+    /// unchanged; any other shape needs the server to reshape the bytes, which
+    /// only a registered behavior can do.
+    static func signal(_ name: String, shape: Mp3Shape) async throws -> URL {
+        guard shape != .tagged else {
+            return try signal(name)
+        }
+        let handle = try await registerBehavior(
+            .init(content: .signal(name: name, shape: shape), delivery: .range)
+        )
+        return handle.childURL(name)
     }
 
     static func streamHQ(_ name: String) throws -> URL {
