@@ -333,6 +333,12 @@ impl SlotControl {
         );
     }
 
+    /// Withdraws every prepared launch of `item_id` and tells the renderer.
+    ///
+    /// `SlotControl` is reached only while the engine holds its slots mutex,
+    /// which also serializes every producer for this command ring, so the
+    /// carrier is reserved before the replacement epoch begins: a decoder
+    /// promise never escapes without its RT command.
     pub(crate) fn cancel_prepared_launches(&mut self, item_id: TrackId, resume: bool) -> bool {
         let Some(PreparedLaunchHandoff { seek_epoch, .. }) = self
             .prepared_launch_epochs
@@ -344,10 +350,6 @@ impl SlotControl {
                 .retain(|seek| seek.item_id != item_id || !seek.disposition.is_prepared_launch());
             return true;
         };
-        // `SlotControl` is accessed only while the engine holds its slots mutex,
-        // which also serializes every producer for this command ring. Reserve the
-        // carrier before beginning replacement epoch so a decoder promise never
-        // escapes without its RT command.
         if self.cmd_tx.vacant_len() == 0 {
             return false;
         }

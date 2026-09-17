@@ -410,6 +410,12 @@ impl<S> AudioControl for Audio<S> {
         }
     }
 
+    /// Raises the render revision floor the callback presents from.
+    ///
+    /// A replacement epoch becomes presentable only once the producer has
+    /// staged its configured preload for that epoch: presenting on the frames
+    /// one block happens to need discards the accumulated scratch and leaves
+    /// the following callbacks starving.
     fn set_render_revision_floor(
         &mut self,
         revision: u64,
@@ -426,10 +432,6 @@ impl<S> AudioControl for Audio<S> {
             &mut self.cursor,
             recv_ctx(&self.session, &self.runtime),
         );
-        // A replacement epoch becomes presentable only once the producer has
-        // staged its configured preload for that epoch. Presenting on the
-        // frames one block happens to need discards the accumulated scratch
-        // and leaves the following callbacks starving.
         match (status, replacement_epoch) {
             (RevisionFloorStatus::ReadyForSeekPresentation, Some(epoch))
                 if !self.session.preload_gate.is_ready_for_epoch(epoch) =>

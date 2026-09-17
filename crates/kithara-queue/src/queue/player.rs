@@ -89,10 +89,7 @@ where
         let _admission = self.control.lock_admission();
         self.control.ensure_open()?;
         self.player.tick()?;
-        self.control.player.process_notifications();
-        self.control.drain_player_events();
-        self.control.update_cached_position();
-        self.control.maybe_arm_crossfade();
+        self.control.observe_player_tick();
         Ok(())
     }
 }

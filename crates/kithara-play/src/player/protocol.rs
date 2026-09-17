@@ -170,6 +170,11 @@ where
         SyncGroup::status(&self.sync)
     }
 
+    /// Applies one synchronization operation to this deck's group.
+    ///
+    /// Enabling sync commits the mode even when reconciliation must wait for a
+    /// grid, so the selected cue is retained before public play can release
+    /// ordinary PCM.
     fn transact(
         &mut self,
         operation: SyncOperation<PlayerMember>,
@@ -272,9 +277,6 @@ where
         if free && matches!(admission, SyncAdmission::Preparing { .. }) {
             self.prepare_free_handoff();
         }
-        // The mode transition has committed even when reconciliation must wait
-        // for a grid, so retain the selected cue before public play can release
-        // ordinary PCM.
         if sync_enable
             && self.sync.mode() == SyncMode::HostSync
             && let Some(item) = self.runtime.core.items.current_item_id()

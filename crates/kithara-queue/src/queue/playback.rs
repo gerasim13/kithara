@@ -201,11 +201,16 @@ where
 
     fn tick_player_inner(&self) -> Result<(), PlayError> {
         self.player.tick()?;
+        self.observe_player_tick();
+        Ok(())
+    }
+
+    /// Folds what one player tick published into the queue's view.
+    pub(super) fn observe_player_tick(&self) {
         self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
         self.maybe_arm_crossfade();
-        Ok(())
     }
 
     pub(super) fn update_cached_position(&self) {

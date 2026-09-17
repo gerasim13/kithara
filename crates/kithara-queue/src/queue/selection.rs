@@ -26,8 +26,7 @@ where
         index: usize,
         transition: SelectTransition,
     ) -> Result<(), QueueError> {
-        let source_cue = matches!(self.cue_in, crate::CueIn::TrackStart)
-            .then(|| AssetFrame::new(0.0).expect("asset start is valid"));
+        let source_cue = matches!(self.cue_in, crate::CueIn::TrackStart).then(AssetFrame::default);
         self.player
             .select_item_with_crossfade_from_source_cue(index, transition, source_cue)
             .map_err(QueueError::from)

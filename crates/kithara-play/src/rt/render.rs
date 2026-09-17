@@ -113,6 +113,11 @@ impl RenderPass {
         self.render_tracks(context.as_ref(), targets, buffers, frames, is_playing)
     }
 
+    /// Renders every active track into `buffers`.
+    ///
+    /// Only a prepared launch may promote the shared playback state: ordinary
+    /// tracks still render while the pause gate drains its fade-out, and that
+    /// must not turn a pause back into playback.
     fn render_tracks(
         &mut self,
         context: Option<&RenderContext>,
@@ -122,9 +127,6 @@ impl RenderPass {
         is_playing: bool,
     ) -> (bool, bool, Option<(f64, f64)>) {
         let mut outputs_modified = false;
-        // Only a prepared launch is allowed to promote the shared playback
-        // state. Ordinary tracks may still render while the pause gate drains
-        // its fade-out, but that must not turn a pause back into playback.
         let mut prepared_launch_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
         let tracks = targets.tracks;
@@ -322,7 +324,9 @@ impl RenderPass {
     /// permanent phase offset instead of cancelling. The mean also makes the
     /// advance independent of how the callback partitions its frames.
     /// An empty block advances neither the smoother nor the source, so it
-    /// carries the standing target rather than a mean over no values.
+    /// carries the standing target rather than a mean over no values. Both
+    /// conversions are total for a non-empty block: the divisor is a frame
+    /// count and the quotient is finite.
     fn block_multiplier(rate: &mut SmoothedParam, frames: usize) -> f32 {
         let mut value = rate.target_value();
         let Some(frames) = NonZeroUsize::new(frames) else {
@@ -333,9 +337,6 @@ impl RenderPass {
             value = rate.next_smoothed();
             sum += f64::from(value);
         }
-        // Both conversions are total for a non-empty block: the divisor is a
-        // frame count and the quotient is finite. `to_f32` names the narrowing
-        // the multiplier travels in; it is not error handling.
         let count = frames.get().to_f64().unwrap_or(f64::INFINITY);
         (sum / count).to_f32().unwrap_or(value)
     }
