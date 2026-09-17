@@ -881,8 +881,12 @@ impl WasmPlayerSelenium {
             return Ok(());
         }
 
+        // A window that saw no motion is the one report that has to say why:
+        // the snapshots alone cannot tell a stalled render apart from a stalled
+        // download, and the page keeps the event log that can.
+        let logs = self.collect_browser_logs().await;
         Err(format!(
-            "{description}: playback did not advance enough; start={start:?} end={end:?}"
+            "{description}: playback did not advance enough; start={start:?} end={end:?}\nbrowser logs:\n{logs}"
         ))
     }
 
