@@ -12,8 +12,14 @@
 #
 # `pins` come from the checkout the job already has, so the image is tagged
 # with whatever the commit pins.
+#
+# It takes the macOS shell runner, not the release one: the release runner
+# serves protected refs only, so a quarantine or merge-request pipeline — the
+# ones that most need the image — left this job pending until it was dropped.
+# The macOS runner is the same `kithara-ci` account on the same host and
+# already runs the change's code, so it grants the change nothing new.
 linux:image:
-  extends: .release-job
+  extends: .macos-job
   stage: linux
   timeout: 90 minutes
   needs: []
