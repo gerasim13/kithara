@@ -131,6 +131,8 @@ impl BeatGridSnapshot {
             pub fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             /// Resolves local tempo at a stamped native position.
             pub fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            /// Resolves the tempo ratio this snapshot applies to its source geometry.
+            pub fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
             /// Resolves meter at a stamped beat.
             pub fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -149,6 +151,7 @@ impl BeatGridView for BeatGridSnapshot {
             fn beat_at_or_next(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
     }
@@ -216,6 +219,8 @@ impl BeatGridView for UnavailableGridView {
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             #[call(unavailable_position)]
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            #[call(unavailable_position)]
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
             #[call(unavailable_beat)]
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -251,6 +256,7 @@ mod tests {
                 fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
                 fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
                 fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+                fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
                 fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
             }
         }

@@ -1,6 +1,6 @@
 use super::{
-    BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
-    BeatGridState, BeatGridUnavailable, BeatGridView,
+    BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridState,
+    BeatGridUnavailable, BeatGridView, view::stale,
 };
 use crate::{
     Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint, MapPosition, Meter,
@@ -35,11 +35,6 @@ impl SessionGridView {
             meter,
         }
     }
-
-    fn stale<T>(&self, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
-        let expected = self.stamp();
-        (given != expected).then_some(BeatGridQuery::Stale { expected, given })
-    }
 }
 
 impl BeatGridView for SessionGridView {
@@ -51,7 +46,7 @@ impl BeatGridView for SessionGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         let MapPosition::Session(frame) = *position.value() else {
@@ -76,7 +71,7 @@ impl BeatGridView for SessionGridView {
     }
 
     fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
+        if let Some(stale) = stale(self, beat.stamp()) {
             return stale;
         }
         let Some(meter) = self.meter else {
@@ -95,7 +90,7 @@ impl BeatGridView for SessionGridView {
         &self,
         beat: MapPoint<Beat>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
+        if let Some(stale) = stale(self, beat.stamp()) {
             return stale;
         }
         let Ok(session_beat) = SessionBeat::new(f64::from(*beat.value())) else {
@@ -122,13 +117,23 @@ impl BeatGridView for SessionGridView {
     }
 
     fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         if !matches!(position.value(), MapPosition::Session(_)) {
             return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
         }
         BeatGridQuery::Resolved(BeatGridRegion::Unbounded)
+    }
+
+    fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64> {
+        if let Some(stale) = stale(self, position.stamp()) {
+            return stale;
+        }
+        if !matches!(*position.value(), MapPosition::Session(_)) {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        }
+        BeatGridQuery::Resolved(1.0)
     }
 
     fn revision(&self) -> BeatGridRevision {
@@ -143,7 +148,7 @@ impl BeatGridView for SessionGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         let MapPosition::Session(frame) = *position.value() else {

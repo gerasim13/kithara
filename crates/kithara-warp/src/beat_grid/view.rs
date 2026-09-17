@@ -44,6 +44,13 @@ pub trait BeatGridView: Debug + Send + Sync + 'static {
     /// Resolves the affine region containing a stamped native position.
     fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion>;
 
+    /// Resolves the tempo ratio this view applies to its source geometry.
+    ///
+    /// A view that describes a recording as analysed answers `1.0`; a
+    /// projection answers the ratio that carries the source onto its target
+    /// axis.
+    fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+
     /// Returns the immutable revision represented by this view.
     fn revision(&self) -> BeatGridRevision;
 
@@ -60,4 +67,14 @@ pub trait BeatGridView: Debug + Send + Sync + 'static {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+}
+
+/// Refuses a query stamped for a different revision of the same grid.
+///
+/// Every view answers only for the exact stamp it carries, so a caller holding
+/// an older coordinate learns which revision it must re-resolve against
+/// instead of silently reading numbers from the wrong geometry.
+pub(super) fn stale<T>(grid: &impl BeatGridView, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
+    let expected = grid.stamp();
+    (given != expected).then_some(BeatGridQuery::Stale { expected, given })
 }
