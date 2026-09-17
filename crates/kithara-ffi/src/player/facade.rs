@@ -5,8 +5,8 @@ use crate::config::FfiPlayerConfig;
 use crate::{
     Inner,
     item::AudioPlayerItem,
-    observer::{PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiPlayerSnapshot, FfiRepeatMode},
+    observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiRepeatMode},
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
@@ -269,6 +269,20 @@ impl AudioPlayer {
     /// [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
     pub fn setup_network(&self, auth_token: String) {
         self.inner.setup_network(auth_token);
+    }
+
+    /// Register a wildcard DRM key processor at runtime with a fresh salt.
+    /// Items already in the queue keep their registry; initial rules belong
+    /// in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+    /// which is applied through the same path.
+    pub fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
+        self.inner.setup_hls_aes(processor);
+    }
+
+    /// Append a domain-scoped DRM key rule at runtime; see
+    /// [`Self::setup_hls_aes`].
+    pub fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
+        self.inner.setup_hls_aes_with_rule(rule);
     }
 
     /// Return a snapshot of the player's current state.

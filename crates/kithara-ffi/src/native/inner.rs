@@ -7,7 +7,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
-    hls::{KeyOptions, KeyProcessorRegistry},
+    hls::KeyOptions,
     host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
@@ -42,6 +42,7 @@ use crate::{
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
+    salt,
     types::{
         FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
         FfiRepeatMode,
@@ -79,34 +80,6 @@ fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
         .maybe_headers(rule.headers)
         .maybe_query_params(rule.query_params)
         .build()
-}
-
-/// Convert the FFI-level [`crate::types::FfiKeyOptions`] into the
-/// initial registry + the player-wide header snapshot to expose to
-/// outgoing HTTP requests.
-fn build_initial_key_state(
-    ffi: crate::types::FfiKeyOptions,
-) -> (KeyOptions, HashMap<String, String>) {
-    if ffi.rules.is_empty() {
-        return (KeyOptions::default(), HashMap::new());
-    }
-    let mut registry = KeyProcessorRegistry::new();
-    let mut player_headers: HashMap<String, String> = HashMap::new();
-    let mut rules: Vec<DomainKeyRule> = Vec::with_capacity(ffi.rules.len());
-    for r in ffi.rules {
-        if let Some(headers) = r.headers.as_ref() {
-            for (k, v) in headers {
-                player_headers.insert(k.clone(), v.clone());
-            }
-        }
-        if let Some(salt) = r.salt.as_ref() {
-            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
-        }
-        rules.push(build_processor_rule(r));
-    }
-    registry.register(Arc::new(DomainKeyPolicy::new(rules)));
-    let key_options = KeyOptions::builder().key_registry(registry).build();
-    (key_options, player_headers)
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -181,10 +154,12 @@ pub(crate) struct NativeInner {
     queue: FfiQueueControl,
     queue_owner: HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
-    /// [`KeyOptions`] built once from [`FfiPlayerConfig::key_options`].
-    /// Key rules are initial state: there is no runtime mutator, so every
-    /// item inserted into this player sees the same registry.
-    key_options: KeyOptions,
+    /// Key registry seeded from [`FfiPlayerConfig::key_options`] and
+    /// extended at runtime by `setup_hls_aes`; both paths go through
+    /// [`Self::setup_hls_aes_with_rule`]. Cloned per-item on insert
+    /// (snapshot semantics: items already in the queue keep their
+    /// original key registry).
+    key_options: Mutex<KeyOptions>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     /// Bandwidth caps configured via `update_peak_bitrate`. Wifi value
     /// drives the ABR cap unless cellular is tighter; cellular is held
@@ -231,21 +206,22 @@ impl NativeInner {
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
-        let (key_options, player_headers) = build_initial_key_state(key_options);
-        let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         let inner = Self {
             downloader,
             store,
             queue_owner,
             queue,
             shutdown: cancel,
-            key_options,
-            player_headers: player_headers_map,
+            key_options: Mutex::default(),
+            player_headers: DashMap::new(),
             peak_bitrate: Mutex::default(),
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
         };
+        for rule in key_options.rules {
+            inner.setup_hls_aes_with_rule(rule);
+        }
         inner.setup_network(auth_token);
         inner.set_crossfade_duration(crossfade_duration);
         inner
@@ -494,6 +470,42 @@ impl NativeInner {
         Ok(())
     }
 
+    /// Register a wildcard (`"*"`) DRM key processor with a freshly
+    /// generated salt; see [`Self::setup_hls_aes_with_rule`].
+    pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
+        let salt = salt::drm_lowercase_hex_salt();
+        let rule = FfiKeyRule {
+            processor,
+            headers: None,
+            query_params: None,
+            domains: vec!["*".to_string()],
+            salt: Some(salt),
+        };
+        self.setup_hls_aes_with_rule(rule);
+    }
+
+    /// Append a DRM key rule to the registry. The rule's headers and salt
+    /// are mirrored into the player-wide header map, later rules winning
+    /// on key collision; items already in the queue keep the registry
+    /// they were inserted with.
+    pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
+        if let Some(headers) = rule.headers.as_ref() {
+            for (k, v) in headers {
+                self.player_headers.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(salt) = rule.salt.as_ref() {
+            self.player_headers
+                .insert(SALT_HEADER.to_string(), salt.clone());
+        }
+
+        let processor_rule = build_processor_rule(rule);
+        let mut opts = self.key_options.lock();
+        let mut registry = opts.key_registry.take().unwrap_or_default();
+        registry.register(Arc::new(DomainKeyPolicy::new([processor_rule])));
+        *opts = KeyOptions::builder().key_registry(registry).build();
+    }
+
     pub(crate) fn setup_network(&self, auth_token: String) {
         if auth_token.is_empty() {
             self.player_headers.remove(AUTH_TOKEN_HEADER);
@@ -583,7 +595,7 @@ fn build_source_for_item(
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
         .store(inner.store.handle().clone())
-        .keys(inner.key_options.clone())
+        .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
     *item.bus.lock() = Some(scoped);
@@ -633,7 +645,7 @@ impl Drop for NativeInner {
 mod tests {
     use unimock::Unimock;
 
-    use super::{super::salt, *};
+    use super::*;
     use crate::observer::FfiKeyProcessor;
 
     struct TaggedProcessor(u8);
@@ -677,27 +689,17 @@ mod tests {
     }
 
     #[kithara::test]
-    fn initial_key_rules_keep_policy_order_and_global_header_semantics() {
-        let ffi = crate::types::FfiKeyOptions {
-            rules: vec![
-                tagged_rule(1, "first-salt", &["keys.example.com"]),
-                tagged_rule(2, "second-salt", &["*"]),
-            ],
-        };
+    fn runtime_key_rules_append_in_registration_order() {
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
+        inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
 
-        let (options, player_headers) = build_initial_key_state(ffi);
-
-        assert_eq!(
-            player_headers.get(SALT_HEADER).map(String::as_str),
-            Some("second-salt"),
-            "player-wide headers retain their existing last-rule-wins merge"
-        );
-        assert_eq!(
-            player_headers.get("X-Provider").map(String::as_str),
-            Some("2")
-        );
-
-        let registry = options.key_registry.expect("registry populated");
+        let registry = inner
+            .key_options
+            .lock()
+            .key_registry
+            .clone()
+            .expect("registry populated");
         let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
         let request = registry.prepare(&url).expect("matching key request");
 
@@ -713,6 +715,47 @@ mod tests {
         assert_eq!(
             (request.processor)(Bytes::from_static(b"encrypted")).expect("processor succeeds"),
             Bytes::from_static(&[1])
+        );
+        assert_eq!(
+            inner
+                .player_headers
+                .get(SALT_HEADER)
+                .map(|header| header.value().clone())
+                .as_deref(),
+            Some("second-salt"),
+            "player-wide headers keep their last-rule-wins merge"
+        );
+        assert_eq!(
+            inner
+                .player_headers
+                .get("X-Provider")
+                .map(|header| header.value().clone())
+                .as_deref(),
+            Some("2")
+        );
+    }
+
+    #[kithara::test]
+    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        // Registration must not run the processor: an unstubbed `Unimock`
+        // panics if `setup_hls_aes` calls it.
+        inner.setup_hls_aes(Arc::new(Unimock::new(())));
+
+        let salt = inner
+            .player_headers
+            .get(SALT_HEADER)
+            .map(|r| r.value().clone())
+            .expect("salt header populated");
+        assert_eq!(salt.len(), 8, "prod auto-salt length");
+        assert!(
+            salt.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "prod auto-salt must be lowercase hex, got {salt:?}"
+        );
+        assert!(
+            inner.key_options.lock().key_registry.is_some(),
+            "registry must hold the wildcard rule"
         );
     }
 
@@ -730,6 +773,7 @@ mod tests {
 
         let registry = inner
             .key_options
+            .lock()
             .key_registry
             .clone()
             .expect("registry populated");
@@ -802,7 +846,7 @@ mod tests {
         );
 
         assert!(
-            inner.key_options.key_registry.is_some(),
+            inner.key_options.lock().key_registry.is_some(),
             "registry must hold the wildcard rule"
         );
     }

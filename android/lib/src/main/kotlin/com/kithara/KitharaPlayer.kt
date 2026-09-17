@@ -245,6 +245,20 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already queued keep their rules. Initial rules belong in
+     * [Config.keyRules], which is applied through the same path.
+     */
+    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
+        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
+    }
+
+    /** Append a domain-scoped DRM key rule at runtime; see [setupHlsAes]. */
+    fun setupHlsAes(rule: KeyRule) {
+        inner.setupHlsAesWithRule(rule.toFfi())
+    }
+
+    /**
      * Per-network bitrate ceilings (bits/sec). Pass `0.0` for either
      * argument to lift that limit.
      */
@@ -443,23 +457,29 @@ interface KeyProcessor {
     fun processKey(key: ByteArray, salt: String): ByteArray
 }
 
+private class ClosureKeyProcessorBridge(
+    private val decrypt: (ByteArray, String) -> ByteArray?,
+) : FfiKeyProcessor {
+    override fun processKey(key: ByteArray, salt: String): ByteArray = decrypt(key, salt) ?: key
+}
+
 private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
     override fun processKey(key: ByteArray, salt: String): ByteArray =
         processor.processKey(key, salt)
 }
 
+private fun KitharaPlayer.KeyRule.toFfi(): FfiKeyRule =
+    FfiKeyRule(
+        processor = KeyProcessorBridge(processor),
+        headers = headers,
+        queryParams = queryParams,
+        domains = domains,
+        salt = salt,
+    )
+
 internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
-    val ffiRules = keyRules.map { rule ->
-        FfiKeyRule(
-            processor = KeyProcessorBridge(rule.processor),
-            headers = rule.headers,
-            queryParams = rule.queryParams,
-            domains = rule.domains,
-            salt = rule.salt,
-        )
-    }
     return FfiPlayerConfig(
-        keyOptions = FfiKeyOptions(rules = ffiRules),
+        keyOptions = FfiKeyOptions(rules = keyRules.map { it.toFfi() }),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
         authToken = authToken,

@@ -379,18 +379,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Create a new player instance.
     public init(config: Config = Config()) {
-        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
-            FfiKeyRule(
-                processor: KeyProcessorBridge(processor: rule.processor),
-                headers: rule.headers,
-                queryParams: rule.queryParams,
-                salt: rule.salt,
-                domains: rule.domains
-            )
-        }
         let ffiConfig = FfiPlayerConfig(
             store: config.store.inner,
-            keyOptions: FfiKeyOptions(rules: ffiRules),
+            keyOptions: FfiKeyOptions(rules: config.keyRules.map { $0.toFfi() }),
             eqBandCount: UInt32(config.eqBandCount),
             authToken: config.authToken,
             crossfadeDuration: config.crossfadeDuration
@@ -776,6 +767,19 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _inner.setupNetwork(authToken: authToken)
     }
 
+    /// Register a wildcard DRM key processor at runtime with a fresh salt.
+    /// Items already queued keep their rules. Initial rules belong in
+    /// ``Config/keyRules``, which is applied through the same path.
+    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
+        _inner.setupHlsAes(processor: ClosureKeyProcessorBridge(decrypt: keyDecryptor))
+    }
+
+    /// Append a domain-scoped DRM key rule at runtime; see
+    /// ``setupHlsAes(keyDecryptor:)``.
+    public func setupHlsAes(rule: KeyRule) {
+        _inner.setupHlsAesWithRule(rule: rule.toFfi())
+    }
+
     /// Per-network bitrate ceilings (bits/sec). Pass `0` for either
     /// argument to lift that limit; with both zero the ABR considers
     /// every variant.
@@ -817,6 +821,30 @@ public protocol KeyProcessor: Sendable {
     ///     ignore the argument.
     /// - Returns: Decrypted key bytes.
     func processKey(_ key: Data, salt: String) -> Data
+}
+
+extension KitharaPlayer.KeyRule {
+    fileprivate func toFfi() -> FfiKeyRule {
+        FfiKeyRule(
+            processor: KeyProcessorBridge(processor: processor),
+            headers: headers,
+            queryParams: queryParams,
+            salt: salt,
+            domains: domains
+        )
+    }
+}
+
+private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
+    private let decrypt: (Data, String) -> Data?
+
+    init(decrypt: @escaping (Data, String) -> Data?) {
+        self.decrypt = decrypt
+    }
+
+    func processKey(key: Data, salt: String) -> Data {
+        decrypt(key, salt) ?? key
+    }
 }
 
 private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {

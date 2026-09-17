@@ -5,9 +5,10 @@ use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
 /// FFI-friendly player configuration.
 ///
 /// Carries the player's whole initial state: every field is applied while
-/// [`crate::player::AudioPlayer::new`] constructs the engine, so a caller
-/// never has to follow the constructor with a setup call to reach the state
-/// it wanted from the start.
+/// [`crate::player::AudioPlayer::new`] constructs the engine through the
+/// same runtime setters (`setup_hls_aes_with_rule`, `setup_network`,
+/// `set_crossfade_duration`), so a caller never has to follow the
+/// constructor with a setup call to reach the state it wanted from the start.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {

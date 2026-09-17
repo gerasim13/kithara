@@ -791,6 +791,20 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setVolume(volume: Float)
 
     /**
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already in the queue keep their registry; initial rules belong
+     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+     * which is applied through the same path.
+     */
+    func setupHlsAes(processor: FfiKeyProcessor)
+
+    /**
+     * Append a domain-scoped DRM key rule at runtime; see
+     * [`Self::setup_hls_aes`].
+     */
+    func setupHlsAesWithRule(rule: FfiKeyRule)
+
+    /**
      * Replace the player-wide auth header at runtime. Stores `auth_token`
      * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
@@ -1268,6 +1282,32 @@ open func setVolume(volume: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(volume),$0
+    )
+}
+}
+
+    /**
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already in the queue keep their registry; initial rules belong
+     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+     * which is applied through the same path.
+     */
+open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiKeyProcessor_lower(processor),$0
+    )
+}
+}
+
+    /**
+     * Append a domain-scoped DRM key rule at runtime; see
+     * [`Self::setup_hls_aes`].
+     */
+open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes_with_rule(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiKeyRule_lower(rule),$0
     )
 }
 }
@@ -8865,6 +8905,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 18214) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 56394) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 43124) {

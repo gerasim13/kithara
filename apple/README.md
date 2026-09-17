@@ -86,8 +86,10 @@ final class MySeekCallback: SeekCallback, @unchecked Sendable {
 
 ### Network and DRM (HLS-AES)
 
-Key rules, the auth token and the crossfade window are initial state: declare
-them in `Config`, not after construction.
+Key rules, the auth token and the crossfade window belong in `Config` so the
+player starts in the state you want. The runtime hooks `setupHlsAes`,
+`setupNetwork` and `crossfadeDuration` still exist and share the same
+implementation; the constructor applies `Config` through them.
 
 ```swift
 final class SaltedCipher: KeyProcessor, @unchecked Sendable {
