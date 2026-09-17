@@ -807,7 +807,11 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                                 flash.unpark(me);
                             })
                         };
-                        flash.park_timed_unparkable(Duration::from_secs(2), me);
+                        flash.park_timed_unparkable(
+                            Duration::from_secs(2),
+                            me,
+                            super::system::ParkRole::Deadline,
+                        );
                         racer.join().expect("scheduler unpark racer panicked");
                     }
                 });
@@ -841,7 +845,11 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                                     flash.unpark(me);
                                 })
                             };
-                            flash.park_timed_unparkable(Duration::from_secs(1 + (idx % 4)), me);
+                            flash.park_timed_unparkable(
+                                Duration::from_secs(1 + (idx % 4)),
+                                me,
+                                super::system::ParkRole::Deadline,
+                            );
                             racer.join().expect("unpark racer panicked");
                         }
                         1 => {
