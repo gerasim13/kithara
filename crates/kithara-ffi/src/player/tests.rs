@@ -97,3 +97,31 @@ fn snapshot_uses_playing_rate_field_name() {
     let snap = player.snapshot();
     assert!((snap.playing_rate - 1.0).abs() < f32::EPSILON);
 }
+
+#[kithara::test]
+fn anchorless_insert_goes_to_the_head_and_append_to_the_tail() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test());
+    let inserted = ["https://example.test/a.mp3", "https://example.test/b.mp3"];
+    for url in inserted {
+        player
+            .insert(test_item(url), None)
+            .expect("queue accepts the item");
+    }
+    player
+        .append(test_item("https://example.test/c.mp3"))
+        .expect("queue accepts the item");
+
+    let queued: Vec<String> = player.items().iter().map(|item| item.url()).collect();
+    assert_eq!(
+        queued,
+        vec![
+            "https://example.test/b.mp3".to_owned(),
+            "https://example.test/a.mp3".to_owned(),
+            "https://example.test/c.mp3".to_owned(),
+        ]
+    );
+}
+
+fn test_item(url: &str) -> std::sync::Arc<crate::item::AudioPlayerItem> {
+    crate::item::AudioPlayerItem::new(crate::types::FfiItemConfig::for_test(url))
+}

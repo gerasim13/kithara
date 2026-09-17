@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::{OfflineQueue, QueueTicker, audio_clock_pace},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
@@ -178,6 +178,7 @@ async fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
     let session = HostConfig::offline(pools.clone()).build();
+    let render_pace = audio_clock_pace(&session);
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -194,7 +195,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
-        RENDER_PACE,
+        render_pace,
     )
     .await
     .expect("create product offline queue");
@@ -280,6 +281,7 @@ async fn run_one_attempt(
                 error: format!("queue.select failed: {e}"),
             };
         }
+        queue.run(QueueControl::play).await;
 
         phase.set(AttemptPhase::Load);
         if let Err(e) =

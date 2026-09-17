@@ -29,6 +29,8 @@ pub mod apple_warmup;
 ))]
 pub mod architecture_trace;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod artifact_timeline;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod asset_fixture;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod assets_ext;
@@ -65,6 +67,8 @@ pub mod fixtures;
 pub mod flash_pace;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod gapless;
+#[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
+pub mod grid;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod hls_blob_store;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -112,6 +116,8 @@ pub mod test_defaults;
 pub mod test_server;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod token_store;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod underrun_ledger;
 /// The probe recorder the native suites read. `kithara-test-utils` compiles
 /// the USDT module only off wasm, so the re-export follows it there rather
 /// than breaking every wasm test binary on an import that cannot resolve.

@@ -9,18 +9,16 @@ use kithara::{
         tokio::sync::broadcast,
     },
     play::{PlayerEvent, TimeControlStatus},
-    queue::{QueueEvent, TrackStatus},
+    queue::QueueEvent,
 };
 
 use crate::{
     core::event_set::QueueBusEvent,
-    item::AudioPlayerItem,
-    observer::{ItemObserver, PlayerObserver},
+    observer::PlayerObserver,
     pools::FfiQueueControl,
     registry::ItemRegistry,
     types::{
-        FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
-        FfiTrackStatus,
+        FfiAdvanceReason, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange, FfiTrackStatus,
     },
 };
 
@@ -30,6 +28,10 @@ pub(crate) struct EventBridge {
 }
 
 impl EventBridge {
+    /// Failure reason recorded when the player reports an item failure
+    /// without one.
+    const ITEM_DID_FAIL: &'static str = "item did fail";
+
     /// Polling interval for time/duration updates (~10 Hz).
     const TIME_POLL_INTERVAL_MS: u64 = 100;
 
@@ -91,12 +93,11 @@ impl EventBridge {
                 let Some(item) = items.lock().get(id).cloned() else {
                     return;
                 };
-                if let Some(item_obs) = item.observer() {
-                    Self::route_track_status_to_item(&item, &item_obs, status);
-                }
+                let status = FfiTrackStatus::from(status.clone());
+                item.apply_track_status(&status);
                 observer.on_event(FfiPlayerEvent::TrackStatusChanged {
                     item_id: *id,
-                    status: FfiTrackStatus::from(status.clone()),
+                    status,
                 });
             }
             QueueEvent::QueueEnded => {
@@ -180,11 +181,8 @@ impl EventBridge {
         let Some(item) = items.lock().get(&track_id).cloned() else {
             return;
         };
-        let Some(item_obs) = item.observer() else {
-            return;
-        };
         *last = Some(available);
-        item_obs.on_event(FfiItemEvent::LoadedRangesChanged {
+        item.deliver(FfiItemEvent::LoadedRangesChanged {
             ranges: Self::loaded_ranges(available),
         });
     }
@@ -228,48 +226,16 @@ impl EventBridge {
         let Some(item) = items.lock().get(&track_id).cloned() else {
             return;
         };
-        let Some(item_obs) = item.observer() else {
-            return;
-        };
         let ffi_event = match event {
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
-            PlayerEvent::ItemDidFail { .. } => FfiItemEvent::DidFail,
+            PlayerEvent::ItemDidFail { .. } => {
+                item.settle_failed(Self::ITEM_DID_FAIL);
+                FfiItemEvent::DidFail
+            }
             PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
             _ => return,
         };
-        item_obs.on_event(ffi_event);
-    }
-
-    /// Forward queue settlement to the item observer. An item reports its
-    /// terminal pair once: whichever source settles it first emits, and the
-    /// other finds it already failed and stays silent. A protocol failure
-    /// reaches the item through [`crate::native::item_bridge::ItemEventBridge`]
-    /// carrying the exact reason, and usually arrives first; a queue failure
-    /// with no protocol event behind it — a decode, DRM, or storage refusal —
-    /// still reaches the item from here.
-    fn route_track_status_to_item(
-        item: &AudioPlayerItem,
-        observer: &Arc<dyn ItemObserver>,
-        status: &TrackStatus,
-    ) {
-        if matches!(status, TrackStatus::Loaded) {
-            observer.on_event(FfiItemEvent::StatusChanged {
-                status: FfiItemStatus::ReadyToPlay,
-            });
-            return;
-        }
-        let TrackStatus::Failed(reason) = status else {
-            return;
-        };
-        if !item.state.lock().mark_failed() {
-            return;
-        }
-        observer.on_event(FfiItemEvent::StatusChanged {
-            status: FfiItemStatus::Failed,
-        });
-        observer.on_event(FfiItemEvent::Error {
-            error: reason.clone(),
-        });
+        item.deliver(ffi_event);
     }
 
     /// Spawn background tasks that translate queue/player events into
@@ -378,16 +344,23 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
+    use std::{
+        num::NonZeroU32,
+        sync::{Condvar, Mutex as StdMutex, PoisonError},
+    };
 
     use kithara::{
         events::{EventBus, SlotId, TrackId},
+        host::HostConfig,
+        output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
         platform::{
+            CancelScope,
             sync::{Arc, Mutex},
-            tokio::{sync::broadcast::error::RecvError, task::spawn_blocking},
+            tokio::task::spawn_blocking,
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
+        signal::AudioSpec,
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
@@ -396,10 +369,11 @@ mod tests {
     use super::*;
     use crate::{
         core::event_set::ItemBusEvent,
+        item::AudioPlayerItem,
         observer::ItemObserver,
         pools,
-        pools::{FfiQueue, FfiWorker},
-        types::{FfiItemConfig, FfiItemEvent},
+        pools::{FfiHost, FfiQueue, FfiWorker},
+        types::{FfiItemConfig, FfiItemEvent, FfiItemStatus},
     };
 
     type QueueEventCase = (QueueEvent, fn(&FfiPlayerEvent) -> bool);
@@ -462,16 +436,7 @@ mod tests {
     fn assert_send<T: Send>() {}
 
     fn item_config() -> FfiItemConfig {
-        FfiItemConfig {
-            abr_mode: None,
-            audio_id: None,
-            headers: None,
-            uuid_i64: None,
-            url: "https://example.com/quiet-intro.flac".to_string(),
-            is_live_stream: false,
-            preferred_peak_bitrate: 0.0,
-            preferred_peak_bitrate_expensive: 0.0,
-        }
+        FfiItemConfig::for_test("https://example.com/quiet-intro.flac")
     }
 
     fn register_observed_item(
@@ -480,9 +445,34 @@ mod tests {
         let item = AudioPlayerItem::new(item_config());
         let observer = Arc::new(CollectingItemObserver::default());
         let item_observer: Arc<dyn ItemObserver> = observer.clone();
-        item.set_observer(item_observer);
+        item.add_observer(item_observer);
         items.lock().insert(item.track_id(), item.clone());
         (item, observer)
+    }
+
+    #[kithara::test]
+    fn state_outlives_the_observer_that_saw_the_events() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (item, _observer) = register_observed_item(&items);
+        let player_observer: Arc<dyn PlayerObserver> =
+            Arc::new(CollectingPlayerObserver::default());
+
+        EventBridge::dispatch_queue_event(
+            &player_observer,
+            &items,
+            &QueueEvent::TrackStatusChanged {
+                id: item.track_id(),
+                status: TrackStatus::Failed("storage refused".to_string()),
+            },
+        );
+
+        let late = Arc::new(CollectingItemObserver::default());
+        item.add_observer(late.clone() as Arc<dyn ItemObserver>);
+
+        let state = item.state();
+        assert_eq!(state.status, FfiItemStatus::Failed);
+        assert_eq!(state.error.as_deref(), Some("storage refused"));
+        assert!(late.take_events().is_empty());
     }
 
     fn assert_protocol_failure_is_not_duplicated(event: ItemBusEvent, expected_error: &str) {
@@ -490,12 +480,13 @@ mod tests {
         let scoped = root.scoped();
         let item = AudioPlayerItem::new(item_config());
         *item.inserted.lock() = true;
-        item.state.lock().resolve_duration(42.0);
+        item.deliver(FfiItemEvent::DurationChanged { seconds: 42.0 });
 
         let item_observer_impl = Arc::new(CollectingItemObserver::default());
         let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
         *item.bus.lock() = Some(scoped.clone());
-        item.set_observer(item_observer);
+        item.add_observer(item_observer);
+        item.restart_bridge();
 
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         items.lock().insert(item.track_id(), item.clone());
@@ -577,7 +568,7 @@ mod tests {
         *item.inserted.lock() = true;
         let item_observer_impl = Arc::new(CollectingItemObserver::default());
         let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
-        item.set_observer(item_observer);
+        item.add_observer(item_observer);
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         items.lock().insert(item.track_id(), item.clone());
         let player_observer: Arc<dyn PlayerObserver> =
@@ -647,8 +638,18 @@ mod tests {
 
         assert!(matches!(
             delayed_observer.take_events().as_slice(),
-            [FfiItemEvent::DidFail]
+            [
+                FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::Failed
+                },
+                FfiItemEvent::Error { .. },
+                FfiItemEvent::DidFail
+            ]
         ));
+        assert_eq!(
+            delayed.state().error.as_deref(),
+            Some(EventBridge::ITEM_DID_FAIL)
+        );
         assert!(
             current_observer.take_events().is_empty(),
             "an outgoing failure must not be delivered to another item with the same source"
@@ -710,7 +711,7 @@ mod tests {
         *item.inserted.lock() = true;
         let item_observer_impl = Arc::new(CollectingItemObserver::default());
         let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
-        item.set_observer(item_observer);
+        item.add_observer(item_observer);
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         items.lock().insert(item.track_id(), item.clone());
         let player_observer: Arc<dyn PlayerObserver> =
@@ -902,46 +903,30 @@ mod tests {
         }
     }
 
-    /// Wait for one status on `id`, answering with every other status that
-    /// arrived for it when the wait runs out.
-    ///
-    /// A lagged receiver is not the end of the stream — the bus drops the
-    /// oldest envelopes and keeps delivering — so a wait that ended on it
-    /// would blame the product for a burst the test's own track caused.
+    #[kithara_test_utils::kithara::hang_watchdog]
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
-        timeout_ms: u64,
-    ) -> Result<(), Vec<TrackStatus>> {
-        let mut seen_statuses = Vec::new();
-        let wait = async {
-            loop {
-                match events.recv().await {
-                    Ok(Envelope {
-                        event:
-                            QueueBusEvent::Queue(QueueEvent::TrackStatusChanged {
-                                id: seen,
-                                status: seen_status,
-                            }),
-                        ..
-                    }) if seen == id => {
-                        if seen_status == status {
-                            return true;
-                        }
-                        seen_statuses.push(seen_status);
-                    }
-                    Ok(_) | Err(RecvError::Lagged(_)) => {}
-                    Err(RecvError::Closed) => return false,
-                }
+    ) -> bool {
+        while let Ok(Envelope { event, .. }) = events.recv().await {
+            if matches!(
+                event,
+                QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                    if seen == id && *seen_status == status
+            ) {
+                return true;
             }
-        };
-        let arrived =
-            kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait).await;
-        if matches!(arrived, Ok(true)) {
+            hang_tick!();
+        }
+        false
+    }
+
+    struct Discard;
+
+    impl RenderSink for Discard {
+        fn write(&mut self, _samples: &[f32]) -> Result<(), RenderSinkError> {
             Ok(())
-        } else {
-            Err(seen_statuses)
         }
     }
 
@@ -950,55 +935,55 @@ mod tests {
     /// — async work that panics without an ambient runtime. The thread is
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
-    #[kithara::test(tokio)]
+    ///
+    /// An offline Host renders the blocks, so the EOF arrives as soon as the
+    /// test pulls it instead of waiting on an output device's cadence.
+    #[kithara::test(tokio, flash(false))]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
-        let worker = FfiWorker::new(
-            PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
-        );
+        const BLOCK_FRAMES: u64 = 512;
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let pools = pools::build().expect("valid FFI pool policy");
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(crate::native::session::requested_sample_rate())
+                .sample_rate(sample_rate)
                 .worker(worker)
+                .block_on_underrun(true)
+                .crossfade_duration(0.0)
                 .build(),
         );
         let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
-        // The FFI surface calls the session from the caller's thread, never
-        // from a runtime worker.
-        let owner = spawn_blocking(move || crate::native::session::insert(queue))
-            .await
-            .expect("insert task completes")
-            .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
-        let queue = owner.control().clone();
-        queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
-        let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_10_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = queue
-            .append(track.to_string_lossy().into_owned())
-            .expect("open queue accepts a local track");
-        if let Err(seen) = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await {
-            panic!("real local track must load before playback; saw {seen:?}");
-        }
+        let (mut host, owner, mut events, id) = spawn_blocking(move || {
+            let mut host =
+                FfiHost::new(HostConfig::offline(pools).sample_rate(sample_rate).build())
+                    .expect("offline Host allocates its root identity");
+            let owner = host
+                .insert(queue)
+                .expect("INVARIANT: the offline Host accepts its allocated Queue");
+            let queue = owner.control();
+            queue.set_repeat(kithara::queue::RepeatMode::One);
+            queue.set_rate(1.0);
+            let events = queue.subscribe();
+            let id = queue
+                .append(track.to_string_lossy().into_owned())
+                .expect("open queue accepts a local track");
+            (host, owner, events, id)
+        })
+        .await
+        .expect("host setup task completes");
+        let queue = owner.control().clone();
+        assert!(
+            wait_for_status(&mut events, id, TrackStatus::Loaded).await,
+            "real local track must load before playback"
+        );
         let selecting = queue.clone();
         spawn_blocking(move || selecting.select(id, Transition::None))
             .await
             .expect("select task completes")
             .expect("loaded track starts through the real queue lifecycle");
-
-        // WHY: The natural end is the render thread's verdict, and this test owns no render. The FFI session shares one process-wide audio
-        // Host whose device decides when — or whether — it pulls a second block, and the fixture is ten frames long, so the whole track fits
-        // inside the first pull: whether a second pull ever arrives is the sound card's business, not this contract's. Publishing the end the
-        // render thread publishes keeps the trigger faithful and leaves the claim under test — the polling thread carries an ambient runtime
-        // into the load that end respawns — independent of the device.
-        queue.bus().publish(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Leading(TrackRef::new(
-                id,
-                SlotId::new(0),
-                Arc::from(track.to_string_lossy().as_ref()),
-            )),
-        });
 
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
@@ -1009,25 +994,40 @@ mod tests {
             Arc::new(Mutex::new(None)),
             cancel.clone(),
         );
+        let render_cancel = cancel.clone();
+        let renderer = spawn_blocking(move || {
+            let spec = AudioSpec::new(2, sample_rate);
+            let scope = CancelScope::new(None);
+            let mut start = 0;
+            while !render_cancel.is_cancelled() {
+                let request = OfflineRenderRequest::builder()
+                    .spec(spec)
+                    .frames(start..start + BLOCK_FRAMES)
+                    .build();
+                host.render(&request, &scope.token(), &mut Discard)
+                    .expect("offline Host renders a block");
+                start += BLOCK_FRAMES;
+            }
+            host
+        });
 
-        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending).await;
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
-        let (joined, owner) = spawn_blocking(move || {
+        let mut host = renderer.await.expect("render task completes");
+        let joined = spawn_blocking(move || {
             let joined = thread.join();
-            crate::native::session::remove(&owner)
-                .expect("INVARIANT: the FFI test Queue detaches from its Host");
-            (joined, owner)
+            host.remove(&owner)
+                .expect("INVARIANT: the test Queue detaches from its Host");
+            joined
         })
         .await
         .expect("teardown task completes");
-        drop(owner);
 
-        if let Err(seen) = reload_started {
-            panic!(
-                "tick after EOF must restart the consumed repeat-one track; status: {status:?}, saw {seen:?}"
-            );
-        }
+        assert!(
+            reload_started,
+            "tick after EOF must restart the consumed repeat-one track; status: {status:?}"
+        );
         assert!(
             joined.is_ok(),
             "polling thread must survive the reload it starts"

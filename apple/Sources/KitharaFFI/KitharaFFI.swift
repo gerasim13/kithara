@@ -757,25 +757,12 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-    func selectItem(index: UInt32, transition: FfiTransition) throws
-
     func setAbrMode(mode: FfiAbrMode)
 
+    /**
+     * Change the crossfade window at runtime. The initial value belongs in
+     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
+     */
     func setCrossfadeDuration(seconds: Float)
 
     /**
@@ -789,6 +776,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func setObserver(observer: PlayerObserver)
 
+    /**
+     * Replace the playback-rate target at runtime. The initial value
+     * belongs in
+     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
+     */
     func setPlayingRate(rate: Float)
 
     /**
@@ -804,32 +796,25 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setVolume(volume: Float)
 
     /**
-     * Register a runtime DRM key processor for every host (`"*"`).
-     *
-     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
-     * into the player-wide `SALT_HEADER` (so it accompanies every
-     * outgoing manifest/segment/key request), and forwards it to
-     * `processor.process_key(key, salt)` on each decrypt.
-     *
-     * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`Self::insert`] for the new processor
-     * to apply.
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already in the queue keep their registry; initial rules belong
+     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+     * which is applied through the same path.
      */
     func setupHlsAes(processor: FfiKeyProcessor)
 
     /**
-     * Register a runtime DRM key processor with explicit rule control
-     * (custom domains, headers, salt). The rule's salt — if any — is
-     * mirrored into the player-wide header map under `SALT_HEADER`.
-     *
-     * Items already in the queue keep their original key registry.
+     * Append a domain-scoped DRM key rule at runtime; see
+     * [`Self::setup_hls_aes`].
      */
     func setupHlsAesWithRule(rule: FfiKeyRule)
 
     /**
-     * Player-wide auth header. Stores `auth_token` under
-     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Replace the player-wide auth header at runtime. Stores `auth_token`
+     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
+     * The initial value belongs in
+     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
     func setupNetwork(authToken: String)
 
@@ -859,6 +844,23 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
     func volume()  -> Float
+
+    /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+    func select(item: AudioPlayerItem, transition: FfiTransition) throws
 
     /**
      * Notify the native player that the platform audio route changed.
@@ -1207,30 +1209,6 @@ open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {
 }
 }
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-open func selectItem(index: UInt32, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_select_item(
-            self.uniffiCloneHandle(),
-        FfiConverterUInt32.lower(index),
-        FfiConverterTypeFfiTransition_lower(transition),$0
-    )
-}
-}
-
 open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_abr_mode(
             self.uniffiCloneHandle(),
@@ -1239,6 +1217,10 @@ open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
 }
 }
 
+    /**
+     * Change the crossfade window at runtime. The initial value belongs in
+     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
+     */
 open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_duration(
             self.uniffiCloneHandle(),
@@ -1277,6 +1259,11 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 }
 }
 
+    /**
+     * Replace the playback-rate target at runtime. The initial value
+     * belongs in
+     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
+     */
 open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
@@ -1310,16 +1297,10 @@ open func setVolume(volume: Float)  {try! rustCall() {
 }
 
     /**
-     * Register a runtime DRM key processor for every host (`"*"`).
-     *
-     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
-     * into the player-wide `SALT_HEADER` (so it accompanies every
-     * outgoing manifest/segment/key request), and forwards it to
-     * `processor.process_key(key, salt)` on each decrypt.
-     *
-     * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`Self::insert`] for the new processor
-     * to apply.
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already in the queue keep their registry; initial rules belong
+     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+     * which is applied through the same path.
      */
 open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes(
@@ -1330,11 +1311,8 @@ open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
 }
 
     /**
-     * Register a runtime DRM key processor with explicit rule control
-     * (custom domains, headers, salt). The rule's salt — if any — is
-     * mirrored into the player-wide header map under `SALT_HEADER`.
-     *
-     * Items already in the queue keep their original key registry.
+     * Append a domain-scoped DRM key rule at runtime; see
+     * [`Self::setup_hls_aes`].
      */
 open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes_with_rule(
@@ -1345,9 +1323,11 @@ open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
 }
 
     /**
-     * Player-wide auth header. Stores `auth_token` under
-     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Replace the player-wide auth header at runtime. Stores `auth_token`
+     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
+     * The initial value belongs in
+     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
 open func setupNetwork(authToken: String)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_network(
@@ -1406,6 +1386,30 @@ open func volume() -> Float  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+
+    /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_select(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeAudioPlayerItem_lower(item),
+        FfiConverterTypeFfiTransition_lower(transition),$0
+    )
+}
 }
 
     /**
@@ -1508,6 +1512,13 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
 
     /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+    func addObserver(observer: ItemObserver)  -> UInt64
+
+    /**
      * Caller-facing content id. Mirrors the iOS
      * `AudioPlayerItemProtocol.audioId: TrackId`.
      */
@@ -1558,7 +1569,16 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
      */
     func queueId()  -> TrackId
 
-    func setObserver(observer: ItemObserver)
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+    func removeObserver(id: UInt64)
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+    func state()  -> FfiItemState
 
     /**
      * Audio source string — either a network URL or an absolute local
@@ -1654,6 +1674,20 @@ public convenience init(config: FfiItemConfig) {
 
 
 
+
+    /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+open func addObserver(observer: ItemObserver) -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_add_observer(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeItemObserver_lower(observer),$0
+    )
+})
+}
 
     /**
      * Caller-facing content id. Mirrors the iOS
@@ -1756,12 +1790,27 @@ open func queueId() -> TrackId  {
 })
 }
 
-open func setObserver(observer: ItemObserver)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayeritem_set_observer(
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+open func removeObserver(id: UInt64)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_remove_observer(
             self.uniffiCloneHandle(),
-        FfiConverterTypeItemObserver_lower(observer),$0
+        FfiConverterUInt64.lower(id),$0
     )
 }
+}
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+open func state() -> FfiItemState  {
+    return try!  FfiConverterTypeFfiItemState_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_state(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
 
     /**
@@ -3797,6 +3846,79 @@ public func FfiConverterTypeFfiItemLoadResult_lower(_ value: FfiItemLoadResult) 
 
 
 /**
+ * Snapshot of everything an item knows about itself. One getter so a
+ * caller reads a consistent set instead of three independently locked
+ * values.
+ */
+public struct FfiItemState: Equatable, Hashable {
+    public let status: FfiItemStatus
+    /**
+     * Playable duration once the metadata layer answers.
+     */
+    public let durationSeconds: Double?
+    public let error: String?
+    public let loadedRanges: [FfiTimeRange]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: FfiItemStatus,
+        /**
+         * Playable duration once the metadata layer answers.
+         */durationSeconds: Double?, error: String?, loadedRanges: [FfiTimeRange]) {
+        self.status = status
+        self.durationSeconds = durationSeconds
+        self.error = error
+        self.loadedRanges = loadedRanges
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiItemState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiItemState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemState {
+        return
+            try FfiItemState(
+                status: FfiConverterTypeFfiItemStatus.read(from: &buf),
+                durationSeconds: FfiConverterOptionDouble.read(from: &buf),
+                error: FfiConverterOptionString.read(from: &buf),
+                loadedRanges: FfiConverterSequenceTypeFfiTimeRange.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiItemState, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiItemStatus.write(value.status, into: &buf)
+        FfiConverterOptionDouble.write(value.durationSeconds, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+        FfiConverterSequenceTypeFfiTimeRange.write(value.loadedRanges, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lift(_ buf: RustBuffer) throws -> FfiItemState {
+    return try FfiConverterTypeFfiItemState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lower(_ value: FfiItemState) -> RustBuffer {
+    return FfiConverterTypeFfiItemState.lower(value)
+}
+
+
+/**
  * FFI-friendly mirror of [`kithara::hls::KeyOptions`].
  *
  * Holds domain-scoped DRM rules — providers with different key
@@ -3864,8 +3986,7 @@ public struct FfiKeyRule {
      * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
      * on every decrypt. `None` is treated as an empty string.
      *
-     * `setup_hls_aes` populates this automatically with a freshly
-     * generated 16-character alphanumeric value and mirrors it into
+     * A rule carrying a salt also mirrors it into
      * [`crate::observer::SALT_HEADER`] in the player-wide header map.
      */
     public let salt: String?
@@ -3882,8 +4003,7 @@ public struct FfiKeyRule {
          * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
          * on every decrypt. `None` is treated as an empty string.
          *
-         * `setup_hls_aes` populates this automatically with a freshly
-         * generated 16-character alphanumeric value and mirrors it into
+         * A rule carrying a salt also mirrors it into
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
          */salt: String?,
         /**
@@ -3948,6 +4068,12 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
 
 /**
  * FFI-friendly player configuration.
+ *
+ * Carries the player's whole initial state: every field is applied while
+ * [`crate::player::AudioPlayer::new`] constructs the engine through the
+ * same runtime setters (`setup_hls_aes_with_rule`, `setup_network`,
+ * `set_crossfade_duration`, `set_playing_rate`), so a caller never has to follow the
+ * constructor with a setup call to reach the state it wanted from the start.
  */
 public struct FfiPlayerConfig {
     /**
@@ -3955,13 +4081,33 @@ public struct FfiPlayerConfig {
      */
     public let store: FfiAssetStore
     /**
-     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+     * DRM key handling — the only place key rules are declared. Pass an
+     * empty [`FfiKeyOptions`] when no DRM is needed.
      */
     public let keyOptions: FfiKeyOptions
     /**
      * Number of EQ bands (log-spaced). Default: 10.
      */
     public let eqBandCount: UInt32
+    /**
+     * Player-wide auth token written to
+     * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
+     * HTTP headers. Empty means no token; change it later through
+     * [`crate::player::AudioPlayer::setup_network`].
+     */
+    public let authToken: String
+    /**
+     * Initial crossfade window in seconds. Callers that have no opinion
+     * pass [`default_crossfade_duration`]; change it later through
+     * [`crate::player::AudioPlayer::set_crossfade_duration`].
+     */
+    public let crossfadeDuration: Float
+    /**
+     * Initial playback-rate target (1.0 = normal). Callers that have no
+     * opinion pass [`default_playing_rate`]; change it later through
+     * [`crate::player::AudioPlayer::set_playing_rate`].
+     */
+    public let playingRate: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3970,14 +4116,34 @@ public struct FfiPlayerConfig {
          * Shared asset store used by every item created by this player.
          */store: FfiAssetStore,
         /**
-         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+         * DRM key handling — the only place key rules are declared. Pass an
+         * empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
-         */eqBandCount: UInt32) {
+         */eqBandCount: UInt32,
+        /**
+         * Player-wide auth token written to
+         * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
+         * HTTP headers. Empty means no token; change it later through
+         * [`crate::player::AudioPlayer::setup_network`].
+         */authToken: String,
+        /**
+         * Initial crossfade window in seconds. Callers that have no opinion
+         * pass [`default_crossfade_duration`]; change it later through
+         * [`crate::player::AudioPlayer::set_crossfade_duration`].
+         */crossfadeDuration: Float,
+        /**
+         * Initial playback-rate target (1.0 = normal). Callers that have no
+         * opinion pass [`default_playing_rate`]; change it later through
+         * [`crate::player::AudioPlayer::set_playing_rate`].
+         */playingRate: Float) {
         self.store = store
         self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
+        self.authToken = authToken
+        self.crossfadeDuration = crossfadeDuration
+        self.playingRate = playingRate
     }
 
 
@@ -3998,7 +4164,10 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
             try FfiPlayerConfig(
                 store: FfiConverterTypeFfiAssetStore.read(from: &buf),
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
-                eqBandCount: FfiConverterUInt32.read(from: &buf)
+                eqBandCount: FfiConverterUInt32.read(from: &buf),
+                authToken: FfiConverterString.read(from: &buf),
+                crossfadeDuration: FfiConverterFloat.read(from: &buf),
+                playingRate: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -4006,6 +4175,9 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+        FfiConverterString.write(value.authToken, into: &buf)
+        FfiConverterFloat.write(value.crossfadeDuration, into: &buf)
+        FfiConverterFloat.write(value.playingRate, into: &buf)
     }
 }
 
@@ -8537,6 +8709,29 @@ public func queryIdentityLayout(rules: [FfiCacheIdentityRule]) -> FfiAssetLayout
     )
 })
 }
+/**
+ * Crossfade window a player starts with when the caller has no opinion.
+ * Re-exports the engine-owned [`kithara::play::DEFAULT_CROSSFADE_DURATION`]
+ * so Swift and Kotlin can default their own configuration to it instead of
+ * restating the number.
+ */
+public func defaultCrossfadeDuration() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_default_crossfade_duration($0
+    )
+})
+}
+/**
+ * Playback rate a player starts with when the caller has no opinion.
+ * Re-exports the engine-owned [`kithara::play::DEFAULT_PLAYING_RATE`] for
+ * the same reason as [`default_crossfade_duration`].
+ */
+public func defaultPlayingRate() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_default_playing_rate($0
+    )
+})
+}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8580,6 +8775,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_func_default_crossfade_duration() != 51240) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_default_playing_rate() != 53814) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8587,6 +8788,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 57426) {
@@ -8613,7 +8817,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_queue_id() != 58096) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_observer() != 8440) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_remove_observer() != 50876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 41337) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 18833) {
@@ -8715,13 +8922,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 51840) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 58512) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 37317) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
@@ -8733,7 +8937,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 11047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
@@ -8742,13 +8946,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 18214) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 56394) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 43124) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {
@@ -8761,6 +8965,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {

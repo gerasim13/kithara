@@ -1,6 +1,5 @@
 #![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
-#[cfg(test)]
 extern crate self as kithara_test_utils;
 
 /// Re-export of `kithara-platform` so the `#[kithara::test]` macro can reach the
