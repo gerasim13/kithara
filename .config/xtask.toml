@@ -123,8 +123,8 @@ machete_exclude = ["kithara-workspace-hack"]
 # --workspace` compiles and reports on like any other member, and which is not
 # the product a deadlock verdict is about. The same set is named in
 # `[architecture.filters] exclude_crates`, per stage, the way every other
-# `[health]` list is. Product crates are not listed: kithara-storage's 8
-# `possibly` double locks fail the stage until that code is fixed.
+# `[health]` list is. Product crates are not listed: a finding in one fails
+# the stage.
 lockbud_exclude = [
   "kithara-abr-tests",
   "kithara-analysis-tests",
@@ -1630,6 +1630,24 @@ kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
 
+# libFuzzer needs the nightly sanitizer flags, so the targets build on the
+# pinned nightly the image links as `nightly`. Each target runs for a fixed
+# budget rather than to exhaustion: the lane looks for inputs that crash a
+# parser or a resource state machine, and a crash is saved under
+# `tests/fuzz/artifacts/` for reproduction.
+[ext.ci.lanes.deep-fuzz]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "cargo-fuzz", "just"]
+program = "just"
+steps = [{ args = ["test", "fuzz"], label = "libFuzzer targets" }]
+role = "deep"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+queue = "heavy-linux"
+timeout_minutes = 90
+
 # Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
 # workspace: ten suites, each naming one package, the production files it may
 # mutate, and the `test()` filters that must kill the mutants, run against
@@ -1784,7 +1802,7 @@ steps = [
     "test",
     "run",
     "--lane=doc",
-  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux doc lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1802,7 +1820,7 @@ steps = [
     "test",
     "run",
     "--lane=loom",
-  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux loom lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1825,7 +1843,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1843,7 +1861,7 @@ steps = [
     "test",
     "run",
     "--lane=harness",
-  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux harness lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1861,13 +1879,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -1885,7 +1903,7 @@ steps = [
     "test",
     "run",
     "--lane=broadcast",
-  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1903,7 +1921,7 @@ steps = [
     "test",
     "run",
     "--lane=integration-regressions",
-  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -1924,7 +1942,7 @@ steps = [
     "test",
     "run",
     "--lane=selenium-firefox",
-  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2059,7 +2077,7 @@ steps = [
     "--lane=tooling",
     "--lane=harness",
     "--lane=fixtures",
-  ], label = "support suites this push touches" },
+  ], label = "support suites this push touches", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2078,35 +2096,35 @@ steps = [
     "--lane=usdt-play",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-play-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2890,6 +2908,10 @@ install_hint = "cargo install cargo-modules"
 [tools.cargo-semver-checks]
 pin = "cargo-semver-checks"
 install_hint = "cargo install cargo-semver-checks"
+
+[tools.cargo-fuzz]
+pin = "cargo-fuzz"
+install_hint = "cargo install --locked cargo-fuzz"
 
 [tools.cargo-hakari]
 pin = "cargo-hakari"

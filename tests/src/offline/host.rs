@@ -1,8 +1,9 @@
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    ops::Deref,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use std::num::NonZeroU64;
+use std::{num::NonZeroU32, ops::Deref};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
     host::{Host, HostConfig, HostLevel, HostOwned},
@@ -16,7 +17,7 @@ use kithara::{
         },
         time::Duration,
     },
-    play::{MixTapWriter, PlayError, SessionError, TransportRevision, player::PlayerControlSource},
+    play::{MixTapWriter, PlayError, player::PlayerControlSource},
     queue::Queue,
     signal::AudioSpec,
 };
@@ -26,6 +27,7 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::usdt_trace;
 
 const CHANNELS: u16 = 2;
@@ -326,7 +328,10 @@ where
 
     /// The canonical transport revision the running session last committed,
     /// read from the `render_committed` probe the renderer fires on every
-    /// committed render.
+    /// committed render. The probe recorder is native-only, so this reads the
+    /// revision on the hosts that carry it and the wasm suites ask other
+    /// questions.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
         usdt_trace::last("render_committed")
             .and_then(|event| event.field("transport_revision"))

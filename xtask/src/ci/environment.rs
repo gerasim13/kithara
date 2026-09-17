@@ -16,7 +16,8 @@ use tracing::warn;
 
 use super::{
     LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, SCCACHE_SLOT_CACHE_NAMESPACE,
-    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, run::CacheGroup,
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, lane_build::LaneBuild,
+    run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -261,6 +262,9 @@ pub(crate) struct CiEnvironment {
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
     _target: Option<lease::Lease>,
+    /// The lane build directory's pairing with this checkout, when the lane
+    /// builds in the fleet's shared root.
+    lane_build: Option<LaneBuild>,
     vars: BTreeMap<OsString, OsString>,
 }
 
@@ -286,7 +290,7 @@ impl CiEnvironment {
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let target_scope = format!("{}-{platform}", trust.as_str());
         let cache_root = shared_root.join(trust.as_str()).join(&platform);
-        let (target, target_lease) = prepare_build_target(
+        let (target, target_lease, lane_build) = prepare_build_target(
             &project_root,
             &shared_root,
             &target_scope,
@@ -433,8 +437,16 @@ impl CiEnvironment {
             lease,
             sccache,
             _target: target_lease,
+            lane_build,
             vars,
         })
+    }
+
+    /// Records what the lane's builds came from once it has finished.
+    pub(crate) fn settle_lane_build(&self, succeeded: bool) -> Result<()> {
+        self.lane_build
+            .as_ref()
+            .map_or(Ok(()), |build| build.settle(succeeded))
     }
 
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {
@@ -583,16 +595,20 @@ fn prepare_build_target(
     config: &CiConfig,
     isolated_target: bool,
     lane: Option<&str>,
-) -> Result<(PathBuf, Option<lease::Lease>)> {
+) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
     let owner = target_owner(config, isolated_target, lane)?;
+    let shared_by_lane = matches!(owner, TargetOwner::Lane(..));
     let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
+    let lane_build = shared_by_lane
+        .then(|| LaneBuild::claim(project_root, &backing))
+        .transpose()?;
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
     let lease = lease::hold(&backing);
     let target = expose_build_target(project_root, &backing, is_gitlab(), cfg!(windows))?;
-    Ok((target, lease))
+    Ok((target, lease, lane_build))
 }
 
 fn expose_build_target(

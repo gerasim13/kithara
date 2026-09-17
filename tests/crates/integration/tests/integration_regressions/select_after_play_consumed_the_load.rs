@@ -2,12 +2,11 @@
 
 //! `Queue::play` loads the current item through the player, which
 //! starts the audio engine first — 130-400 ms against a real output device.
-//! A track load completing inside that window fills the queue slot and is
-//! picked up by the same call, so the consumption has to be read back from
-//! the player rather than inferred from a status snapshot taken before it.
-//! Get that wrong and the track stays `Loaded` over an emptied slot, which
-//! turns every later select of it into `PlayError::ItemConsumed` — the
-//! rejection the iOS switch storm reports.
+//! A track load completing inside that window must not leave the track
+//! `Loaded` over an emptied slot, which turns every later select of it into
+//! `PlayError::ItemConsumed` — the rejection the iOS switch storm reports.
+//! The load is applied under the queue's admission lock, so it lands only
+//! once `play` has returned.
 //!
 //! The engine-start window is a session gate here, so the interleaving is a
 //! rendezvous rather than a timing window.
@@ -92,6 +91,7 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 None,
                 Shared::NON_ZERO_SAMPLE_RATE.get(),
             )),
+            Cmd::QueryStreamShape => Reply::StreamShape(None),
             _ => Reply::Ok,
         };
         Ok(reply)
@@ -152,7 +152,6 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
             .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
-    let player_control = player.control();
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -183,10 +182,14 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         .expect("gate task must join")
         .expect("play must reach the engine start");
 
-    // The first track's load lands inside the window the gate is holding open.
+    release_tx.send(()).expect("gate is still parked");
+    playing.await.expect("play must join");
+
+    // The first track's load, finished while play was inside the engine
+    // start, is applied once play has returned.
     wait_for_event(
         &mut status_rx,
-        "the first track's load landing while play is inside the engine start",
+        "the first track's load landing after play left the engine start",
         |event| {
             matches!(
                 event,
@@ -197,15 +200,6 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
     )
     .await
     .unwrap_or_else(|error| panic!("precondition: {error}"));
-
-    release_tx.send(()).expect("gate is still parked");
-    playing.await.expect("play must join");
-
-    assert!(
-        !player_control.item_has_resource(0),
-        "precondition: play did not consume the load that landed inside the engine \
-         start, so the reported window was never opened"
-    );
 
     queue
         .select(ids[1], Transition::None)
