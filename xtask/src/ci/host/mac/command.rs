@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, thread, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -14,6 +20,8 @@ use super::{
 };
 use crate::ci::{
     config::{CiConfig, PINS_PATH},
+    host::provision::Provision,
+    image::ImageCommand,
     process::Process,
 };
 
@@ -73,6 +81,32 @@ enum MacCommand {
     Cleanup,
     /// Emit host storage and runner health as JSON.
     Health,
+}
+
+/// Bring this machine up to what the current commit describes.
+///
+/// Every step is one this host already owns and every one of them is
+/// idempotent, so a pipeline can run this as often as it likes: the image
+/// build reuses what is already there and only moves the floating tag, the
+/// runner configuration is rewritten from the same profile, and the agents are
+/// reloaded from the definitions that were just installed.
+pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
+    provision.as_root("mac", "install-services")?;
+    let config = CiConfig::load(provision.config, provision.pins)?;
+    config.validate_macos_layout()?;
+    let mut vars = BTreeMap::new();
+    vars.insert(
+        OsString::from("TART_HOME"),
+        config.host.tart_home()?.as_os_str().to_os_string(),
+    );
+    let process = Process::new(&std::env::current_dir()?, vars);
+    let runners = RunnerManager::new(&config, &process);
+    runners.configure()?;
+    runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
+    runners.smoke_linux()?;
+    runners.activate()?;
+    provision.done("mac");
+    Ok(())
 }
 
 pub(crate) fn run(args: &MacArgs) -> Result<()> {
