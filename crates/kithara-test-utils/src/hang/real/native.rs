@@ -383,8 +383,7 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
         output.write_all(payload.as_bytes())?;
         output.sync_data()?;
         drop(output);
-        fs::hard_link(&temp, &file)?;
-        let _ = fs::remove_file(&temp);
+        fs::rename(&temp, &file)?;
         Ok::<(), std::io::Error>(())
     })();
     match write {

@@ -367,7 +367,7 @@
             if (!track) return;
             $('status').textContent = `Loading ${track.label}...`;
             try {
-                player.selectItem(index);
+                player.select(track.id);
                 player.play();
                 $('status').textContent = `Playing ${track.label}`;
                 log(`Track selected: ${track.label}`, 'info');

@@ -2,6 +2,7 @@ import groovy.json.JsonSlurper
 
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.dokka)
 }
 
 val repoRoot = rootProject.projectDir.parentFile
@@ -9,6 +10,7 @@ val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffi/kotlin")
 val generatedJniDir = layout.buildDirectory.dir("generated/jniLibs")
 val generatedTestAssetsDir = layout.buildDirectory.dir("generated/testAssets")
 val releaseAarOutputDir = layout.buildDirectory.dir("outputs/aar")
+val apiDocsOutputDir = repoRoot.resolve("docs-build/kithara-android")
 val releaseBuild = providers.gradleProperty("kithara.release").map { it == "true" }.orElse(false)
 
 fun cargoExecutable(): String {
@@ -61,7 +63,7 @@ val generateKitharaFfi by tasks.registering(Exec::class) {
     inputs.dir(repoRoot.resolve("crates"))
     inputs.file(repoRoot.resolve("Cargo.toml"))
     inputs.file(repoRoot.resolve("Cargo.lock"))
-    commandLine("cargo", "xtask", "android", "build")
+    commandLine(cargoExecutable(), "xtask", "android", "build")
     if (releaseBuild.get()) {
         args("--profile", "release")
     }
@@ -166,4 +168,25 @@ tasks.named("preBuild") {
 // by name as it appears.
 tasks.matching { it.name.endsWith("AndroidTestAssets") }.configureEach {
     dependsOn(exportTestFixtures)
+}
+
+dokka {
+    moduleName.set("kithara-android")
+
+    dokkaSourceSets.configureEach {
+        // The UniFFI bindings are generated from the Rust FFI surface and are
+        // not part of the documented facade.
+        perPackageOption {
+            matchingRegex.set("com\\.kithara\\.ffi.*")
+            suppress.set(true)
+        }
+    }
+
+    dokkaPublications.html {
+        outputDirectory.set(apiDocsOutputDir)
+    }
+}
+
+tasks.named("dokkaGenerate") {
+    dependsOn(generateKitharaFfi)
 }

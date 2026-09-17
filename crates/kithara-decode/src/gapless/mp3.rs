@@ -64,8 +64,91 @@ pub(crate) fn read_xing_duration(data: &[u8]) -> Option<Duration> {
         return None;
     }
     let frames = u64::from(frame_count).saturating_mul(u64::from(tag.header.samples_per_frame));
-    let sample_rate = NonZeroU32::new(tag.header.sample_rate)?;
+    let sample_rate = NonZeroU32::new(tag.header.timing.sample_rate)?;
     AudioSpec::new(1, sample_rate).duration_for(frames).ok()
+}
+
+/// Frames whose shared bitrate is accepted as proof the stream is CBR.
+///
+/// A 16 `KiB` probe window holds ~39 frames at 128 kbps and ~15 at 320 kbps, so
+/// this stays well inside the window for every MPEG-1 bitrate.
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+const CBR_EVIDENCE_FRAMES: u32 = 8;
+
+/// Duration of a constant-bitrate stream that keeps no frame count of its own.
+///
+/// `base` is the absolute offset of `data[0]` in the resource and `total_bytes`
+/// the resource's full length. A CBR stream's duration is exactly its audio byte
+/// count over its byte rate, which is the only record a plain MP3 keeps once it
+/// has no Xing/Info frame.
+///
+/// Returns `None` unless the window proves the bitrate is constant: under VBR a
+/// byte count says nothing about duration.
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+pub(crate) fn read_cbr_duration(data: &[u8], base: u64, total_bytes: u64) -> Option<Duration> {
+    let frame_start = find_frame_start(data)?;
+    let bitrate = frame_header_at(data, frame_start)?.timing.bitrate;
+
+    let mut cursor = frame_start;
+    let mut frames = 0u32;
+    while let Some(header) = frame_header_at(data, cursor) {
+        if header.timing.bitrate != bitrate {
+            return None;
+        }
+        frames = frames.saturating_add(1);
+        cursor = cursor.checked_add(frame_len(header)?)?;
+    }
+    if frames < CBR_EVIDENCE_FRAMES {
+        return None;
+    }
+
+    let audio_start = base.checked_add(u64::try_from(frame_start).ok()?)?;
+    let audio_bytes = total_bytes.checked_sub(audio_start)?;
+    let nanos = u128::from(audio_bytes)
+        .checked_mul(8 * 1_000_000_000)?
+        .checked_div(u128::from(bitrate))?;
+    Some(Duration::from_nanos(u64::try_from(nanos).ok()?))
+}
+
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+fn frame_header_at(data: &[u8], offset: usize) -> Option<FrameHeader> {
+    let word = u32::from_be_bytes(
+        data.get(offset..offset.checked_add(Consts::MPEG_HEADER_LEN)?)?
+            .try_into()
+            .ok()?,
+    );
+    if word & Consts::SYNC_MASK != Consts::SYNC_VALUE {
+        return None;
+    }
+    parse_header(word)
+}
+
+/// On-disk length of one frame, including its slot-stuffing pad byte.
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+fn frame_len(header: FrameHeader) -> Option<usize> {
+    let coefficient: u32 = if header.samples_per_frame == 1152 {
+        144
+    } else {
+        72
+    };
+    let bytes = coefficient
+        .checked_mul(header.timing.bitrate)?
+        .checked_div(header.timing.sample_rate)?;
+    usize::try_from(bytes)
+        .ok()?
+        .checked_add(usize::from(header.timing.padded))
 }
 
 struct XingTag<'a> {
@@ -166,8 +249,21 @@ struct FrameHeader {
         test,
         all(feature = "apple", any(target_os = "macos", target_os = "ios"))
     ))]
-    sample_rate: u32,
+    timing: Timing,
     samples_per_frame: u32,
+}
+
+/// The header fields only the duration derivations read: enough to turn a byte
+/// count into playing time and to step from one frame to the next.
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    bitrate: u32,
+    sample_rate: u32,
+    padded: bool,
 }
 
 fn parse_header(word: u32) -> Option<FrameHeader> {
@@ -185,16 +281,34 @@ fn parse_header(word: u32) -> Option<FrameHeader> {
         test,
         all(feature = "apple", any(target_os = "macos", target_os = "ios"))
     ))]
-    let sample_rate = {
+    let timing = {
+        let bitrate_index = usize::try_from((word >> 12) & 0xF).ok()?;
+        let kbps = match version_bits {
+            0b11 => [
+                0u32, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+            ],
+            _ => [
+                0u32, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+            ],
+        }
+        .get(bitrate_index)
+        .copied()?;
+        if kbps == 0 {
+            return None;
+        }
         let sample_rate_index = usize::try_from((word >> 10) & 0x3).ok()?;
         let base_rate = [44_100u32, 48_000, 32_000]
             .get(sample_rate_index)
             .copied()?;
-        match version_bits {
-            0b11 => base_rate,
-            0b10 => base_rate / 2,
-            0b00 => base_rate / 4,
-            _ => return None,
+        Timing {
+            bitrate: kbps.saturating_mul(1000),
+            sample_rate: match version_bits {
+                0b11 => base_rate,
+                0b10 => base_rate / 2,
+                0b00 => base_rate / 4,
+                _ => return None,
+            },
+            padded: (word >> 9) & 0x1 == 1,
         }
     };
     let channel_mode = (word >> 6) & 0x3;
@@ -204,7 +318,7 @@ fn parse_header(word: u32) -> Option<FrameHeader> {
             test,
             all(feature = "apple", any(target_os = "macos", target_os = "ios"))
         ))]
-        sample_rate,
+        timing,
         samples_per_frame,
         side_info_mono: mono,
     })
@@ -287,5 +401,85 @@ mod tests {
         let buf = vec![0xFF, 0xFB, 0x90, 0x00, 0, 0, 0, 0];
         assert!(read_lame_trim(&buf).is_none());
         assert!(read_xing_duration(&buf).is_none());
+    }
+
+    /// `count` back-to-back MPEG-1 Layer III frames at `kbps`, 44.1 kHz stereo,
+    /// each the on-disk length its own header claims so the walker steps frame
+    /// to frame.
+    fn frames(kbps: u32, count: usize) -> Vec<u8> {
+        const MPEG1_KBPS: [u32; 16] = [
+            0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+        ];
+
+        let index = MPEG1_KBPS
+            .iter()
+            .position(|&rate| rate == kbps)
+            .expect("kbps is an MPEG-1 Layer III bitrate");
+        let rate_byte = u8::try_from(index << 4).expect("bitrate index fits the byte");
+        let len = 144 * usize::try_from(kbps).expect("kbps fits usize") * 1000 / 44_100;
+        let mut buf = Vec::with_capacity(len * count);
+        for _ in 0..count {
+            let mut frame = vec![0u8; len];
+            frame[0] = 0xFF;
+            frame[1] = 0xFB;
+            frame[2] = rate_byte;
+            buf.extend_from_slice(&frame);
+        }
+        buf
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn cbr_duration_is_the_audio_byte_length_over_the_byte_rate() {
+        let buf = frames(128, 12);
+        let total = u64::try_from(buf.len()).expect("fixture length fits u64");
+
+        let duration = read_cbr_duration(&buf, 0, total).expect("BUG: CBR duration");
+
+        assert_eq!(duration, Duration::from_nanos(312_750_000));
+    }
+
+    /// The window only ever holds the head of the resource, so the duration must
+    /// come from the resource's full length — the device case, where 16 `KiB` of
+    /// probe stands in for a 12 MB audiobook.
+    #[kithara::test(native, flash(false))]
+    fn cbr_duration_spans_the_whole_resource_not_just_the_probe_window() {
+        let buf = frames(128, 12);
+        let total = u64::try_from(buf.len() * 100).expect("fixture length fits u64");
+
+        let duration = read_cbr_duration(&buf, 0, total).expect("BUG: CBR duration");
+
+        assert_eq!(duration, Duration::from_nanos(31_275_000_000));
+    }
+
+    /// `base` is where the window sits in the resource, so the bytes it skipped
+    /// are not audio and must not be billed as playing time.
+    #[kithara::test(native, flash(false))]
+    fn cbr_duration_excludes_the_bytes_before_the_window() {
+        let buf = frames(128, 12);
+        let audio_bytes = u64::try_from(buf.len()).expect("fixture length fits u64");
+        let base = 1024;
+
+        let duration =
+            read_cbr_duration(&buf, base, base + audio_bytes).expect("BUG: CBR duration");
+
+        assert_eq!(duration, Duration::from_nanos(312_750_000));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn variable_bitrate_frames_yield_no_cbr_duration() {
+        let mut buf = frames(128, 6);
+        buf.extend_from_slice(&frames(160, 6));
+        let total = u64::try_from(buf.len()).expect("fixture length fits u64");
+
+        assert!(read_cbr_duration(&buf, 0, total).is_none());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn too_few_frames_yield_no_cbr_duration() {
+        let count = usize::try_from(CBR_EVIDENCE_FRAMES).expect("threshold fits usize") - 1;
+        let buf = frames(128, count);
+        let total = u64::try_from(buf.len()).expect("fixture length fits u64");
+
+        assert!(read_cbr_duration(&buf, 0, total).is_none());
     }
 }

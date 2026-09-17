@@ -337,12 +337,12 @@ apple-fused-src = [
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-download?/client-apple", "kithara-stream?/client-apple"]
 android = [
+    "audio",
     "kithara-analysis?/android",
     "kithara-audio?/android",
     "kithara-decode?/android",
     "kithara-net?/client-wreq",
     "resample-rubato",
-    "analysis-beat",
 ]
 full = [
     "audio",
@@ -392,7 +392,7 @@ kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
-kithara-ui = { workspace = true, optional = true }
+kithara-ui = { workspace = true, optional = true, default-features = false }
 kithara-warp = { workspace = true, optional = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 

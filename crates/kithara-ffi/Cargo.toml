@@ -30,11 +30,24 @@ required-features = ["uniffi-bindgen-cli"]
 # Device builds compile with `--no-default-features` (see `xtask apple`/
 # `xtask android`), so `symphonia` is never pulled into apple/android — the
 # hardware backend is the sole decoder there.
-default = ["uniffi", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = ["uniffi", "symphonia", "standard", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
+standard = ["stretch-signalsmith"]
 apple = ["kithara/apple-fused-src", "kithara/apple-net", "stretch-signalsmith"]
 android = ["kithara/android", "stretch-signalsmith"]
+analysis = ["analysis-waveform", "beat-dsp"]
+analysis-beat = ["kithara/analysis-beat"]
+analysis-waveform = ["kithara/analysis-waveform"]
+beat-dsp = ["kithara/beat-dsp"]
+beat-nn = ["kithara/beat-nn"]
+beat-nn-small = ["kithara/beat-nn-small"]
+beat-nn-full = ["kithara/beat-nn-full"]
+beat-nn-full-int8 = ["kithara/beat-nn-full-int8"]
+ui = ["kithara/ui"]
+ui-capture = ["kithara/ui-capture"]
+ui-iced = ["kithara/ui-iced"]
+ui-masonry = ["kithara/ui-masonry"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side
 # uniffi-bindgen build, where neither the apple nor the android
@@ -105,7 +118,7 @@ tracing-subscriber = { workspace = true }
 # `symphonia`, which would leak into apple/android device builds (compiled
 # with `--no-default-features`). symphonia is re-added explicitly via the
 # crate-local `symphonia` feature (in the default set, off on device).
-kithara = { workspace = true, default-features = false, features = ["download", "backend-cpal", "file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["download", "backend-cpal", "file", "hls", "warp"] }
 
 bytes = { workspace = true }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
@@ -122,9 +135,7 @@ uuid = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "download",
-    "analysis-waveform",
     "audio",
-    "beat-dsp",
     "hls",
     "host",
     "resample-rubato",
@@ -163,7 +174,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["usdt", "download", "net", "signal"] }
+kithara = { workspace = true, features = ["usdt", "download", "net", "offline", "signal"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 

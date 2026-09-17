@@ -148,28 +148,6 @@ apple:ios-test:
     paths:
       - .ci-artifacts/junit/
 
-# The resampler axis: the same end-to-end playback through three source-rate
-# conversion shapes, which is what a change to decode, blending or output can
-# break without a single unit test noticing.
-apple:e2e:
-  extends:
-    - .macos-job
-    - .rules-review-or-nightly
-    - .measured
-  stage: apple
-  timeout: 90 minutes
-  needs:
-    - apple:lint
-  script:
-    - just ci run apple-e2e
-  artifacts:
-    when: always
-    expire_in: 30 days
-    reports:
-      junit: target/nextest/ci/junit.xml
-    paths:
-      - target/nextest/ci/junit.xml
-
 apple:safari:
   extends:
     - .macos-job

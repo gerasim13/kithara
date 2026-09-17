@@ -242,7 +242,7 @@ impl Scope {
     /// Resolves once the firings recorded so far satisfy `holds`,
     /// re-checking after every newly recorded firing.
     ///
-    /// The wait carries the watchdog budget, so a condition the product never
+    /// The wait runs under the hang watchdog, so a condition the product never
     /// satisfies fails the test with what was recorded instead of parking it
     /// until the runner kills the binary. The budget is real time, so the
     /// caller runs under `flash(false)`: a virtual clock jumps the deadline
@@ -250,29 +250,31 @@ impl Scope {
     ///
     /// # Panics
     ///
-    /// Panics when `holds` has not held within that budget.
+    /// Panics when `holds` has not held within the watchdog budget.
+    #[crate::kithara::hang_watchdog(ctx = String)]
     pub async fn wait_for<F>(&self, mut holds: F)
     where
         F: FnMut(&[ProbeEvent]) -> bool,
     {
-        let budget = crate::hang::default_timeout();
-        let wait = async {
-            loop {
-                let recorded = self.recorded.notified();
-                if holds(&lock(&STATE).events) {
-                    return;
-                }
-                recorded.await;
+        loop {
+            let recorded = self.recorded.notified();
+            if holds(&lock(&STATE).events) {
+                return;
             }
-        };
-        if timeout(budget, wait).await.is_err() {
-            panic!("{}", Self::unsatisfied_wait(budget));
+            if timeout(__hang_detector.remaining(), recorded)
+                .await
+                .is_err()
+            {
+                hang_tick!(Self::unsatisfied_wait());
+            } else {
+                hang_tick!();
+            }
         }
     }
 
-    /// Describe a wait that ran out of budget: how long it waited and which
-    /// probes it did see, so the failure names the missing firing.
-    fn unsatisfied_wait(budget: kithara_platform::time::Duration) -> String {
+    /// Describe a wait that ran out of budget: which probes it did see, so
+    /// the failure names the missing firing.
+    fn unsatisfied_wait() -> String {
         let (events, overflowed) = recorded();
         let mut counts: Vec<(&'static str, usize, ProbeEvent)> = Vec::new();
         for event in &events {
@@ -308,7 +310,7 @@ impl Scope {
             String::new()
         };
         format!(
-            "usdt scope waited {budget:?} without its condition holding; \
+            "usdt scope condition never held; \
              recorded {} firings{overflow}, latest of each: {seen}",
             events.len()
         )

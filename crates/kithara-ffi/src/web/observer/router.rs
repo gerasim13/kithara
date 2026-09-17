@@ -1,20 +1,19 @@
 use std::mem;
 
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Function, Reflect};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
 };
-use send_wrapper::SendWrapper;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use web_sys::{BroadcastChannel, MessageEvent, console};
 
 use super::{decode::decode, decode_item::decode_item_event, marshal::get_id_req};
 use crate::{
     item::AudioPlayerItem,
-    observer::{ItemObserver, PlayerObserver},
-    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
-    web::{analysis::encode::ANALYSIS_SCOPE, observer::source::EVENT_CHANNEL},
+    observer::PlayerObserver,
+    types::FfiPlayerEvent,
+    web::{analysis::AnalysisRoute, observer::source::EVENT_CHANNEL},
 };
 
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
@@ -25,12 +24,12 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 pub(crate) struct Routes {
     queue_view: Arc<Mutex<QueueView>>,
     sinks: Arc<Mutex<Sinks>>,
+    analysis: AnalysisRoute,
 }
 
 #[derive(Default)]
 struct Sinks {
     player: Option<Arc<dyn PlayerObserver>>,
-    analysis: Option<SendWrapper<Function>>,
     installed: bool,
 }
 
@@ -39,11 +38,12 @@ impl Routes {
         Self {
             queue_view,
             sinks: Arc::new(Mutex::default()),
+            analysis: AnalysisRoute::default(),
         }
     }
 
     pub(crate) fn set_analysis(&self, func: Function) {
-        self.sinks.lock().analysis = Some(SendWrapper::new(func));
+        self.analysis.set(func);
         self.arm();
     }
 
@@ -79,25 +79,13 @@ impl Routes {
     }
 
     fn dispatch(&self, data: &JsValue) {
-        match scope(data).as_deref() {
-            Some("item") => self.route_item_message(data),
-            Some(ANALYSIS_SCOPE) => self.route_analysis(data),
-            _ => self.route_player(data),
+        let scope = scope(data);
+        if self.analysis.dispatch(scope.as_deref(), data) {
+            return;
         }
-    }
-
-    fn route_analysis(&self, data: &JsValue) {
-        let func = self
-            .sinks
-            .lock()
-            .analysis
-            .as_ref()
-            .map(|func| (*func).clone());
-        if let Some(func) = func {
-            if let Some(payload) = data.dyn_ref::<Object>() {
-                let _ = Reflect::delete_property(payload, &JsValue::from_str(SCOPE_KEY));
-            }
-            let _ = func.call1(&JsValue::UNDEFINED, data);
+        match scope.as_deref() {
+            Some("item") => self.route_item_message(data),
+            _ => self.route_player(data),
         }
     }
 
@@ -127,10 +115,7 @@ impl Routes {
         let Some(item) = self.item(*item_id) else {
             return;
         };
-        update_item_state(&item, status);
-        if let Some(item_obs) = item.observer() {
-            dispatch_track_status_to_item(&item_obs, status);
-        }
+        item.apply_track_status(status);
     }
 
     fn route_item_message(&self, data: &JsValue) {
@@ -142,9 +127,7 @@ impl Routes {
         let Some(item) = self.item(track_id) else {
             return;
         };
-        if let Some(obs) = item.observer() {
-            obs.on_event(item_event);
-        }
+        item.deliver(item_event);
     }
 }
 
@@ -154,34 +137,4 @@ fn scope(data: &JsValue) -> Option<String> {
     Reflect::get(data, &JsValue::from_str(SCOPE_KEY))
         .ok()
         .and_then(|value| value.as_string())
-}
-
-fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {
-    match status {
-        FfiTrackStatus::Loaded => {
-            let duration = item.duration_sec();
-            item.state.lock().resolve_duration(duration);
-        }
-        FfiTrackStatus::Failed { .. } => {
-            item.state.lock().mark_failed();
-        }
-        _ => {}
-    }
-}
-
-fn dispatch_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &FfiTrackStatus) {
-    match status {
-        FfiTrackStatus::Loaded => observer.on_event(FfiItemEvent::StatusChanged {
-            status: FfiItemStatus::ReadyToPlay,
-        }),
-        FfiTrackStatus::Failed { reason } => {
-            observer.on_event(FfiItemEvent::StatusChanged {
-                status: FfiItemStatus::Failed,
-            });
-            observer.on_event(FfiItemEvent::Error {
-                error: reason.clone(),
-            });
-        }
-        _ => {}
-    }
 }

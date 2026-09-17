@@ -5,9 +5,3 @@
     not(any(feature = "resample-rubato", feature = "resample-glide"))
 ))]
 compile_error!("kithara-play: wasm32 build requires `resample-rubato` or `resample-glide`");
-
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
-))]
-compile_error!("kithara-play: non-wasm build requires `stretch-signalsmith` or `stretch-bungee`");

@@ -63,9 +63,6 @@ lanes:usdt:
   script:
     - just ci run linux-usdt
 
-# Linux CI runs in containers with no output device, so `apple:e2e` serves the
-# hardware-dependent e2e lanes.
-
 lanes:selenium-firefox:
   extends: .lane-job
   script:

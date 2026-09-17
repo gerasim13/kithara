@@ -55,6 +55,12 @@ pub(crate) enum AndroidCommand {
     Clippy,
     /// Build release JNI/Kotlin bindings and export stable release AAR files.
     Aar,
+    /// Build the Kotlin bindings and render the API documentation for them.
+    Doc {
+        /// Build profile for the underlying Rust JNI libraries.
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
+    },
     /// Boot an emulator (if needed), install the demo APK, and launch it.
     ///
     /// Pass `--debug` to start the activity with `am start -D`, which
@@ -89,6 +95,9 @@ pub(crate) enum AndroidCommand {
         /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
         #[arg(long)]
         skip_build: bool,
+        /// Nextest expression selecting the Rust tests to run on the device.
+        #[arg(long, env = "KITHARA_ANDROID_TEST_FILTER")]
+        filter: Option<String>,
     },
 }
 
@@ -130,6 +139,7 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
         AndroidCommand::Build { profile } => run_build(profile, &ext.android, tools),
         AndroidCommand::Clippy => run_clippy(&ctx.root, &ext.android, tools),
         AndroidCommand::Aar => run_aar(&ext.android, tools),
+        AndroidCommand::Doc { profile } => run_doc(profile, &ext.android, tools),
         AndroidCommand::Run {
             profile,
             avd,
@@ -148,12 +158,14 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
             avd,
             serial,
             skip_build,
+            filter,
         } => run_tests(
             &ctx.root,
             &ctx.config,
             profile,
             request(avd.as_deref(), serial.as_deref()),
             skip_build,
+            filter.as_deref().filter(|filter| !filter.is_empty()),
             &ext.android,
         ),
     }
@@ -196,15 +208,23 @@ const RUST_TARGETS: &[(&str, &str)] = &[
 
 /// Features the FFI crate is compiled with on-device. Defaults stay off so
 /// `symphonia` is absent: `MediaCodec` is the sole decoder there.
-const fn device_features(profile: BuildProfile) -> &'static str {
-    match profile {
-        BuildProfile::Release => {
-            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/stretch-signalsmith"
-        }
+fn device_features(profile: BuildProfile) -> String {
+    let mut features = match profile {
+        BuildProfile::Release => "kithara-ffi/uniffi,kithara-ffi/android".to_owned(),
         BuildProfile::Debug => {
-            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/dev,kithara-ffi/test,kithara-ffi/stretch-signalsmith"
+            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/dev,kithara-ffi/test".to_owned()
         }
+    };
+    let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_else(|_| "standard".to_owned());
+    for feature in selected
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        features.push_str(",kithara-ffi/");
+        features.push_str(feature);
     }
+    features
 }
 
 fn check_ndk_toolchain(tools: &ToolsConfig) -> Result<()> {
@@ -252,7 +272,7 @@ fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Resu
     for package in CLIPPY_PACKAGES {
         cmd.args(["-p", package]);
     }
-    cmd.args(["--no-default-features", "--features", features]);
+    cmd.args(["--no-default-features", "--features", &features]);
     cmd.args(["--", "-D", "warnings"]);
     cmd.current_dir(root);
 
@@ -292,7 +312,7 @@ pub(crate) fn run_build(
         ffi_crate,
         "--no-default-features",
         "--features",
-        device_features(profile),
+        &device_features(profile),
     ]);
 
     if matches!(profile, BuildProfile::Release) {
@@ -331,11 +351,13 @@ pub(crate) fn run_build(
         "run",
         "--bin",
         "uniffi-bindgen",
+        "--no-default-features",
         "--features",
         // symphonia gives the host bindgen build a DecoderBackend
         // variant (the android MediaCodec variant is target_os-gated
-        // and absent when compiling the bindgen bin for the host).
-        "uniffi-bindgen-cli,symphonia",
+        // and absent when compiling the bindgen bin for the host);
+        // kithara-net refuses to build without one HTTP client.
+        "uniffi-bindgen-cli,symphonia,client-reqwest,tls-rustls",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");
@@ -418,6 +440,48 @@ fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
         println!("    {}", aar.display());
     }
     Ok(())
+}
+
+fn run_doc(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
+    run_build(profile, android, tools)?;
+    render_docs().map(drop)
+}
+
+/// Render the Kotlin API documentation from the generated bindings already on
+/// disk, and answer with the directory it was written to. The release job
+/// builds the AAR through its own recipe, so the documentation step must not
+/// build again.
+pub(crate) fn render_docs() -> Result<PathBuf> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+    let android_root = workspace_root.join("android");
+    let gradlew = android_root.join("gradlew");
+    if !gradlew.exists() {
+        bail!("gradlew not found at {}", gradlew.display());
+    }
+
+    println!("==> Rendering Kotlin API documentation");
+    let status = Command::new(&gradlew)
+        .args([":lib:dokkaGenerate", "-x", "generateKitharaFfi"])
+        .current_dir(&android_root)
+        .status()
+        .context("failed to run Gradle dokkaGenerate")?;
+    if !status.success() {
+        bail!("Gradle dokkaGenerate failed");
+    }
+
+    let docs = workspace_root.join("docs-build/kithara-android");
+    if !docs.join("index.html").is_file() {
+        bail!(
+            "expected documentation was not produced: {}",
+            docs.display()
+        );
+    }
+
+    println!("==> Documentation: {}", docs.display());
+    Ok(docs)
 }
 
 /// Resolved before the run takes anything, so a failure while preparing is
@@ -516,6 +580,7 @@ fn run_tests(
     profile: BuildProfile,
     request: Request<'_>,
     skip_build: bool,
+    filter: Option<&str>,
     android: &AndroidConfig,
 ) -> Result<()> {
     let _run_lease = test_run_lease(workspace_root)?;
@@ -616,7 +681,7 @@ fn run_tests(
             "rust_prepare",
             native::prepare(workspace_root, config, selected, evidence.path(), &cancel),
         )?;
-        let rust = record.stage("rust_tests", native.run(&device_url, &cancel));
+        let rust = record.stage("rust_tests", native.run(&device_url, filter, &cancel));
         let native_report = evidence.path().join("native/junit.xml");
         if native_report.is_file() {
             results::merge(&[instrumentation, native_report], &report)?;

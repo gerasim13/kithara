@@ -20,9 +20,21 @@ use kithara::{
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, QueueError, RepeatMode, Transition},
+    warp::{StretchControls, WarpConfig},
 };
 
 use super::salt;
+fn player_timestretch() -> Arc<StretchControls> {
+    let controls = StretchControls::new(1.0);
+    #[cfg(all(
+        feature = "apple",
+        target_vendor = "apple",
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    controls.set_keylock(true);
+    controls
+}
+
 use crate::{
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
@@ -200,6 +212,7 @@ impl NativeInner {
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+            .warp(WarpConfig::builder().stretch(player_timestretch()).build())
             .cancel(player_cancel.child())
             .sample_rate(super::session::requested_sample_rate())
             .worker(worker)
@@ -405,19 +418,14 @@ impl NativeInner {
         }
     }
 
-    pub(crate) fn select_item(
+    pub(crate) fn select(
         &self,
-        index: u32,
+        item: &AudioPlayerItem,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
-        let tracks = self.queue.tracks();
-        let idx = index as usize;
-        let entry = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
-            reason: format!("item index {idx} out of range (len: {})", tracks.len()),
-        })?;
         self.queue
-            .select(entry.id, transition.into())
+            .select(item.track_id(), transition.into())
             .map_err(|e| match e {
                 QueueError::NotReady(_) => FfiError::NotReady,
                 other => FfiError::Internal {

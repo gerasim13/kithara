@@ -16,7 +16,7 @@ extension IntegrationRegressionsIOS {
 
         let fixture = try await TestServerFixture.registerBehavior(
             .init(
-                content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
+                content: .signal(name: "signal_mp3_track_sine440_187s.mp3", shape: .tagged),
                 delivery: .stallAfter(afterBytes: prefix)
             )
         )

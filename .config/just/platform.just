@@ -37,7 +37,7 @@ wasm MODE="check" *ARGS:
         ;;
     esac
 
-# Android tasks: build, aar, or another xtask mode.
+# Android tasks: build, aar, doc, or another xtask mode.
 [positional-arguments]
 android MODE="build" *ARGS:
     #!/usr/bin/env bash
@@ -50,6 +50,9 @@ android MODE="build" *ARGS:
         ;;
       aar)
         just _xtask android aar
+        ;;
+      doc)
+        just _xtask android doc "$@"
         ;;
       *)
         just _xtask android "$mode" "$@"
@@ -141,6 +144,7 @@ apple MODE="xcframework" *ARGS:
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
             -resultBundlePath "$bundle" \
+            ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO
         ;;
       integration-regressions)
@@ -171,6 +175,7 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
         log="$TMPDIR/kithara-integration-regressions.log"

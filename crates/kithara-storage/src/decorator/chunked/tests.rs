@@ -14,7 +14,7 @@ use kithara_platform::{CancelToken, time::Duration};
 use tempfile::TempDir;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
-use crate::{MmapDriver, MmapOptions, OpenMode, Resource, StorageResult};
+use crate::{MmapDriver, MmapOptions, OpenMode, Resource, ResourceRead, StorageResult};
 
 fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBuf, PathBuf) {
     let canonical = dir.path().join(name);
@@ -113,7 +113,9 @@ fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
 const DEAD_OWNERS_BYTES: &[u8] = b"stale-from-previous-process";
 
 /// Reclaiming a stale tmp starts from an empty file. `create_new` used to
-/// give that for free; the lock-based claim has to do it itself.
+/// give that for free; the lock-based claim has to do it itself. The bytes are
+/// read through a mapping because the claim's lock refuses plain reads through
+/// any other handle on Windows.
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
     let dir = TempDir::new().unwrap();
@@ -122,11 +124,17 @@ fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
 
     let (_res, _canonical, tmp) = open_chunked(&dir, "tail.bin");
 
-    let bytes = fs::read(&tmp).unwrap();
+    let reader = Resource::<_, MmapDriver>::open(
+        CancelToken::never(),
+        MmapOptions::for_path(tmp).mode(OpenMode::ReadOnly).build(),
+    )
+    .unwrap();
+    let mut bytes = vec![0xff; DEAD_OWNERS_BYTES.len()];
+    let read = reader.read_at(0, &mut bytes).unwrap();
     assert!(
-        bytes.iter().all(|byte| *byte == 0),
+        bytes[..read].iter().all(|byte| *byte == 0),
         "reclaimed tmp still carries the dead owner's bytes: {:?}",
-        &bytes[..bytes.len().min(32)]
+        &bytes[..read]
     );
 }
 

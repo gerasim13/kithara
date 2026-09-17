@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, env, ffi::OsString};
+use std::{collections::BTreeMap, env, ffi::OsString, path::Path};
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -6,7 +6,7 @@ use kithara_devtools::Ctx;
 
 use super::declared;
 use crate::{
-    ci::{config::CiPins, process::Process, run::PipelineKind},
+    ci::{config::CiPins, lane_build::LaneBuild, process::Process, run::PipelineKind},
     config::{CiLaneConfig, KitharaExt},
 };
 
@@ -53,14 +53,25 @@ fn executor_vars(target_dir: Option<OsString>) -> BTreeMap<OsString, OsString> {
 }
 
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
+    run_in(args, ctx, env::var_os("CARGO_TARGET_DIR"))
+}
+
+fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
-    let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
-    let process = Process::new(&ctx.root, vars);
-    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)?;
-    Ok(())
+    // Every lane but a snapshot restore builds in the directory named after
+    // it, which checkouts of other content share; a snapshot lane is handed a
+    // private one.
+    let build = match (&target_dir, &lane.target_snapshot) {
+        (Some(dir), None) => Some(LaneBuild::claim(&ctx.root, Path::new(dir))?),
+        _ => None,
+    };
+    let process = Process::new(&ctx.root, executor_vars(target_dir));
+    let outcome = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
+    let settled = build.map_or(Ok(()), |build| build.settle(outcome.is_ok()));
+    outcome.and(settled)
 }
 
 #[cfg(test)]
@@ -123,22 +134,15 @@ mod tests {
         );
     }
 
-    /// `ci run` requires `KITHARA_CI_HOST_CONFIG` and bails without it
-    /// (`xtask/src/ci/run.rs`). So a lane that reaches its own work at all,
-    /// with the ambient environment left untouched, is already the proof
-    /// that `ci lane` resolved no host profile: the fixture lane's one step
-    /// is `sh -c "exit 0"` (`cmd /C exit 0` on Windows), and `Ok` means
-    /// execution got there.
-    #[test]
-    fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
+    /// A workspace at `root` declaring one lane whose only step succeeds.
+    fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
         let (program, step_args) = if cfg!(windows) {
             ("cmd", r#"["/C", "exit", "0"]"#)
         } else {
             ("sh", r#"["-c", "exit 0"]"#)
         };
 
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let root = temp.path().to_path_buf();
+        let root = root.to_path_buf();
         fixture()
             .pins
             .write(&root.join("ci-pins.toml"))
@@ -174,12 +178,48 @@ args = {step_args}
             lane: "trivial".to_owned(),
             kind: PipelineKind::Branch,
         };
+        (ctx, args)
+    }
 
-        let result = run(&args, &ctx);
+    /// `ci run` requires `KITHARA_CI_HOST_CONFIG` and bails without it
+    /// (`xtask/src/ci/run.rs`). So a lane that reaches its own work at all,
+    /// with the ambient environment left untouched, is already the proof
+    /// that `ci lane` resolved no host profile: the fixture lane's one step
+    /// is `sh -c "exit 0"` (`cmd /C exit 0` on Windows), and `Ok` means
+    /// execution got there.
+    #[test]
+    fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let (ctx, args) = trivial_lane(temp.path());
+
+        let result = run_in(&args, &ctx, None);
 
         assert!(
             result.is_ok(),
             "a lane that needs no host profile must not fail resolving one: {result:?}"
+        );
+    }
+
+    /// A lane building in its shared directory records the content it built
+    /// from, which is what lets the next checkout of other content rebuild
+    /// instead of reusing these artifacts.
+    #[test]
+    fn a_lane_claims_the_shared_directory_it_builds_in() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let target = tempfile::tempdir().expect("create lane build directory");
+        let (ctx, args) = trivial_lane(temp.path());
+        let status = std::process::Command::new("git")
+            .current_dir(temp.path())
+            .args(["init", "-q"])
+            .status()
+            .expect("run git init");
+        assert!(status.success(), "git init");
+
+        run_in(&args, &ctx, Some(target.path().as_os_str().to_owned())).expect("lane runs");
+
+        assert!(
+            target.path().join(".kithara-lane-sources").exists(),
+            "the shared lane directory must record what it was built from"
         );
     }
 

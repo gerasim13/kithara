@@ -8,27 +8,15 @@ use kithara::{
     play::{Resource, SeekOutcome},
 };
 use kithara_integration_tests::event::TestEvent;
-use serde::Serialize;
 
 use super::{BLOCK_FRAMES, CHANNELS, CapturedAudio, Case, Deck, PRELOAD_TIMEOUT};
-
-#[derive(Default, Serialize)]
-pub(super) struct ReferenceCapture {
-    #[serde(skip_serializing)]
-    pub(super) pcm: Vec<f32>,
-    pub(super) requested_seek_secs: f64,
-    pub(super) landed_at_secs: Option<f64>,
-    pub(super) first_source_start: Option<u64>,
-    pub(super) first_source_end: Option<u64>,
-    pub(super) first_source_sample_rate: Option<u32>,
-}
 
 pub(super) async fn capture_references(
     case: &Case,
     decks: &mut [Deck],
     capture: &CapturedAudio,
     failures: &mut Vec<String>,
-) -> Vec<ReferenceCapture> {
+) -> Vec<Vec<f32>> {
     if capture.start_positions_secs.len() != decks.len() {
         failures.push(format!(
             "{}: final capture recorded {} starts for {} decks",
@@ -46,16 +34,9 @@ pub(super) async fn capture_references(
         .enumerate()
     {
         let target = Duration::from_secs_f64(start);
-        let mut reference = ReferenceCapture {
-            requested_seek_secs: start,
-            ..ReferenceCapture::default()
-        };
         drain_reference_events(&mut deck.reference_events);
         let seek_ready = match deck.reference.seek(target) {
-            Ok(SeekOutcome::Landed { landed_at, .. }) => {
-                reference.landed_at_secs = Some(landed_at.as_secs_f64());
-                true
-            }
+            Ok(SeekOutcome::Landed { .. }) => true,
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference start {start:.9}s is past EOF at {:.9}s",
@@ -73,7 +54,7 @@ pub(super) async fn capture_references(
             }
         };
         if !seek_ready {
-            references.push(reference);
+            references.push(Vec::new());
             continue;
         }
         let preload = time::timeout(PRELOAD_TIMEOUT, deck.reference.preload()).await;
@@ -84,7 +65,7 @@ pub(super) async fn capture_references(
                     "{} deck {deck_index} reference preload failed: {error}",
                     case.label,
                 ));
-                references.push(reference);
+                references.push(Vec::new());
                 continue;
             }
             Err(_) => {
@@ -92,7 +73,7 @@ pub(super) async fn capture_references(
                     "{} deck {deck_index} reference preload timed out",
                     case.label,
                 ));
-                references.push(reference);
+                references.push(Vec::new());
                 continue;
             }
         }
@@ -103,26 +84,27 @@ pub(super) async fn capture_references(
                 &mut deck.reference,
                 &mut deck.reference_events,
                 capture.requested_frames,
-                &mut reference,
+                case.source_channels,
             ),
         )
         .await
         {
-            Ok(Ok(pcm)) => reference.pcm = pcm,
+            Ok(Ok(pcm)) => references.push(pcm),
             Ok(Err(error)) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference read failed: {error}",
                     case.label,
                 ));
+                references.push(Vec::new());
             }
             Err(_) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference read timed out",
                     case.label,
                 ));
+                references.push(Vec::new());
             }
         }
-        references.push(reference);
     }
     references
 }
@@ -131,11 +113,14 @@ async fn read_reference_pcm(
     resource: &mut Resource,
     events: &mut EventReceiver<TestEvent>,
     requested_frames: usize,
-    measurement: &mut ReferenceCapture,
+    source_channels: u16,
 ) -> Result<Vec<f32>, String> {
-    if resource.spec().channels != CHANNELS {
+    // The reference decodes the source's channels and reads them into
+    // `CHANNELS` planes, the same shape the engine renders. A source that is
+    // not the one the case declares would compare against the wrong content.
+    if resource.spec().channels != source_channels {
         return Err(format!(
-            "reference has {} channels, expected {CHANNELS}",
+            "reference has {} channels, expected {source_channels}",
             resource.spec().channels,
         ));
     }
@@ -152,16 +137,9 @@ async fn read_reference_pcm(
             .read_planar(&mut planar)
             .map_err(|error| error.to_string())?
         {
-            ReadOutcome::Frames {
-                count, source_span, ..
-            } => {
+            ReadOutcome::Frames { count, .. } => {
                 drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
                 if pcm.is_empty() {
-                    if let Some(span) = source_span {
-                        measurement.first_source_start = Some(span.start());
-                        measurement.first_source_end = Some(span.end());
-                        measurement.first_source_sample_rate = Some(span.sample_rate().get());
-                    }
                     wait_for_reference_seek_completion(events, &mut request_epoch, &mut completion)
                         .await?;
                     validate_reference_seek_barrier(request_epoch, completion)?;
