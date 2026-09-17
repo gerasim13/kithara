@@ -179,9 +179,9 @@ where
             && matches!(admission, SyncAdmission::Prepared { .. });
         let prepared = {
             let sync = &self.sync;
-            sync.prepared()
+            sync.prepared().get(grid.id)
         };
-        if let Some(prepared) = prepared.filter(|prepared| prepared.target == grid.id)
+        if let Some(prepared) = prepared
             && let Some(grid) = self.runtime.core.items.track_grid(item)
         {
             kithara::probe_event!(
@@ -272,13 +272,19 @@ where
     pub(crate) fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
         self.adopt_free_receipt();
         let sync = &self.sync;
-        let Some(prepared) = sync.prepared() else {
-            return Ok(None);
-        };
-        let free = prepared.frees_deck();
         let Some(item) = self.runtime.core.items.current_item_id() else {
             return Ok(None);
         };
+        let Some(prepared) = self
+            .runtime
+            .core
+            .items
+            .track_grid(item)
+            .and_then(|grid| sync.prepared().get(grid.id))
+        else {
+            return Ok(None);
+        };
+        let free = prepared.frees_deck();
         let Some(frontier) = self
             .runtime
             .presentation_frontier_for(item, Some(prepared.warp_map))
@@ -479,7 +485,11 @@ where
         let before = self.sync.snapshot().state();
         let item = self.runtime.core.items.current_item_id();
         let withdraws = self.sync.crosses_axis_boundary(anchor);
-        let withdraws_prepared = withdraws && self.sync.prepared().is_some();
+        let member = item
+            .and_then(|item| self.runtime.core.items.track_grid(item))
+            .map(|grid| grid.id);
+        let prepared = member.and_then(|member| self.sync.prepared().get(member));
+        let withdraws_prepared = withdraws && !self.sync.prepared().is_empty();
         if withdraws_prepared
             && let (Some(slot), Some(item)) = (self.runtime.slot(), item)
             && !self.runtime.core.engine.cancel_prepared_launches(
@@ -490,10 +500,10 @@ where
         {
             return Err(SyncError::SlotChannelFull);
         }
-        let retargets = self.sync.retargets_tempo(anchor)
+        let retargets = member.is_some_and(|member| self.sync.retargets_tempo(member, anchor))
             && self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing;
         let withdraws_preparing = withdraws && self.sync.preparing().is_some();
-        let expected = self.sync.prepared().map(|prepared| prepared.activation);
+        let expected = prepared.map(|prepared| prepared.activation);
         self.sync.publish_session_anchor(anchor)?;
         let Some(item) = item else {
             return Ok(());
@@ -504,11 +514,13 @@ where
         if withdraws_prepared {
             self.replan_track(item);
         }
-        if let (Some(expected), Some(successor), Some(slot)) = (
-            expected,
-            self.sync.reanchored_prepared(anchor)?,
-            self.runtime.slot(),
-        ) {
+        let reanchored = match member {
+            Some(member) => self.sync.reanchored_prepared(member, anchor)?,
+            None => None,
+        };
+        if let (Some(expected), Some(successor), Some(slot)) =
+            (expected, reanchored, self.runtime.slot())
+        {
             let grid = self.runtime.core.items.track_grid(item);
             let reanchor = ScheduledSeekReanchor {
                 item_id: item,

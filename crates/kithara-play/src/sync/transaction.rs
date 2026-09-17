@@ -8,8 +8,8 @@ use kithara_warp::{
 use super::{
     TempoSource,
     prepare::{
-        AlignmentPolicy, FreePreparing, PreparedDisposition, PreparedSync, align_member,
-        handoff_member,
+        AlignmentPolicy, FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs,
+        align_member, handoff_member,
     },
     topology::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
@@ -27,7 +27,7 @@ pub(super) struct GroupSlots<'a, G: SyncGroup<NestedGroup = G>> {
     pub(super) generations: &'a mut (LoadGeneration, TransportRevision),
     pub(super) warp_map: &'a mut WarpMapRevision,
     pub(super) preparing: &'a mut Option<FreePreparing>,
-    pub(super) prepared: &'a mut Option<PreparedSync>,
+    pub(super) prepared: &'a mut PreparedSyncs,
     pub(super) locked: &'a mut Option<SyncApplied>,
     pub(super) topology_revision: &'a mut TopologyRevision,
     pub(super) members: &'a mut Vec<SyncMember<G>>,
@@ -320,7 +320,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
     *slots.unavailable = None;
     *slots.waiting = None;
     *slots.preparing = None;
-    *slots.prepared = Some(PreparedSync {
+    slots.prepared.insert(PreparedSync {
         operation: operation_id,
         warp_map,
         activation: aligned.activation,
@@ -394,7 +394,7 @@ fn prepare_free<G: SyncGroup<NestedGroup = G>>(
     *slots.warp_map = warp_map;
     *slots.unavailable = None;
     *slots.waiting = None;
-    *slots.prepared = None;
+    slots.prepared.clear();
     *slots.preparing = Some(FreePreparing {
         operation: operation_id,
         warp_map,
@@ -425,7 +425,7 @@ fn state_changed<G: SyncGroup<NestedGroup = G>>(
     *slots.unavailable = None;
     *slots.waiting = None;
     *slots.preparing = None;
-    *slots.prepared = None;
+    slots.prepared.clear();
     *slots.locked = None;
     Ok(SyncAdmission::StateChanged {
         operation: operation_id,

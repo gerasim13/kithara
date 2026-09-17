@@ -124,7 +124,7 @@ where
     *alignment = Some(candidate.alignment.alignment);
     group.generations = candidate.expected_generation;
     group.warp_map = candidate.prepared.warp_map;
-    group.prepared = Some(candidate.prepared);
+    group.prepared.insert(candidate.prepared);
     group.unavailable = None;
     group.waiting = None;
     group.next_operation = group.next_operation.and_then(SyncOperationId::checked_next);

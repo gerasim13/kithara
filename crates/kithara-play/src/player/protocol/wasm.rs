@@ -10,7 +10,10 @@ use portable_atomic::{AtomicF32, Ordering};
 
 use crate::{
     api::TrackId,
-    sync::{DeckGrid, GroupState, PreparedSync, prepare::FreePreparing},
+    sync::{
+        DeckGrid, GroupState, PreparedSync,
+        prepare::{FreePreparing, PreparedSyncs},
+    },
 };
 
 pub(crate) struct PlayerSync {
@@ -19,7 +22,7 @@ pub(crate) struct PlayerSync {
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
     generations: (LoadGeneration, TransportRevision),
-    prepared: Option<PreparedSync>,
+    prepared: PreparedSyncs,
 }
 
 impl PlayerSync {
@@ -40,10 +43,10 @@ impl PlayerSync {
             .map_or(self.generations, GroupState::generations)
     }
 
-    pub(crate) fn prepared(&self) -> Option<PreparedSync> {
+    pub(crate) fn prepared(&self) -> &PreparedSyncs {
         self.owned
             .as_ref()
-            .map_or(self.prepared, GroupState::prepared)
+            .map_or(&self.prepared, GroupState::prepared)
     }
 
     pub(crate) fn preparing(&self) -> Option<FreePreparing> {
@@ -66,11 +69,12 @@ impl PlayerSync {
 
     pub(crate) fn reanchored_prepared(
         &self,
+        target: BeatGridId,
         anchor: SessionAnchor,
     ) -> Result<Option<PreparedSync>, SyncError> {
         self.owned
             .as_ref()
-            .map_or(Ok(None), |owned| owned.reanchored_prepared(anchor))
+            .map_or(Ok(None), |owned| owned.reanchored_prepared(target, anchor))
     }
 
     pub(crate) fn crosses_axis_boundary(&self, anchor: SessionAnchor) -> bool {
@@ -79,10 +83,10 @@ impl PlayerSync {
             .is_some_and(|owned| owned.crosses_axis_boundary(anchor))
     }
 
-    pub(crate) fn retargets_tempo(&self, anchor: SessionAnchor) -> bool {
+    pub(crate) fn retargets_tempo(&self, target: BeatGridId, anchor: SessionAnchor) -> bool {
         self.owned
             .as_ref()
-            .is_some_and(|owned| owned.retargets_tempo(anchor))
+            .is_some_and(|owned| owned.retargets_tempo(target, anchor))
     }
 
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
@@ -108,7 +112,7 @@ impl PlayerSync {
         self.topology = owned.topology();
         self.status = owned.status();
         self.generations = owned.generations();
-        self.prepared = owned.prepared();
+        self.prepared = owned.prepared().clone();
         Some(owned)
     }
     pub(crate) fn unavailable(
@@ -124,7 +128,7 @@ impl PlayerSync {
             topology: owned.topology(),
             status: owned.status(),
             generations: owned.generations(),
-            prepared: owned.prepared(),
+            prepared: PreparedSyncs::default(),
             owned: Some(owned),
         }
     }

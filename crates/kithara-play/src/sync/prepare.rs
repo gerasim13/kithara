@@ -18,6 +18,63 @@ pub(crate) struct PreparedSync {
     pub(crate) disposition: PreparedDisposition,
 }
 
+/// Every warp map this group has prepared, one per member it targets.
+///
+/// A group prepares an entry for each of its members, not only for the one it
+/// hears: a waiting member holds its own prepared map until its activation
+/// frame arrives.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PreparedSyncs(Vec<PreparedSync>);
+
+impl PreparedSyncs {
+    /// Replaces whatever this member had prepared.
+    pub(crate) fn insert(&mut self, prepared: PreparedSync) {
+        self.remove(prepared.target);
+        self.0.push(prepared);
+    }
+
+    /// The map prepared for one member.
+    pub(crate) fn get(&self, target: BeatGridId) -> Option<PreparedSync> {
+        self.0
+            .iter()
+            .copied()
+            .find(|prepared| prepared.target == target)
+    }
+
+    /// The map prepared by one operation, which a renderer acknowledges by.
+    pub(crate) fn by_operation(&self, operation: SyncOperationId) -> Option<PreparedSync> {
+        self.0
+            .iter()
+            .copied()
+            .find(|prepared| prepared.operation == operation)
+    }
+
+    /// The most recently prepared map.
+    ///
+    /// The group reports one status and names one expected operation for the
+    /// whole group, so both read the newest preparation rather than a member.
+    pub(crate) fn latest(&self) -> Option<PreparedSync> {
+        self.0
+            .iter()
+            .copied()
+            .max_by_key(|prepared| prepared.operation)
+    }
+
+    /// Drops what one member had prepared.
+    pub(crate) fn remove(&mut self, target: BeatGridId) {
+        self.0.retain(|prepared| prepared.target != target);
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            /// Drops every prepared map, as an axis change or a state change does.
+            pub(crate) fn clear(&mut self);
+            /// Whether this group holds no prepared map at all.
+            pub(crate) fn is_empty(&self) -> bool;
+        }
+    }
+}
+
 /// Immutable Free handoff input reserved by the group until its worker claims it.
 #[derive(Clone, Debug)]
 pub(crate) struct FreePreparing {

@@ -17,7 +17,7 @@ use kithara_warp::{
 
 use super::{
     DeckGrid, TempoSource,
-    prepare::{FreePreparing, PreparedDisposition, PreparedSync},
+    prepare::{FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs},
     topology::materialize_topology,
     transaction,
 };
@@ -43,8 +43,8 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     generations: (LoadGeneration, TransportRevision),
     parent_anchor: Option<SessionAnchor>,
     warp_map: WarpMapRevision,
-    #[field(get, vis = "pub(crate)", copy)]
-    prepared: Option<PreparedSync>,
+    #[field(get, vis = "pub(crate)")]
+    prepared: PreparedSyncs,
     #[field(get, vis = "pub(crate)")]
     preparing: Option<FreePreparing>,
     locked: Option<SyncApplied>,
@@ -70,10 +70,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         self.preparing = None;
         let crate::worker::FreeAdoptionReceipt::Installed(receipt) = receipt else {
-            self.prepared = None;
+            self.prepared.clear();
             return true;
         };
-        self.prepared = Some(PreparedSync {
+        self.prepared.insert(PreparedSync {
             operation: preparing.operation,
             warp_map: preparing.warp_map,
             source: receipt.source,
@@ -452,7 +452,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             let candidate = self.session_candidate(anchor)?;
             self.publish_grid(candidate)?;
             if crosses_axis {
-                self.prepared = None;
+                self.prepared.clear();
                 self.preparing = None;
             }
         }
@@ -468,9 +468,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// changes until the successor is adopted.
     pub(crate) fn reanchored_prepared(
         &self,
+        target: BeatGridId,
         anchor: SessionAnchor,
     ) -> Result<Option<PreparedSync>, SyncError> {
-        let Some(prepared) = self.prepared.filter(|prepared| {
+        let Some(prepared) = self.prepared.get(target).filter(|prepared| {
             prepared.disposition == PreparedDisposition::Lock
                 && prepared.activation_beat >= anchor.beat()
                 && !self.crosses_axis_boundary(anchor)
@@ -498,12 +499,15 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }))
     }
 
-    /// Whether committing the same-axis `anchor` moves a settled deck's
-    /// target tempo, so its audible mapping must be replaced.
-    pub(crate) fn retargets_tempo(&self, anchor: SessionAnchor) -> bool {
+    /// Whether committing the same-axis `anchor` moves the target tempo of a
+    /// settled member, so its audible mapping must be replaced.
+    ///
+    /// A member with a map already prepared answers `false`: that preparation
+    /// carries the tempo, and another member's preparation is not its concern.
+    pub(crate) fn retargets_tempo(&self, target: BeatGridId, anchor: SessionAnchor) -> bool {
         self.mode == SyncMode::HostSync
             && self.grid.state() == BeatGridState::Live
-            && self.prepared.is_none()
+            && self.prepared.get(target).is_none()
             && self.preparing.is_none()
             && !self.crosses_axis_boundary(anchor)
             && self.parent_anchor.is_some_and(|previous| {
@@ -514,7 +518,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Adopts a successor produced by [`Self::reanchored_prepared`].
     pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
         self.warp_map = successor.warp_map;
-        self.prepared = Some(successor);
+        self.prepared.insert(successor);
     }
 
     /// Whether committing `anchor` steps this deck's live grid onto the
@@ -577,7 +581,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             generations: (LoadGeneration::first(), TransportRevision::first()),
             parent_anchor: None,
             warp_map: WarpMapRevision::first(),
-            prepared: None,
+            prepared: PreparedSyncs::default(),
             preparing: None,
             locked: None,
             topology_revision: TopologyRevision::first(),
@@ -643,13 +647,19 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 operation: given.operation(),
             });
         }
-        let prepared = self.prepared.ok_or(SyncError::NoPreparedOperation)?;
-        if given.operation() != prepared.operation {
-            return Err(SyncError::StaleAcknowledgement {
-                expected: prepared.operation,
-                given: given.operation(),
-            });
-        }
+        let prepared = self
+            .prepared
+            .by_operation(given.operation())
+            .ok_or_else(|| {
+                self.prepared
+                    .latest()
+                    .map_or(SyncError::NoPreparedOperation, |latest| {
+                        SyncError::StaleAcknowledgement {
+                            expected: latest.operation,
+                            given: given.operation(),
+                        }
+                    })
+            })?;
         let (load, transport) = self.generations;
         let expected = SyncApplied::builder()
             .group(self.grid.stamp())
@@ -674,7 +684,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
         } else {
             self.locked = Some(given);
         }
-        self.prepared = None;
+        self.prepared.remove(prepared.target);
         Ok(if prepared.disposition == PreparedDisposition::Free {
             self.status()
         } else {
@@ -692,7 +702,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 unavailable: self.unavailable,
                 waiting: self.waiting,
                 preparing: self.preparing.clone(),
-                prepared: self.prepared,
+                prepared: self.prepared.latest(),
                 locked: self.locked,
             },
         )

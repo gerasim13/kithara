@@ -405,7 +405,10 @@ fn free_leaves_the_beat_timeline() {
             .warp_map(kithara_warp::WarpMapRevision::first())
             .build(),
     );
-    let previous = group.prepared().expect("reconcile leaves its map prepared");
+    let previous = group
+        .prepared()
+        .latest()
+        .expect("reconcile leaves its map prepared");
     let previous_identity = (previous.operation, previous.warp_map);
     let admission = group
         .transact(SyncOperation::Sync {
@@ -433,7 +436,7 @@ fn free_leaves_the_beat_timeline() {
         panic!("Free must reserve identity before worker adoption: {admission:?}");
     };
     assert_ne!((operation, warp_map), previous_identity);
-    assert!(group.prepared().is_none());
+    assert!(group.prepared().is_empty());
     assert!(matches!(
         group.status(),
         SyncStatusSnapshot::Preparing {
@@ -458,7 +461,10 @@ fn free_leaves_the_beat_timeline() {
             },
         ))
     );
-    let prepared = group.prepared().expect("worker-adopted Free handoff");
+    let prepared = group
+        .prepared()
+        .latest()
+        .expect("worker-adopted Free handoff");
     assert_eq!(prepared.source, 48_448);
     assert_eq!(prepared.activation, SessionFrame::new(48_448));
     let applied = SyncApplied::builder()
@@ -544,7 +550,7 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
         ))
     );
     assert!(group.preparing().is_none());
-    assert!(group.prepared().is_none());
+    assert!(group.prepared().is_empty());
 }
 
 #[kithara::test]
@@ -1022,11 +1028,66 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
         .build();
 
     let admission = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
+}
+
+#[kithara::test]
+fn each_member_keeps_its_own_prepared_map() {
+    let mut group = synced_deck();
+    let first = BeatGridId::allocate().expect("grid id");
+    let second = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(first, 480_000, 24_000));
+    attach_grid(&mut group, asset_grid(second, 480_000, 36_000));
+
+    reconcile(&mut group, first, ReconcileCause::GridAvailable);
+    reconcile(&mut group, second, ReconcileCause::GridAvailable);
+
+    let prepared_first = group.prepared().get(first).expect("first member's map");
+    let prepared_second = group.prepared().get(second).expect("second member's map");
+    assert_eq!(prepared_first.target, first);
+    assert_eq!(prepared_second.target, second);
+    assert_ne!(prepared_first.operation, prepared_second.operation);
+}
+
+#[kithara::test]
+fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
+    let axis = SessionAxis::new(
+        NonZeroU32::new(44_100).expect("sample rate"),
+        SessionEpoch::new(0),
+    );
+    let anchor = |beats_per_second| {
+        SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(0.0).expect("beat"),
+            beats_per_second,
+            axis,
+        )
+        .expect("session anchor")
+    };
+    let mut group = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        NonZeroU32::new(44_100).expect("sample rate"),
+        SessionEpoch::new(0),
+        SyncMemberKind::Grid,
+        SyncMode::HostSync,
+    );
+    group
+        .publish_session_anchor(anchor(2.0))
+        .expect("the first anchor makes the deck grid live");
+    let prepared_member = BeatGridId::allocate().expect("grid id");
+    let settled_member = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(prepared_member, 480_000, 24_000));
+    attach_grid(&mut group, asset_grid(settled_member, 480_000, 36_000));
+    reconcile(&mut group, prepared_member, ReconcileCause::GridAvailable);
+
+    let faster = anchor(2.5);
+
+    assert!(!group.retargets_tempo(prepared_member, faster));
+    assert!(group.retargets_tempo(settled_member, faster));
 }
 
 #[kithara::test]
@@ -1062,7 +1123,7 @@ fn a_route_boundary_drops_the_preparation_planned_on_the_previous_axis() {
         .publish_session_anchor(anchor(48_000, 1))
         .expect("the successor epoch steps the deck through an unavailable grid");
 
-    assert!(group.prepared().is_none());
+    assert!(group.prepared().is_empty());
 }
 
 #[kithara::test]
@@ -1110,7 +1171,7 @@ fn stale_host_seek_topology_commits_nothing() {
     )
     .expect("candidate");
     let before_generations = group.generations();
-    let before_prepared = group.prepared();
+    let before_prepared = group.prepared().clone();
     attach_grid(
         &mut group,
         asset_grid(
@@ -1125,7 +1186,7 @@ fn stale_host_seek_topology_commits_nothing() {
         Err(SyncError::OwnerUnavailable)
     ));
     assert_eq!(group.generations(), before_generations);
-    assert_eq!(group.prepared(), before_prepared);
+    assert_eq!(*group.prepared(), before_prepared);
 }
 
 #[kithara::test]
@@ -1166,7 +1227,7 @@ fn stale_host_seek_member_grid_stamp_commits_nothing() {
         })
         .expect("replace member grid");
     let before_generations = group.generations();
-    let before_prepared = group.prepared();
+    let before_prepared = group.prepared().clone();
     let before_status = group.status();
 
     assert!(matches!(
@@ -1174,7 +1235,7 @@ fn stale_host_seek_member_grid_stamp_commits_nothing() {
         Err(SyncError::OwnerUnavailable)
     ));
     assert_eq!(group.generations(), before_generations);
-    assert_eq!(group.prepared(), before_prepared);
+    assert_eq!(*group.prepared(), before_prepared);
     assert_eq!(group.status(), before_status);
 }
 
@@ -1205,7 +1266,7 @@ fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
         ))
         .expect("publish newer owner grid");
     let before_generations = group.generations();
-    let before_prepared = group.prepared();
+    let before_prepared = group.prepared().clone();
     let before_status = group.status();
     let before_topology = group.topology().expect("topology").stamp();
 
@@ -1214,7 +1275,7 @@ fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
         Err(SyncError::OwnerUnavailable)
     ));
     assert_eq!(group.generations(), before_generations);
-    assert_eq!(group.prepared(), before_prepared);
+    assert_eq!(*group.prepared(), before_prepared);
     assert_eq!(group.status(), before_status);
     assert_eq!(group.topology().expect("topology").stamp(), before_topology);
 }
@@ -1249,7 +1310,7 @@ fn preparation_before_the_first_grid_beat_cues_that_first_beat() {
         matches!(admission, SyncAdmission::Prepared { .. }),
         "{admission:?}"
     );
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
     assert_eq!(prepared.source, 30_000);
 }
 
@@ -1275,7 +1336,7 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
             source_cue: None,
         })
         .expect("audible alignment is admitted");
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
@@ -1316,7 +1377,7 @@ fn audible_alignment_seeks_ahead_of_the_live_source_at_the_next_host_downbeat() 
             source_cue: None,
         })
         .expect("audible alignment is admitted");
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     // Preparation reaches output 61_216 (beat 2.55), so the next Host downbeat
     // is beat 4 at 96_000. The live mapping stands at source 419_104 there
@@ -1344,7 +1405,7 @@ fn preparation_preserves_both_phase_error_directions(
         .build();
 
     let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
@@ -1376,7 +1437,7 @@ fn different_bpm_grids_produce_one_coherent_phase_and_rate_decision() {
         .build();
 
     let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
     assert_eq!(prepared.source, 30_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
     assert_eq!(
@@ -1422,7 +1483,7 @@ fn preparation_aligns_a_known_track_downbeat_to_the_session_origin_phase() {
         .build();
 
     let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(prepared.source, 192_000);
     assert_eq!(prepared.activation, SessionFrame::new(192_000));
@@ -1451,7 +1512,7 @@ fn preparation_preserves_non_four_four_downbeat_phase() {
         .build();
 
     let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(
         prepared.source, 96_000,
@@ -1490,7 +1551,7 @@ fn preparation_keeps_the_nearest_host_downbeat_for_a_large_source_jump() {
         ReconcileCause::TransportChanged,
         frontier,
     );
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(prepared.source, 288_000);
     assert_eq!(prepared.activation, SessionFrame::new(192_000));
@@ -1522,7 +1583,7 @@ fn explicit_alignment_uses_the_next_beat_instead_of_waiting_for_a_bar() {
         ReconcileCause::AlignmentRequested,
         frontier,
     );
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
 
     assert_eq!(prepared.source, 264_000);
     assert_eq!(prepared.activation, SessionFrame::new(192_000));
@@ -1578,7 +1639,7 @@ fn a_complete_grid_is_prepared_on_the_next_deck_beat_and_locks_on_acknowledge() 
         SessionFrame::new(0),
         "a frontier on beat 0 activates on beat 0"
     );
-    let prepared = group.prepared().expect("prepared relation");
+    let prepared = group.prepared().latest().expect("prepared relation");
     assert_eq!(prepared.source, 0);
     assert_eq!(prepared.target, track);
     assert_eq!(prepared.warp_map, warp_map);
@@ -1742,7 +1803,7 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
             .output(SessionFrame::new(30_000))
             .build(),
     );
-    let planned = group.prepared().expect("prepared relation");
+    let planned = group.prepared().latest().expect("prepared relation");
     let faster = SessionAnchor::new(
         SessionFrame::new(60_000),
         initial.beat_at(SessionFrame::new(60_000)).expect("beat"),
@@ -1774,7 +1835,7 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
             source_cue: None,
         })
         .expect("a tempo retarget is admitted");
-    let retarget = group.prepared().expect("retarget relation");
+    let retarget = group.prepared().latest().expect("retarget relation");
 
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
     assert!(retarget.warp_map > planned.warp_map);
@@ -1820,7 +1881,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
         .build();
     let admission = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
-    let planned = group.prepared().expect("prepared relation");
+    let planned = group.prepared().latest().expect("prepared relation");
     assert_eq!(
         planned.activation,
         initial.frame_at(planned.activation_beat).expect("frame")
@@ -1837,14 +1898,15 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
         .publish_session_anchor(faster)
         .expect("a tempo commit keeps the session axis");
     let successor = group
-        .reanchored_prepared(faster)
+        .reanchored_prepared(planned.target, faster)
         .expect("the activation beat maps onto the live tempo")
         .expect("the unreached activation moves");
-    assert_eq!(group.prepared(), Some(planned));
+    assert_eq!(group.prepared().get(planned.target), Some(planned));
     group.adopt_reanchored(successor);
 
     let prepared = group
         .prepared()
+        .latest()
         .expect("the activation survives a tempo commit");
     assert_eq!(prepared.operation, planned.operation);
     assert_eq!(prepared.source, planned.source);
