@@ -34,9 +34,9 @@ where
         .members
         .iter()
         .find_map(|member| match member {
-            SyncMember::Grid { alignment, grid } if grid.id() == target => {
-                Some((*alignment, grid.snapshot()))
-            }
+            SyncMember::Grid {
+                alignment, grid, ..
+            } if grid.id() == target => Some((*alignment, grid.snapshot())),
             SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
         })
         .ok_or_else(|| SyncError::MemberNotFound {
@@ -109,9 +109,9 @@ where
         .members
         .iter_mut()
         .find_map(|member| match member {
-            SyncMember::Grid { alignment, grid } if grid.id() == candidate.prepared.target => {
-                Some((alignment, grid.snapshot()))
-            }
+            SyncMember::Grid {
+                alignment, grid, ..
+            } if grid.id() == candidate.prepared.target => Some((alignment, grid.snapshot())),
             SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
         })
         .ok_or_else(|| SyncError::MemberNotFound {

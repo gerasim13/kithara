@@ -267,9 +267,9 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         ));
     };
     let Some(member) = slots.members.iter_mut().find_map(|member| match member {
-        SyncMember::Grid { alignment, grid } if grid.id() == *target => {
-            Some((alignment, grid.snapshot()))
-        }
+        SyncMember::Grid {
+            alignment, grid, ..
+        } if grid.id() == *target => Some((alignment, grid.snapshot())),
         SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
     }) else {
         return Err(SyncRejected::new(
@@ -376,6 +376,7 @@ fn prepare_free<G: SyncGroup<NestedGroup = G>>(
         SyncMember::Grid {
             alignment: Some(alignment),
             grid,
+            ..
         } => Some((*alignment, grid.snapshot())),
         SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
     }) else {

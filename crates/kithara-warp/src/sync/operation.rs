@@ -168,7 +168,18 @@ pub enum TopologyOperation<G: SyncGroup> {
         /// Identity of the direct member being detached.
         member: BeatGridId,
     },
-    /// Replaces one direct member atomically.
+    /// Marks one direct member sounding, so the group synchronizes it actively.
+    Arm {
+        /// Identity of the direct member being armed.
+        member: BeatGridId,
+    },
+    /// Marks one direct member waiting, so the group only pre-aligns it.
+    Disarm {
+        /// Identity of the direct member being disarmed.
+        member: BeatGridId,
+    },
+    /// Replaces one direct member atomically, keeping its arm state: arming
+    /// belongs to the edge between group and member, not to the grid handle.
     Replace {
         /// Identity of the direct member being replaced.
         member: BeatGridId,

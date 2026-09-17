@@ -9,9 +9,9 @@ use kithara_play::{
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridState, SegmentSet, SessionEpoch, SyncAdmission, SyncApplied,
-    SyncError, SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    BeatGrid, BeatGridId, BeatGridState, MemberArm, SegmentSet, SessionEpoch, SyncAdmission,
+    SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
 };
 mod config;
 #[cfg(feature = "offline")]
@@ -183,6 +183,7 @@ impl<S> Host<S> {
         let operations = Box::new([TopologyOperation::Attach {
             member: SyncMember::Group {
                 alignment: None,
+                arm: MemberArm::Waiting,
                 group: Box::new(member),
             },
         }]);

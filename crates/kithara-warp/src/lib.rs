@@ -29,11 +29,12 @@ pub use segment::{
     SegmentSet,
 };
 pub use sync::{
-    AlignmentSource, BeatAlignment, LoadGeneration, PresentationFrontier, ReconcileCause,
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
-    SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
-    TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
+    AlignmentSource, BeatAlignment, LoadGeneration, MemberArm, PresentationFrontier,
+    ReconcileCause, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
+    WarpMapRevision,
 };
 #[cfg(feature = "render")]
 pub(crate) use temporal::RenderState;

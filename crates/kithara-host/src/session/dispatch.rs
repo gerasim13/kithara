@@ -174,6 +174,7 @@ fn topology_conflicts_with_graph<B: AudioBackend, S>(
     operations.iter().any(|operation| match operation {
         TopologyOperation::Attach { member } => state.graph.index_by_grid(member.id()).is_some(),
         TopologyOperation::Detach { member } => state.graph.index_by_grid(*member).is_some(),
+        TopologyOperation::Arm { .. } | TopologyOperation::Disarm { .. } => false,
         TopologyOperation::Replace {
             member,
             replacement,
@@ -882,6 +883,31 @@ mod tests {
         ));
 
         assert_eq!(state.next_player_id, next_player_id);
+        assert_eq!(member_count(&state), 1);
+        assert_eq!(deck_count(&state), 1);
+    }
+
+    #[kithara::test]
+    fn arming_a_deck_is_admitted_while_the_graph_projection_is_live() {
+        let mut state = test_state(start_route_loss_stream);
+        let grid_id = attach_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
+            ),
+            Reply::PlayerRegistered(_)
+        ));
+        let arm = |state: &TestState| SyncOperation::Topology {
+            base: state.root.topology().expect("fixture topology").stamp(),
+            operations: Box::new([TopologyOperation::Arm { member: grid_id }]),
+        };
+
+        let operation = arm(&state);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
+        ));
         assert_eq!(member_count(&state), 1);
         assert_eq!(deck_count(&state), 1);
     }

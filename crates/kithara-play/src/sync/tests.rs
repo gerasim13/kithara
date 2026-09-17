@@ -6,10 +6,10 @@ use kithara_warp::{
     AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridQuery,
     BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker,
     BeatOrdinal, BeatsPerMinute, FrameUncertainty, LoadGeneration, MapAxis, MapPoint, MapPosition,
-    MapSegment, Meter, MeterFacts, PresentationFrontier, RateTarget, ReconcileCause, RenderContext,
-    SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember,
-    SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
+    MapSegment, MemberArm, Meter, MeterFacts, PresentationFrontier, RateTarget, ReconcileCause,
+    RenderContext, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+    SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent,
+    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
     TransportRevision,
 };
 
@@ -766,6 +766,7 @@ fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Grid {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     grid: Box::new(TestGrid(BeatGridSnapshot::unavailable(
                         track,
                         BeatGridRevision::first(),
@@ -864,6 +865,102 @@ fn synced_deck() -> GroupState<PlayerMember> {
     deck
 }
 
+#[kithara::test]
+fn an_attached_member_waits_until_the_group_arms_it() {
+    let mut group = fixture_group();
+    let track = BeatGridId::allocate().expect("invariant: track grid id is available");
+    attach_grid(&mut group, asset_grid(track, 96_000, 24_000));
+    assert_eq!(member_arm(&group, track), MemberArm::Waiting);
+
+    transact_topology(&mut group, TopologyOperation::Arm { member: track });
+    assert_eq!(member_arm(&group, track), MemberArm::Armed);
+
+    transact_topology(&mut group, TopologyOperation::Disarm { member: track });
+    assert_eq!(member_arm(&group, track), MemberArm::Waiting);
+}
+
+#[kithara::test]
+fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
+    let mut group = fixture_group();
+    let track = BeatGridId::allocate().expect("invariant: track grid id is available");
+    attach_grid(&mut group, asset_grid(track, 96_000, 24_000));
+    transact_topology(&mut group, TopologyOperation::Arm { member: track });
+
+    let refined = BeatGridSnapshot::segments(
+        track,
+        BeatGridRevision::first()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance"),
+        BeatGridState::Complete,
+        asset_segments(96_000, 24_000, None),
+    )
+    .expect("fixture asset grid is valid");
+    transact_topology(
+        &mut group,
+        TopologyOperation::Replace {
+            member: track,
+            replacement: SyncMember::Grid {
+                alignment: None,
+                arm: MemberArm::Waiting,
+                grid: Box::new(TestGrid(refined)),
+            },
+        },
+    );
+
+    assert_eq!(member_arm(&group, track), MemberArm::Armed);
+}
+
+#[kithara::test]
+fn arming_an_absent_member_is_rejected() {
+    let mut group = fixture_group();
+    let absent = BeatGridId::allocate().expect("invariant: absent grid id is available");
+    let base = group.topology().expect("topology").stamp();
+
+    let rejected = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Arm { member: absent }]),
+        })
+        .expect_err("a group cannot arm a member it does not hold");
+
+    let (error, _) = rejected.into();
+    assert_eq!(
+        error,
+        SyncError::MemberNotFound {
+            group_id: group.id(),
+            member_id: absent,
+        }
+    );
+}
+
+fn transact_topology(
+    group: &mut GroupState<PlayerMember>,
+    operation: TopologyOperation<PlayerMember>,
+) {
+    let base = group.topology().expect("topology").stamp();
+    let admission = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([operation]),
+        })
+        .expect("the group admits its own topology change");
+    assert!(
+        matches!(admission, SyncAdmission::TopologyChanged { .. }),
+        "topology change is applied, got {admission:?}"
+    );
+}
+
+fn member_arm(group: &GroupState<PlayerMember>, target: BeatGridId) -> MemberArm {
+    group
+        .topology()
+        .expect("topology")
+        .members()
+        .iter()
+        .find(|member| member.grid().id() == target)
+        .expect("attached member is present")
+        .arm()
+}
+
 fn attach_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
     let base = group.topology().expect("topology").stamp();
     let _ = group
@@ -872,6 +969,7 @@ fn attach_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Grid {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     grid: Box::new(TestGrid(grid)),
                 },
             }]),
@@ -1061,6 +1159,7 @@ fn stale_host_seek_member_grid_stamp_commits_nothing() {
                 member: track,
                 replacement: SyncMember::Grid {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     grid: Box::new(TestGrid(replacement)),
                 },
             }]),

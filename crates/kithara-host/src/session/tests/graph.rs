@@ -13,8 +13,8 @@ use kithara_play::{
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{
-    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
-    SyncOperation, TopologyOperation,
+    BeatGridId, MemberArm, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind,
+    SyncMode, SyncOperation, TopologyOperation,
 };
 
 use super::super::{
@@ -166,6 +166,7 @@ fn attach_player_with_id<B, S>(
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     group: Box::new(target_member(player)),
                 },
             }]),

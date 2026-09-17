@@ -4,9 +4,10 @@ use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use kithara_warp::{
     AlignmentSource, AssetFrame, Beat, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
-    BeatGridSnapshot, BeatGridState, MapAxis, MapPoint, MapPosition, PresentationFrontier,
-    ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember,
-    SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation, WarpMap,
+    BeatGridSnapshot, BeatGridState, MapAxis, MapPoint, MapPosition, MemberArm,
+    PresentationFrontier, ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncMember, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    WarpMap,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -69,6 +70,7 @@ where
         let base = self.sync.topology()?.stamp();
         let member = SyncMember::Grid {
             alignment: None,
+            arm: MemberArm::Waiting,
             grid: Box::new(TrackGridMember(snapshot.clone())),
         };
         let operation = if previous.is_some() {
