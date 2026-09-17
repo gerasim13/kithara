@@ -10,11 +10,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use super::services::launchd;
+use super::{runner_images::LINUX_LATEST_IMAGE, services::launchd};
 use crate::ci::{
     cache::client_environment,
     config::{CiConfig, MAC_CONFIG_PATH},
-    environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
 };
 
@@ -277,8 +276,7 @@ impl<'a> RunnerManager<'a> {
         let url = self.config.host.gitlab_origin();
         let cache = self.config.host.cache_root_linux.display();
         let lane_config = MAC_CONFIG_PATH;
-        let image = &self.config.pins.linux_image;
-        let provisioned_image = format!("{PROVISIONED_LINUX_IMAGE_ENV}={image}");
+        let image = LINUX_LATEST_IMAGE;
         let sccache_environment = self
             .config
             .host
@@ -300,7 +298,7 @@ impl<'a> RunnerManager<'a> {
             .collect::<String>();
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-linux-sccache.sock\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-linux-sccache.sock\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
@@ -978,10 +976,7 @@ mod tests {
             .iter()
             .find(|runner| runner["name"].as_str() == Some("kithara-mac-mini-linux"))
             .unwrap();
-        assert_eq!(
-            linux["docker"]["image"].as_str(),
-            Some(config.pins.linux_image.as_str())
-        );
+        assert_eq!(linux["docker"]["image"].as_str(), Some(LINUX_LATEST_IMAGE));
         assert_eq!(linux["docker"]["pull_policy"].as_str(), Some("never"));
         assert_eq!(
             linux["docker"]["allowed_pull_policies"][0].as_str(),
@@ -989,19 +984,7 @@ mod tests {
         );
         assert_eq!(
             linux["docker"]["allowed_images"][0].as_str(),
-            Some(config.pins.linux_image.as_str())
-        );
-        assert!(
-            linux["environment"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| {
-                    value.as_str().is_some_and(|entry| {
-                        entry
-                            == format!("{PROVISIONED_LINUX_IMAGE_ENV}={}", config.pins.linux_image)
-                    })
-                })
+            Some(LINUX_LATEST_IMAGE)
         );
     }
 

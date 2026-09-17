@@ -20,8 +20,6 @@ use super::{
     run::CacheGroup,
 };
 
-pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
-
 struct Consts;
 
 impl Consts {

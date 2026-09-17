@@ -123,7 +123,6 @@ fn fingerprint(
     require_success(&rustc, "read Rust toolchain identity")?;
     let rustflags = env::var("RUSTFLAGS").unwrap_or_default();
     let encoded_rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
-    let image = env::var("KITHARA_CI_PROVISIONED_LINUX_IMAGE").unwrap_or_default();
     let mut hash = Sha256::new();
     for value in [
         Snapshot::SCHEMA.as_bytes(),
@@ -133,7 +132,6 @@ fn fingerprint(
         &rustc.stdout,
         rustflags.as_bytes(),
         encoded_rustflags.as_bytes(),
-        image.as_bytes(),
         root.as_os_str().as_encoded_bytes(),
         cargo_home.as_os_str().as_encoded_bytes(),
     ] {
