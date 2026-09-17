@@ -103,6 +103,13 @@ fn run_build(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
     println!("==> Building kithara-ffi (wasm32)");
     let mut cmd = Command::new(program);
     cmd.args(["build", "--config", "Trunk.toml"]);
+    let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_default();
+    let features = if selected.trim().is_empty() {
+        "wasm".to_owned()
+    } else {
+        format!("wasm,{}", selected.trim())
+    };
+    cmd.args(["--no-default-features", "--features", &features]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
     }

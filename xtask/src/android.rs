@@ -203,15 +203,23 @@ const RUST_TARGETS: &[(&str, &str)] = &[
 
 /// Features the FFI crate is compiled with on-device. Defaults stay off so
 /// `symphonia` is absent: `MediaCodec` is the sole decoder there.
-const fn device_features(profile: BuildProfile) -> &'static str {
-    match profile {
-        BuildProfile::Release => {
-            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/stretch-signalsmith"
-        }
+fn device_features(profile: BuildProfile) -> String {
+    let mut features = match profile {
+        BuildProfile::Release => "kithara-ffi/uniffi,kithara-ffi/android".to_owned(),
         BuildProfile::Debug => {
-            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/dev,kithara-ffi/test,kithara-ffi/stretch-signalsmith"
+            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/dev,kithara-ffi/test".to_owned()
         }
+    };
+    let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_else(|_| "standard".to_owned());
+    for feature in selected
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        features.push_str(",kithara-ffi/");
+        features.push_str(feature);
     }
+    features
 }
 
 fn check_ndk_toolchain(tools: &ToolsConfig) -> Result<()> {
@@ -259,7 +267,7 @@ fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Resu
     for package in CLIPPY_PACKAGES {
         cmd.args(["-p", package]);
     }
-    cmd.args(["--no-default-features", "--features", features]);
+    cmd.args(["--no-default-features", "--features", &features]);
     cmd.args(["--", "-D", "warnings"]);
     cmd.current_dir(root);
 
@@ -299,7 +307,7 @@ pub(crate) fn run_build(
         ffi_crate,
         "--no-default-features",
         "--features",
-        device_features(profile),
+        &device_features(profile),
     ]);
 
     if matches!(profile, BuildProfile::Release) {
@@ -338,6 +346,7 @@ pub(crate) fn run_build(
         "run",
         "--bin",
         "uniffi-bindgen",
+        "--no-default-features",
         "--features",
         // symphonia gives the host bindgen build a DecoderBackend
         // variant (the android MediaCodec variant is target_os-gated
