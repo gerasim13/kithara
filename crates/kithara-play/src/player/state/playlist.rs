@@ -254,20 +254,16 @@ impl Playlist {
         }
     }
 
-    /// Consume a selected source cue before ordinary playback, or report that
-    /// synchronized preparation still owns it.
-    pub(crate) fn hold_or_consume_initial_source_cue(&mut self, item: TrackId) -> bool {
-        let Some(track) = self.tracks.get_mut(&item) else {
-            return false;
-        };
-        match track.initial_source_cue {
-            InitialSourceCue::AwaitingPreparation(_) => true,
-            InitialSourceCue::Selected(_) => {
-                track.initial_source_cue = InitialSourceCue::None;
-                false
-            }
-            InitialSourceCue::None => false,
-        }
+    /// Whether synchronized preparation owns the source cue and so holds
+    /// ordinary playback. A selected cue stays selected: it is spent only
+    /// once the track presents PCM.
+    pub(crate) fn holds_initial_source_cue(&self, item: TrackId) -> bool {
+        self.tracks.get(&item).is_some_and(|track| {
+            matches!(
+                track.initial_source_cue,
+                InitialSourceCue::AwaitingPreparation(_)
+            )
+        })
     }
 
     /// Consume a prepared source cue once the engine owns its scheduled launch.
@@ -583,13 +579,28 @@ mod tests {
         playlist.set_initial_source_cue(item, Some(cue));
         assert!(!playlist.await_initial_source_cue_if(item, false));
         assert_eq!(playlist.initial_source_cue(item), None);
-        assert!(!playlist.hold_or_consume_initial_source_cue(item));
+        assert!(!playlist.holds_initial_source_cue(item));
 
         playlist.set_initial_source_cue(item, Some(cue));
         assert!(playlist.await_initial_source_cue(item));
         assert!(!playlist.await_initial_source_cue_if(item, false));
         assert_eq!(playlist.initial_source_cue(item), None);
-        assert!(!playlist.hold_or_consume_initial_source_cue(item));
+        assert!(!playlist.holds_initial_source_cue(item));
+    }
+
+    #[kithara::test(native)]
+    fn a_selected_source_cue_survives_ordinary_playback_until_synchronized_preparation() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let cue = AssetFrame::new(0.0).expect("zero asset frame is valid");
+
+        playlist.set_initial_source_cue(item, Some(cue));
+        assert!(!playlist.holds_initial_source_cue(item));
+        assert_eq!(playlist.initial_source_cue(item), Some(cue));
+
+        assert!(playlist.await_initial_source_cue(item));
+        assert!(playlist.holds_initial_source_cue(item));
+        assert_eq!(playlist.initial_source_cue(item), Some(cue));
     }
 
     #[kithara::test(native)]

@@ -1,5 +1,6 @@
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, SessionFrame, StretchControls};
+use num_traits::ToPrimitive;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -96,6 +97,22 @@ impl<S> PlayerRuntime<S> {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+    }
+
+    /// Spends the track's initial source cue once its own rendered frontier
+    /// has moved past the cue, so a later synchronized launch never rewinds
+    /// to it.
+    pub(crate) fn retire_presented_source_cue(&self, item: crate::api::TrackId) {
+        let Some(cue) = self.core.items.initial_source_cue(item) else {
+            return;
+        };
+        let presented = self
+            .presentation_frontier_for(item, None)
+            .and_then(|frontier| frontier.source().to_f64())
+            .is_some_and(|source| source > f64::from(cue));
+        if presented {
+            self.core.items.clear_initial_source_cue(item);
+        }
     }
 
     /// The frontier the active slot renders next, or the session origin when

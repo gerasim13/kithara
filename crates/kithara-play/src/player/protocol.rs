@@ -279,6 +279,7 @@ where
             && self.sync.mode() == SyncMode::HostSync
             && let Some(item) = self.runtime.core.items.current_item_id()
         {
+            self.runtime.retire_presented_source_cue(item);
             self.runtime.core.items.await_initial_source_cue(item);
         }
         if sync_disable

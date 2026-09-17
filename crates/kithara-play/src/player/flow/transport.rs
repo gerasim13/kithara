@@ -161,7 +161,7 @@ where
             self.core.items.consume_awaiting_initial_source_cue(item);
             true
         } else {
-            self.core.items.hold_or_consume_initial_source_cue(item)
+            self.core.items.holds_initial_source_cue(item)
         }
     }
 

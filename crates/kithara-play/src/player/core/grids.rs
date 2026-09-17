@@ -93,6 +93,7 @@ where
             },
         );
         self.replan_track(item);
+        self.runtime.retire_presented_source_cue(item);
         let prepared_launch = self.await_prepared_launch(item, &snapshot);
         self.reconcile_item_grid(item, cause, None, prepared_launch)
             .map_err(|rejected| {
@@ -544,6 +545,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return Ok(());
         };
+        self.runtime.retire_presented_source_cue(item);
         let prepared_launch = self.await_prepared_launch(item, &grid.snapshot);
         self.reconcile_item_grid(
             item,

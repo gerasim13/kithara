@@ -91,10 +91,8 @@ impl ItemQueue {
             .await_initial_source_cue_if(item, resolved)
     }
 
-    pub(crate) fn hold_or_consume_initial_source_cue(&self, item: TrackId) -> bool {
-        self.playlist
-            .lock()
-            .hold_or_consume_initial_source_cue(item)
+    pub(crate) fn holds_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist.lock().holds_initial_source_cue(item)
     }
 
     pub(crate) fn consume_awaiting_initial_source_cue(&self, item: TrackId) -> bool {
