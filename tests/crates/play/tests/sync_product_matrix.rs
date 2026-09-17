@@ -2715,11 +2715,11 @@ async fn directed_sync_toggle_matrix(
                     if output_frames < u64::try_from(target_frames).expect("block fits u64") {
                         continue;
                     }
+                    let ideal_source = f64::from(expected_rate) * output_frames as f64;
                     assert!(
-                        ((source_frames as f64) - f64::from(expected_rate) * output_frames as f64)
-                            .abs()
-                            < f64::from(expected_rate),
-                        "Free preserves the manual rate across one coherent renderer quantum: source={source_frames}, output={output_frames}, rate={expected_rate}"
+                        (ideal_source.floor()..=ideal_source.ceil())
+                            .contains(&(source_frames as f64)),
+                        "Free consumes whole source frames at the manual rate across one coherent renderer quantum: source={source_frames}, output={output_frames}, rate={expected_rate}"
                     );
                     target_consumed_index = Some(index);
                     break;
