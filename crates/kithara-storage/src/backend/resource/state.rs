@@ -55,6 +55,15 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) retired: Retired,
 }
 
+impl<D: DriverIo> Inner<D> {
+    /// Wake every parked `wait_range_inner`. Taking the gate lock first means a
+    /// waiter that checked cancellation but has not parked yet cannot miss it.
+    pub(super) fn wake_waiters(&self) {
+        let _guard = self.gate.lock();
+        self.gate.notify_all();
+    }
+}
+
 /// Generic storage resource state machine, parameterized by backend driver.
 ///
 /// Owns the common state machine (range tracking, committed/failed flags,

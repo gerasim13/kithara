@@ -13,7 +13,7 @@ use kithara::{
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
 use serde::Serialize;
 
-use super::{CHANNELS, Case, SOURCE_RATE};
+use super::{Case, SOURCE_RATE};
 use crate::bufpool_ext::TestPools;
 
 pub(super) struct Deck {
@@ -280,11 +280,14 @@ pub(super) fn validate_deck(
             .observation
             .decoder_channels
             .iter()
-            .any(|channels| *channels != CHANNELS)
+            .any(|channels| *channels != case.source_channels)
     {
         failures.push(format!(
-            "{} deck {deck_index} ({}): decoder channels {:?}, expected only {CHANNELS}",
-            case.label, deck.observation.label, deck.observation.decoder_channels,
+            "{} deck {deck_index} ({}): decoder channels {:?}, expected only {}",
+            case.label,
+            deck.observation.label,
+            deck.observation.decoder_channels,
+            case.source_channels,
         ));
     }
     let expected_variant = if deck.observation.hls { Some(0) } else { None };

@@ -39,17 +39,11 @@ impl<D: DriverIo> ResourceCore<D> {
 
         let _resource_cancel_wake = {
             let inner = Arc::clone(&self.inner);
-            self.inner.cancel.on_cancel(move || {
-                let _guard = inner.gate.lock();
-                inner.gate.notify_all();
-            })
+            self.inner.cancel.on_cancel(move || inner.wake_waiters())
         };
         let _wait_cancel_wake = wait_cancel.map(|cancel| {
             let inner = Arc::clone(&self.inner);
-            cancel.on_cancel(move || {
-                let _guard = inner.gate.lock();
-                inner.gate.notify_all();
-            })
+            cancel.on_cancel(move || inner.wake_waiters())
         });
 
         // WHY: How far the available prefix of `range` reaches. Bytes arrive front-to-back for a sequential fetch, so this advancing means

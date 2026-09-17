@@ -139,16 +139,38 @@ fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
         return Ok(missing("Duplication", "similarity-report"));
     }
     let mut out = String::from("\n## Duplication\n\n");
+    out.push_str(&capped(
+        &text,
+        rows,
+        "the whole report is in the `similarity-report` artifact",
+    ));
+    Ok(out)
+}
+
+/// A row budget counts lines, and a fenced block is not one line.
+///
+/// The similarity report draws its candidate map as a `mermaid` block. Cutting
+/// the report at its budget shipped the opening fence without the closing one,
+/// and every renderer then read the rest of the document as code - the map
+/// showed up as an error on a page whose job all reported success. A cap that
+/// can cut a fence has to close it.
+fn capped(text: &str, rows: usize, artifact: &str) -> String {
+    let mut out = String::new();
+    let mut fenced = false;
     for line in text.lines().take(rows) {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
         out.push_str(line);
         out.push('\n');
     }
     if text.lines().count() > rows {
-        out.push_str(
-            "\nTruncated here; the whole report is in the `similarity-report` artifact.\n",
-        );
+        if fenced {
+            out.push_str("```\n");
+        }
+        let _ = writeln!(out, "\nTruncated here; {artifact}.");
     }
-    Ok(out)
+    out
 }
 
 fn health(artifacts: &Path, report_name: &str) -> Result<String> {
@@ -175,13 +197,11 @@ fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
     };
     let text = read(&report)?;
     let mut out = String::from("\n## Coverage risk (CRAP)\n\n");
-    for line in text.lines().take(rows) {
-        out.push_str(line);
-        out.push('\n');
-    }
-    if text.lines().count() > rows {
-        out.push_str("\nTruncated here; the whole table is in the `coverage-risk` artifact.\n");
-    }
+    out.push_str(&capped(
+        &text,
+        rows,
+        "the whole table is in the `coverage-risk` artifact",
+    ));
     Ok(out)
 }
 
@@ -613,5 +633,22 @@ mod tests {
         let report = duplication(temp.path(), 2).expect("duplication section");
 
         assert!(report.contains("Truncated here"), "{report}");
+    }
+
+    #[test]
+    fn a_cap_that_lands_inside_a_fenced_block_closes_it() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report/abc1234/report.md"),
+            "# Behavioral similarity\n\n```mermaid\nflowchart LR\n    c0[\"a\"]\n```\n\n## Candidates\n",
+        );
+
+        let report = duplication(temp.path(), 4).expect("duplication section");
+
+        assert_eq!(
+            report.matches("```").count() % 2,
+            0,
+            "a truncated report must not leave a fence open: {report}"
+        );
     }
 }

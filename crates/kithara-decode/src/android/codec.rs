@@ -120,15 +120,21 @@ impl FrameCodec for AndroidCodec {
             return Ok(0);
         }
         if matches!(self.drain, DrainState::Feeding) {
-            let mut buf = self
-                .codec
-                .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)?
-                .ok_or_else(|| {
-                    AndroidBackendError::operation(
-                        "codec-input-backpressure",
-                        "input packet was not consumed",
-                    )
-                })?;
+            // Every input slot can be holding a packet the codec has not turned
+            // into output yet; taking that output is what frees one. The packet
+            // is queued before this returns, so it is never dropped.
+            let mut produced = 0;
+            let mut buf = loop {
+                if let Some(buf) = self
+                    .codec
+                    .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)?
+                {
+                    break buf;
+                }
+                if produced == 0 {
+                    produced = self.read_output(out)?;
+                }
+            };
             let dst = buf.data_mut();
             if frame_data.len() > dst.len() {
                 return Err(DecodeError::InvalidData {
@@ -149,6 +155,9 @@ impl FrameCodec for AndroidCodec {
             })?;
             if end_of_stream {
                 self.drain = DrainState::Draining;
+            }
+            if produced != 0 {
+                return Ok(produced);
             }
         }
         self.read_output(out)

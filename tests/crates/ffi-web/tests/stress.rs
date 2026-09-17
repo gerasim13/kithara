@@ -1,4 +1,7 @@
+use std::num::NonZeroUsize;
+
 use gloo_timers::future::TimeoutFuture;
+use js_sys::{Date, Promise};
 use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -20,6 +23,9 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::signal;
 use tracing::{info, warn};
 use url::Url;
+use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::MessageChannel;
 
 /// Minimal xorshift64 PRNG for deterministic seek positions.
 struct Xorshift64(u64);
@@ -79,6 +85,10 @@ async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
     (helper, url)
 }
 
+/// Every segment of the stress fixture plus its init resource, so a random
+/// seek reads what an earlier one downloaded.
+const STRESS_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
 async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
@@ -89,6 +99,15 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
+                // The store's default in-memory capacity holds an init
+                // segment and two or three media segments, which is what
+                // sequential playback needs. These tests seek at random
+                // across all 48 segments of the fixture, so that default
+                // turns almost every seek into a fresh network fetch of the
+                // segment it lands in and the suite measures the server
+                // rather than the pipeline. The capacity covers the whole
+                // fixture instead.
+                .cache_capacity(STRESS_CACHE_CAPACITY)
                 .build(),
         )
         .pools(pools.clone())
@@ -227,14 +246,16 @@ async fn read_with_yield(
     read_with_yield_limit(audio, buf, 500).await
 }
 
-/// Read with configurable retry limit. `None` is the end of the stream;
-/// `Some(0)` is a reader that stayed pending for the whole budget.
+/// Read with a pending budget in wall-clock milliseconds. `None` is the end
+/// of the stream; `Some(0)` is a reader that stayed pending for the whole
+/// budget.
 async fn read_with_yield_limit(
     audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
-    max_yields: usize,
+    budget_ms: u32,
 ) -> Option<usize> {
-    for _ in 0..max_yields {
+    let deadline = Date::now() + f64::from(budget_ms);
+    loop {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
             Ok(ReadOutcome::Eof { .. }) => return None,
@@ -244,12 +265,26 @@ async fn read_with_yield_limit(
                 return None;
             }
         }
-        // A positive timer turn lets fetch and worker queues make progress.
-        // The wait happens only after an observed Pending; 1 ms keeps the
-        // 500/1000-seek stress cases inside their unchanged deadline.
-        TimeoutFuture::new(1).await;
+        if Date::now() >= deadline {
+            return Some(0);
+        }
+        yield_macrotask().await;
     }
-    Some(0)
+}
+
+/// One macrotask turn, so fetch and worker messages make progress.
+///
+/// A timer turn is clamped to at least 4 ms once timers nest, which Firefox
+/// applies to this loop; a message-port turn has no clamp, so the wait
+/// tracks the pipeline instead of the browser's timer policy.
+async fn yield_macrotask() {
+    let channel = MessageChannel::new().expect("MessageChannel is available in every worker");
+    let turn = Promise::new(&mut |resolve, _| channel.port1().set_onmessage(Some(&resolve)));
+    channel
+        .port2()
+        .post_message(&JsValue::NULL)
+        .expect("posting to an owned port cannot fail");
+    let _ = JsFuture::from(turn).await;
 }
 
 /// Yield to event loop so async I/O and Web Workers can progress.

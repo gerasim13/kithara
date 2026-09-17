@@ -132,7 +132,7 @@ async fn hls_stream_options_open(
 
 /// Test HLS session error handling with invalid URLs.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("http://127.0.0.1:9/master.m3u8")]
+#[case("http://127.0.0.1:0/master.m3u8")]
 #[case("not-a-valid-url")]
 #[case("")]
 async fn test_hls_invalid_url_handling(

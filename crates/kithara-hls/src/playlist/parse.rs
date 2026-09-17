@@ -25,6 +25,67 @@ fn truncate_error(msg: &str) -> String {
 /// AES initialization vector length in bytes.
 const IV_LEN: usize = 16;
 
+/// Rejects an attribute list whose quoted strings are not well formed. A
+/// quoted string opens a value and closes before the next attribute; the
+/// parser behind [`parse_master_playlist`] and [`parse_media_playlist`]
+/// panics on a quote it cannot pair, and a playlist comes from a server.
+fn check_quoted_strings(input: &str) -> HlsResult<()> {
+    /// Tags whose payload is an attribute list (RFC 8216, section 4.2).
+    const ATTRIBUTE_LIST_TAGS: [&str; 9] = [
+        "#EXT-X-KEY:",
+        "#EXT-X-MAP:",
+        "#EXT-X-DATERANGE:",
+        "#EXT-X-MEDIA:",
+        "#EXT-X-STREAM-INF:",
+        "#EXT-X-I-FRAME-STREAM-INF:",
+        "#EXT-X-SESSION-DATA:",
+        "#EXT-X-SESSION-KEY:",
+        "#EXT-X-START:",
+    ];
+    for line in input.lines().map(str::trim) {
+        let Some(attributes) = ATTRIBUTE_LIST_TAGS
+            .iter()
+            .find_map(|tag| line.strip_prefix(tag))
+        else {
+            continue;
+        };
+        if !quoted_strings_are_well_formed(attributes) {
+            return Err(crate::HlsError::PlaylistParse(truncate_error(&format!(
+                "malformed quoted string in `{line}`"
+            ))));
+        }
+    }
+    Ok(())
+}
+
+fn quoted_strings_are_well_formed(attributes: &str) -> bool {
+    let mut value_starts = false;
+    let mut quoted = false;
+    let mut closed = false;
+    for c in attributes.chars() {
+        if quoted {
+            if c == '"' {
+                quoted = false;
+                closed = true;
+            }
+            continue;
+        }
+        match c {
+            ',' => {
+                value_starts = false;
+                closed = false;
+            }
+            c if c.is_whitespace() => {}
+            _ if closed => return false,
+            '=' => value_starts = true,
+            '"' if value_starts => quoted = true,
+            '"' => return false,
+            _ => value_starts = false,
+        }
+    }
+    !quoted
+}
+
 /// Identifies a variant within a parsed master playlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariantId(pub usize);
@@ -166,6 +227,7 @@ fn detect_container_from_codecs(codecs: &str) -> Option<ContainerFormat> {
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<ParsedMaster> {
     let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
+    check_quoted_strings(input)?;
     let hls_master = HlsMasterPlaylist::try_from(input)
         .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
         .into_owned();
@@ -248,6 +310,7 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
     }
 
     let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
+    check_quoted_strings(input)?;
     let hls_media = HlsMediaPlaylist::try_from(input)
         .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
         .into_owned();
@@ -437,6 +500,15 @@ video.m3u8";
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"fLaC\"
 audio_flac.m3u8";
+
+        pub(super) const MASTER_PLAYLIST_WITH_UNCLOSED_QUOTE: &[u8] = b"#EXTM3U
+#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"";
+
+        pub(super) const MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE: &[u8] = b"#EXTM3U
+#EXT-X-TARGETDURATION:4
+#EXT-X-KEY:METHOD=AES-128,URI=\"
+#EXTINF:4,
+seg0.ts";
     }
 
     #[kithara::test]
@@ -567,6 +639,21 @@ audio_flac.m3u8";
         } else {
             panic!("Expected PlaylistParse error, got: {:?}", result);
         }
+    }
+
+    /// A server's playlist is untrusted: a quoted string it never closes is
+    /// a parse error, not a crash.
+    #[kithara::test]
+    fn an_unclosed_quoted_string_is_a_parse_error() {
+        assert!(matches!(
+            parse_master_playlist(fixtures::MASTER_PLAYLIST_WITH_UNCLOSED_QUOTE),
+            Err(HlsError::PlaylistParse(_))
+        ));
+        let url = Url::parse("http://example.com/media.m3u8").unwrap();
+        assert!(matches!(
+            parse_media_playlist(url, fixtures::MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE),
+            Err(HlsError::PlaylistParse(_))
+        ));
     }
 
     #[kithara::test]

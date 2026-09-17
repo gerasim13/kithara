@@ -364,8 +364,8 @@ where
     let cancel = CancelScope::new(cancel).token();
     let hub = flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
 
-    let pins = open_disk_pins_index(&root_dir, &cancel, pools.get::<u8>());
-    let lru = open_disk_lru_index(&root_dir, &cancel, pools.get::<u8>());
+    let pins = open_disk_pins_index(&root_dir, pools.get::<u8>());
+    let lru = open_disk_lru_index(&root_dir, pools.get::<u8>());
     pins.attach_to(&hub);
     lru.attach_to(&hub);
 
@@ -377,7 +377,7 @@ where
     ));
 
     if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-        availability.enable_persistence(path, cancel.clone());
+        availability.enable_persistence(path, pools.get::<u8>());
         availability
             .retain(|root, rel| indexed_path(&root_dir, root, rel).is_some_and(|p| p.exists()));
     }
@@ -440,30 +440,22 @@ fn fresh_temp_root() -> PathBuf {
 /// Open `_index/pins.bin` as a disk-backed [`crate::index::PinsIndex`]; on path
 /// failure falls back to an ephemeral index (best-effort, lazily materialised).
 #[cfg(not(target_arch = "wasm32"))]
-fn open_disk_pins_index(
-    root_dir: &std::path::Path,
-    cancel: &CancelToken,
-    buffer: ByteBuffer,
-) -> crate::index::PinsIndex {
+fn open_disk_pins_index(root_dir: &std::path::Path, buffer: ByteBuffer) -> crate::index::PinsIndex {
     let Some(path) = lazy_index_path(root_dir, "pins.bin") else {
         return crate::index::PinsIndex::ephemeral();
     };
-    crate::index::PinsIndex::with_persist_at(path, cancel.clone(), buffer)
+    crate::index::PinsIndex::with_persist_at(path, buffer)
 }
 
 /// Open `_index/lru.bin` as a disk-backed [`crate::index::LruIndex`].
 /// Same fallback policy and lazy-materialisation contract as
 /// [`open_disk_pins_index`].
 #[cfg(not(target_arch = "wasm32"))]
-fn open_disk_lru_index(
-    root_dir: &std::path::Path,
-    cancel: &CancelToken,
-    buffer: ByteBuffer,
-) -> crate::index::LruIndex {
+fn open_disk_lru_index(root_dir: &std::path::Path, buffer: ByteBuffer) -> crate::index::LruIndex {
     let Some(path) = lazy_index_path(root_dir, "lru.bin") else {
         return crate::index::LruIndex::ephemeral();
     };
-    crate::index::LruIndex::with_persist_at(path, cancel.clone(), buffer)
+    crate::index::LruIndex::with_persist_at(path, buffer)
 }
 
 /// Build the `root_dir/_index/<name>` path; `None` if the parent dir can't be

@@ -448,6 +448,36 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
     }
 }
 
+/// Key-lock on above unity: speed shortens duration while pitch holds.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn keylocked_double_speed_preserves_pitch(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    let channels = usize::from(Consts::CH);
+    let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+    let (out, _tail) = run_keylocked_with_tail(&warp_sine, backend, 2.0, in_frames);
+    let out_frames = out.len() / channels;
+    assert!(
+        out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
+        "key-locked 2x should roughly halve duration, got {out_frames} from {in_frames}"
+    );
+
+    let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
+    assert!(
+        mono.len() >= Consts::N,
+        "not enough key-locked output for the pitch window"
+    );
+    let peak = dominant_bin(&mono);
+    let want = expected_bin(Consts::F0);
+    assert!(
+        peak.abs_diff(want) <= 3,
+        "key-locked playback rate shifted pitch: peak bin {peak}, expected {want}"
+    );
+}
+
 /// Key-lock off is vinyl mode: speed changes duration and pitch in the
 /// stretch slot, with no resampler-rate handoff.
 #[kithara::test]

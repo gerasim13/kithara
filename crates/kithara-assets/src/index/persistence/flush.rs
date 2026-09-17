@@ -38,7 +38,7 @@ pub(crate) trait Flushable: Send + Sync {
     /// committed bytes — survives power-loss.
     ///
     /// Default forwards to [`Self::flush`]; disk-backed inners
-    /// override to call `Atomic::write_all_durable`. Used only on the
+    /// override to `sync_data` the new index file. Used only on the
     /// explicit `checkpoint()` path (rare; throughput is irrelevant).
     fn flush_durable(&self) -> AssetsResult<()> {
         self.flush()

@@ -76,6 +76,22 @@ pub trait DriverIo: Send + Sync + 'static {
     /// Returns error only on a genuine backing-store read failure.
     fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>>;
 
+    /// Drop every handle this driver holds on its own path.
+    ///
+    /// A publisher that replaces the file underneath this driver — the
+    /// atomic-chunked rename, the whole-payload atomic write — calls this
+    /// first. Windows refuses to resize, rename, or replace a file while a
+    /// mapping of it is alive, so a driver that keeps one open after
+    /// [`Self::seal`] makes the publication that follows fail outright. The
+    /// driver reopens on its own at the next commit or write.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if pending bytes cannot be flushed before the release.
+    fn release_backing(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
     /// Finalize the written bytes without publishing a committed snapshot.
     ///
     /// For a caller that is about to replace this resource anyway — the
