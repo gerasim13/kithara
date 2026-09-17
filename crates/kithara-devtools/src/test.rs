@@ -210,19 +210,47 @@ fn lane_command(
                 cmd.arg(&test.feature_arg)
                     .arg(features.into_iter().collect::<Vec<_>>().join(","));
             }
+            let caller_args = caller_args_for(lane, &request.passthrough);
             match passthrough {
                 PassthroughPosition::BeforeSuffix => {
-                    cmd.args(&request.passthrough);
+                    cmd.args(&caller_args);
                     cmd.args(&lane.suffix_args);
                 }
                 PassthroughPosition::AfterSuffix => {
                     cmd.args(&lane.suffix_args);
-                    cmd.args(&request.passthrough);
+                    cmd.args(&caller_args);
                 }
             }
             Ok(cmd)
         }
     }
+}
+
+/// The caller's arguments as a named lane receives them.
+///
+/// A lane that names its own nextest profile keeps it: the profile carries the
+/// lane's filter, and nextest refuses a second `--profile` outright. A gate
+/// that fans `--touched` out over such lanes passes the profile the default
+/// lane needs, so every lane of that fan-out would otherwise fail before a
+/// single test ran.
+fn caller_args_for(lane: &TestLaneConfig, passthrough: &[String]) -> Vec<String> {
+    let names_profile = lane
+        .prefix_args
+        .iter()
+        .any(|arg| arg == "--profile" || arg.starts_with("--profile="));
+    if !names_profile {
+        return passthrough.to_vec();
+    }
+    let mut args = Vec::with_capacity(passthrough.len());
+    let mut iter = passthrough.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--profile" {
+            iter.next();
+        } else if !arg.starts_with("--profile=") {
+            args.push(arg.clone());
+        }
+    }
+    args
 }
 
 fn validate_config(config: &TestCommandConfig) -> Result<()> {
@@ -1223,6 +1251,62 @@ mod tests {
         assert_eq!(
             envs_of(&cmd),
             vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_lane_that_names_its_own_profile_keeps_it_over_the_callers() {
+        let mut project = synthetic_project();
+        project.test.lanes.insert(
+            "tooling".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: ["nextest", "run", "--profile", "support"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                ..TestLaneConfig::default()
+            },
+        );
+        let request = TestRequest::parse(
+            &[
+                "--lane=tooling",
+                "--profile",
+                "ci",
+                "--profile=ci",
+                "--timings",
+            ]
+            .map(str::to_owned),
+        )
+        .expect("parse request");
+        let (name, lane) = select_lane(&project.test, &request).expect("select tooling lane");
+
+        let cmd = lane_command(&project, name, lane, &request).expect("tooling lane command");
+
+        let args = args_of(&cmd);
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.starts_with("--profile"))
+                .count(),
+            1
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--profile", "support"]));
+        assert!(args.contains(&"--timings".to_owned()));
+    }
+
+    #[test]
+    fn a_lane_without_a_profile_takes_the_callers() {
+        let project = synthetic_project();
+        let request =
+            TestRequest::parse(&["--lane=detector", "--profile", "ci"].map(str::to_owned))
+                .expect("parse request");
+        let (name, lane) = select_lane(&project.test, &request).expect("select detector lane");
+
+        let cmd = lane_command(&project, name, lane, &request).expect("detector lane command");
+
+        assert!(
+            args_of(&cmd)
+                .windows(2)
+                .any(|pair| pair == ["--profile", "ci"])
         );
     }
 

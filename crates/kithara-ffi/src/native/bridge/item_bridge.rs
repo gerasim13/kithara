@@ -12,9 +12,9 @@ use kithara_audio::AudioEvent;
 
 use crate::{
     core::event_set::ItemBusEvent,
-    item::ItemView,
+    item::{ItemView, settle_failed},
     observer::ItemObserver,
-    types::{FfiError, FfiItemEvent, FfiItemStatus},
+    types::{FfiError, FfiItemEvent},
 };
 
 pub(crate) struct ItemEventBridge {
@@ -46,25 +46,21 @@ impl ItemEventBridge {
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
-            state.lock().resolve_duration(duration);
-            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
+            Self::deliver(
+                observer,
+                state,
+                FfiItemEvent::DurationChanged { seconds: duration },
+            );
         }
 
         Self::dispatch_variant_events(observer, event, variants);
 
         if let Ok(event) = FfiItemEvent::try_from(event) {
-            observer.on_event(event);
+            Self::deliver(observer, state, event);
         }
 
-        if let Ok(error) = FfiError::try_from(event)
-            && state.lock().mark_failed()
-        {
-            observer.on_event(FfiItemEvent::StatusChanged {
-                status: FfiItemStatus::Failed,
-            });
-            observer.on_event(FfiItemEvent::Error {
-                error: error.to_string(),
-            });
+        if let Ok(error) = FfiError::try_from(event) {
+            settle_failed(state, observer.as_ref(), &error.to_string());
         }
     }
 
@@ -177,11 +173,21 @@ impl ItemEventBridge {
         cancel: CancelToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
-            state.lock().resolve_duration(duration);
-            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
+            Self::deliver(
+                &observer,
+                &state,
+                FfiItemEvent::DurationChanged { seconds: duration },
+            );
         }
         Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
         Self { cancel }
+    }
+
+    /// Same contract as `AudioPlayerItem::deliver`: state settles before
+    /// observers see the event.
+    fn deliver(observer: &Arc<dyn ItemObserver>, state: &Mutex<ItemView>, event: FfiItemEvent) {
+        state.lock().absorb(&event);
+        observer.on_event(event);
     }
 
     fn spawn_event_task(
@@ -327,7 +333,10 @@ mod tests {
         let observer_impl = Arc::new(CollectingItemObserver::default());
         let observer: Arc<dyn ItemObserver> = observer_impl.clone();
         let state = item_state();
-        assert!(state.lock().mark_failed(), "the item settles first");
+        assert!(
+            state.lock().mark_failed("test failure"),
+            "the item settles first"
+        );
 
         dispatch_file_error(&observer, &state);
 

@@ -83,6 +83,13 @@ _xtask-ready:
 _xtask-bootstrap *ARGS:
     @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-$trust-$system-$arch-$owner.sock"; fi; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
+# A generation path is accepted as absolute or as a drive letter, and the
+# drive letter is read two characters at a time rather than matched against a
+# pattern holding a backslash: the bash the Windows guest runs mangles one
+# inside a bracket expression, so `[A-Za-z]:[\\/]*` matched a forward slash
+# alone there and refused every generation the guest published. What separates
+# the drive from the rest of the path is left to the executable test below,
+# which asks the filesystem instead of a pattern.
 [no-exit-message]
 [positional-arguments]
 [private]
@@ -116,8 +123,10 @@ _xtask-cached MODE *ARGS:
       esac; \
       case "$generation" in \
         /*) ;; \
-        [A-Za-z]:[\\/]*) [ "$windows" -eq 1 ] || unavailable ;; \
-        *) unavailable ;; \
+        *) case "$(printf %.2s "$generation")" in \
+             [A-Za-z]:) [ "$windows" -eq 1 ] || unavailable ;; \
+             *) unavailable ;; \
+           esac ;; \
       esac; \
       binary="$generation/xtask$suffix"; \
       [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable; \

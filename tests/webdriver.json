@@ -12,5 +12,16 @@
       "--js-flags=--experimental-wasm-threads"
     ],
     "w3c": false
+  },
+  "moz:firefoxOptions": {
+    "args": [
+      "-headless"
+    ],
+    "prefs": {
+      "media.autoplay.block-event.enabled": false,
+      "media.autoplay.block-webaudio": false,
+      "media.autoplay.blocking_policy": 0,
+      "media.autoplay.default": 0
+    }
   }
 }

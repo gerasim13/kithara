@@ -418,19 +418,14 @@ impl NativeInner {
         }
     }
 
-    pub(crate) fn select_item(
+    pub(crate) fn select(
         &self,
-        index: u32,
+        item: &AudioPlayerItem,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
-        let tracks = self.queue.tracks();
-        let idx = index as usize;
-        let entry = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
-            reason: format!("item index {idx} out of range (len: {})", tracks.len()),
-        })?;
         self.queue
-            .select(entry.id, transition.into())
+            .select(item.track_id(), transition.into())
             .map_err(|e| match e {
                 QueueError::NotReady(_) => FfiError::NotReady,
                 other => FfiError::Internal {

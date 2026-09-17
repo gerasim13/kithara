@@ -34,6 +34,10 @@ impl ResourceSrc {
 
 pub(crate) fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
     let trimmed = input.as_ref().trim();
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return Ok(ResourceSrc::Path(path));
+    }
 
     match Url::parse(trimmed) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -48,15 +52,9 @@ pub(crate) fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeEr
             detail: "file:// URL is not supported on wasm",
         }),
         Ok(url) => Ok(ResourceSrc::Url(url)),
-        Err(_) => {
-            let path = PathBuf::from(trimmed);
-            if !path.is_absolute() {
-                return Err(DecodeError::InvalidData {
-                    detail: "invalid URL or file path (must be absolute)",
-                });
-            }
-            Ok(ResourceSrc::Path(path))
-        }
+        Err(_) => Err(DecodeError::InvalidData {
+            detail: "invalid URL or file path (must be absolute)",
+        }),
     }
 }
 
@@ -101,6 +99,17 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    /// A drive letter parses as a URL scheme, so a Windows path read as a URL
+    /// first became a host-less remote source that no layout can key.
+    #[kithara::test]
+    #[cfg(windows)]
+    fn a_drive_letter_path_is_a_local_file() {
+        assert_eq!(
+            ResourceSrc::parse(r"C:\Music\song.mp3").expect("absolute Windows path"),
+            ResourceSrc::Path(PathBuf::from(r"C:\Music\song.mp3"))
+        );
+    }
 
     fn source_tag(source: &SourceType) -> &'static str {
         match source {

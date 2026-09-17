@@ -592,6 +592,38 @@
   <require os> macos
   <require tools> cargo just
   just perf bench ci
+# deep-fuzz / branch
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / platforms
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / merge-request
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / quarantine
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / main
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / nightly
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / weekly
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
+# deep-fuzz / release
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
 # deep-miri / branch
   <require os> linux
   <require tools> cargo just
@@ -1124,42 +1156,66 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-check / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1244,210 +1300,330 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-lint / branch
   <require os> linux
   <require tools> cargo just
@@ -1484,42 +1660,66 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-msrv / branch
   <require os> linux
   <require tools> cargo just
@@ -1628,74 +1828,122 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / branch
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / platforms
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / merge-request
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / quarantine
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / main
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / nightly
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / weekly
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / release
   <require os> linux
   <require tools> cargo just
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just
@@ -1844,146 +2092,330 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache

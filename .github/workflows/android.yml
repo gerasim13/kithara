@@ -5,11 +5,29 @@ name: Android
 # which is what makes running them here worth the minutes.
 on:
   workflow_call:
+    inputs:
+      filter:
+        description: nextest expression for the Rust tests; empty runs them all
+        required: false
+        type: string
   workflow_dispatch:
+    inputs:
+      filter:
+        description: nextest expression for the Rust tests; empty runs them all
+        required: false
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # A called workflow inherits nothing from its caller, so a workflow that runs
+  # a lane on the Linux fleet says for itself where that lane builds and what it
+  # reuses - the same three the shared lane workflow states. Without them the
+  # lane builds in the checkout, which `actions/checkout` wipes on every run, so
+  # the device suite recompiled the workspace from source each time.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  CARGO_TARGET_DIR: /cache/lanes/lane-android-test
 
 concurrency:
   group: android-${{ github.ref }}
@@ -30,6 +48,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run instrumentation and Rust tests
+        env:
+          KITHARA_ANDROID_TEST_FILTER: ${{ inputs.filter }}
         run: just ci lane android-test --kind platforms
 
       - name: Upload test results and run evidence

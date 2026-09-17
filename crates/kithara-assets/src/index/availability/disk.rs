@@ -4,83 +4,62 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::OpenOptions,
     path::PathBuf,
-    sync::OnceLock,
 };
 
 use arc_swap::ArcSwap;
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_storage::{Atomic, MmapDriver, StorageError};
+use kithara_bufpool::ByteBuffer;
+use kithara_platform::sync::{Arc, Mutex};
+use kithara_storage::StorageError;
 use rkyv::rancor::Error;
 
 use super::core::{Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
     error::{AssetsError, AssetsResult},
     index::persistence::{
-        init_atomic, open_existing,
+        IndexFile,
         schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
     },
 };
 
 pub(super) struct AvailabilityPersist {
-    cancel: CancelToken,
-    res: OnceLock<Atomic<MmapDriver>>,
-    path: PathBuf,
+    /// One writer at a time for `availability.bin`: the snapshot and the
+    /// atomic rename that publishes it are one step.
+    writing: Mutex<()>,
+    file: IndexFile,
 }
 
 impl AvailabilityIndex {
-    /// Enable disk persistence rooted at `path`. Hydrates the
-    /// in-memory aggregate from the existing on-disk snapshot (if
-    /// any), then caches the `Atomic<MmapDriver>` for subsequent
-    /// flushes. Idempotent.
+    /// Enable disk persistence rooted at `path`. Hydrates the in-memory
+    /// aggregate from the existing on-disk snapshot (if any). Idempotent.
     ///
-    /// Failures (open, load) collapse silently — the aggregate
-    /// stays empty and the persist resource is materialised lazily
-    /// on first flush.
-    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
-        let opened = if path.exists() {
-            match open_existing(&path, &cancel) {
-                Ok(res) => {
-                    let atomic = Atomic::new(res);
-                    let _ = self.load_from(&atomic);
-                    Some(atomic)
-                }
-                Err(e) => {
-                    tracing::debug!("open existing availability.bin failed: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+    /// A failed load collapses silently — the aggregate stays empty and the
+    /// file is replaced on the first flush.
+    pub(crate) fn enable_persistence(&self, path: PathBuf, mut buffer: ByteBuffer) {
+        let file = IndexFile::new(path);
+        if let Err(e) = self.load_from(&file, &mut buffer) {
+            tracing::debug!("read existing availability.bin failed: {e}");
+        }
         let _ = self.inner.persist.set(AvailabilityPersist {
-            path,
-            cancel,
-            res: opened.map_or_else(OnceLock::new, |a| {
-                let cell = OnceLock::new();
-                cell.set(a)
-                    .unwrap_or_else(|_| unreachable!("freshly created cell"));
-                cell
-            }),
+            writing: Mutex::new(()),
+            file,
         });
     }
 
     /// Load the availability index from a persistent resource.
-    pub(crate) fn load_from(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
-        let mut buf = Vec::new();
-        let n = res.read_into(&mut buf)?;
-        if n == 0 {
+    pub(crate) fn load_from(&self, file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<()> {
+        file.read_into(buf)?;
+        if buf.is_empty() {
             return Ok(());
         }
 
-        let archived = match rkyv::access::<crate::index::schema::ArchivedAvailabilityFile, Error>(
-            &buf[..n],
-        ) {
-            Ok(archived) => archived,
-            Err(e) => {
-                tracing::debug!("Failed to validate availability index: {}", e);
-                return Ok(());
-            }
-        };
+        let archived =
+            match rkyv::access::<crate::index::schema::ArchivedAvailabilityFile, Error>(buf) {
+                Ok(archived) => archived,
+                Err(e) => {
+                    tracing::debug!("Failed to validate availability index: {}", e);
+                    return Ok(());
+                }
+            };
 
         let mut tree = HashMap::clone(&self.inner.assets.load());
         for (root, asset_record) in archived.assets.iter() {
@@ -113,12 +92,11 @@ impl AvailabilityIndex {
         Ok(())
     }
 
-    /// Persist the aggregate index to a caller-supplied storage
-    /// resource. Used by the cross-instance roundtrip tests; the
+    /// Persist the aggregate index to a caller-supplied index file. Used by the cross-instance roundtrip tests; the
     /// production flush path goes through [`super::Flushable::flush`].
     #[cfg(test)]
-    pub(crate) fn persist_to(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
-        write_aggregate(&self.inner, res, false)
+    pub(crate) fn persist_to(&self, file: &IndexFile) -> AssetsResult<()> {
+        write_aggregate(&self.inner, file, false)
     }
 }
 
@@ -150,19 +128,15 @@ impl InnerIndex {
         };
         // WHY: Order is the whole point: force the committed files onto the medium first, then name them. Reversed, a crash could leave the
         // manifest vouching for bytes that never landed.
+        let _writing = p.writing.lock();
         self.barrier_pending_files();
-        let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
-        write_aggregate(self, atomic, durable)?;
+        write_aggregate(self, &p.file, durable)?;
         Ok(())
     }
 }
 
-/// Serialise the aggregate into an `Atomic`-wrapped storage resource.
-fn write_aggregate(
-    inner: &InnerIndex,
-    res: &Atomic<MmapDriver>,
-    durable: bool,
-) -> AssetsResult<()> {
+/// Serialise the aggregate and publish it as `file`.
+fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> AssetsResult<()> {
     let tree = inner.assets.load();
     let assets = tree
         .iter()
@@ -190,13 +164,8 @@ fn write_aggregate(
             Some((root.clone(), AssetAvailabilityFile { resources }))
         })
         .collect();
-    let file = AvailabilityFile { assets, version: 1 };
-    let bytes = rkyv::to_bytes::<Error>(&file)
+    let index = AvailabilityFile { assets, version: 1 };
+    let bytes = rkyv::to_bytes::<Error>(&index)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    if durable {
-        res.write_all_durable(&bytes)?;
-    } else {
-        res.write_all(&bytes)?;
-    }
-    Ok(())
+    file.write(&bytes, durable)
 }

@@ -27,9 +27,9 @@ const EQ_BANDS: usize = 10;
 /// [`Queue`](kithara::queue::Queue); this mirror exists because the caller
 /// allocates the [`TrackId`](kithara::queue::TrackId) on the main thread
 /// and the worker plants the identical id via `*_with_id`, so order is
-/// deterministic without a round-trip. Drives `items` / `item_count` /
-/// index-based `select_item` exactly as `NativeInner`'s registry +
-/// `queue.tracks()` order do on native.
+/// deterministic without a round-trip. Drives `items` / `item_count`
+/// exactly as `NativeInner`'s registry + `queue.tracks()` order do on
+/// native.
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 
 /// Wasm implementation of the FFI player engine, parallel to
@@ -154,13 +154,6 @@ impl WasmInner {
 
     pub(crate) fn eq_gain(&self, band: u32) -> f32 {
         self.eq_gains.get(band as usize).map_or(0.0, load_f32)
-    }
-
-    fn id_at(&self, index: u32) -> Option<TrackId> {
-        self.queue_view
-            .lock()
-            .get(index as usize)
-            .map(|(id, _)| *id)
     }
 
     pub(crate) fn insert(
@@ -330,20 +323,19 @@ impl WasmInner {
         self.send(WorkerCmd::Seek(position_ms.max(0.0)));
     }
 
-    pub(crate) fn select_item(
+    pub(crate) fn select(
         &self,
-        index: u32,
+        item: &AudioPlayerItem,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
-        let id = self.id_at(index).ok_or_else(|| FfiError::InvalidArgument {
-            reason: format!(
-                "item index {index} out of range (len: {})",
-                self.queue_view.lock().len()
-            ),
-        })?;
+        if !*item.inserted.lock() {
+            return Err(FfiError::InvalidArgument {
+                reason: format!("item {} not in queue", item.audio_id()),
+            });
+        }
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::SelectQueue {
-            id,
+            id: item.track_id(),
             request_id,
             transition: Transition::from(transition),
         });

@@ -8,7 +8,8 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.kithara.example.ui.PlayerRoute
+import com.kithara.example.ui.player.PlayerRoute
+import com.kithara.example.ui.player.PlayerViewModel
 import com.kithara.example.ui.theme.KitharaTheme
 
 class MainActivity : ComponentActivity() {
@@ -17,6 +18,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
         setContent {
             KitharaTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
