@@ -186,39 +186,17 @@ where
 
     /// Resolve the segment whose fetch queue owns the reader cursor.
     ///
-    /// This is deliberately wider than [`Self::find_at_offset`]: a cursor in
-    /// the active variant's init prefix is not inside any media segment, but it
-    /// still demands the segment-0 decoder probe plan. Cross-variant media
-    /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
-    /// variants.
+    /// Deliberately wider than [`Self::find_at_offset`]: a cursor inside the
+    /// active variant's init prefix is not inside any media segment, but it
+    /// still demands the segment-0 decoder probe plan.
     pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        let active = self.active();
-        active
-            .demand_segment_at_offset(byte_offset)
-            .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
+        self.active().demand_segment_at_offset(byte_offset)
     }
 
-    /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
-    /// priority: active first, then shrunk `v_old`s. Returns `None` if no
-    /// engaged variant claims the offset.
+    /// Segment lookup in the audible variant's byte space. Returns `None`
+    /// when no media segment of that variant claims the offset.
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        let active = self.active();
-        if let Some(found) = active.find_at_offset(byte_offset) {
-            return Some(found);
-        }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, &active) {
-                continue;
-            }
-            let shrunk = v.is_shrunk();
-            if !shrunk {
-                continue;
-            }
-            if let Some(found) = v.find_at_offset(byte_offset) {
-                return Some(found);
-            }
-        }
-        None
+        self.active().find_at_offset(byte_offset)
     }
 
     /// Track-level phase. Master-cancel takes precedence (terminal
@@ -229,7 +207,7 @@ where
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
         }
-        self.variant_serving(range.start).phase_at(range)
+        self.active().phase_at(range)
     }
 
     pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -261,14 +239,14 @@ where
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
-        self.variant_serving(range.start).wait_range(range, timeout)
+        self.active().wait_range(range, timeout)
     }
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
-        self.variant_serving(offset).read_at(offset, buf)
+        self.active().read_at(offset, buf)
     }
 
     /// Reconcile the ABR escape flag against the live stall geometry. Edge-
@@ -346,40 +324,6 @@ where
         } else if !pending && locked {
             self.abr.unlock();
         }
-    }
-
-    /// Find the variant whose served range covers `offset`. Priority:
-    ///
-    /// 1. The active session's variant — the normal steady-state hit.
-    /// 2. Any non-active variant whose served range has been *shrunk*
-    ///    from its default span by a prior ABR commit (i.e.
-    ///    `served_from > 0` or `served_until < num_segments`). These
-    ///    are `v_old`s that still serve their pre-switch byte range so
-    ///    a reader crossing the boundary mid-buffer hits the right
-    ///    payload.
-    ///
-    /// Idle variants with default served bounds are deliberately
-    /// excluded: their layout overlaps the active range but their
-    /// resources were never fetched, so routing to them would return
-    /// `NotFound` / `Pending(Retry)`.
-    pub(crate) fn variant_serving(&self, offset: u64) -> Arc<HlsVariant<S>> {
-        let active = self.active();
-        if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
-            return active;
-        }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, &active) {
-                continue;
-            }
-            let shrunk = v.is_shrunk();
-            if !shrunk {
-                continue;
-            }
-            if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
-                return Arc::clone(v);
-            }
-        }
-        active
     }
 
     pub(crate) fn wait_range(
@@ -604,6 +548,10 @@ where
         self.active().descriptor_after_byte(byte)
     }
 
+    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active().descriptor_at_byte(byte)
+    }
+
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
         self.active().descriptor(segment_index as usize)
     }
@@ -623,9 +571,6 @@ where
             #[expr($.stream_len())]
             #[call(active)]
             fn len(&self) -> Option<u64>;
-            #[expr($.descriptor_at_byte(byte))]
-            #[call(variant_serving)]
-            fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
             #[expr(Some($.num_segments()))]
             #[call(active)]
             fn segment_count(&self) -> Option<u32>;
@@ -650,7 +595,10 @@ pub(super) mod tests {
     use std::{
         io::{ErrorKind, Read},
         num::NonZeroU64,
-        sync::OnceLock,
+        sync::{
+            OnceLock,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use kithara_abr::{
@@ -666,7 +614,7 @@ pub(super) mod tests {
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl,
+        SeekControl, WorkerWake,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -696,6 +644,36 @@ pub(super) mod tests {
         reason: AbrReason,
         v0_segments: u32,
     ) -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
+        let (coord, bus, ctx, abr_state, _slots) = switch_coord_slots(reason, v0_segments, 1);
+        (coord, bus, ctx, abr_state)
+    }
+
+    /// Same fixture with a multi-segment alternate variant, so a rebuild of the
+    /// incoming session's plan is visible in what it dispatches next.
+    fn switch_coord_variants(
+        reason: AbrReason,
+        v0_segments: u32,
+        v1_segments: u32,
+    ) -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
+        let (coord, bus, ctx, abr_state, _slots) =
+            switch_coord_slots(reason, v0_segments, v1_segments);
+        (coord, bus, ctx, abr_state)
+    }
+
+    /// Same fixture, plus the audible variant's segment slot states — the
+    /// handles a test needs to drive a slot into the slow-in-flight shape the
+    /// stalled-escape reconciliation reads.
+    fn switch_coord_slots(
+        reason: AbrReason,
+        v0_segments: u32,
+        v1_segments: u32,
+    ) -> (
+        Arc<TestHlsCoord>,
+        EventBus,
+        TestPlanCtx,
+        Arc<AbrState>,
+        Vec<Arc<SegmentSlotState>>,
+    ) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -727,6 +705,16 @@ pub(super) mod tests {
                     .expect("url")
             })
             .collect();
+        let v1_urls: Vec<url::Url> = (0..v1_segments)
+            .map(|idx| {
+                format!("https://example.com/v1-seg{idx}.m4s")
+                    .parse()
+                    .expect("url")
+            })
+            .collect();
+        let v0_slots: Vec<Arc<SegmentSlotState>> = (0..v0_segments)
+            .map(|_| SegmentSlotState::missing())
+            .collect();
         let playlist = Arc::new(PlaylistState::new(vec![
             VariantState {
                 codec: Some(AudioCodec::AacLc),
@@ -745,17 +733,45 @@ pub(super) mod tests {
                 codec: Some(AudioCodec::Mp3),
                 container: Some(ContainerFormat::MpegAudio),
                 init_url: None,
-                segments: vec![SegmentState {
-                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                    duration: Duration::from_secs(2),
-                    byte_range_len: Some(100),
-                }],
+                segments: v1_urls
+                    .iter()
+                    .map(|url| SegmentState {
+                        url: url.clone(),
+                        duration: Duration::from_secs(2),
+                        byte_range_len: Some(100),
+                    })
+                    .collect(),
             },
         ]));
         let variants: Arc<[Arc<TestHlsVariant>]> = Arc::from(vec![
             VariantParts {
                 init: None,
                 segments: v0_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, url)| {
+                        Segment::Media(MediaSegment {
+                            url: url.clone(),
+                            resource_id: ctx
+                                .scope
+                                .key(&AssetResource::Url(url.clone()))
+                                .expect("segment key"),
+                            state: Arc::clone(&v0_slots[idx]),
+                            size: SegmentSize::seed(100),
+                            content: SegmentContent::Plain,
+                            decode_time: Duration::from_secs(2) * u32::try_from(idx).expect("idx"),
+                            duration: Duration::from_secs(2),
+                        })
+                    })
+                    .collect(),
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                codec: playlist.variant_codec(0),
+                container: playlist.variant_container(0),
+            }
+            .into_variant(0, &ctx),
+            VariantParts {
+                init: None,
+                segments: v1_urls
                     .iter()
                     .enumerate()
                     .map(|(idx, url)| {
@@ -773,27 +789,6 @@ pub(super) mod tests {
                         })
                     })
                     .collect(),
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-                codec: playlist.variant_codec(0),
-                container: playlist.variant_container(0),
-            }
-            .into_variant(0, &ctx),
-            VariantParts {
-                init: None,
-                segments: vec![Segment::Media(MediaSegment {
-                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                    resource_id: ctx
-                        .scope
-                        .key(&AssetResource::Url(
-                            "https://example.com/v1-seg0.m4s".parse().expect("url"),
-                        ))
-                        .expect("segment key"),
-                    state: SegmentSlotState::missing(),
-                    size: SegmentSize::seed(100),
-                    content: SegmentContent::Plain,
-                    decode_time: Duration::ZERO,
-                    duration: Duration::from_secs(2),
-                })],
                 seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(1),
                 container: playlist.variant_container(1),
@@ -828,7 +823,7 @@ pub(super) mod tests {
             abr_publisher,
             variants,
         ));
-        (coord, bus, ctx, abr_state)
+        (coord, bus, ctx, abr_state, v0_slots)
     }
 
     pub(in crate::stream) fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
@@ -1795,6 +1790,444 @@ pub(super) mod tests {
         assert!(
             beyond.is_empty(),
             "capped dispatch re-emitted look-ahead segments {beyond:?}"
+        );
+    }
+
+    /// Counting data-arrival wake — the observable end of a wake install.
+    #[derive(Default)]
+    struct CountingWake {
+        woken: AtomicUsize,
+    }
+
+    impl CountingWake {
+        fn count(&self) -> usize {
+            self.woken.load(Ordering::Acquire)
+        }
+    }
+
+    impl WorkerWake for CountingWake {
+        fn defer(&self) {}
+
+        fn wake(&self) {
+            self.woken.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// Deliver every dispatched active-variant segment in full, so the layout
+    /// carries exact sizes and the bytes are readable.
+    fn deliver_active(coord: &TestHlsCoord, ctx: &TestPlanCtx, budget: usize) {
+        for mut cmd in coord.dispatch_active(ctx, budget) {
+            let mut writer = cmd.take_writer().expect("streaming writer");
+            writer(&[7; 100]).expect("segment body");
+            cmd.take_on_complete().expect("completion handler")(100, None, None);
+        }
+    }
+
+    fn v0_segment_key(ctx: &TestPlanCtx, idx: u32) -> ResourceKey {
+        ctx.scope
+            .key(&AssetResource::Url(
+                format!("https://example.com/v0-seg{idx}.m4s")
+                    .parse()
+                    .expect("url"),
+            ))
+            .expect("segment key")
+    }
+
+    #[kithara::test]
+    fn find_at_offset_addresses_the_segment_that_owns_the_byte() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        assert_eq!(coord.find_at_offset(250), Some((2, 200, 100)));
+    }
+
+    #[kithara::test]
+    fn find_at_offset_is_none_past_the_last_segment() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        assert_eq!(coord.find_at_offset(600), None);
+    }
+
+    #[kithara::test]
+    fn demand_segment_at_offset_names_the_segment_that_owns_the_cursor() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        assert_eq!(coord.demand_segment_at_offset(250), Some(2));
+    }
+
+    #[kithara::test]
+    fn demand_segment_at_offset_is_none_past_the_last_segment() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        assert_eq!(coord.demand_segment_at_offset(600), None);
+    }
+
+    #[kithara::test]
+    fn byte_map_resolves_the_segment_holding_a_byte() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        let descriptor =
+            ByteMap::segment_at_byte(coord.as_ref(), 250).expect("byte 250 is inside segment 2");
+
+        assert_eq!(descriptor.segment_index, 2);
+        assert_eq!(descriptor.byte_range, 200..300);
+    }
+
+    #[kithara::test]
+    fn byte_map_resolves_the_segment_after_a_byte() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        let descriptor = ByteMap::segment_after_byte(coord.as_ref(), 50)
+            .expect("segment 1 follows a byte inside segment 0");
+
+        assert_eq!(descriptor.segment_index, 1);
+        assert_eq!(descriptor.byte_range, 100..200);
+    }
+
+    #[kithara::test]
+    fn byte_map_resolves_a_segment_by_index() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        let descriptor = ByteMap::segment_at_index(coord.as_ref(), 3).expect("segment 3 exists");
+
+        assert_eq!(descriptor.byte_range, 300..400);
+    }
+
+    #[kithara::test]
+    fn byte_map_resolves_a_segment_by_decode_time() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        let descriptor = ByteMap::segment_at_time(coord.as_ref(), Duration::from_secs(5))
+            .expect("five seconds lands in segment 2");
+
+        assert_eq!(descriptor.segment_index, 2);
+        assert_eq!(descriptor.decode_time, Duration::from_secs(4));
+    }
+
+    #[kithara::test]
+    fn phase_at_is_ready_once_the_segment_bytes_land() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        deliver_active(&coord, &ctx, 1);
+
+        assert_eq!(coord.phase_at(0..1), SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn probe_phase_reads_the_range_under_the_cursor() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        deliver_active(&coord, &ctx, 1);
+        coord.set_position(0);
+        let probe = HlsProbe::new(Arc::clone(&coord));
+
+        assert_eq!(probe.phase(), SourcePhase::Ready);
+    }
+
+    #[kithara::test]
+    fn probe_vends_the_coord_as_its_byte_map() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        let probe = HlsProbe::new(Arc::clone(&coord));
+
+        let map = probe
+            .byte_map()
+            .expect("a segmented source vends a byte map");
+
+        assert_eq!(
+            map.segment_at_index(3).expect("segment 3").byte_range,
+            300..400
+        );
+    }
+
+    #[kithara::test]
+    fn prepare_for_seek_wakes_a_reader_parked_on_the_pre_seek_range() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let signal = coord.signal();
+        let before = signal.current();
+
+        coord.prepare_for_seek();
+
+        assert!(
+            signal.current() > before,
+            "a repositioned active variant must re-arm the readiness gate"
+        );
+    }
+
+    #[kithara::test]
+    fn reconcile_escape_marks_a_reader_stalled_at_a_clean_boundary() {
+        let (coord, _bus, ctx, _abr, slots) = switch_coord_slots(AbrReason::ManualOverride, 6, 1);
+        coord.variants[0].rebuild(&ctx, 0);
+        let _in_flight = coord.dispatch_active(&ctx, 1);
+        slots[0].mark_slow();
+        coord.set_position(0);
+
+        assert!(coord.reconcile_escape(0));
+        assert!(coord.abr.is_escaping());
+    }
+
+    #[kithara::test]
+    fn reconcile_escape_holds_the_mark_while_the_stall_persists() {
+        let (coord, _bus, ctx, _abr, slots) = switch_coord_slots(AbrReason::ManualOverride, 6, 1);
+        coord.variants[0].rebuild(&ctx, 0);
+        let _in_flight = coord.dispatch_active(&ctx, 1);
+        slots[0].mark_slow();
+        coord.set_position(0);
+        coord.abr.mark_escape();
+
+        assert!(!coord.reconcile_escape(0), "the rising edge already passed");
+        assert!(coord.abr.is_escaping());
+    }
+
+    #[kithara::test]
+    fn reconcile_escape_clears_the_mark_once_the_stall_lifts() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.abr.mark_escape();
+
+        assert!(!coord.reconcile_escape(0));
+        assert!(!coord.abr.is_escaping());
+    }
+
+    #[kithara::test]
+    fn reconcile_escape_leaves_a_delivering_reader_unmarked() {
+        let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+
+        assert!(!coord.reconcile_escape(0));
+        assert!(!coord.abr.is_escaping());
+    }
+
+    #[kithara::test]
+    fn seek_epoch_handle_reads_the_live_epoch() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let handle = coord.seek_epoch_handle();
+
+        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        assert_ne!(epoch, 0, "a begun seek mints a non-zero epoch");
+        assert_eq!(handle.load(Ordering::Acquire), epoch);
+    }
+
+    #[kithara::test]
+    fn variant_control_seek_selection_names_the_pending_target() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+
+        assert_eq!(VariantControl::selected_variant_for_seek(coord.as_ref()), 1);
+    }
+
+    #[kithara::test]
+    fn seek_selection_falls_back_to_the_committed_variant() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        let claim = coord
+            .abr
+            .claim_pending_decision()
+            .expect("fixture selection claim");
+        assert!(abr_state.abort_pending(claim.ticket()));
+
+        assert_eq!(coord.selected_variant_for_seek(), 0);
+        assert_eq!(VariantControl::selected_variant_for_seek(coord.as_ref()), 0);
+    }
+
+    #[kithara::test]
+    fn set_worker_wake_installs_the_data_arrival_wake() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let wake = Arc::new(CountingWake::default());
+
+        coord.set_worker_wake(Arc::clone(&wake) as Arc<dyn WorkerWake>);
+        coord.signal().fire();
+
+        assert_eq!(wake.count(), 1);
+    }
+
+    #[kithara::test]
+    fn set_peer_wake_installs_the_direct_peer_poll_wake() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let direct = Arc::new(CountingWake::default());
+
+        coord.set_peer_wake(
+            Arc::new(DeferredWake::default()),
+            Arc::clone(&direct) as Arc<dyn WorkerWake>,
+        );
+        coord.signal().wake_peer();
+
+        assert_eq!(direct.count(), 1);
+    }
+
+    #[kithara::test]
+    fn set_peer_wake_installs_the_deferred_peer_wake() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let deferred = Arc::new(DeferredWake::default());
+
+        coord.set_peer_wake(
+            Arc::clone(&deferred),
+            Arc::new(CountingWake::default()) as Arc<dyn WorkerWake>,
+        );
+        coord.signal().arm_peer();
+
+        assert!(deferred.flush(), "the armed peer wake must be deliverable");
+    }
+
+    #[kithara::test]
+    fn sync_abr_lock_locks_abr_while_a_seek_is_pending() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        coord.sync_abr_lock();
+
+        assert!(coord.abr.is_locked());
+    }
+
+    #[kithara::test]
+    fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        coord.abr.lock();
+
+        coord.sync_abr_lock();
+
+        assert!(!coord.abr.is_locked());
+    }
+
+    #[kithara::test]
+    fn sync_abr_lock_leaves_a_quiet_coord_unlocked() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+
+        coord.sync_abr_lock();
+
+        assert!(!coord.abr.is_locked());
+    }
+
+    #[kithara::test]
+    fn sync_abr_lock_keeps_a_pending_seek_locked() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.abr.lock();
+
+        coord.sync_abr_lock();
+
+        assert!(coord.abr.is_locked());
+    }
+
+    #[kithara::test]
+    fn variant_control_abort_retires_a_live_transition() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        assert!(VariantControl::abort_variant(coord.as_ref(), transition));
+    }
+
+    #[kithara::test]
+    fn variant_control_abort_rejects_a_superseded_transition() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        let stale = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        renew_switch_intent(&abr_state);
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare replacement")
+            .expect("replacement switch");
+
+        assert!(!VariantControl::abort_variant(coord.as_ref(), stale));
+    }
+
+    #[kithara::test]
+    fn eviction_rebuilds_the_active_reader_from_its_own_cursor() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        deliver_active(&coord, &ctx, 6);
+        coord.variants[0].rebuild(&ctx, 2);
+        let key = v0_segment_key(&ctx, 0);
+        ctx.scope
+            .store()
+            .remove_resource(&key)
+            .expect("evict the active segment bytes");
+
+        coord.broadcast_eviction(&ctx, &key, 0);
+
+        let planned: Vec<u32> = coord
+            .dispatch_active(&ctx, 6)
+            .iter()
+            .map(v0_seg_idx)
+            .collect();
+        assert!(
+            planned.contains(&0),
+            "the evicted segment must be re-planned from the reader cursor: {planned:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn eviction_elsewhere_leaves_the_active_reader_alone() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 2);
+        let foreign = ctx
+            .scope
+            .key(&AssetResource::Url(
+                "https://example.com/v1-seg0.m4s".parse().expect("url"),
+            ))
+            .expect("incoming segment key");
+
+        coord.broadcast_eviction(&ctx, &foreign, 0);
+
+        let planned: Vec<u32> = coord
+            .dispatch_active(&ctx, 6)
+            .iter()
+            .map(v0_seg_idx)
+            .collect();
+        assert!(
+            !planned.contains(&0),
+            "an eviction the active variant did not lose must not rewind its queue: {planned:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn eviction_in_the_active_variant_leaves_the_incoming_plan_alone() {
+        let (coord, _bus, ctx, _abr) = switch_coord_variants(AbrReason::ManualOverride, 2, 2);
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        // The incoming plan deliberately starts ahead of its own cursor: only a
+        // rebuild aimed at that cursor would pull segment 0 back onto the front.
+        coord.variants[1].rebuild(&ctx, 1);
+        deliver_active(&coord, &ctx, 1);
+        let key = v0_segment_key(&ctx, 0);
+        ctx.scope
+            .store()
+            .remove_resource(&key)
+            .expect("evict the active segment bytes");
+
+        coord.broadcast_eviction(&ctx, &key, 0);
+
+        let planned: Vec<String> = coord
+            .dispatch_incoming(&ctx, 1)
+            .iter()
+            .map(|cmd| cmd.url().to_string())
+            .collect();
+        assert!(
+            planned.is_empty(),
+            "an eviction the incoming variant did not lose must not re-aim its plan at              the session cursor: {planned:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn prepare_for_seek_remints_a_layout_frozen_behind_a_seek_tail() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild_with_decoder_probe(&ctx, 2);
+        let mut command = coord
+            .dispatch_active(&ctx, 1)
+            .pop()
+            .expect("the decoder probe fetches segment 0");
+        let mut writer = command.take_writer().expect("streaming writer");
+        writer(&[7; 64]).expect("short segment body");
+        command.take_on_complete().expect("completion handler")(64, None, None);
+        assert!(
+            !coord.variants[0].layout_seek_invariant(),
+            "the short size must park behind the seek tail"
+        );
+
+        coord.prepare_for_seek();
+
+        assert_eq!(
+            coord.find_at_offset(64),
+            Some((1, 64, 100)),
+            "the reset must land the parked size in the byte space"
         );
     }
 }
