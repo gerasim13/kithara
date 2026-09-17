@@ -66,14 +66,10 @@ impl AudioEvents {
             first_output_meta,
         } = read;
         if matches!(outcome, ReadOutcome::Frames { .. }) {
+            debug_assert!(first_output_meta.is_some());
             let position = session.playhead.position();
             self.fill_result(true, false, false, position, epoch);
-            self.post_seek_output(
-                session.seek_obs.as_ref(),
-                epoch,
-                first_output_meta,
-                position,
-            );
+            self.post_seek_output(session.seek_obs.as_ref(), epoch, first_output_meta);
             self.progress(session.playhead.as_ref(), epoch);
         }
         outcome
@@ -118,7 +114,6 @@ impl AudioEvents {
         seek: &dyn SeekObserve,
         epoch: u64,
         meta: Option<AudioChunkInfo>,
-        position: Duration,
     ) {
         let Some(seek_epoch) = seek.pending_epoch() else {
             return;
@@ -126,9 +121,12 @@ impl AudioEvents {
         if seek_epoch != epoch {
             return;
         }
+        let Some(meta) = meta else {
+            return;
+        };
 
-        let variant = meta.as_ref().and_then(|value| value.variant_index);
-        let segment_index = meta.as_ref().and_then(|value| value.segment_index);
+        let variant = meta.variant_index;
+        let segment_index = meta.segment_index;
         self.publish(AudioEvent::SeekLifecycle {
             seek_epoch,
             stage: SeekLifecycleStage::OutputCommitted,
@@ -136,7 +134,7 @@ impl AudioEvents {
         });
         self.publish(AudioEvent::SeekComplete {
             seek_epoch,
-            position: meta.map_or(position, |chunk| chunk.timestamp),
+            position: meta.timestamp,
         });
         let _ = seek.clear_pending_epoch(seek_epoch);
     }
@@ -437,7 +435,6 @@ mod tests {
                 end_timestamp: Duration::from_millis(521),
                 ..Default::default()
             }),
-            Duration::from_millis(521),
         );
         assert!(events.take_wake_pending());
         assert!(!events.take_wake_pending());

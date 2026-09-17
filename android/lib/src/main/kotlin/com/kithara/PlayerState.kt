@@ -35,7 +35,6 @@ enum class ItemStatus {
  * @property currentTime Current playback position in seconds.
  * @property duration Total item duration in seconds, if known.
  * @property error Last reported player error, if any.
- * @property items Current queue snapshot.
  * @property rate Current playback rate.
  * @property status Current player readiness status.
  */
@@ -44,7 +43,6 @@ data class PlayerState(
     val currentTime: Double = 0.0,
     val duration: Double? = null,
     val error: KitharaError? = null,
-    val items: List<KitharaPlayerItem> = emptyList(),
     val rate: Float = 0f,
     val status: PlayerStatus = PlayerStatus.Unknown,
 )

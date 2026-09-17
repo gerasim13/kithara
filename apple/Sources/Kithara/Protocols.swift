@@ -177,9 +177,7 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// argument to lift that limit.
     func updatePeakBitrate(wifi: Double, cellular: Double)
 
-    /// Configure the auth token sent on every player HTTP request.
+    /// Replace the auth token sent on every player HTTP request. The
+    /// initial value belongs in the player configuration.
     func setupNetwork(authToken: String)
-
-    /// Register a runtime DRM key decryptor on every host (`"*"`).
-    func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?)
 }

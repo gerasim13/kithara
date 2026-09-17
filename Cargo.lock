@@ -5531,6 +5531,7 @@ dependencies = [
  "kithara-play",
  "kithara-queue",
  "kithara-test-utils",
+ "kithara-warp",
  "kithara-workspace-hack",
  "serde",
  "serde_yaml_ng",

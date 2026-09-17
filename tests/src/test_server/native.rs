@@ -6,7 +6,7 @@ use kithara::platform::{
     time::{Duration, sleep},
     tokio::task::spawn,
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
 use tower_http::cors::CorsLayer;
 use tracing::trace;
 use url::Url;
@@ -17,7 +17,9 @@ use crate::{
     http_server::TestHttpServer,
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
+    test_server_state::{
+        Content, DelayGate, Delivery, FixtureBehavior, InitGate, SegmentGate, TestServerState,
+    },
 };
 
 /// Facade over the process-global shared test server.
@@ -92,6 +94,29 @@ impl TestServerHelper {
     #[must_use]
     pub fn signal(&self, asset: SignalAsset) -> Url {
         self.url(&asset.path())
+    }
+
+    /// URL of one build-time generated signal body, served in `shape`.
+    ///
+    /// The generator always writes a Xing/Info frame; real CBR content often
+    /// has none, which leaves its byte length as the only record of duration.
+    /// The stored body is the tagged shape, so any other shape is reshaped
+    /// here and served through a registered behavior over the same
+    /// range-capable route.
+    #[must_use]
+    pub fn signal_in(&self, asset: SignalAsset, shape: Mp3Shape) -> Url {
+        if shape == Mp3Shape::Tagged {
+            return self.signal(asset);
+        }
+        let generated = by_name(asset.name()).expect("asset name comes from the generator");
+        let handle = self.register_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(shape.apply(generated.bytes())),
+                content_type: Some(generated.entry().content_type),
+            },
+            delivery: Delivery::Range,
+        });
+        handle.child_url(&format!("{}.{}", asset.name(), asset.ext()))
     }
 
     /// Build an arbitrary URL on this server.
@@ -395,11 +420,10 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
 mod tests {
     use kithara::platform::time::{self, Duration};
 
-    use super::{DelayRule, FixtureBehavior, HlsFixtureBuilder, TestServerHelper};
-    use crate::{
-        kithara,
-        test_server_state::{Content, Delivery},
+    use super::{
+        Content, DelayRule, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     };
+    use crate::kithara;
 
     #[kithara::test(tokio)]
     async fn two_helpers_share_one_base_url() {
