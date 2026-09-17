@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
+use std::{collections::HashSet, num::NonZeroUsize, path::Path};
 
 use kithara::{
     self,

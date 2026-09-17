@@ -1,5 +1,3 @@
-use std::fmt;
-
 use super::mpsc::{Shared, drop_sender, error::SendError, push_unbounded};
 use crate::sync::Arc;
 

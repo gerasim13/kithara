@@ -8,6 +8,9 @@ use kithara_test_dylib as _;
 
 mod support;
 
+#[path = "support/xor.rs"]
+mod xor;
+
 use aes::Aes128;
 use cbc::{
     Encryptor,
@@ -21,8 +24,9 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
-use support::{Test, resource, source, xor_processor};
+use support::{Test, resource, source};
 use tempfile::tempdir;
+use xor::xor_processor;
 
 const ROOT: &str = "processed-asset";
 const DRM_ROOT: &str = "processed-drm-asset";

@@ -1,7 +1,4 @@
-use std::{
-    f64::consts::{PI, TAU},
-    fmt,
-};
+use std::f64::consts::{PI, TAU};
 
 use kithara::{
     audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
