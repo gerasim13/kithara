@@ -170,14 +170,14 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
             .eraseToAnyPublisher()
     }
 
-    /// Error publisher. Maps `ItemEvent.error` / `ItemEvent.didFail`
-    /// onto ``PlayerError``. Combine equivalent of iOS `rxError`.
+    /// Error publisher. Maps `ItemEvent.error` onto ``PlayerError``;
+    /// every failure carries exactly one `error` event, so `didFail`
+    /// adds nothing here. Combine equivalent of iOS `rxError`.
     public nonisolated var error: AnyPublisher<Error, Never> {
         _eventSubject
             .compactMap { event -> PlayerError? in
                 switch event {
                 case let .error(message): return .itemFailed(message)
-                case .didFail: return .itemFailed("item did fail")
                 default: return nil
                 }
             }
@@ -200,6 +200,8 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     // MARK: - Internal
 
     nonisolated let _inner: AudioPlayerItem
+
+    private nonisolated let _observerId: UInt64
 
     // MARK: - Init
 
@@ -247,7 +249,7 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
         self.url = URL(string: url) ?? URL(fileURLWithPath: url)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
-        _inner.setObserver(observer: observer)
+        self._observerId = _inner.addObserver(observer: observer)
     }
 
     /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
@@ -259,7 +261,11 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
         self.url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
-        inner.setObserver(observer: observer)
+        self._observerId = inner.addObserver(observer: observer)
+    }
+
+    deinit {
+        _inner.removeObserver(id: _observerId)
     }
 
     private static func ffiTrackId(from id: TrackId) -> KitharaFFI.TrackId {

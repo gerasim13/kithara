@@ -683,47 +683,45 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// Select an item at the given queue index.
+    /// Select the item at the given position of the engine's queue.
     ///
     /// - Parameters:
-    ///   - index: Queue index (0-based).
-    ///   - transition: How the switch plays — `.none` for an immediate
-    ///     cut (AVQueuePlayer user-initiated-selection idiom — default),
+    ///   - index: Queue index (0-based) into ``items()``.
+    ///   - transition: How the switch plays: `.none` for an immediate
+    ///     cut (AVQueuePlayer user-initiated-selection idiom, default),
     ///     `.crossfade` to use the player's configured duration.
-    /// - Throws: ``KitharaError`` if the index is out of range or the item
-    ///   is not yet inserted into the engine.
+    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the index is out
+    ///   of range, or whatever ``selectItem(_:transition:)`` throws.
     public func selectItem(at index: Int, transition: Transition = .none) throws {
         let snapshot = items()
-        let itemId = snapshot.indices.contains(index) ? snapshot[index].audioId : nil
-        do {
-            try _inner.selectItem(index: UInt32(index), transition: transition.ffi)
-        } catch let ffiError as FfiError {
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: itemId)
+        guard snapshot.indices.contains(index) else {
+            let error = KitharaError.invalidArgument(
+                "item index \(index) out of range (len: \(snapshot.count))"
+            )
+            publishCommandError(error, itemId: nil)
             throw error
         }
+        try selectItem(snapshot[index], transition: transition)
     }
 
-    /// Select an item by identity (AVQueuePlayer-style).
-    ///
-    /// Resolves the item's current index via ``items()`` and delegates to
-    /// ``selectItem(at:transition:)``. Race-free against concurrent
-    /// `insert`/`remove` that would shift indices.
+    /// Select an item by identity (AVQueuePlayer-style). The engine
+    /// resolves the item itself, so concurrent `insert`/`remove` cannot
+    /// redirect the selection.
     ///
     /// - Parameters:
     ///   - item: The item to select. Must currently be in the queue.
     ///   - transition: `.none` by default (immediate cut); pass
     ///     `.crossfade` for Next/Prev button UX.
-    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the item is not in
-    ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
+    /// - Throws: ``KitharaError`` if the item is not in the queue or is
+    ///   not yet loaded.
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
-        let snapshot = items()
-        guard let index = snapshot.firstIndex(where: { $0.ffiTrackId == item.ffiTrackId }) else {
-            let error = KitharaError.invalidArgument("item \(item.id) not in queue")
+        do {
+            try _inner.select(item: item._inner, transition: transition.ffi)
+        } catch let ffiError as FfiError {
+            let error = KitharaError(ffi: ffiError)
             publishCommandError(error, itemId: item.audioId)
             throw error
         }
-        try selectItem(at: index, transition: transition)
     }
 
     /// Crossfade duration in seconds applied on item transitions.

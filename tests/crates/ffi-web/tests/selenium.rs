@@ -8,7 +8,10 @@ use std::{
     thread,
 };
 
-use kithara::platform::time::{self, Duration, Instant};
+use kithara::platform::{
+    time::{self, Duration, Instant},
+    tokio,
+};
 use kithara_test_fixtures::SignalAsset;
 use reqwest::{Client, Url};
 use serde::Deserialize;
@@ -420,29 +423,45 @@ impl SeleniumHarness {
         let trunk_port = trunk_port.to_string();
         let toolchain =
             env::var("KITHARA_SELENIUM_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
-        let mut cmd = Command::new("trunk");
-        cmd.current_dir(repo_root().join("crates/kithara-ffi"))
-            .env("RUSTUP_TOOLCHAIN", toolchain)
-            .env_remove("NO_COLOR")
-            .args([
-                "serve",
-                "--address",
-                "127.0.0.1",
-                "--port",
-                &trunk_port,
-                "--no-autoreload",
-            ])
-            .arg("--dist")
-            .arg(&dist_dir);
-        // Realtime playback assertions (assert_motion, realtime seek) require
-        // an optimised wasm build: our own crates intentionally stay at debug
-        // opt-level, so the opt-0 audio pipeline (rubato sinc monomorphised in
-        // kithara-audio) cannot sustain realtime in a debug build. Build
-        // release by default; opt into debug only for fast non-realtime checks.
-        if env::var("KITHARA_SELENIUM_DEBUG").is_err() {
-            println!("[selenium] building wasm in release");
-            cmd.arg("--release");
+        let trunk = |subcommand: &str| {
+            let mut cmd = Command::new("trunk");
+            cmd.current_dir(repo_root().join("crates/kithara-ffi"))
+                .env("RUSTUP_TOOLCHAIN", &toolchain)
+                .env_remove("NO_COLOR")
+                .arg(subcommand)
+                .arg("--dist")
+                .arg(&dist_dir);
+            // Realtime playback assertions (assert_motion, realtime seek) require
+            // an optimised wasm build: our own crates intentionally stay at debug
+            // opt-level, so the opt-0 audio pipeline (rubato sinc monomorphised in
+            // kithara-audio) cannot sustain realtime in a debug build. Build
+            // release by default; opt into debug only for fast non-realtime checks.
+            if env::var("KITHARA_SELENIUM_DEBUG").is_err() {
+                cmd.arg("--release");
+            }
+            cmd
+        };
+
+        // The cold wasm compile takes minutes; finishing it before serving
+        // keeps the page readiness wait about the server, not the compiler.
+        println!("[selenium] building wasm with trunk");
+        let mut build = trunk("build");
+        let status = tokio::task::spawn_blocking(move || build.status())
+            .await
+            .map_err(|err| format!("trunk build task failed: {err}"))?
+            .map_err(|err| format!("failed to run trunk build: {err}"))?;
+        if !status.success() {
+            return Err(format!("trunk build failed: {status}"));
         }
+
+        let mut cmd = trunk("serve");
+        cmd.args([
+            "--address",
+            "127.0.0.1",
+            "--port",
+            &trunk_port,
+            "--no-autoreload",
+        ]);
 
         port_lease.release();
         self.trunk_server = Some(ChildGuard::spawn("trunk", cmd)?);
