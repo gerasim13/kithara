@@ -938,6 +938,47 @@ mod tests {
         }
     }
 
+    /// The iOS simulator suite runs on one Mac mini and nowhere else, so no
+    /// other lane answers for that surface. A `.judged` lane only reports, and
+    /// a rule set without the quarantine kind skips the pipeline that judges an
+    /// imported pull request — together they let an iOS regression merge.
+    #[test]
+    fn the_ios_suite_blocks_every_pipeline_that_judges_a_change() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let apple = fs::read_to_string(root.join(".gitlab/ci/apple.yml"))
+            .expect("the Apple pipeline definition is readable");
+        let (_, after_ios_test) = apple
+            .split_once("apple:ios-test:")
+            .expect("the iOS test job exists");
+        let ios_test = after_ios_test
+            .split_once("\napple:")
+            .map_or(after_ios_test, |(job, _)| job);
+
+        assert!(
+            !ios_test.contains(".judged"),
+            "the iOS suite reports instead of blocking"
+        );
+        assert!(
+            ios_test.contains(".rules-verify-and-branch"),
+            "the iOS suite skips a pipeline kind that judges a change"
+        );
+
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+        let (_, after_verify) = common
+            .split_once(".rules-verify:")
+            .expect("the verify rule set exists");
+        let verify = after_verify
+            .split_once("\n.")
+            .map_or(after_verify, |(rules, _)| rules);
+        assert!(
+            verify.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
+            "the rule set the iOS suite takes does not carry the quarantine kind"
+        );
+    }
+
     #[test]
     fn linux_tests_do_not_disappear_when_linux_check_fails() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
