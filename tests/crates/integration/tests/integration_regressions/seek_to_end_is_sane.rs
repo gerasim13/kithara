@@ -45,8 +45,8 @@ struct SeekEvents {
     seek_rejected: bool,
 }
 
-fn render_and_tick(queue: &OfflineQueue<TestPools>) {
-    let _ = queue.render(BLOCK_FRAMES);
+async fn render_and_tick(queue: &OfflineQueue<TestPools>) {
+    queue.render(BLOCK_FRAMES).await;
     queue.tick().expect("tick queue");
 }
 
@@ -152,7 +152,7 @@ async fn run_case(
 
     let mut warmup_position = None;
     for _ in 0..WARMUP_BLOCKS {
-        render_and_tick(&queue);
+        render_and_tick(&queue).await;
         drain_warmup(&mut rx, &mut warmup_position);
         if warmup_position.is_some_and(|position| position >= MIN_WARMUP_SECS)
             && queue.playback_view().duration.is_some()
@@ -205,7 +205,7 @@ async fn run_case(
 
     let mut observation = SeekEvents::default();
     for _ in 0..SEEK_BLOCKS {
-        render_and_tick(&queue);
+        render_and_tick(&queue).await;
         drain_seek_events(&mut rx, &mut observation);
         let reached_outcome = match target_kind {
             Target::NearEnd => {

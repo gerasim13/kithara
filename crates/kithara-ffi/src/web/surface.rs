@@ -229,14 +229,17 @@ impl AudioPlayer {
         Ok(())
     }
 
-    /// Select (start playing) the track at `index` with an immediate cut.
+    /// Select (start playing) the track with `id` with an immediate cut.
     ///
     /// # Errors
-    /// Returns a JS error if `index` is out of range.
-    #[wasm_bindgen(js_name = selectItem)]
-    pub fn select_item_js(&self, index: u32) -> Result<(), JsValue> {
+    /// Returns a JS error if the id is not in the queue.
+    #[wasm_bindgen(js_name = select)]
+    pub fn select_js(&self, id: f64) -> Result<(), JsValue> {
+        let item = self
+            .item_by_id(id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
         self.inner
-            .select_item(index, FfiTransition::None)
+            .select(&item, FfiTransition::None)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -283,25 +286,36 @@ impl AudioPlayer {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    /// Register a JS callback as the per-item observer for the track at
-    /// `index`. The callback receives marshalled
-    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects.
+    /// Subscribe `obj` to the marshalled
+    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects of the track
+    /// with `id`. Returns the observer handle `removeItemObserver` takes.
     ///
     /// # Errors
-    /// Returns a JS error if `index` is out of range or `obj` is not a
+    /// Returns a JS error if the id is not in the queue or `obj` is not a
     /// callable function.
-    #[wasm_bindgen(js_name = setItemObserver)]
-    pub fn set_item_observer_js(&self, index: u32, obj: JsValue) -> Result<(), JsValue> {
+    #[wasm_bindgen(js_name = addItemObserver)]
+    pub fn add_item_observer_js(&self, id: f64, obj: JsValue) -> Result<f64, JsValue> {
         let func: Function = obj
             .dyn_into()
             .map_err(|_| JsValue::from_str("observer must be a function"))?;
         let item = self
-            .inner
-            .items()
-            .into_iter()
-            .nth(index as usize)
-            .ok_or_else(|| JsValue::from_str("item index out of range"))?;
-        item.set_observer(Arc::new(ItemObserverJs::new(func)));
+            .item_by_id(id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
+        let observer_id = item.add_observer(Arc::new(ItemObserverJs::new(func)));
+        Ok(cast::<u64, f64>(observer_id).unwrap_or(0.0))
+    }
+
+    /// Unsubscribe the observer registered under `observer_id` from the
+    /// track with `id`.
+    ///
+    /// # Errors
+    /// Returns a JS error if the id is not in the queue.
+    #[wasm_bindgen(js_name = removeItemObserver)]
+    pub fn remove_item_observer_js(&self, id: f64, observer_id: f64) -> Result<(), JsValue> {
+        let item = self
+            .item_by_id(id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
+        item.remove_observer(cast(observer_id).unwrap_or(u64::MAX));
         Ok(())
     }
 

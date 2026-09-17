@@ -63,7 +63,7 @@ val generateKitharaFfi by tasks.registering(Exec::class) {
     inputs.dir(repoRoot.resolve("crates"))
     inputs.file(repoRoot.resolve("Cargo.toml"))
     inputs.file(repoRoot.resolve("Cargo.lock"))
-    commandLine("cargo", "xtask", "android", "build")
+    commandLine(cargoExecutable(), "xtask", "android", "build")
     if (releaseBuild.get()) {
         args("--profile", "release")
     }

@@ -80,7 +80,7 @@ async fn fetch_manager_error_handling_invalid_url(
 ) -> HlsResult<()> {
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
 
-    let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
+    let invalid_url = Url::parse("http://127.0.0.1:0/master.m3u8")
         .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
     let result = fetch_manager

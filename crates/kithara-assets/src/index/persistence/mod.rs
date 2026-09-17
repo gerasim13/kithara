@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-mod atomic;
+mod file;
 mod flush;
 pub mod schema;
 #[cfg(not(target_arch = "wasm32"))]
@@ -9,6 +9,6 @@ mod worker;
 mod worker;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use atomic::{init_atomic, open_existing};
+pub(crate) use file::IndexFile;
 pub use flush::{FlushHub, FlushPolicy, FlushPolicyPatch};
 pub(crate) use flush::{Flushable, flush_sync};

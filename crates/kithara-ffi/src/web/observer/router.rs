@@ -11,8 +11,8 @@ use web_sys::{BroadcastChannel, MessageEvent, console};
 use super::{decode::decode, decode_item::decode_item_event, marshal::get_id_req};
 use crate::{
     item::AudioPlayerItem,
-    observer::{ItemObserver, PlayerObserver},
-    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
+    observer::PlayerObserver,
+    types::FfiPlayerEvent,
     web::{analysis::AnalysisRoute, observer::source::EVENT_CHANNEL},
 };
 
@@ -115,10 +115,7 @@ impl Routes {
         let Some(item) = self.item(*item_id) else {
             return;
         };
-        update_item_state(&item, status);
-        if let Some(item_obs) = item.observer() {
-            dispatch_track_status_to_item(&item_obs, status);
-        }
+        item.apply_track_status(status);
     }
 
     fn route_item_message(&self, data: &JsValue) {
@@ -130,9 +127,7 @@ impl Routes {
         let Some(item) = self.item(track_id) else {
             return;
         };
-        if let Some(obs) = item.observer() {
-            obs.on_event(item_event);
-        }
+        item.deliver(item_event);
     }
 }
 
@@ -142,34 +137,4 @@ fn scope(data: &JsValue) -> Option<String> {
     Reflect::get(data, &JsValue::from_str(SCOPE_KEY))
         .ok()
         .and_then(|value| value.as_string())
-}
-
-fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {
-    match status {
-        FfiTrackStatus::Loaded => {
-            let duration = item.duration_sec();
-            item.state.lock().resolve_duration(duration);
-        }
-        FfiTrackStatus::Failed { .. } => {
-            item.state.lock().mark_failed();
-        }
-        _ => {}
-    }
-}
-
-fn dispatch_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &FfiTrackStatus) {
-    match status {
-        FfiTrackStatus::Loaded => observer.on_event(FfiItemEvent::StatusChanged {
-            status: FfiItemStatus::ReadyToPlay,
-        }),
-        FfiTrackStatus::Failed { reason } => {
-            observer.on_event(FfiItemEvent::StatusChanged {
-                status: FfiItemStatus::Failed,
-            });
-            observer.on_event(FfiItemEvent::Error {
-                error: reason.clone(),
-            });
-        }
-        _ => {}
-    }
 }

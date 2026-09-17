@@ -41,8 +41,15 @@ const CHANNELS: u16 = 2;
 const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 /// The segment whose body is withheld; forward playback parks at its start.
-const GATED_SEGMENT: usize = 4;
-/// Window over which the parked worker's decode steps are counted.
+/// Past the first 128 KiB of PCM: Android's `AMediaExtractor` reads that far
+/// while it opens the WAV, and a gate inside that window parks the open
+/// itself, before any playback can reach the boundary.
+const GATED_SEGMENT: usize = 5;
+
+/// Window over which the parked worker's `decode_one_step` invocations are
+/// counted while the consumer is blocked at the withheld boundary. A real
+/// budget — long enough that a busy-spin (thousands/sec) blows the bound by
+/// orders of magnitude.
 const OBSERVE_WINDOW: Duration = Duration::from_millis(700);
 /// Upper bound on `decode_step` firings over the window while parked. The
 /// busy-spin fires it thousands of times per second; a parked worker re-checks
