@@ -3349,9 +3349,7 @@ async fn listening_single_deck_host_metronome_preview(#[case] scenario: Listenin
         );
     }
     let audible_start = harness.rendered_frames;
-    let raw = harness
-        .capture_frames(case, AUDIBLE_CAPTURE_FRAMES, harness.block_frames)
-        .await;
+    let raw = harness.capture_paced(case, AUDIBLE_CAPTURE_FRAMES).await;
     let activation = harness.sync_activation;
     if !scenario.publish_grid_after_play {
         assert_eq!(activation, Some(scenario.expected_activation));
