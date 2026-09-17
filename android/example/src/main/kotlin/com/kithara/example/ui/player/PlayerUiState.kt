@@ -1,10 +1,9 @@
-package com.kithara.example
+package com.kithara.example.ui.player
 
 import com.kithara.PlayerStatus
 import com.kithara.TrackStatus
 
 internal data class PlaylistEntry(
-    /** Matches `KitharaPlayerItem.id` — stable across queue reorder. */
     val id: String,
     val name: String,
     val url: String,
@@ -41,8 +40,6 @@ internal data class PlayerUiState(
 
     companion object {
         private const val DefaultRate = 1.0f
-        // Mirrors `PlayerViewModel.availableRates` on iOS — keep in sync to
-        // preserve cross-platform parity.
         private val AvailableRates: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
     }
 }

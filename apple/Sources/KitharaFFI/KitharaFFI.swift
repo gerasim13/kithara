@@ -757,23 +757,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-    func selectItem(index: UInt32, transition: FfiTransition) throws
-
     func setAbrMode(mode: FfiAbrMode)
 
     /**
@@ -842,6 +825,23 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
     func volume()  -> Float
+
+    /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+    func select(item: AudioPlayerItem, transition: FfiTransition) throws
 
     /**
      * Notify the native player that the platform audio route changed.
@@ -1190,30 +1190,6 @@ open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {
 }
 }
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-open func selectItem(index: UInt32, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_select_item(
-            self.uniffiCloneHandle(),
-        FfiConverterUInt32.lower(index),
-        FfiConverterTypeFfiTransition_lower(transition),$0
-    )
-}
-}
-
 open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_abr_mode(
             self.uniffiCloneHandle(),
@@ -1363,6 +1339,30 @@ open func volume() -> Float  {
 }
 
     /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_select(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeAudioPlayerItem_lower(item),
+        FfiConverterTypeFfiTransition_lower(transition),$0
+    )
+}
+}
+
+    /**
      * Notify the native player that the platform audio route changed.
      *
      * This does not change queue state. If playback is active, the
@@ -1462,6 +1462,13 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
 
     /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+    func addObserver(observer: ItemObserver)  -> UInt64
+
+    /**
      * Caller-facing content id. Mirrors the iOS
      * `AudioPlayerItemProtocol.audioId: TrackId`.
      */
@@ -1512,7 +1519,16 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
      */
     func queueId()  -> TrackId
 
-    func setObserver(observer: ItemObserver)
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+    func removeObserver(id: UInt64)
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+    func state()  -> FfiItemState
 
     /**
      * Audio source string — either a network URL or an absolute local
@@ -1608,6 +1624,20 @@ public convenience init(config: FfiItemConfig) {
 
 
 
+
+    /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+open func addObserver(observer: ItemObserver) -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_add_observer(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeItemObserver_lower(observer),$0
+    )
+})
+}
 
     /**
      * Caller-facing content id. Mirrors the iOS
@@ -1710,12 +1740,27 @@ open func queueId() -> TrackId  {
 })
 }
 
-open func setObserver(observer: ItemObserver)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayeritem_set_observer(
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+open func removeObserver(id: UInt64)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_remove_observer(
             self.uniffiCloneHandle(),
-        FfiConverterTypeItemObserver_lower(observer),$0
+        FfiConverterUInt64.lower(id),$0
     )
 }
+}
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+open func state() -> FfiItemState  {
+    return try!  FfiConverterTypeFfiItemState_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_state(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
 
     /**
@@ -3747,6 +3792,79 @@ public func FfiConverterTypeFfiItemLoadResult_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiItemLoadResult_lower(_ value: FfiItemLoadResult) -> RustBuffer {
     return FfiConverterTypeFfiItemLoadResult.lower(value)
+}
+
+
+/**
+ * Snapshot of everything an item knows about itself. One getter so a
+ * caller reads a consistent set instead of three independently locked
+ * values.
+ */
+public struct FfiItemState: Equatable, Hashable {
+    public let status: FfiItemStatus
+    /**
+     * Playable duration once the metadata layer answers.
+     */
+    public let durationSeconds: Double?
+    public let error: String?
+    public let loadedRanges: [FfiTimeRange]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: FfiItemStatus,
+        /**
+         * Playable duration once the metadata layer answers.
+         */durationSeconds: Double?, error: String?, loadedRanges: [FfiTimeRange]) {
+        self.status = status
+        self.durationSeconds = durationSeconds
+        self.error = error
+        self.loadedRanges = loadedRanges
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiItemState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiItemState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemState {
+        return
+            try FfiItemState(
+                status: FfiConverterTypeFfiItemStatus.read(from: &buf),
+                durationSeconds: FfiConverterOptionDouble.read(from: &buf),
+                error: FfiConverterOptionString.read(from: &buf),
+                loadedRanges: FfiConverterSequenceTypeFfiTimeRange.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiItemState, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiItemStatus.write(value.status, into: &buf)
+        FfiConverterOptionDouble.write(value.durationSeconds, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+        FfiConverterSequenceTypeFfiTimeRange.write(value.loadedRanges, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lift(_ buf: RustBuffer) throws -> FfiItemState {
+    return try FfiConverterTypeFfiItemState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lower(_ value: FfiItemState) -> RustBuffer {
+    return FfiConverterTypeFfiItemState.lower(value)
 }
 
 
@@ -8593,6 +8711,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 57426) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8617,7 +8738,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_queue_id() != 58096) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_observer() != 8440) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_remove_observer() != 50876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 41337) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 18833) {
@@ -8719,9 +8843,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 51840) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8759,6 +8880,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
