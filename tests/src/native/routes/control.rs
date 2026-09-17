@@ -8,7 +8,7 @@ use axum::{
 };
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use kithara::platform::sync::Arc;
-use kithara_test_fixtures::{assets::by_name, hls::long_plain};
+use kithara_test_fixtures::{Mp3Shape, assets::by_name, hls::long_plain};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -38,6 +38,7 @@ pub(crate) enum ContentSpec {
     /// bodies are resolved by accessor name instead.
     Signal {
         name: String,
+        shape: Mp3Shape,
     },
     /// Serve one file of the generated HLS bundle, named the way the
     /// `assets` route names it. A paced-segment fixture needs the same
@@ -102,14 +103,14 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
                 content_type,
             })
         }
-        ContentSpec::Signal { name } => {
+        ContentSpec::Signal { name, shape } => {
             let accessor = name
                 .rsplit_once('.')
                 .map_or(name.as_str(), |(stem, _)| stem);
             let asset =
                 by_name(accessor).ok_or_else(|| format!("no generated asset is named `{name}`"))?;
             Ok(Content::StaticBytes {
-                bytes: Arc::new(asset.bytes().to_vec()),
+                bytes: Arc::new(shape.apply(asset.bytes())),
                 content_type: Some(asset.entry().content_type),
             })
         }
@@ -207,10 +208,15 @@ mod tests {
         assert!(state.network_online(), "switch must bring the server back");
     }
 
+    /// Both shapes come off the same generated body, so the client never
+    /// uploads one.
     #[kithara::test]
-    fn signal_spec_serves_a_generated_body() {
+    #[case::tagged(Mp3Shape::Tagged)]
+    #[case::headerless(Mp3Shape::Headerless)]
+    fn signal_spec_serves_a_generated_body(#[case] shape: Mp3Shape) {
         let content = content_from_spec(ContentSpec::Signal {
             name: "signal_mp3_track_sine440_187s.mp3".to_owned(),
+            shape,
         })
         .expect("the generated MP3 must resolve");
         let Content::StaticBytes {
@@ -222,7 +228,9 @@ mod tests {
         };
         assert_eq!(
             bytes.as_slice(),
-            kithara_test_fixtures::assets::signal_mp3_track_sine440_187s().bytes(),
+            shape
+                .apply(kithara_test_fixtures::assets::signal_mp3_track_sine440_187s().bytes())
+                .as_slice(),
         );
         assert_eq!(content_type, Some("audio/mpeg"));
     }
@@ -231,6 +239,7 @@ mod tests {
     fn signal_spec_rejects_an_unregistered_name() {
         let Err(error) = content_from_spec(ContentSpec::Signal {
             name: "signal_mp3_not_a_generator.mp3".to_owned(),
+            shape: Mp3Shape::Tagged,
         }) else {
             panic!("an unregistered name must be rejected");
         };

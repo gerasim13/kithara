@@ -344,16 +344,23 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
+    use std::{
+        num::NonZeroU32,
+        sync::{Condvar, Mutex as StdMutex, PoisonError},
+    };
 
     use kithara::{
         events::{EventBus, SlotId, TrackId},
+        host::HostConfig,
+        output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
         platform::{
+            CancelScope,
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
+        signal::AudioSpec,
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
@@ -365,7 +372,7 @@ mod tests {
         item::AudioPlayerItem,
         observer::ItemObserver,
         pools,
-        pools::{FfiQueue, FfiWorker},
+        pools::{FfiHost, FfiQueue, FfiWorker},
         types::{FfiItemConfig, FfiItemEvent, FfiItemStatus},
     };
 
@@ -896,27 +903,31 @@ mod tests {
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog]
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
-        timeout_ms: u64,
     ) -> bool {
-        let wait = async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
-                if matches!(
-                    event,
-                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
-                        if seen == id && *seen_status == status
-                ) {
-                    return true;
-                }
+        while let Ok(Envelope { event, .. }) = events.recv().await {
+            if matches!(
+                event,
+                QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                    if seen == id && *seen_status == status
+            ) {
+                return true;
             }
-            false
-        };
-        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
-            .await
-            .unwrap_or(false)
+            hang_tick!();
+        }
+        false
+    }
+
+    struct Discard;
+
+    impl RenderSink for Discard {
+        fn write(&mut self, _samples: &[f32]) -> Result<(), RenderSinkError> {
+            Ok(())
+        }
     }
 
     /// The polling thread drives `Queue::tick`, and a natural EOF on a
@@ -924,36 +935,48 @@ mod tests {
     /// — async work that panics without an ambient runtime. The thread is
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
-    #[kithara::test(tokio)]
+    ///
+    /// An offline Host renders the blocks, so the EOF arrives as soon as the
+    /// test pulls it instead of waiting on an output device's cadence.
+    #[kithara::test(tokio, flash(false))]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
-        let worker = FfiWorker::new(
-            PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
-        );
+        const BLOCK_FRAMES: u64 = 512;
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let pools = pools::build().expect("valid FFI pool policy");
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(crate::native::session::requested_sample_rate())
+                .sample_rate(sample_rate)
                 .worker(worker)
+                .block_on_underrun(true)
+                .crossfade_duration(0.0)
                 .build(),
         );
         let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
-        // The FFI surface calls the session from the caller's thread, never
-        // from a runtime worker.
-        let owner = spawn_blocking(move || crate::native::session::insert(queue))
-            .await
-            .expect("insert task completes")
-            .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
-        let queue = owner.control().clone();
-        queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
-        let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_10_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = queue
-            .append(track.to_string_lossy().into_owned())
-            .expect("open queue accepts a local track");
+        let (mut host, owner, mut events, id) = spawn_blocking(move || {
+            let mut host =
+                FfiHost::new(HostConfig::offline(pools).sample_rate(sample_rate).build())
+                    .expect("offline Host allocates its root identity");
+            let owner = host
+                .insert(queue)
+                .expect("INVARIANT: the offline Host accepts its allocated Queue");
+            let queue = owner.control();
+            queue.set_repeat(kithara::queue::RepeatMode::One);
+            queue.set_rate(1.0);
+            let events = queue.subscribe();
+            let id = queue
+                .append(track.to_string_lossy().into_owned())
+                .expect("open queue accepts a local track");
+            (host, owner, events, id)
+        })
+        .await
+        .expect("host setup task completes");
+        let queue = owner.control().clone();
         assert!(
-            wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
+            wait_for_status(&mut events, id, TrackStatus::Loaded).await,
             "real local track must load before playback"
         );
         let selecting = queue.clone();
@@ -971,19 +994,35 @@ mod tests {
             Arc::new(Mutex::new(None)),
             cancel.clone(),
         );
+        let render_cancel = cancel.clone();
+        let renderer = spawn_blocking(move || {
+            let spec = AudioSpec::new(2, sample_rate);
+            let scope = CancelScope::new(None);
+            let mut start = 0;
+            while !render_cancel.is_cancelled() {
+                let request = OfflineRenderRequest::builder()
+                    .spec(spec)
+                    .frames(start..start + BLOCK_FRAMES)
+                    .build();
+                host.render(&request, &scope.token(), &mut Discard)
+                    .expect("offline Host renders a block");
+                start += BLOCK_FRAMES;
+            }
+            host
+        });
 
-        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending).await;
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
-        let (joined, owner) = spawn_blocking(move || {
+        let mut host = renderer.await.expect("render task completes");
+        let joined = spawn_blocking(move || {
             let joined = thread.join();
-            crate::native::session::remove(&owner)
-                .expect("INVARIANT: the FFI test Queue detaches from its Host");
-            (joined, owner)
+            host.remove(&owner)
+                .expect("INVARIANT: the test Queue detaches from its Host");
+            joined
         })
         .await
         .expect("teardown task completes");
-        drop(owner);
 
         assert!(
             reload_started,

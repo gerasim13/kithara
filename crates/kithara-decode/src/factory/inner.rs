@@ -1,3 +1,5 @@
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use std::sync::atomic::Ordering;
 use std::{
     io::{Read, Seek},
     num::{NonZeroU32, NonZeroU64},
@@ -484,7 +486,14 @@ where
         demuxer::Demuxer,
         gapless::{scoped_probe, scoped_startup_probe},
     };
-    let startup_probe = scoped_startup_probe(&mut *source, codec, &config.pools)?;
+    // The resource length is the only record a plain CBR MP3 keeps of its own
+    // duration, and the handle already carries it for the streaming open.
+    let total_bytes = config
+        .byte_len_handle
+        .as_ref()
+        .map(|handle| handle.load(Ordering::Acquire))
+        .filter(|len| *len > 0);
+    let startup_probe = scoped_startup_probe(&mut *source, codec, total_bytes, &config.pools)?;
     let probed_gapless = if config.gapless {
         if matches!(codec, AudioCodec::Mp3) {
             startup_probe.gapless
@@ -1294,5 +1303,57 @@ mod apple_factory_tests {
         assert_eq!(output_gapless.trailing_frames, 480);
         assert_eq!(decoded_frames, 11_150);
         assert_eq!(trimmed_frames, expected_frames);
+    }
+}
+
+/// LABA-417 (device repro): an audiobook encoded as plain CBR MP3 carries no
+/// Xing/Info frame, so the startup probe has no frame count to read. The
+/// streaming Apple open reports no `packet_count` by design, which leaves
+/// `TrackInfo.duration` at `None` — a seek then has nothing to scale a byte
+/// offset from, `landed_byte` comes back `None`, and `pipeline/seek/emit.rs`
+/// never moves the stream's byte cursor. On device the slider snapped back and
+/// playback continued from the pre-seek offset.
+///
+/// The duration itself is pinned at the demuxer in `apple::audio_file_demuxer`
+/// and the arithmetic in `gapless::mp3`. What only the factory owns is handing
+/// the resource length from `config.byte_len_handle` to the startup probe, so
+/// that is all this test asserts.
+#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+mod apple_headerless_cbr_mp3_tests {
+    use std::{io::Cursor, sync::atomic::AtomicU64};
+
+    use kithara_platform::sync::Arc;
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, without_xing_frame};
+    use kithara_test_utils::kithara;
+
+    use super::{DecoderBackend, DecoderConfig, DecoderFactory};
+    use crate::test_pools::{TestPools, pools};
+
+    #[kithara::test]
+    fn factory_gives_the_startup_probe_the_length_behind_a_headerless_cbr_mp3() {
+        let bytes = without_xing_frame(signal_mp3_track_sine440_187s().bytes());
+        let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        let media_info = MediaInfo::builder()
+            .maybe_codec(Some(AudioCodec::Mp3))
+            .maybe_container(Some(ContainerFormat::MpegAudio))
+            .build();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .byte_len_handle(Arc::new(AtomicU64::new(total)))
+                .pools(pools())
+                .build();
+
+        let decoder =
+            DecoderFactory::create_from_media_info(Cursor::new(bytes), &media_info, config)
+                .expect("headerless CBR MP3 must open on the streaming Apple path");
+
+        assert!(
+            decoder.duration().is_some(),
+            "the factory holds the only resource length on the streaming path; \
+             without forwarding it the open reports no duration and every seek \
+             lands nowhere"
+        );
     }
 }
