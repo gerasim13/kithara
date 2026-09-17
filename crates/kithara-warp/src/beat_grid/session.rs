@@ -3,8 +3,8 @@ use super::{
     BeatGridUnavailable, BeatGridView, view::stale,
 };
 use crate::{
-    Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint, MapPosition, Meter,
-    MeterFacts, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+    AssetFrame, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
+    MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -136,6 +136,16 @@ impl BeatGridView for SessionGridView {
         BeatGridQuery::Resolved(1.0)
     }
 
+    fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame> {
+        if let Some(stale) = stale(self, position.stamp()) {
+            return stale;
+        }
+        if !matches!(*position.value(), MapPosition::Session(_)) {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        }
+        BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry)
+    }
+
     fn revision(&self) -> BeatGridRevision {
         self.revision
     }
@@ -175,9 +185,9 @@ mod tests {
 
     use super::SessionGridView;
     use crate::{
-        Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridView, BeatOrdinal,
-        FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis,
-        SessionBeat, SessionEpoch, SessionFrame,
+        Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridUnavailable,
+        BeatGridView, BeatOrdinal, FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts,
+        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
     };
 
     #[kithara::test]
@@ -274,6 +284,36 @@ mod tests {
             (at(48_000) - 180.0).abs() < 1e-9,
             "a second later the approach has reached its target, got {}",
             at(48_000)
+        );
+    }
+
+    #[kithara::test]
+    fn a_live_session_grid_carries_no_recording_to_answer_with() {
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
+            2.0,
+            SessionAxis::new(
+                NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
+                SessionEpoch::new(0),
+            ),
+        )
+        .expect("invariant: fixture tempo is invertible");
+        let view = SessionGridView::new(
+            BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            anchor,
+            None,
+        );
+
+        assert_eq!(
+            view.source_at(MapPoint::new(
+                view.stamp(),
+                MapPosition::Session(SessionFrame::new(24_000))
+            )),
+            BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry),
+            "a session clock describes no recording, so it names no frame of one"
         );
     }
 

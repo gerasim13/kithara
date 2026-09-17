@@ -16,7 +16,7 @@ pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
 pub use beat_grid::{
     BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridQuery, BeatGridRegion,
     BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridStamp, BeatGridState,
-    BeatGridUnavailable, BeatGridView,
+    BeatGridUnavailable, BeatGridView, GridProjectionError,
 };
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{

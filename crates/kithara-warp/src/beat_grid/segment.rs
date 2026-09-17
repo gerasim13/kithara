@@ -2,7 +2,9 @@ use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision,
     BeatGridSnapshotError, BeatGridState, BeatGridUnavailable, BeatGridView, view::stale,
 };
-use crate::{Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion, Meter, SegmentSet};
+use crate::{
+    AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion, Meter, SegmentSet,
+};
 
 /// Immutable query view over validated sparse timing segments.
 #[derive(Debug)]
@@ -192,16 +194,24 @@ impl BeatGridView for SegmentGridView {
     }
 
     fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64> {
+        self.source_at(position)
+            .and_then(|_| BeatGridQuery::Resolved(1.0))
+    }
+
+    fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame> {
         if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         if position.value().kind() != self.axis().kind() {
             return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
         }
+        let MapPosition::Asset(frame) = *position.value() else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
         if self.outside_asset_extent(*position.value()) {
             return BeatGridQuery::OutsideDomain;
         }
-        BeatGridQuery::Resolved(1.0)
+        BeatGridQuery::Resolved(frame)
     }
 
     fn revision(&self) -> BeatGridRevision {
@@ -439,6 +449,14 @@ mod tests {
             )),
             BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch),
             "a rate is answered only on the axis the grid describes"
+        );
+        assert_eq!(
+            grid.source_at(MapPoint::new(
+                stamp,
+                MapPosition::Asset(asset_frame(12_000.0))
+            )),
+            BeatGridQuery::Resolved(asset_frame(12_000.0)),
+            "a grid that describes its own recording answers with the frame it was asked about"
         );
     }
 

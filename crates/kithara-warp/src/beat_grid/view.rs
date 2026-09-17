@@ -4,7 +4,7 @@ use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
     BeatGridState,
 };
-use crate::{Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter};
+use crate::{AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter};
 
 /// One immutable, revisioned view of musical timing facts.
 ///
@@ -50,6 +50,13 @@ pub trait BeatGridView: Debug + Send + Sync + 'static {
     /// projection answers the ratio that carries the source onto its target
     /// axis.
     fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+
+    /// Resolves the recording frame that sounds at a stamped native position.
+    ///
+    /// A view that describes a recording as analysed answers the position it
+    /// was asked about; a projection answers the frame of the recording it
+    /// carries, which is the absolute relation a renderer reads.
+    fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
 
     /// Returns the immutable revision represented by this view.
     fn revision(&self) -> BeatGridRevision;
