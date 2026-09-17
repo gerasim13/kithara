@@ -99,11 +99,7 @@ class KitharaPlayer(config: Config = Config()) {
      * the iOS `AudioPlayerProtocol.currentAudioItem`.
      */
     val currentAudioItem: KitharaPlayerItem?
-        get() {
-            val ffiItem = inner.currentItem() ?: return null
-            val id = ffiItem.audioId().toString()
-            return state.value.items.firstOrNull { it.id == id }
-        }
+        get() = inner.currentItem()?.let { KitharaPlayerItem(it) }
 
     /** Last loaded ranges reported by the underlying resource. */
     val loadedRanges: List<ItemLoadedRange>
@@ -113,9 +109,9 @@ class KitharaPlayer(config: Config = Config()) {
     val error: KitharaError?
         get() = state.value.error
 
-    /** Current queue snapshot. */
+    /** Current queue in native order. */
     val items: List<KitharaPlayerItem>
-        get() = state.value.items
+        get() = inner.items().map { KitharaPlayerItem(it) }
 
     /**
      * Target playback speed used by [play]. While the player is
@@ -165,7 +161,6 @@ class KitharaPlayer(config: Config = Config()) {
      */
     fun stop() {
         inner.stop()
-        updateState { current -> current.copy(items = emptyList()) }
     }
 
     /**
@@ -234,14 +229,11 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Register a runtime DRM key decryptor on every host (default
-     * `"*"` wildcard). The lambda receives the encrypted key bytes
-     * plus the player-generated salt that was attached to outgoing
-     * requests under `X-Encrypted-Key`. Returning `null` preserves
-     * the input ciphertext unchanged.
+     * Register a runtime DRM key processor on every host (default
+     * `"*"` wildcard).
      */
-    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
-        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
+    fun setupHlsAes(processor: KeyProcessor) {
+        inner.setupHlsAes(KeyProcessorBridge(processor))
     }
 
     /**
@@ -271,15 +263,23 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Inserts an item into the queue.
+     * Inserts an item after [after], or at the head of the queue when
+     * [after] is null. Use [append] to add to the tail.
      */
     @Throws(KitharaError::class)
     fun insert(item: KitharaPlayerItem, after: KitharaPlayerItem? = null) {
         try {
             inner.insert(item.inner, after?.inner)
-            updateState { current ->
-                current.copy(items = current.items.inserted(item, after))
-            }
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    /** Adds an item to the tail of the queue. */
+    @Throws(KitharaError::class)
+    fun append(item: KitharaPlayerItem) {
+        try {
+            inner.append(item.inner)
         } catch (error: FfiException) {
             throw KitharaError.fromFfi(error)
         }
@@ -290,9 +290,6 @@ class KitharaPlayer(config: Config = Config()) {
     fun remove(item: KitharaPlayerItem) {
         try {
             inner.remove(item.inner)
-            updateState { current ->
-                current.copy(items = current.items.filterNot { queued -> queued.id == item.id })
-            }
         } catch (error: FfiException) {
             throw KitharaError.fromFfi(error)
         }
@@ -301,29 +298,24 @@ class KitharaPlayer(config: Config = Config()) {
     /** Clears the queue. */
     fun removeAllItems() {
         inner.removeAllItems()
-        updateState { current -> current.copy(items = emptyList()) }
     }
 
-    /**
-     * Select an item at the given queue index.
-     */
+    /** Select the item at the given position of [items]. */
     @Throws(KitharaError::class)
     fun selectItem(at: Int, transition: Transition = Transition.None) {
-        try {
-            inner.selectItem(at.toUInt(), transition.toFfi())
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
-        }
+        val item = items.getOrNull(at)
+            ?: throw KitharaError.InvalidArgument("item index $at out of range")
+        selectItem(item, transition)
     }
 
     /** Select an item by identity (AVQueuePlayer-style). */
     @Throws(KitharaError::class)
     fun selectItem(item: KitharaPlayerItem, transition: Transition = Transition.None) {
-        val idx = items.indexOfFirst { queued -> queued.id == item.id }
-        if (idx < 0) {
-            throw KitharaError.InvalidArgument("item ${item.id} not in queue")
+        try {
+            inner.select(item.inner, transition.toFfi())
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
         }
-        selectItem(at = idx, transition = transition)
     }
 
     private fun updateState(update: (PlayerState) -> PlayerState) {
@@ -446,20 +438,13 @@ private fun Transition.toFfi(): FfiTransition = when (this) {
  * cipher can ignore the argument; implementations that derive the
  * cipher per-session should rebuild it from `salt` on every call.
  */
-fun interface KeyProcessor {
+interface KeyProcessor {
     fun processKey(key: ByteArray, salt: String): ByteArray
 }
 
 private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
     override fun processKey(key: ByteArray, salt: String): ByteArray =
         processor.processKey(key, salt)
-}
-
-private class ClosureKeyProcessorBridge(
-    private val decrypt: (ByteArray, String) -> ByteArray?,
-) : FfiKeyProcessor {
-    override fun processKey(key: ByteArray, salt: String): ByteArray =
-        decrypt(key, salt) ?: key
 }
 
 internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
@@ -479,20 +464,3 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     )
 }
 
-private fun List<KitharaPlayerItem>.inserted(
-    item: KitharaPlayerItem,
-    after: KitharaPlayerItem?,
-): List<KitharaPlayerItem> = buildList {
-    addAll(this@inserted)
-    if (after == null) {
-        add(item)
-        return@buildList
-    }
-
-    val index = indexOfFirst { queued -> queued.id == after.id }
-    if (index >= 0) {
-        add(index + 1, item)
-    } else {
-        add(item)
-    }
-}

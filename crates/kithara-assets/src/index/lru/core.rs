@@ -30,12 +30,11 @@ pub(crate) struct EvictConfig {
 /// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex)
 /// and [`PinsIndex`](super::PinsIndex): the `Arc` is encapsulated
 /// **inside** the type, [`Clone`] is cheap (atomic refcount bump),
-/// every mutation flushes the optional disk-backed [`Atomic`]
-/// tempfile.
+/// every mutation flushes the optional disk-backed index file.
 ///
 /// Persistence is **lazy**: the disk file is materialised only on the
 /// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is opened eagerly during `Self::with_persist_at` (native only)
+/// run is read eagerly during `Self::with_persist_at` (native only)
 /// for hydration. On wasm32 the index is always ephemeral.
 ///
 /// Two call-sites share a single instance per `cache_dir`:

@@ -264,6 +264,7 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "deep-rtsan-hls",
         "deep-ui",
         "deep-miri",
+        "deep-fuzz",
         "quality-assess",
         "quality-similarity",
         "quality-architecture",
@@ -385,4 +386,64 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
             }
         }
     }
+}
+
+/// Every Linux lane builds in a directory named after it on a root the host's
+/// runners share, so the artefacts a lane finds were built by whichever branch
+/// ran it last, on whichever runner. Cargo's default freshness compares mtimes,
+/// and a checkout leaves a file it did not change with the mtime of an earlier
+/// checkout: a test binary another branch built later then reads as fresh, and
+/// the lane runs that branch's tests. Freshness by content is the only kind a
+/// shared directory can trust, and Cargo honours it only on nightly - a stable
+/// toolchain ignores the flag without a word.
+#[test]
+fn every_linux_test_lane_judges_freshness_by_content() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog declares lanes");
+    let mut checked = 0;
+    for (name, lane) in lanes {
+        if lane.get("os").and_then(toml::Value::as_str) != Some("linux") {
+            continue;
+        }
+        let steps = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        for step in steps {
+            let args: Vec<&str> = step
+                .get("args")
+                .and_then(toml::Value::as_array)
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect();
+            if !args.starts_with(&["test", "run"]) {
+                continue;
+            }
+            let env = |key: &str| {
+                step.get("env")
+                    .and_then(|env| env.get(key))
+                    .and_then(toml::Value::as_str)
+            };
+            assert_eq!(env("CARGO_BUILD_FINGERPRINT"), Some("content"), "{name}");
+            assert_eq!(
+                env("CARGO_UNSTABLE_CHECKSUM_FRESHNESS"),
+                Some("true"),
+                "{name}"
+            );
+            assert_eq!(
+                env("RUSTUP_TOOLCHAIN"),
+                Some("{pin.nightly_toolchain}"),
+                "{name}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "the catalog runs the suite on Linux");
 }
