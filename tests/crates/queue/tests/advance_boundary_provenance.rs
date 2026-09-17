@@ -923,6 +923,24 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
 
     let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+    {
+        let raw_peak = max_abs(&left_raw);
+        let onset = seek_complete_frame;
+        let around: Vec<String> = (0..24)
+            .map(|step| {
+                let frame = onset.saturating_sub(12 * WINDOW_FRAMES) + step * WINDOW_FRAMES;
+                let value = left.get(frame).copied().unwrap_or(0.0);
+                format!("{frame}:{}", phase::units(value))
+            })
+            .collect();
+        eprintln!(
+            "[PROBE] raw_peak={raw_peak}; frames={}; seek_issue={seek_issue_frame}; \
+             seek_complete={seek_complete_frame}; duration={duration}; expected_phase={expected_phase}; \
+             around_onset=[{}]",
+            left.len(),
+            around.join(", ")
+        );
+    }
     let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
     assert!(
         landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
