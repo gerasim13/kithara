@@ -5,9 +5,7 @@ use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{
-    RegionPlanSlot, RenderReader, RenderSnapshot, ScheduledActivationProgress, WarpConfig,
-};
+use crate::{RenderReader, RenderSnapshot, ScheduledActivationProgress, WarpConfig, WarpPlanSlot};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -29,7 +27,7 @@ where
         context: RenderReader,
         _spec: AudioSpec,
         _pools: PoolRegion<S>,
-        _plan_slot: Arc<RegionPlanSlot>,
+        _plan_slot: Arc<WarpPlanSlot>,
     ) -> Self {
         Self {
             context,
