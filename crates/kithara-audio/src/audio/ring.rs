@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicU64;
+use std::{num::NonZeroUsize, sync::atomic::AtomicU64};
 
 use kithara_abr::AbrHandle;
 use kithara_events::DeferredBus;
@@ -12,11 +12,18 @@ use super::{
     Outlet, ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
     park::receive_is_nonblocking,
 };
-use crate::{SourceEnd, SourceSpan};
+use crate::{RevisionFloorStatus, SourceEnd, SourceSpan};
 
 enum FetchOutcome {
     Continue,
+    Future(Fetch<AudioChunk>),
     Return(Option<(AudioChunk, Option<SourceSpan>)>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SeekEpochStatus {
+    WaitingForPcm,
+    Ready,
 }
 
 pub(super) enum RecvOutcome {
@@ -39,6 +46,7 @@ pub(super) struct RingConsumer {
     pub(super) validator: EpochValidator,
     pub(super) current_chunk: Option<AudioChunk>,
     pub(super) current_source_span: Option<SourceSpan>,
+    future_fetch: Option<Fetch<AudioChunk>>,
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
@@ -46,6 +54,8 @@ pub(super) struct RingConsumer {
     consumer_wake_mode: ConsumerWakeMode,
     audio_rx: Inlet<Fetch<AudioChunk>>,
     rendered_source_head: Option<SourceEnd>,
+    rendered_warp_revision: Option<u64>,
+    render_revision_floor: u64,
     trash_tx: Outlet<AudioChunk>,
     block_on_underrun: bool,
 }
@@ -59,6 +69,27 @@ pub(super) struct RingParts {
     pub(super) block_on_underrun: bool,
 }
 
+pub(super) trait SeekEpochReadiness {
+    fn seek_epoch_status(&mut self, epoch: u64) -> SeekEpochStatus;
+}
+
+impl SeekEpochReadiness for RingConsumer {
+    fn seek_epoch_status(&mut self, epoch: u64) -> SeekEpochStatus {
+        let parked = self
+            .future_fetch
+            .as_ref()
+            .is_some_and(|fetch| fetch.epoch() == epoch);
+        let queued = self
+            .audio_rx
+            .fold(false, |ready, fetch| ready || fetch.epoch() == epoch);
+        if parked || queued {
+            SeekEpochStatus::Ready
+        } else {
+            SeekEpochStatus::WaitingForPcm
+        }
+    }
+}
+
 impl RingConsumer {
     pub(super) fn new(parts: RingParts) -> Self {
         let consumer_wake_mode =
@@ -70,7 +101,10 @@ impl RingConsumer {
             phase: ConsumerPhase::Buffering,
             current_chunk: None,
             current_source_span: None,
+            future_fetch: None,
             rendered_source_head: None,
+            rendered_warp_revision: None,
+            render_revision_floor: 0,
             trash_tx: parts.trash_tx,
             reader_wake: parts.reader_wake,
             _epoch: parts.epoch,
@@ -85,10 +119,20 @@ impl RingConsumer {
         self.validator.epoch = epoch;
         self.recycle_current();
         self.rendered_source_head = None;
+        self.rendered_warp_revision = None;
         cursor.clear();
         self.phase = ConsumerPhase::SeekPending { epoch };
 
-        let mut popped = false;
+        let mut popped = self.future_fetch.is_some();
+        if let Some(fetch) = self.future_fetch.take() {
+            if fetch.epoch() == epoch || is_producer_terminal(&fetch) {
+                self.stage_post_seek_fetch(fetch, epoch, cursor);
+                return true;
+            }
+            if let Fetch::Data { data, .. } = fetch {
+                self.discard(data);
+            }
+        }
         while let Some(fetch) = self.audio_rx.try_pop() {
             popped = true;
             if fetch.epoch() < epoch && !is_producer_terminal(&fetch) {
@@ -129,6 +173,26 @@ impl RingConsumer {
         }
     }
 
+    pub(super) fn set_render_revision_floor(
+        &mut self,
+        revision: u64,
+        required_frames: NonZeroUsize,
+        presented_source: Option<SourceEnd>,
+        replacement_epoch: Option<u64>,
+        cursor: &mut ChunkCursor,
+        ctx: RecvCtx<'_>,
+    ) -> RevisionFloorStatus {
+        apply_render_revision_floor(
+            self,
+            revision,
+            required_frames,
+            presented_source,
+            replacement_epoch,
+            cursor,
+            ctx,
+        )
+    }
+
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
         let Some((chunk, source_span)) = self.recv_valid_chunk(ctx) else {
             return false;
@@ -141,6 +205,9 @@ impl RingConsumer {
     }
 
     fn process_fetch(&mut self, fetch: Fetch<AudioChunk>) -> FetchOutcome {
+        if fetch.epoch() > self.validator.epoch && !is_producer_terminal(&fetch) {
+            return FetchOutcome::Future(fetch);
+        }
         if !self.validator.is_valid(&fetch) && !is_producer_terminal(&fetch) {
             if let Fetch::Data { data, .. } = fetch {
                 self.discard(data);
@@ -160,9 +227,29 @@ impl RingConsumer {
                 FetchOutcome::Return(None)
             }
             Fetch::Data {
-                data, source_end, ..
+                data,
+                epoch,
+                source_end,
             } => {
+                if data.meta.render_revision < self.render_revision_floor {
+                    kithara::probe_event!(
+                        pcm_revision_discarded,
+                        revision = data.meta.render_revision
+                    );
+                    self.discard(data);
+                    return FetchOutcome::Continue;
+                }
                 let source_span = self.source_span(&data, source_end);
+                if let Some(source) = source_span {
+                    kithara::probe_event!(
+                        pcm_reader_admitted,
+                        seek_epoch = epoch,
+                        source_start = source.start(),
+                        source_end = source.end(),
+                        frames = data.frames(),
+                        render_revision = source.render_revision()
+                    );
+                }
                 FetchOutcome::Return(Some((data, source_span)))
             }
         }
@@ -178,6 +265,9 @@ impl RingConsumer {
     }
 
     pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
+        if self.future_fetch.is_some() {
+            return RecvOutcome::Empty;
+        }
         if receive_is_nonblocking(self.preloaded, self.block_on_underrun) {
             if let Some(fetch) =
                 try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
@@ -240,6 +330,10 @@ impl RingConsumer {
                     FetchOutcome::Continue => {
                         hang_tick!();
                     }
+                    FetchOutcome::Future(fetch) => {
+                        self.future_fetch = Some(fetch);
+                        return None;
+                    }
                     FetchOutcome::Return(chunk) => {
                         hang_reset!();
                         return chunk;
@@ -275,17 +369,28 @@ impl RingConsumer {
     ) -> Option<SourceSpan> {
         let Some(source_end) = source_end else {
             self.rendered_source_head = None;
+            self.rendered_warp_revision = None;
             return None;
         };
         if source_end.sample_rate() != data.meta.spec.sample_rate {
             self.rendered_source_head = None;
+            self.rendered_warp_revision = None;
             return None;
         }
         let source_start = self
             .rendered_source_head
-            .filter(|head| head.sample_rate() == source_end.sample_rate())
+            .filter(|head| {
+                head.sample_rate() == source_end.sample_rate()
+                    && self.rendered_warp_revision
+                        == Some(kithara_signal::render_warp_map_revision(
+                            data.meta.render_revision,
+                        ))
+            })
             .map_or(data.meta.frame_offset, |head| head.frame());
         self.rendered_source_head = Some(source_end);
+        self.rendered_warp_revision = Some(kithara_signal::render_warp_map_revision(
+            data.meta.render_revision,
+        ));
         SourceSpan::new(source_start, source_end.frame(), source_end.sample_rate())
             .map(|span| span.with_render_revision(data.meta.render_revision))
     }
@@ -325,6 +430,90 @@ impl RingConsumer {
     pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
         wake_worker(worker, self.consumer_wake_mode);
     }
+}
+
+fn apply_render_revision_floor(
+    consumer: &mut RingConsumer,
+    revision: u64,
+    required_frames: NonZeroUsize,
+    presented_source: Option<SourceEnd>,
+    replacement_epoch: Option<u64>,
+    cursor: &mut ChunkCursor,
+    ctx: RecvCtx<'_>,
+) -> RevisionFloorStatus {
+    let stale = consumer
+        .current_chunk
+        .as_ref()
+        .is_some_and(|chunk| chunk.meta.render_revision < revision);
+    let current_frames = consumer.current_chunk.as_ref().map_or(0, |chunk| {
+        if replacement_epoch.is_none() && chunk.meta.render_revision >= revision {
+            cursor.remaining_frames(chunk)
+        } else {
+            0
+        }
+    });
+    let future_frames = consumer.future_fetch.as_ref().map_or(0, |fetch| {
+        let eligible = replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch)
+            && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
+        if eligible {
+            let Fetch::Data { data, .. } = fetch else {
+                unreachable!();
+            };
+            usize::try_from(data.meta.frames).unwrap_or(usize::MAX)
+        } else {
+            0
+        }
+    });
+    let prepared_frames = consumer.audio_rx.fold(
+        current_frames.saturating_add(future_frames),
+        |frames, fetch| {
+            let eligible = replacement_epoch.map_or_else(
+                || consumer.validator.is_valid(fetch),
+                |epoch| fetch.epoch() == epoch,
+            ) && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
+            if eligible {
+                let Fetch::Data { data, .. } = fetch else {
+                    unreachable!();
+                };
+                frames.saturating_add(usize::try_from(data.meta.frames).unwrap_or(usize::MAX))
+            } else {
+                frames
+            }
+        },
+    );
+    if prepared_frames < required_frames.get() {
+        return RevisionFloorStatus::WaitingForReplacement;
+    }
+    if replacement_epoch.is_some_and(|epoch| epoch != consumer.validator.epoch) {
+        return RevisionFloorStatus::ReadyForSeekPresentation;
+    }
+    if consumer.current_chunk.is_some() && !stale {
+        return RevisionFloorStatus::Current;
+    }
+    if revision > consumer.render_revision_floor {
+        consumer.render_revision_floor = revision;
+        consumer.rendered_source_head = presented_source;
+        consumer.rendered_warp_revision =
+            presented_source.map(|_| kithara_signal::render_warp_map_revision(revision));
+    }
+    let Some((replacement, source_span)) = consumer.recv_valid_chunk(ctx) else {
+        return RevisionFloorStatus::WaitingForReplacement;
+    };
+    if stale {
+        kithara::probe_event!(
+            pcm_revision_discarded,
+            revision = consumer
+                .current_chunk
+                .as_ref()
+                .map_or(0, |chunk| chunk.meta.render_revision)
+        );
+        consumer.recycle_current();
+    }
+    cursor.begin_chunk(&replacement);
+    consumer.current_chunk = Some(replacement);
+    consumer.current_source_span = source_span;
+    consumer.promote_playing();
+    RevisionFloorStatus::Switched
 }
 
 /// A consumer that blocks on underrun waits on the producer thread, so it wakes
@@ -416,7 +605,7 @@ mod tests {
         playhead: Arc<PlayheadState>,
         events: crate::audio::event::AudioEvents,
         cursor: ChunkCursor,
-        _trash_rx: Inlet<AudioChunk>,
+        trash_rx: Inlet<AudioChunk>,
         data_tx: Outlet<Fetch<AudioChunk>>,
         pools: Pools,
         ring: RingConsumer,
@@ -425,6 +614,15 @@ mod tests {
     impl RingFixture {
         fn new(preloaded: bool) -> Self {
             Self::with_wake_mode(preloaded, false, ConsumerWakeMode::RealtimeDeferred)
+        }
+
+        fn with_ring_capacity(preloaded: bool, capacity: usize) -> Self {
+            Self::with_parts(
+                preloaded,
+                false,
+                ConsumerWakeMode::RealtimeDeferred,
+                capacity,
+            )
         }
 
         fn chunk(&self, samples: &[f32]) -> AudioChunk {
@@ -445,8 +643,17 @@ mod tests {
             block_on_underrun: bool,
             consumer_wake_mode: ConsumerWakeMode,
         ) -> Self {
+            Self::with_parts(preloaded, block_on_underrun, consumer_wake_mode, 4)
+        }
+
+        fn with_parts(
+            preloaded: bool,
+            block_on_underrun: bool,
+            consumer_wake_mode: ConsumerWakeMode,
+            capacity: usize,
+        ) -> Self {
             let pools = pools();
-            let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(4, None);
+            let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(capacity, None);
             let (trash_tx, trash_rx) = connect::<AudioChunk>(8, None);
             let mut ring = RingConsumer::new(RingParts {
                 audio_rx,
@@ -465,7 +672,7 @@ mod tests {
                 data_tx,
                 events: crate::audio::event::AudioEvents::test(),
                 playhead: Arc::new(PlayheadState::new()),
-                _trash_rx: trash_rx,
+                trash_rx,
             }
         }
     }
@@ -537,6 +744,32 @@ mod tests {
         assert!(!empty.ring.begin_seek_epoch(1, &mut empty.cursor));
     }
 
+    #[kithara::test]
+    fn seek_epoch_becomes_ready_only_when_its_fetch_is_queued(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        assert_eq!(
+            fixture.ring.seek_epoch_status(1),
+            SeekEpochStatus::WaitingForPcm
+        );
+
+        let old = fixture.chunk(&ring_pcm[..1]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(old, 0))
+            .expect("old epoch reaches ring");
+        assert_eq!(
+            fixture.ring.seek_epoch_status(1),
+            SeekEpochStatus::WaitingForPcm
+        );
+
+        let replacement = fixture.chunk(&ring_pcm[1..2]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(replacement, 1))
+            .expect("replacement epoch reaches ring");
+        assert_eq!(fixture.ring.seek_epoch_status(1), SeekEpochStatus::Ready);
+    }
+
     /// One second instead of the ambient ten: the watchdog park is the point of
     /// this test, and on the flash-off lane that park is spent in real time
     /// (measured: 10.087 s ambient vs 0.074 s under flash, where it is virtual).
@@ -592,6 +825,201 @@ mod tests {
     }
 
     #[kithara::test]
+    fn render_revision_floor_discards_current_and_queued_stale_pcm(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let mut current = fixture.chunk(&ring_pcm[..1]);
+        current.meta.render_revision = 7;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(current, 0))
+            .expect("current stale chunk reaches ring");
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        for revision in [8, 10, 11] {
+            let mut chunk = fixture.chunk(&ring_pcm[..1]);
+            chunk.meta.render_revision = revision;
+            fixture
+                .data_tx
+                .try_push(Fetch::data(chunk, 0))
+                .expect("revisioned chunk reaches ring");
+        }
+
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                NonZeroUsize::new(1).expect("fixture interval is non-zero"),
+                None,
+                None,
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::Switched
+        );
+        assert_eq!(
+            fixture
+                .ring
+                .current_chunk
+                .as_ref()
+                .map(|chunk| chunk.meta.render_revision),
+            Some(10)
+        );
+        assert_eq!(
+            fixture
+                .trash_rx
+                .try_pop()
+                .map(|chunk| chunk.meta.render_revision),
+            Some(8)
+        );
+        assert_eq!(
+            fixture
+                .trash_rx
+                .try_pop()
+                .map(|chunk| chunk.meta.render_revision),
+            Some(7)
+        );
+        assert_eq!(
+            fixture.recv().map(|chunk| chunk.meta.render_revision),
+            Some(11)
+        );
+    }
+
+    #[kithara::test]
+    fn render_revision_floor_keeps_current_pcm_until_replacement_is_ready(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let mut current = fixture.chunk(&ring_pcm[..1]);
+        current.meta.render_revision = 7;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(current, 0))
+            .expect("current chunk reaches ring");
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                NonZeroUsize::new(1).expect("fixture interval is non-zero"),
+                None,
+                None,
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::WaitingForReplacement
+        );
+        assert_eq!(
+            fixture
+                .ring
+                .current_chunk
+                .as_ref()
+                .map(|chunk| chunk.meta.render_revision),
+            Some(7)
+        );
+        assert!(fixture.trash_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn revision_switch_waits_for_the_complete_requested_interval(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let mut current = fixture.chunk(&ring_pcm[..1]);
+        current.meta.render_revision = 7;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(current, 0))
+            .expect("current PCM reaches ring");
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        let mut first = fixture.chunk(&ring_pcm[1..2]);
+        first.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(first, 0))
+            .expect("partial replacement reaches ring");
+        let required = NonZeroUsize::new(2).expect("fixture interval is non-zero");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                None,
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::WaitingForReplacement
+        );
+        assert_eq!(
+            fixture
+                .ring
+                .current_chunk
+                .as_ref()
+                .map(|chunk| chunk.meta.render_revision),
+            Some(7)
+        );
+
+        let mut second = fixture.chunk(&ring_pcm[2..3]);
+        second.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(second, 0))
+            .expect("complete replacement reaches ring");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                None,
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::Switched
+        );
+    }
+
+    #[kithara::test]
+    fn unavailable_revision_preserves_pcm_across_current_chunk_boundary(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        for sample in &ring_pcm[..2] {
+            let mut chunk = fixture.chunk(&[*sample]);
+            chunk.meta.render_revision = 7;
+            fixture
+                .data_tx
+                .try_push(Fetch::data(chunk, 0))
+                .expect("old PCM reaches ring");
+        }
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                NonZeroUsize::new(2).expect("fixture interval is non-zero"),
+                None,
+                None,
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::WaitingForReplacement
+        );
+
+        let mut output = [0.0; 2];
+        let read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut output,
+            )
+            .expect("retained PCM remains readable");
+        let ReadOutcome::Frames { count, .. } = read.outcome else {
+            panic!("old PCM must remain available until replacement arrives");
+        };
+        assert_eq!(
+            count.get(),
+            2,
+            "unavailable replacement must not create a hole"
+        );
+        assert_eq!(output.as_slice(), &ring_pcm[..2]);
+    }
+
+    #[kithara::test]
     fn consumer_phase_transitions_to_seek_pending() {
         let mut fixture = RingFixture::new(true);
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
@@ -612,6 +1040,98 @@ mod tests {
             .expect("post-seek chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn future_seek_pcm_waits_for_explicit_presentation(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let future = fixture.chunk(&ring_pcm[..2]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(future, 1))
+            .expect("future chunk reaches ring");
+
+        assert!(fixture.recv().is_none());
+        assert!(fixture.trash_rx.try_pop().is_none());
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                0,
+                NonZeroUsize::new(2).expect("replacement length is non-zero"),
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::ReadyForSeekPresentation
+        );
+        assert!(fixture.ring.begin_seek_epoch(1, &mut fixture.cursor));
+
+        let mut output = [0.0; 2];
+        let read = fixture
+            .cursor
+            .read(
+                &mut fixture.ring,
+                &mut fixture.events,
+                fixture.playhead.as_ref(),
+                empty_ctx(),
+                &mut output,
+            )
+            .expect("presented future PCM remains readable");
+        let ReadOutcome::Frames { count, .. } = read.outcome else {
+            panic!("presented future PCM must produce frames");
+        };
+        assert_eq!(count.get(), 2);
+        assert_eq!(output.as_slice(), &ring_pcm[..2]);
+    }
+
+    #[kithara::test]
+    fn future_seek_readiness_counts_only_the_epoch_that_will_be_presented(ring_pcm: Vec<f32>) {
+        let mut fixture = RingFixture::new(true);
+        let mut current = fixture.chunk(&ring_pcm[..1]);
+        current.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(current, 0))
+            .expect("current epoch PCM reaches ring");
+        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+
+        let mut first = fixture.chunk(&ring_pcm[1..2]);
+        first.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(first, 1))
+            .expect("partial future epoch PCM reaches ring");
+        let required = NonZeroUsize::new(2).expect("fixture interval is non-zero");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::WaitingForReplacement,
+            "presenting the future epoch discards current-epoch PCM"
+        );
+
+        let mut second = fixture.chunk(&ring_pcm[2..3]);
+        second.meta.render_revision = 10;
+        fixture
+            .data_tx
+            .try_push(Fetch::data(second, 1))
+            .expect("complete future epoch PCM reaches ring");
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                10,
+                required,
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::ReadyForSeekPresentation
+        );
     }
 
     #[kithara::test]

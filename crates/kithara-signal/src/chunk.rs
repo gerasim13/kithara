@@ -55,6 +55,12 @@ impl Default for AudioChunkInfo {
     }
 }
 
+/// Returns the Warp-map identity carried by an opaque PCM revision word.
+#[must_use]
+pub const fn render_warp_map_revision(revision: u64) -> u64 {
+    revision >> u32::BITS
+}
+
 /// One owning chunk of interleaved decoded samples and timeline information.
 #[derive(Debug)]
 pub struct AudioChunk {

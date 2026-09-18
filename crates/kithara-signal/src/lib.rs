@@ -13,7 +13,7 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod time;
 mod units;
 
-pub use chunk::{AudioChunk, AudioChunkInfo};
+pub use chunk::{AudioChunk, AudioChunkInfo, render_warp_map_revision};
 pub use error::SignalError;
 pub use interleaved::InterleavedView;
 pub use planar::{PlanarBuffer, PlanarView};

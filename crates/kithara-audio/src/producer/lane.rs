@@ -5,7 +5,7 @@ use kithara_stream::PlayheadWrite;
 
 use super::PreloadGate;
 use crate::{
-    AudioEvent, DecoderEvent, Fetch,
+    AudioEvent, DecoderEvent, Fetch, ScheduledSeekActivator,
     runtime::{Inlet, Outlet},
 };
 
@@ -15,6 +15,7 @@ use crate::{
 pub struct ProducerPort {
     trash_inlet: Inlet<AudioChunk>,
     outlet: Outlet<Fetch<AudioChunk>>,
+    scheduled_seek: Option<ScheduledSeekActivator>,
 }
 
 impl ProducerPort {
@@ -25,7 +26,17 @@ impl ProducerPort {
         Self {
             trash_inlet,
             outlet,
+            scheduled_seek: None,
         }
+    }
+
+    pub(crate) fn install_scheduled_seek(&mut self, scheduled_seek: ScheduledSeekActivator) {
+        self.scheduled_seek = Some(scheduled_seek);
+    }
+
+    /// Return the scheduled seek paired with this final playback ring.
+    pub fn scheduled_seek(&self) -> Option<&ScheduledSeekActivator> {
+        self.scheduled_seek.as_ref()
     }
 
     /// Reclaim spent chunks outside the checked producer core.
@@ -87,6 +98,25 @@ impl<S> PreparedAudioLane<S> {
                 preload_chunks: self.preload_chunks,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_events::EventBus;
+    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_stream::{PlayheadState, SeekControl, SeekObserve, SeekState, WorkerWake};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::audio::SeekHandleParts;
+
+    struct TestWake;
+
+    impl WorkerWake for TestWake {
+        fn defer(&self) {}
+
+        fn wake(&self) {}
     }
 }
 

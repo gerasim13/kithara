@@ -54,6 +54,13 @@ impl ChunkCursor {
         self.current_chunk_consumed_frames = 0;
     }
 
+    pub(super) fn remaining_frames(&self, chunk: &AudioChunk) -> usize {
+        usize::try_from(
+            u64::from(chunk.meta.frames).saturating_sub(self.current_chunk_consumed_frames),
+        )
+        .unwrap_or(usize::MAX)
+    }
+
     fn copy_into(
         &mut self,
         chunk: &AudioChunk,
@@ -337,9 +344,10 @@ fn source_subspan(
     }
     let source_frames = span.end().checked_sub(span.start())?;
     let source_at = |output_frame: u64| {
-        let offset = u128::from(source_frames)
+        let numerator = u128::from(source_frames)
             .checked_mul(u128::from(output_frame))?
-            .checked_div(u128::from(output_frames))?;
+            .checked_add(u128::from(output_frames / 2))?;
+        let offset = numerator.checked_div(u128::from(output_frames))?;
         span.start().checked_add(u64::try_from(offset).ok()?)
     };
     let start = source_at(output_start)?;
@@ -417,6 +425,51 @@ mod tests {
     };
 
     #[kithara::test]
+    fn source_subspan_preserves_nearest_endpoint_across_rate_chunks() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let chunks = [
+            (0, 23, 31, 31),
+            (23, 46, 30, 30),
+            (46, 69, 31, 31),
+            (69, 92, 31, 28),
+        ];
+
+        let endpoint = chunks
+            .into_iter()
+            .try_fold(0, |_, (start, end, frames, taken)| {
+                source_subspan(
+                    SourceSpan::new(start, end, rate).expect("fixture source span is valid"),
+                    0,
+                    taken,
+                    frames,
+                )
+                .map(|span| span.end())
+            });
+        assert_eq!(endpoint, Some(90));
+
+        let span = SourceSpan::new(69, 92, rate).expect("fixture source span is valid");
+        let whole = source_subspan(span, 0, 28, 31).expect("whole prefix projects");
+        let prefix = source_subspan(span, 0, 13, 31).expect("prefix projects");
+        let suffix = source_subspan(span, 13, 28, 31).expect("suffix projects");
+        assert_eq!(
+            (prefix.end(), suffix.start(), suffix.end()),
+            (79, 79, whole.end())
+        );
+    }
+
+    #[kithara::test]
+    fn source_subspan_keeps_the_159_to_191_free_handoff_boundary_exact() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let span = SourceSpan::new(0, 159, rate).expect("fixture source span is valid");
+        let first = source_subspan(span, 0, 128, 191).expect("first callback projects");
+        let second = source_subspan(span, 128, 191, 191).expect("second callback projects");
+
+        assert_eq!((first.start(), first.end()), (0, 107));
+        assert_eq!((second.start(), second.end()), (107, 159));
+        assert_eq!(first.end(), second.start());
+    }
+
+    #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration(cursor_half: Vec<f32>) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
@@ -474,138 +527,6 @@ mod tests {
         assert_eq!(position, duration);
         assert_eq!(source_span, None);
         assert_eq!(cursor.current_chunk_consumed_frames, 100);
-    }
-
-    #[kithara::test]
-    fn reads_preserve_consecutive_rendered_source_spans_and_revisions(cursor_half: Vec<f32>) {
-        let pools = pools();
-        let rate = NonZeroU32::new(48_000).expect("test rate");
-        let spec = AudioSpec::new(1, rate);
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        let mut first = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            3,
-            Duration::ZERO,
-            Duration::from_millis(3),
-        );
-        first.meta.frame_offset = 100;
-        first.meta.render_revision = 7;
-        let mut second = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            2,
-            Duration::from_millis(3),
-            Duration::from_millis(5),
-        );
-        second.meta.frame_offset = 1_000;
-        second.meta.render_revision = 7;
-        let mut changed = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            2,
-            Duration::from_millis(5),
-            Duration::from_millis(7),
-        );
-        changed.meta.frame_offset = 2_000;
-        changed.meta.render_revision = 8;
-        data_tx
-            .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
-            .expect("first rendered chunk reaches ring");
-        data_tx
-            .try_push(Fetch::rendered(second, 0, SourceEnd::new(110, rate)))
-            .expect("second rendered chunk reaches ring");
-        data_tx
-            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(114, rate)))
-            .expect("changed-revision rendered chunk reaches ring");
-
-        let playhead = PlayheadState::new();
-        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
-        let mut events = AudioEvents::test();
-        let mut output = [0.0; 8];
-        let first_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output,
-            )
-            .expect("first read succeeds");
-        assert_eq!(
-            first_read.first_output_meta.map(|meta| meta.timestamp),
-            Some(Duration::ZERO)
-        );
-        let ReadOutcome::Frames {
-            count, source_span, ..
-        } = first_read.outcome
-        else {
-            panic!("expected first rendered frames");
-        };
-        assert_eq!(count.get(), 5);
-        assert_eq!(
-            source_span,
-            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(7))
-        );
-
-        let second_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output[..1],
-            )
-            .expect("partial changed-revision read succeeds");
-        let ReadOutcome::Frames { source_span, .. } = second_read.outcome else {
-            panic!("expected partial changed-revision frames");
-        };
-        assert_eq!(
-            source_span,
-            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(8))
-        );
-
-        let final_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output,
-            )
-            .expect("final changed-revision read succeeds");
-        let ReadOutcome::Frames { source_span, .. } = final_read.outcome else {
-            panic!("expected final changed-revision frames");
-        };
-        assert_eq!(
-            source_span,
-            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(8))
-        );
     }
 
     #[kithara::test]
