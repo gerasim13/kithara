@@ -2,12 +2,13 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
-use kithara_warp::{AssetAxis, SegmentSet};
+use kithara_warp::{AssetAxis, MapPosition, SegmentSet};
+use num_traits::ToPrimitive;
 
 use super::snapshot::BeatSnapshot;
 use crate::{
     coverage::{Coverage, FrameRange},
-    segments::{BeatGridError, segment_set},
+    segments::{BeatGridError, GridBeat, segment_set},
     waveform::bucket::Waveform,
 };
 
@@ -114,6 +115,40 @@ impl TrackAnalysis {
         ))
     }
 
+    /// Every beat the grid states, as its ordinal and the source frame it
+    /// sounds at, in order.
+    ///
+    /// `None` on the same terms as [`beat_grid`](Self::beat_grid). This is the
+    /// sequence a caller draws or counts; the grid itself answers geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatGridError`] when the beats the pass found cannot form a
+    /// grid on the source axis, and [`BeatGridError::OffSourceAxis`] when the
+    /// grid answers a position that axis cannot express.
+    #[must_use]
+    pub fn beats(&self) -> Option<Result<Vec<GridBeat>, BeatGridError>> {
+        let grid = match self.beat_grid()? {
+            Ok(grid) => grid,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(
+            grid.beats()
+                .map(|(beat, position)| {
+                    let ordinal = f64::from(beat).round().to_i64();
+                    let frame = match position {
+                        MapPosition::Asset(frame) => f64::from(frame).round().to_u64(),
+                        _ => None,
+                    };
+                    ordinal
+                        .zip(frame)
+                        .map(|(ordinal, frame)| GridBeat::new(ordinal, frame))
+                        .ok_or(BeatGridError::OffSourceAxis)
+                })
+                .collect(),
+        )
+    }
+
     #[must_use]
     pub const fn coverage(&self) -> &Coverage {
         &self.coverage
@@ -191,7 +226,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{AnalysisToken, BeatSnapshot, NonZeroU32, TrackAnalysis};
-    use crate::{BeatArtifact, BeatState};
+    use crate::{BeatArtifact, BeatState, GridBeat};
 
     struct Consts;
 
@@ -212,6 +247,28 @@ mod tests {
             .maybe_extent(extent)
             .revision(0)
             .build()
+    }
+
+    /// Every beat carries the ordinal its grid gives it.
+    ///
+    /// The beats a pass leaves unmarked are extended from the beats it marked,
+    /// and the head reaches back from the first marked beat, so the ordinals
+    /// before it are negative. A caller counts and draws by these numbers, so
+    /// they must be the grid's own rather than a position in a list.
+    #[kithara::test]
+    fn a_beat_carries_the_ordinal_of_its_grid() {
+        let beats = analysis(Some(Consts::EXTENT))
+            .beats()
+            .expect("the stated extent carries a grid")
+            .expect("the fixture beats form a grid");
+
+        assert_eq!(
+            beats,
+            [(0, 0), (1, 12_000), (2, 24_000), (3, 36_000), (4, 48_000)]
+                .map(|(ordinal, frame)| GridBeat::new(ordinal, frame))
+                .to_vec(),
+            "the grid states one beat per marked interval and extends its tail"
+        );
     }
 
     /// A grid is laid on the extent the track declares, never on a frontier.

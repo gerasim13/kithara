@@ -444,15 +444,15 @@ impl SegmentSet {
         segment.beat_at(position)
     }
 
-    /// The position of every whole beat this set states, in coordinate order.
+    /// Every whole beat this set states, in coordinate order, with its position.
     ///
     /// A grid is consumed as the sequence of beats it asserts — drawn on a
-    /// waveform, counted into ticks — and that sequence is the set's own
-    /// answer rather than something a caller may re-derive from tempo. A beat
-    /// landing on a seam belongs to the segment that follows it, so it is
+    /// waveform, counted into ticks — and each beat travels with the ordinal
+    /// the set gives it, so one beat has one number wherever it is read. A
+    /// beat landing on a seam belongs to the segment that follows it, so it is
     /// answered once; the final beat of the set is answered by its last
     /// segment.
-    pub fn beat_positions(&self) -> impl Iterator<Item = MapPosition> + '_ {
+    pub fn beats(&self) -> impl Iterator<Item = (Beat, MapPosition)> + '_ {
         let last = self.segments.last();
         let spans = self.segments.iter().flat_map(|segment| {
             let first = f64::from(segment.start_beat()).ceil();
@@ -463,11 +463,14 @@ impl SegmentSet {
                 .unwrap_or(0);
             (0..count)
                 .filter_map(move |step| Beat::new(step.to_f64()? + first).ok())
-                .filter_map(|beat| Some(segment.position_at(beat)?.0))
+                .filter_map(|beat| Some((beat, segment.position_at(beat)?.0)))
         });
         let tail = last
             .filter(|segment| f64::from(segment.end_beat()).fract() == 0.0)
-            .and_then(|segment| Some(segment.position_at(segment.end_beat())?.0));
+            .and_then(|segment| {
+                let beat = segment.end_beat();
+                Some((beat, segment.position_at(beat)?.0))
+            });
         spans.chain(tail)
     }
 

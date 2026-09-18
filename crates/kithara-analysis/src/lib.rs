@@ -35,7 +35,7 @@ pub use blob::frame::BlobError;
 pub use coverage::{Coverage, FrameRange};
 pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
-pub use segments::BeatGridError;
+pub use segments::{BeatGridError, GridBeat};
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;
 pub use waveform::{AnalysisParams, Bucket, bucket::Waveform};

@@ -542,14 +542,24 @@ mod tests {
         )
         .expect("invariant: the fixture segments are ordered and disjoint");
 
-        let beats: Vec<MapPosition> = set.beat_positions().collect();
+        let beats: Vec<(Beat, MapPosition)> = set.beats().collect();
 
         assert_eq!(
             beats,
-            [0.0, 12_000.0, 24_000.0, 36_000.0, 42_000.0, 48_000.0]
-                .map(|frame| MapPosition::Asset(asset_frame(frame)))
-                .to_vec(),
-            "every whole beat of the extended set is listed once, in order"
+            [
+                (0.0, 0.0),
+                (1.0, 12_000.0),
+                (2.0, 24_000.0),
+                (3.0, 36_000.0),
+                (4.0, 42_000.0),
+                (5.0, 48_000.0)
+            ]
+            .map(|(beat, frame)| (
+                Beat::new(beat).expect("invariant: fixture beat is finite"),
+                MapPosition::Asset(asset_frame(frame))
+            ))
+            .to_vec(),
+            "every whole beat of the extended set is listed once, with its ordinal"
         );
     }
 

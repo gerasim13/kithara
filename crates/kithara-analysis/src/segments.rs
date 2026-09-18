@@ -18,6 +18,9 @@ pub enum BeatGridError {
     /// A grid needs at least one beat interval.
     #[error("beat artifact carries fewer than two beats")]
     TooFewBeats,
+    /// A beat of the grid falls outside the coordinates the source axis states.
+    #[error("the grid answers a beat the source axis cannot express")]
+    OffSourceAxis,
     /// The dominant bar length exceeds the meter range.
     #[error("bar of {beats} beats exceeds the meter range")]
     BarTooLong { beats: usize },
@@ -27,6 +30,23 @@ pub enum BeatGridError {
     Meter(#[from] MeterError),
     #[error(transparent)]
     Segment(#[from] SegmentError),
+}
+
+/// One beat of a track grid: the ordinal the grid gives it and the source
+/// frame it sounds at.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct GridBeat {
+    pub ordinal: i64,
+    pub frame: u64,
+}
+
+impl GridBeat {
+    /// Names one beat of a grid on the source axis.
+    #[must_use]
+    pub const fn new(ordinal: i64, frame: u64) -> Self {
+        Self { ordinal, frame }
+    }
 }
 
 /// One observed segment per beat interval of `artifact` on `axis`. The meter
