@@ -656,38 +656,70 @@
   <require os> linux
   <require tools> cargo just
   just test miri
-# deep-mutants / branch
+# deep-mutants-1 / branch
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / platforms
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / platforms
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / merge-request
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / merge-request
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / quarantine
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / quarantine
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / main
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / main
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / nightly
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / nightly
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / weekly
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / weekly
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
-# deep-mutants / release
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-1 / release
   <require os> linux
   <require tools> cargo just
-  just test mutants run-all --jobs 4
+  just test mutants run-all --jobs 4 --share 1/2
+# deep-mutants-2 / branch
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / main
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
+# deep-mutants-2 / release
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --share 2/2
 # deep-perf / branch
   <require os> macos
   <require tools> cargo just

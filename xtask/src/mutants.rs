@@ -42,7 +42,59 @@ enum MutantsCommand {
         /// Concurrent cargo-mutants jobs within one suite.
         #[arg(long, default_value_t = 1)]
         jobs: usize,
+        /// Run only this part of the suite list, as `part/parts`.
+        ///
+        /// The suites are a serial hour and a half, which overran the lane's
+        /// window with the last suite unread: a part runs its own share and
+        /// the parts run as separate lanes. Suites are dealt round-robin, so
+        /// the two long ones do not land in the same part.
+        #[arg(long, default_value_t = Share::whole())]
+        share: Share,
     },
+}
+
+/// One part of the suite list, written `part/parts` - `1/2` is the first half.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Share {
+    part: usize,
+    parts: usize,
+}
+
+impl Share {
+    const fn whole() -> Self {
+        Self { part: 1, parts: 1 }
+    }
+
+    /// Whether the suite dealt at `index` belongs to this part.
+    const fn holds(self, index: usize) -> bool {
+        index % self.parts == self.part - 1
+    }
+}
+
+impl std::fmt::Display for Share {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.part, self.parts)
+    }
+}
+
+impl std::str::FromStr for Share {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        let (part, parts) = text
+            .split_once('/')
+            .with_context(|| format!("share `{text}` is not `part/parts`"))?;
+        let part: usize = part
+            .parse()
+            .with_context(|| format!("share `{text}` has a non-numeric part"))?;
+        let parts: usize = parts
+            .parse()
+            .with_context(|| format!("share `{text}` has a non-numeric part count"))?;
+        if parts == 0 || part == 0 || part > parts {
+            bail!("share `{text}` must name a part between 1 and the part count");
+        }
+        Ok(Self { part, parts })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,9 +149,16 @@ pub(crate) fn run(args: &MutantsArgs, ctx: &Ctx) -> Result<()> {
             );
             suite.execute(&ctx.root, &output, *jobs)
         }
-        MutantsCommand::RunAll { output, jobs } => {
+        MutantsCommand::RunAll {
+            output,
+            jobs,
+            share,
+        } => {
             let output = rooted(&ctx.root, output);
-            for suite in &config.suite {
+            for (index, suite) in config.suite.iter().enumerate() {
+                if !share.holds(index) {
+                    continue;
+                }
                 suite.execute(&ctx.root, &output.join(&suite.name), *jobs)?;
             }
             Ok(())
@@ -309,7 +368,7 @@ mod tests {
 
     /// The suites the repository ships, not a fixture. Every other test here
     /// proves the machinery against a synthetic config and never opens the file
-    /// the `deep-mutants` lane runs, which is how `crossfader` came to name a
+    /// the `deep-mutants` lanes run, which is how `crossfader` came to name a
     /// production file that had moved. Validation covers the whole config
     /// before any suite runs, so one stale path failed `list`, `run` and
     /// `run-all` alike: the lane spent its week reporting an error instead of
@@ -383,5 +442,37 @@ timeout_seconds = 30
         );
 
         assert!(MutationConfig::load(root.path()).is_err());
+    }
+
+    #[test]
+    fn every_suite_belongs_to_exactly_one_part() {
+        let parts: Vec<Share> = ["1/3", "2/3", "3/3"]
+            .iter()
+            .map(|text| text.parse().expect("a well-formed share"))
+            .collect();
+
+        for index in 0..10 {
+            assert_eq!(
+                parts.iter().filter(|share| share.holds(index)).count(),
+                1,
+                "suite {index} is claimed once across the parts"
+            );
+        }
+    }
+
+    #[test]
+    fn consecutive_suites_land_in_different_parts() {
+        let first: Share = "1/2".parse().expect("a well-formed share");
+
+        assert!(first.holds(0), "the first part takes the first suite");
+        assert!(!first.holds(1), "and leaves the next one to the second");
+    }
+
+    #[test]
+    fn a_share_outside_its_part_count_is_refused() {
+        assert!("3/2".parse::<Share>().is_err());
+        assert!("0/2".parse::<Share>().is_err());
+        assert!("1/0".parse::<Share>().is_err());
+        assert!("half".parse::<Share>().is_err());
     }
 }

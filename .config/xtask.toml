@@ -1664,10 +1664,16 @@ timeout_minutes = 90
 # added over the decision-dense files that carry their own unit tests, are 535:
 # `stream::coord` 132, `waveform::analyzer` 125, `size` 122, `worker::scheduler`
 # 76, `track` 42, `media` 38. Seven times the work, and six package baselines
-# instead of three, so this is an hour rather than a coffee. The timeout is
-# still headroom for a hung mutant, but it is now roughly double the expected
-# run rather than fifteen times it.
-[ext.ci.lanes.deep-mutants]
+# instead of three.
+#
+# Run serially that is more than one lane window: on 2026-09-18 the ten suites
+# reached the ninth at 100 minutes and the lane was cut at its timeout with
+# `ui-size` eight mutants in and `queue-track` unread. The work is split rather
+# than the window widened - two lanes, each running its half through
+# `run-all --share`, which deals the suites round-robin so the two long ones
+# land on opposite sides. The timeout is unchanged and stays headroom for a
+# hung mutant.
+[ext.ci.lanes.deep-mutants-1]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1680,13 +1686,39 @@ steps = [
     "run-all",
     "--jobs",
     "4",
+    "--share",
+    "1/2",
   ], label = "unit mutation suites" },
 ]
 role = "deep"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-artifact = { name = "mutants", path = "target/mutants-ci" }
+artifact = { name = "mutants-1", path = "target/mutants-ci" }
+timeout_minutes = 120
+
+[ext.ci.lanes.deep-mutants-2]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--share",
+    "2/2",
+  ], label = "unit mutation suites" },
+]
+role = "deep"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-2", path = "target/mutants-ci" }
 timeout_minutes = 120
 
 # The scan reports where it found something, not merely how many: without the
@@ -2746,7 +2778,7 @@ unimock_traits_dir = "crates/kithara-play/src/api"
 
 [[quality.assessment.not_applicable_tools]]
 tool = "cargo-mutants"
-reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the `deep-mutants` lane runs the curated unit suites in `.config/mutation-suites.toml` instead."
+reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the `deep-mutants-1`/`deep-mutants-2` lanes run the curated unit suites in `.config/mutation-suites.toml` instead."
 
 [[quality.assessment.deep_stages]]
 name = "extended-clippy"
