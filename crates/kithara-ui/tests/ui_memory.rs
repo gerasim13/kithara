@@ -26,5 +26,8 @@ mod host;
 #[path = "../examples/gallery/sections.rs"]
 mod sections;
 
-#[path = "ui_memory_checks.rs"]
+// A sibling in `tests/` would be a test binary of its own, and this one
+// carries the gallery modules the checks are written against. Under this
+// directory cargo leaves it alone and only this binary claims it.
+#[path = "ui_memory/checks.rs"]
 mod checks;

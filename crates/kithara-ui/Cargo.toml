@@ -23,6 +23,10 @@ gpu = ["iced", "dep:pollster"]
 capture = ["iced", "dep:futures-lite", "dep:iced_renderer", "dep:iced_runtime", "dep:iced_wgpu"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# Hand the no-block gate the platform layer the toolkit draws through, so a
+# lane that runs this package under the gate detects a blocking call made
+# from a paint pass.
+no-block = ["kithara-platform/no-block"]
 # Everything that draws. Artwork reading is part of it rather than an opt-in:
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
