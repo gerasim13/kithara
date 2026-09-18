@@ -42,59 +42,16 @@ enum MutantsCommand {
         /// Concurrent cargo-mutants jobs within one suite.
         #[arg(long, default_value_t = 1)]
         jobs: usize,
-        /// Run only this part of the suite list, as `part/parts`.
+        /// Run only the suites in this group; omit to run every suite.
         ///
-        /// The suites are a serial hour and a half, which overran the lane's
-        /// window with the last suite unread: a part runs its own share and
-        /// the parts run as separate lanes. Suites are dealt round-robin, so
-        /// the two long ones do not land in the same part.
-        #[arg(long, default_value_t = Share::whole())]
-        share: Share,
+        /// A group is one CI lane. Ten suites in one lane are more than its
+        /// window: the run reached the ninth at 100 minutes and was cut with
+        /// the last two unread. Groups also keep a lane's builds down to the
+        /// packages its own suites name, and leave a green group alone while
+        /// another is still red.
+        #[arg(long)]
+        group: Option<String>,
     },
-}
-
-/// One part of the suite list, written `part/parts` - `1/2` is the first half.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Share {
-    part: usize,
-    parts: usize,
-}
-
-impl Share {
-    const fn whole() -> Self {
-        Self { part: 1, parts: 1 }
-    }
-
-    /// Whether the suite dealt at `index` belongs to this part.
-    const fn holds(self, index: usize) -> bool {
-        index % self.parts == self.part - 1
-    }
-}
-
-impl std::fmt::Display for Share {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.part, self.parts)
-    }
-}
-
-impl std::str::FromStr for Share {
-    type Err = anyhow::Error;
-
-    fn from_str(text: &str) -> Result<Self> {
-        let (part, parts) = text
-            .split_once('/')
-            .with_context(|| format!("share `{text}` is not `part/parts`"))?;
-        let part: usize = part
-            .parse()
-            .with_context(|| format!("share `{text}` has a non-numeric part"))?;
-        let parts: usize = parts
-            .parse()
-            .with_context(|| format!("share `{text}` has a non-numeric part count"))?;
-        if parts == 0 || part == 0 || part > parts {
-            bail!("share `{text}` must name a part between 1 and the part count");
-        }
-        Ok(Self { part, parts })
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +64,8 @@ struct MutationConfig {
 #[serde(deny_unknown_fields)]
 struct MutationSuite {
     name: String,
+    /// CI lane this suite runs in. See `.config/mutation-suites.toml`.
+    group: String,
     package: String,
     files: Vec<PathBuf>,
     #[serde(default)]
@@ -152,13 +111,11 @@ pub(crate) fn run(args: &MutantsArgs, ctx: &Ctx) -> Result<()> {
         MutantsCommand::RunAll {
             output,
             jobs,
-            share,
+            group,
         } => {
             let output = rooted(&ctx.root, output);
-            for (index, suite) in config.suite.iter().enumerate() {
-                if !share.holds(index) {
-                    continue;
-                }
+            let selected = config.in_group(group.as_deref())?;
+            for suite in selected {
                 suite.execute(&ctx.root, &output.join(&suite.name), *jobs)?;
             }
             Ok(())
@@ -183,6 +140,29 @@ impl MutationConfig {
             toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
         config.validate(root)?;
         Ok(config)
+    }
+
+    /// The suites in `group`, or every suite when no group is named.
+    ///
+    /// A group nobody declares is a typo in a lane, not an empty run: the
+    /// lane would report success having tested nothing.
+    fn in_group(&self, group: Option<&str>) -> Result<Vec<&MutationSuite>> {
+        let Some(group) = group else {
+            return Ok(self.suite.iter().collect());
+        };
+        let selected: Vec<&MutationSuite> = self
+            .suite
+            .iter()
+            .filter(|suite| suite.group == group)
+            .collect();
+        if selected.is_empty() {
+            let known: BTreeSet<&str> = self.suite.iter().map(|s| s.group.as_str()).collect();
+            bail!(
+                "no mutation suite is in group `{group}`; {CONFIG_PATH} declares {}",
+                known.into_iter().collect::<Vec<_>>().join(", ")
+            );
+        }
+        Ok(selected)
     }
 
     fn validate(&self, root: &Path) -> Result<()> {
@@ -223,6 +203,12 @@ impl MutationSuite {
         }
         if self.package.trim().is_empty() {
             bail!("mutation suite {} has no package", self.name);
+        }
+        if self.group.trim().is_empty() {
+            bail!(
+                "mutation suite {} names no group, so no lane runs it",
+                self.name
+            );
         }
         if self.files.is_empty() {
             bail!("mutation suite {} has no production files", self.name);
@@ -390,6 +376,7 @@ mod tests {
             r#"
 [[suite]]
 name = "small"
+group = "stream"
 package = "example"
 files = ["crates/example/src/lib.rs"]
 exclude_re = ["example::debug"]
@@ -434,6 +421,7 @@ timeout_seconds = 30
             r#"
 [[suite]]
 name = "small"
+group = "stream"
 package = "example"
 files = ["../outside.rs"]
 test_filters = ["test(/tests::value/)"]
@@ -445,34 +433,75 @@ timeout_seconds = 30
     }
 
     #[test]
-    fn every_suite_belongs_to_exactly_one_part() {
-        let parts: Vec<Share> = ["1/3", "2/3", "3/3"]
-            .iter()
-            .map(|text| text.parse().expect("a well-formed share"))
-            .collect();
+    fn a_group_selects_only_its_own_suites() {
+        let root = tempdir().unwrap();
+        write_fixture(
+            root.path(),
+            r#"
+[[suite]]
+name = "first"
+group = "stream"
+package = "example"
+files = ["crates/example/src/lib.rs"]
+test_filters = ["test(/tests::value/)"]
+timeout_seconds = 30
 
-        for index in 0..10 {
-            assert_eq!(
-                parts.iter().filter(|share| share.holds(index)).count(),
-                1,
-                "suite {index} is claimed once across the parts"
-            );
-        }
+[[suite]]
+name = "second"
+group = "ui"
+package = "example"
+files = ["crates/example/src/lib.rs"]
+test_filters = ["test(/tests::value/)"]
+timeout_seconds = 30
+"#,
+        );
+        let config = MutationConfig::load(root.path()).expect("a valid fixture");
+
+        let selected = config.in_group(Some("stream")).expect("a declared group");
+
+        assert_eq!(
+            selected.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["first"]
+        );
     }
 
     #[test]
-    fn consecutive_suites_land_in_different_parts() {
-        let first: Share = "1/2".parse().expect("a well-formed share");
+    fn no_group_runs_every_suite() {
+        let root = tempdir().unwrap();
+        write_fixture(
+            root.path(),
+            r#"
+[[suite]]
+name = "first"
+group = "stream"
+package = "example"
+files = ["crates/example/src/lib.rs"]
+test_filters = ["test(/tests::value/)"]
+timeout_seconds = 30
+"#,
+        );
+        let config = MutationConfig::load(root.path()).expect("a valid fixture");
 
-        assert!(first.holds(0), "the first part takes the first suite");
-        assert!(!first.holds(1), "and leaves the next one to the second");
+        assert_eq!(config.in_group(None).expect("every suite").len(), 1);
     }
 
     #[test]
-    fn a_share_outside_its_part_count_is_refused() {
-        assert!("3/2".parse::<Share>().is_err());
-        assert!("0/2".parse::<Share>().is_err());
-        assert!("1/0".parse::<Share>().is_err());
-        assert!("half".parse::<Share>().is_err());
+    fn a_group_nobody_declares_is_refused() {
+        let root = tempdir().unwrap();
+        write_fixture(
+            root.path(),
+            r#"
+[[suite]]
+name = "first"
+group = "stream"
+package = "example"
+files = ["crates/example/src/lib.rs"]
+test_filters = ["test(/tests::value/)"]
+timeout_seconds = 30
+"#,
+        );
+        let config = MutationConfig::load(root.path()).expect("a valid fixture");
+
+        assert!(config.in_group(Some("no-such-group")).is_err());
     }
 }

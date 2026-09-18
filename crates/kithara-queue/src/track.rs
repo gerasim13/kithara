@@ -348,11 +348,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use kithara_assets::AssetStore;
+    use kithara_audio::{AudioObserveError, AudioObserver};
+    use kithara_platform::sync::Arc;
+    use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools};
+    use crate::test_pools::{TestPools, pools, sample_buffer};
 
     #[kithara::test]
     #[case::from_str("https://example.com/song.mp3")]
@@ -385,6 +390,84 @@ mod tests {
             "https://x/a.mp3".into(),
         ));
         tracks
+    }
+
+    /// Two queued tracks, each carrying its own source, so a lookup that
+    /// reaches the wrong record is visible rather than indistinguishable.
+    fn two_tracks() -> Tracks<TestPools> {
+        let tracks = Tracks::new(EventBus::default());
+        let mut guard = tracks.lock();
+        guard.push(TrackRecord::new(
+            TrackId(1),
+            String::new(),
+            "https://x/first.mp3".into(),
+        ));
+        guard.push(TrackRecord::new(
+            TrackId(2),
+            String::new(),
+            "https://x/second.mp3".into(),
+        ));
+        drop(guard);
+        tracks
+    }
+
+    struct CountingObserver(Arc<AtomicUsize>);
+
+    impl AudioObserver for CountingObserver {
+        fn try_observe(&mut self, _chunk: &AudioChunk) -> Result<(), AudioObserveError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[kithara::test]
+    fn an_attached_observer_reaches_its_own_tracks_decoder() {
+        let pools = pools();
+        let tracks = two_tracks();
+        let seen = Arc::new(AtomicUsize::new(0));
+        tracks.attach_observer(TrackId(2), Box::new(CountingObserver(Arc::clone(&seen))));
+        let mut relay = tracks.observer_relay(TrackId(2));
+
+        let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
+        relay.try_observe(&chunk).expect("the observer accepts it");
+
+        assert_eq!(seen.load(Ordering::Relaxed), 1);
+    }
+
+    #[kithara::test]
+    fn an_attached_observer_does_not_reach_another_track() {
+        let pools = pools();
+        let tracks = two_tracks();
+        let seen = Arc::new(AtomicUsize::new(0));
+        tracks.attach_observer(TrackId(2), Box::new(CountingObserver(Arc::clone(&seen))));
+        let mut relay = tracks.observer_relay(TrackId(1));
+
+        let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
+        relay
+            .try_observe(&chunk)
+            .expect("an empty relay is a no-op");
+
+        assert_eq!(seen.load(Ordering::Relaxed), 0);
+    }
+
+    #[kithara::test]
+    fn a_track_reports_its_own_source() {
+        let tracks = two_tracks();
+
+        assert_eq!(
+            tracks
+                .source(TrackId(2))
+                .as_ref()
+                .and_then(TrackSource::uri),
+            Some("https://x/second.mp3")
+        );
+    }
+
+    #[kithara::test]
+    fn an_unqueued_track_has_no_source() {
+        let tracks = two_tracks();
+
+        assert!(tracks.source(TrackId(3)).is_none());
     }
 
     fn token() -> CancelToken {

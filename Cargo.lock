@@ -5542,6 +5542,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
