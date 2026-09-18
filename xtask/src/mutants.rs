@@ -260,6 +260,12 @@ impl MutationSuite {
             .arg("--output")
             .arg(output)
             .arg("--cargo-test-arg=--lib")
+            // A suite names its own filterset over one file. The test profile's
+            // `default-filter` exists to keep `just test` off the lanes that own
+            // their own runner, and it silently subtracts from that filterset:
+            // for a package it excludes outright, the suite selects nothing and
+            // the run dies on an empty baseline rather than on a mutant.
+            .arg("--cargo-test-arg=--ignore-default-filter")
             .arg("--cargo-test-arg=-E")
             .arg(format!(
                 "--cargo-test-arg={}",
@@ -350,6 +356,7 @@ timeout_seconds = 30
                 .any(|args| args == ["--exclude-re", "example::debug"])
         );
         assert!(args.contains(&"--cargo-test-arg=--lib".to_string()));
+        assert!(args.contains(&"--cargo-test-arg=--ignore-default-filter".to_string()));
         assert!(args.contains(&"--cargo-test-arg=test(/tests::value/)".to_string()));
         assert!(!args.contains(&"--workspace".to_string()));
         assert!(!args.iter().any(|arg| arg.starts_with("--test-workspace")));
