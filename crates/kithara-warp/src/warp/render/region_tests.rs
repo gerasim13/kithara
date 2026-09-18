@@ -7,9 +7,9 @@ use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, war
 use kithara_test_utils::kithara;
 
 use crate::{
-    PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame, StretchControls,
-    TransportRevision, Warp, WarpConfig, WarpPlan,
-    test_grids::spaced_plan,
+    Beat, BeatGridSnapshot, PresentationFrontier, RenderContext, SessionBeat, SessionEpoch,
+    SessionFrame, StretchControls, TransportRevision, Warp, WarpConfig, WarpPlan,
+    test_grids::{asset_grid_over, session_grid_spaced, spaced_plan},
     test_pools::{Pools, pools, sample_buffer},
 };
 
@@ -340,8 +340,9 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL / 4) * 2].to_vec();
-    let unprojected = WarpPlan::new(crate::test_grids::asset_grid_spaced(
+    let unprojected = WarpPlan::new(asset_grid_over(
         &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
+        None,
         spec().sample_rate,
     ));
     let with = render(backend, 0.5, Some(unprojected), &src);
@@ -389,6 +390,113 @@ fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
                 "{bps} beats/s: beat interval {actual}, expected {interval}"
             );
         }
+    }
+}
+
+/// A span the beat pass never marked renders at the rate the projection
+/// prescribes, not at the listener's manual speed.
+///
+/// A pass that stops half way leaves a grid whose segments end before the axis
+/// the track declares, and the set answers the rest by extending them. The
+/// renderer must take that answer: reading its own target instead would let
+/// the recording change tempo at the frontier the pass happened to reach, and
+/// a manual speed that disagrees with the projection makes that audible.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn an_unmarked_span_renders_at_the_projected_rate(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
+    const MARKED: usize = BARS / 2;
+    let interval = NOMINAL * 4 / 3;
+    let projection = BeatGridSnapshot::projection(
+        asset_grid_over(
+            &[(0.0, f64_of(NOMINAL), i64_of(MARKED))],
+            Some(u64_of(NOMINAL * BARS) + 1),
+            spec().sample_rate,
+        ),
+        session_grid_spaced(f64_of(interval), spec().sample_rate),
+        Beat::new(0.0).expect("fixture cue"),
+        SessionFrame::new(0),
+    )
+    .expect("an asset grid projects onto a live session grid");
+    let output = render_on_grid(
+        backend,
+        2.0,
+        Some(WarpPlan::new(projection)),
+        &warp_nominal_clicks,
+        1.5,
+        None,
+    );
+    let clicks = click_positions(&mono(&output));
+    assert_eq!(
+        clicks.len(),
+        BARS,
+        "every source beat survives, marked by the pass or extended from it"
+    );
+    for (index, pair) in clicks.windows(2).enumerate() {
+        let actual = pair[1] - pair[0];
+        assert!(
+            actual.abs_diff(interval) <= interval / 20,
+            "beat {index} spans {actual} frames; the projection prescribes {interval}"
+        );
+    }
+}
+
+/// Frames past the end of the recording keep the rate the projection last
+/// named, rather than stepping to unity inside the item.
+///
+/// A projection names no rate beyond the axis its recording declares, and the
+/// renderer reads the rate once per chunk. Answering unity there would change
+/// the item's tempo at its own tail, which is audible as a beat interval that
+/// collapses towards the source spacing.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn the_tail_past_the_recording_keeps_the_projected_rate(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
+    const DECLARED: usize = BARS / 2;
+    let interval = NOMINAL * 4 / 3;
+    let projection = BeatGridSnapshot::projection(
+        asset_grid_over(
+            &[(0.0, f64_of(NOMINAL), i64_of(DECLARED))],
+            Some(u64_of(NOMINAL * DECLARED) + 1),
+            spec().sample_rate,
+        ),
+        session_grid_spaced(f64_of(interval), spec().sample_rate),
+        Beat::new(0.0).expect("fixture cue"),
+        SessionFrame::new(0),
+    )
+    .expect("an asset grid projects onto a live session grid");
+    let output = render_on_grid(
+        backend,
+        2.0,
+        Some(WarpPlan::new(projection)),
+        &warp_nominal_clicks,
+        1.5,
+        None,
+    );
+    let clicks = click_positions(&mono(&output));
+    assert!(
+        clicks.len() > DECLARED,
+        "the tail past the declared recording is rendered, not dropped: {} clicks",
+        clicks.len()
+    );
+    for (index, pair) in clicks.windows(2).enumerate().skip(DECLARED - 1) {
+        let actual = pair[1] - pair[0];
+        assert!(
+            actual.abs_diff(interval) <= interval / 20,
+            "tail beat {index} spans {actual} frames; the projection last named {interval}"
+        );
     }
 }
 

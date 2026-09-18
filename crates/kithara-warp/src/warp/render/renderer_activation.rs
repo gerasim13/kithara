@@ -330,6 +330,7 @@ where
             self.plan = want;
             self.prepared_context = None;
             self.free_handoff_latch = None;
+            self.projected_rate_held = None;
         }
     }
 
@@ -389,6 +390,11 @@ where
     /// The span is the distance from where the recording actually stands to
     /// where the projection says it must stand, so a block that rounded short
     /// is made whole by the next one instead of drifting.
+    ///
+    /// `None` where no projection prescribes a span: no plan is installed, no
+    /// frontier exists yet, the plan places the item on its own axis and
+    /// answers no output frame, or the recording already stands at or past the
+    /// point the projection names and the next chunk owes it nothing.
     pub(super) fn projected_source_span(&self, output: usize, source: u64) -> Option<u64> {
         let plan = self.plan.as_ref()?;
         let start = self.output_frontier()?;
@@ -416,12 +422,18 @@ where
     ///
     /// An item the projection does not place on the output axis is the bypass
     /// case: the listener's own target owns the speed. Otherwise the projection
-    /// owns it, and nothing else may answer.
-    pub(super) fn projected_speed(&self, context: &RenderContext) -> f32 {
+    /// owns it, and nothing else may answer: past the end of the recording the
+    /// projection names no rate, and the item finishes on the rate it was
+    /// already running at rather than stepping to unity mid-item. Unity is the
+    /// speed only while the projection has never named one.
+    pub(super) fn projected_speed(&mut self, context: &RenderContext) -> f32 {
         if self.plan.as_ref().is_none_or(|plan| !plan.follows_output()) {
             return context.rate().speed();
         }
-        self.projected_rate().map_or(1.0, AsPrimitive::as_)
+        if let Some(rate) = self.projected_rate() {
+            self.projected_rate_held = Some(rate);
+        }
+        self.projected_rate_held.map_or(1.0, AsPrimitive::as_)
     }
 
     pub(super) fn cap_before_activation(&self, source: u64, frames: usize) -> usize {

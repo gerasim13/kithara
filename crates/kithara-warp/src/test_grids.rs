@@ -76,13 +76,20 @@ pub(crate) fn projected_plan(source_bpm: f64, host_bpm: f64, sample_rate: NonZer
     WarpPlan::new(projection)
 }
 
-/// One analysed recording whose beats are spaced by frame count.
+/// One analysed recording whose beats are spaced by frame count, laid on an
+/// axis of `frames`.
 ///
 /// Each entry is `(start_frame, frames_per_beat, beats)`. Spacing states the
 /// tempo exactly, which a beats-per-second figure cannot always do, so a
 /// fixture can place a beat on a chosen frame and mean it.
-pub(crate) fn asset_grid_spaced(
+///
+/// A pass that marked only part of a track leaves segments that stop short of
+/// the axis the track declares, and the set answers the rest by extending
+/// them. Stating `frames` apart from the marked span is how a fixture asks for
+/// that; `None` ends the axis one frame past the last marked beat.
+pub(crate) fn asset_grid_over(
     spans: &[(f64, f64, i64)],
+    frames: Option<u64>,
     sample_rate: NonZeroU32,
 ) -> BeatGridSnapshot {
     let marker = |frame: f64, ordinal: i64| {
@@ -111,7 +118,10 @@ pub(crate) fn asset_grid_spaced(
         );
         ordinal += beats;
     }
-    let axis = AssetAxis::new(sample_rate, end.ceil().to_u64().unwrap_or_default() + 1);
+    let axis = AssetAxis::new(
+        sample_rate,
+        frames.unwrap_or_else(|| end.ceil().to_u64().unwrap_or_default() + 1),
+    );
     BeatGridSnapshot::segments(
         BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
         BeatGridRevision::first(),
@@ -140,7 +150,7 @@ pub(crate) fn spaced_plan(
     sample_rate: NonZeroU32,
 ) -> WarpPlan {
     let projection = BeatGridSnapshot::projection(
-        asset_grid_spaced(spans, sample_rate),
+        asset_grid_over(spans, None, sample_rate),
         session_grid_spaced(host_frames_per_beat, sample_rate),
         Beat::new(0.0).expect("invariant: fixture cue is finite"),
         SessionFrame::new(0),

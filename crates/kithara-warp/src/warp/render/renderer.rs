@@ -91,6 +91,9 @@ pub struct WarpRenderer<S> {
     pub(super) plan: Option<Arc<WarpPlan>>,
     /// Live plan of the rendered item, shared with the deck that installs it.
     pub(super) plan_slot: Arc<WarpPlanSlot>,
+    /// Last rate the installed projection named, held for the frames past the
+    /// end of the recording, where it names none. Cleared with the plan.
+    pub(super) projected_rate_held: Option<f64>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Maximum output frames between samples of live temporal controls.
@@ -175,6 +178,7 @@ where
             current_keylock,
             controls,
             plan_slot,
+            projected_rate_held: None,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),

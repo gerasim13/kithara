@@ -199,10 +199,10 @@ where
         if available == 0 {
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
-        let projected = self
-            .projected_source_span(output_limit, meta.frame_offset)
-            .and_then(|span| usize::try_from(span).ok())
-            .unwrap_or(remaining);
+        let projected = match self.projected_source_span(output_limit, meta.frame_offset) {
+            Some(span) => usize::try_from(span).map_err(|_| ElasticError::SampleCountOverflow)?,
+            None => remaining,
+        };
         if projected == 0 {
             return Err(ElasticError::StationarySourceSpan);
         }
@@ -214,6 +214,13 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Stretches one source chunk at the rate the caller settled on.
+    ///
+    /// `speed` is the one rate this render runs at: a projected item takes it
+    /// from the projection at the output frontier, and an item the projection
+    /// does not place takes it from the listener's own target. The frontier
+    /// does not move while a chunk is consumed, so the rate is read once and
+    /// every block of the chunk is stretched by it.
     pub(super) fn render_active(
         &mut self,
         meta: AudioChunkInfo,
@@ -224,13 +231,13 @@ where
     ) -> Result<(), ElasticError> {
         let mut consumed = 0usize;
         let mut frame = meta.frame_offset;
+        let rate = f64::from(speed);
+        let stretch = 1.0 / rate;
         for _ in 0..frames {
             if consumed == frames {
                 return Ok(());
             }
             let span = u64::try_from(frames - consumed).unwrap_or(u64::MAX).max(1);
-            let rate = self.projected_rate().unwrap_or_else(|| f64::from(speed));
-            let stretch = 1.0 / rate;
             self.apply_pitch(if self.controls.keylock() { 1.0 } else { rate })?;
             let capabilities = self
                 .engine
