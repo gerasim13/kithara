@@ -15,7 +15,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_app::pools::{AppStore, AppWorker, Pools, PoolsSection, build};
-use kithara_test_utils::{kithara, memory};
+use kithara_test_utils::memory;
 
 /// Budgets in kibibytes, held after construction.
 ///
@@ -25,17 +25,21 @@ use kithara_test_utils::{kithara, memory};
 struct Budget;
 
 impl Budget {
-    /// The pool region preallocates `INITIAL_SAMPLE_BUFFERS` sample buffers.
+    /// The pool region preallocates `INITIAL_SAMPLE_BUFFERS` sample buffers,
+    /// and is the only subsystem here that costs anything at construction.
+    /// Measured at 603 KiB.
     const POOLS_KIB: usize = 1_024;
     /// The asset store on its in-memory backend, with no assets yet.
-    const STORE_KIB: usize = 512;
-    /// One playback worker and the threads it owns.
-    const WORKER_KIB: usize = 4_096;
-    /// One HTTP client and the downloader in front of it. The TLS stack is
-    /// the bulk of it.
-    const DOWNLOADER_KIB: usize = 8_192;
-    /// Everything above, standing at once.
-    const TOTAL_KIB: usize = 12_288;
+    /// Measured at 84 KiB.
+    const STORE_KIB: usize = 256;
+    /// One playback worker and the threads it owns. Measured at 3 KiB: a
+    /// thread's stack is not heap, and the worker's buffers are the pool's.
+    const WORKER_KIB: usize = 256;
+    /// One HTTP client and the downloader in front of it. Measured at 15 KiB
+    /// — the TLS stack is built on first use, not here.
+    const DOWNLOADER_KIB: usize = 256;
+    /// Everything above, standing at once. Measured at 707 KiB.
+    const TOTAL_KIB: usize = 1_536;
 }
 
 fn pools() -> Pools {
