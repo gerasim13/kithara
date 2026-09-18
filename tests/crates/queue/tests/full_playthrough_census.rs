@@ -391,7 +391,6 @@ struct Firing {
 fn firings(records: &[ProbeEvent]) -> Vec<Firing> {
     let mut firings: Vec<Firing> = records
         .iter()
-        .filter(|record| record.probe == "render")
         .filter_map(|record| {
             let base = record.field("output_base")?;
             if base == u64::MAX {
@@ -516,7 +515,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
     let census = build_queue(sources, seam).await;
     let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
-    let records = trace.events();
+    let records = trace.events_of("render");
 
     assert!(
         log.ended,

@@ -40,26 +40,18 @@ fn fire(probe: &'static str, value: u64) {
     );
 }
 
-/// Warms up on `warm_probe` then fires `probe` from [`THREADS`] threads,
-/// returning the peak heap growth over the warm baseline and the growth left
-/// after the threads finish.
-///
-/// `warm_probe` is `None` once the backend is already warm from an earlier
-/// call. It has to be: a warm-up fires real probes, and a scope standing at
-/// the time records them, so warming again would grow the history before the
-/// baseline is taken and leave the measurement reading whatever was left to
-/// grow rather than what the history costs.
-fn hammer(warm_probe: Option<&'static str>, probe: &'static str) -> (usize, usize) {
+/// Warms up on `warm` then fires `probe` from [`THREADS`] threads, returning
+/// the peak heap growth over the warm baseline and the growth left after the
+/// threads finish.
+fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
     let warm = Barrier::new(THREADS + 1);
     let go = Barrier::new(THREADS + 1);
     let mut baseline = 0;
     thread::scope(|threads| {
         for _ in 0..THREADS {
             threads.spawn(|| {
-                if let Some(warm_probe) = warm_probe {
-                    for value in 0..WARMUP {
-                        fire(warm_probe, value);
-                    }
+                for value in 0..WARMUP {
+                    fire(warm_probe, value);
                 }
                 warm.wait();
                 go.wait();
@@ -91,7 +83,7 @@ fn continuous_probes_keep_the_heap_bounded() {
     setup_tracing();
     prime_panic_backtrace();
 
-    let (peak, left) = hammer(Some("unobserved"), "unobserved");
+    let (peak, left) = hammer("unobserved", "unobserved");
     eprintln!("unobserved: peak +{peak} B, left +{left} B");
     assert!(
         peak <= STEADY_BUDGET,
@@ -100,15 +92,16 @@ fn continuous_probes_keep_the_heap_bounded() {
 
     let before = memory::live_bytes();
     let history = scope();
-    let (peak, _) = hammer(None, "history");
-    let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
+    let (peak, _) = hammer("unobserved", "history");
+    let probes_recorded = 2;
+    let history_bytes = probes_recorded * MAX_EVENTS * size_of::<ProbeEvent>();
     assert!(
         peak >= history_bytes,
         "a scope past MAX_EVENTS must have held the full history, peak {peak} B"
     );
     let history_budget = history_bytes + history_bytes / 2 + STEADY_BUDGET;
     eprintln!(
-        "history: peak +{peak} B for {MAX_EVENTS} events of {} B (budget {history_budget} B)",
+        "history: peak +{peak} B for {MAX_EVENTS} events of each of {probes_recorded} probes at {} B (budget {history_budget} B)",
         size_of::<ProbeEvent>()
     );
     assert!(

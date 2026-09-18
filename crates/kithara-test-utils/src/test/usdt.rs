@@ -20,10 +20,12 @@ use tracing_subscriber::layer::{Context, Layer};
 /// arguments minus the operation id.
 const MAX_FIELDS: usize = 5;
 
-/// Firings a scope's history holds. Past it the history stops growing and
-/// every reader of it fails, so a probe-heavy run can neither swell the
-/// process nor hand a census a silently truncated history. The latest firing
-/// of each probe stays readable either way.
+/// Firings of one probe a scope's history holds. Past it that probe stops
+/// entering the history and every reader of it fails, so a hot probe can
+/// neither swell the process nor hand a census a silently truncated history,
+/// while the other probes keep recording. The latest firing of each probe
+/// stays readable either way. The history is bounded by this cap times the
+/// probe call sites the process compiled.
 pub const MAX_EVENTS: usize = 1 << 19;
 
 /// One recorded firing. Every string is `'static`, so recording a firing
@@ -61,9 +63,21 @@ struct State {
     /// kept across scopes so each name is interned once.
     names: Vec<&'static str>,
     events: Vec<ProbeEvent>,
-    latest: Vec<ProbeEvent>,
-    overflowed: bool,
+    probes: Vec<ProbeTally>,
     recorded: Option<Arc<Notify>>,
+}
+
+/// What the live scope saw of one probe: its latest firing and how many times
+/// it fired, including the firings past [`MAX_EVENTS`] the history dropped.
+struct ProbeTally {
+    latest: ProbeEvent,
+    fired: usize,
+}
+
+impl ProbeTally {
+    fn overflowed(&self) -> bool {
+        self.fired > MAX_EVENTS
+    }
 }
 
 impl State {
@@ -76,21 +90,49 @@ impl State {
         name
     }
 
+    fn tally(&self, probe: &str) -> Option<&ProbeTally> {
+        self.probes.iter().find(|tally| tally.latest.probe == probe)
+    }
+
+    fn overflowed(&self) -> impl Iterator<Item = &ProbeTally> {
+        self.probes.iter().filter(|tally| tally.overflowed())
+    }
+
     fn history(&self) -> &[ProbeEvent] {
+        let overflowed = self
+            .overflowed()
+            .map(|tally| format!("{} x{}", tally.latest.probe, tally.fired))
+            .collect::<Vec<_>>();
         assert!(
-            !self.overflowed,
-            "usdt scope history overflowed {MAX_EVENTS} firings; \
-             scope the observation to the operation under test"
+            overflowed.is_empty(),
+            "usdt scope history overflowed {MAX_EVENTS} firings of {}; \
+             read the probes under test with `events_of`",
+            overflowed.join(", ")
         );
         &self.events
+    }
+
+    fn history_of(&self, probe: &str) -> Vec<ProbeEvent> {
+        if let Some(tally) = self.tally(probe) {
+            assert!(
+                !tally.overflowed(),
+                "usdt scope history overflowed {MAX_EVENTS} firings of {probe} \
+                 ({} fired); scope the observation to the operation under test",
+                tally.fired
+            );
+        }
+        self.events
+            .iter()
+            .filter(|event| event.probe == probe)
+            .copied()
+            .collect()
     }
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
     names: Vec::new(),
     events: Vec::new(),
-    latest: Vec::new(),
-    overflowed: false,
+    probes: Vec::new(),
     recorded: None,
 });
 static SCOPE: Mutex<()> = Mutex::new(());
@@ -140,8 +182,7 @@ pub fn scope() -> Scope {
     {
         let mut state = lock(&STATE);
         state.events = Vec::new();
-        state.latest = Vec::new();
-        state.overflowed = false;
+        state.probes = Vec::new();
         state.recorded = Some(Arc::clone(&recorded));
     }
     *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
@@ -158,7 +199,7 @@ pub fn events() -> Vec<ProbeEvent> {
     lock(&STATE).history().to_vec()
 }
 
-/// The firings recorded so far, and whether the history stopped growing.
+/// The firings recorded so far, and whether any probe stopped entering them.
 ///
 /// The reader for evidence written from a destructor: [`events`] fails on an
 /// overflowed history, and a panic there aborts the process instead of
@@ -166,23 +207,31 @@ pub fn events() -> Vec<ProbeEvent> {
 #[must_use]
 pub fn recorded() -> (Vec<ProbeEvent>, bool) {
     let state = lock(&STATE);
-    (state.events.clone(), state.overflowed)
+    (state.events.clone(), state.overflowed().next().is_some())
 }
 
 /// The latest firing of `probe` recorded by the live [`Scope`].
 #[must_use]
 pub fn last(probe: &str) -> Option<ProbeEvent> {
-    lock(&STATE)
-        .latest
-        .iter()
-        .find(|event| event.probe == probe)
-        .copied()
+    lock(&STATE).tally(probe).map(|tally| tally.latest)
+}
+
+/// Every firing of `probe` recorded by the live [`Scope`], in order. Fails
+/// only when that probe overflowed, whatever the other probes did.
+#[must_use]
+pub fn events_of(probe: &str) -> Vec<ProbeEvent> {
+    lock(&STATE).history_of(probe)
 }
 
 impl Scope {
     #[must_use]
     pub fn events(&self) -> Vec<ProbeEvent> {
         events()
+    }
+
+    #[must_use]
+    pub fn events_of(&self, probe: &str) -> Vec<ProbeEvent> {
+        events_of(probe)
     }
 
     #[must_use]
@@ -209,7 +258,7 @@ impl Scope {
     {
         loop {
             let recorded = self.recorded.notified();
-            if holds(lock(&STATE).history()) {
+            if holds(&lock(&STATE).events) {
                 return;
             }
             if timeout(__hang_detector.remaining(), recorded)
@@ -251,9 +300,14 @@ impl Scope {
             .collect::<Vec<_>>()
             .join("; ");
         let overflow = if overflowed {
-            " (history overflowed)"
+            let probes = lock(&STATE)
+                .overflowed()
+                .map(|tally| format!("{} x{}", tally.latest.probe, tally.fired))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" (history overflowed on {probes})")
         } else {
-            ""
+            String::new()
         };
         format!(
             "usdt scope condition never held; \
@@ -273,8 +327,7 @@ impl Drop for Scope {
         let mut state = lock(&STATE);
         state.recorded = None;
         state.events = Vec::new();
-        state.latest = Vec::new();
-        state.overflowed = false;
+        state.probes = Vec::new();
     }
 }
 
@@ -320,14 +373,23 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
             fields: visitor.fields,
             len: visitor.len,
         };
-        if state.events.len() == MAX_EVENTS {
-            state.overflowed = true;
+        let fired = if let Some(tally) = state
+            .probes
+            .iter_mut()
+            .find(|tally| tally.latest.probe == probe)
+        {
+            tally.latest = recorded_event;
+            tally.fired += 1;
+            tally.fired
         } else {
+            state.probes.push(ProbeTally {
+                latest: recorded_event,
+                fired: 1,
+            });
+            1
+        };
+        if fired <= MAX_EVENTS {
             state.events.push(recorded_event);
-        }
-        match state.latest.iter_mut().find(|event| event.probe == probe) {
-            Some(slot) => *slot = recorded_event,
-            None => state.latest.push(recorded_event),
         }
         drop(state);
         recorded.notify_one();
@@ -379,7 +441,7 @@ impl Visit for FieldVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_EVENTS, events, recorded, scope};
+    use super::{MAX_EVENTS, events, events_of, recorded, scope};
 
     fn fire(probe: &'static str, value: u64) {
         tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE, probe = probe, value = value);
@@ -423,6 +485,34 @@ mod tests {
         }
 
         let _ = trace.events();
+    }
+
+    #[test]
+    fn a_hot_probe_leaves_the_history_of_another_readable() {
+        crate::test::setup_tracing();
+        let trace = scope();
+        fire("quiet", 1);
+        for value in 0..=MAX_EVENTS as u64 {
+            fire("hot", value);
+        }
+        fire("quiet", 2);
+
+        let quiet = trace.events_of("quiet");
+
+        assert_eq!(quiet.len(), 2);
+        assert_eq!(quiet[1].field("value"), Some(2));
+    }
+
+    #[test]
+    #[should_panic(expected = "overflowed")]
+    fn an_overflowed_probe_fails_its_own_reader() {
+        crate::test::setup_tracing();
+        let _trace = scope();
+        for value in 0..=MAX_EVENTS as u64 {
+            fire("hot", value);
+        }
+
+        let _ = events_of("hot");
     }
 
     #[test]
