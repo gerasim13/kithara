@@ -24,5 +24,28 @@ linux:image:
   timeout: 90 minutes
   needs: []
   script:
-    - just ci host build-linux-image docker/ci.Dockerfile
-    - just ci host smoke-linux
+    - just ci host mac build-linux-image docker/ci.Dockerfile
+    - just ci host mac smoke-linux
+
+# The same roll-out on the Mac mini, and the same opt-in: set `KITHARA_PROVISION`
+# to `1` when starting the pipeline. It reinstalls the services from this
+# commit, rewrites the runner configuration, makes sure the pinned Linux image
+# is there and reloads the agents.
+#
+# Protected kinds only. Provisioning writes to the machine that serves every
+# lane, and a merge-request or quarantine ref carries code no one has reviewed
+# yet; `linux:image` above is what those refs get, and it only ever builds an
+# image from pins the ref already ran under.
+host:provision:
+  extends: .macos-job
+  stage: linux
+  timeout: 180 minutes
+  needs: []
+  rules:
+    - if: $KITHARA_PROVISION != "1"
+      when: never
+    - if: $KITHARA_PIPELINE_KIND == "main"
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+    - if: $KITHARA_PIPELINE_KIND == "release"
+  script:
+    - just ci host provision

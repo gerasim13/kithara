@@ -10,7 +10,7 @@ use serde_json::json;
 use tracing::info;
 
 use super::required;
-use crate::ci::host::{read_secret, write_secure};
+use crate::ci::host::mac::{read_secret, write_secure};
 
 fn secret(path: &Path) -> Result<String> {
     let mut bytes = [0; 32];

@@ -10,7 +10,7 @@ use super::{
     container::{Container, container},
     profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor},
 };
-use crate::ci::{cache::client_environment, config::CiPins, process::Process};
+use crate::ci::{cache::client_environment, config::CiPins, image::floating_tag, process::Process};
 
 /// Where the services live and what they call.
 ///
@@ -69,7 +69,7 @@ pub(super) fn install(
             cpuset, "runner service installed"
         );
     }
-    install_cleanup_timer(&installed_images(host, pins))?;
+    install_cleanup_timer(&installed_images(host, pins)?)?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -106,20 +106,27 @@ fn flavor_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<(&'a str, &'a st
     images
 }
 
-/// Which images this profile's runners start from, each named once.
-fn required_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+/// Which images this profile's runners start from, each named once. The units
+/// name the floating tag, so that is what has to be on the machine.
+fn required_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
     flavor_images(host, pins)
         .into_iter()
-        .map(|(_, runner)| runner)
+        .map(|(_, runner)| floating_tag(runner))
         .collect()
 }
 
 /// Everything the installed fleet depends on, in the order cleanup is told it.
-fn installed_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
-    flavor_images(host, pins)
-        .into_iter()
-        .flat_map(|(toolchain, runner)| [toolchain, runner])
-        .collect()
+/// Both spellings of each image are kept: the pin is what a rebuild compares
+/// against, and the floating tag is what the running containers hold.
+fn installed_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
+    let mut images = Vec::new();
+    for (toolchain, runner) in flavor_images(host, pins) {
+        for image in [toolchain, runner] {
+            images.push(image.to_owned());
+            images.push(floating_tag(image)?);
+        }
+    }
+    Ok(images)
 }
 
 /// Refuse to install services the machine cannot run.
@@ -131,13 +138,13 @@ fn installed_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
 /// built by hand here, so the two drift apart on their own; this is where the
 /// drift becomes a sentence instead of a symptom.
 fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> Result<()> {
-    let missing: Vec<&str> = required_images(host, pins)
+    let missing: Vec<String> = required_images(host, pins)?
         .into_iter()
         .filter(|image| {
             process
                 .capture(
                     "docker",
-                    &["image", "inspect", "--format", "{{.Id}}", image],
+                    &["image", "inspect", "--format", "{{.Id}}", image.as_str()],
                     "look for a pinned runner image",
                 )
                 .is_err()
@@ -164,7 +171,7 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// runs from a timer with no repository around it — and because what must
 /// survive is what this machine was installed to run, not what the checkout
 /// happens to pin by the time the timer next fires.
-fn cleanup_unit(keep: &[&str]) -> String {
+fn cleanup_unit(keep: &[String]) -> String {
     format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
@@ -172,7 +179,7 @@ fn cleanup_unit(keep: &[&str]) -> String {
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={executable} ci linux --config {config} cleanup{keep}\n",
+         ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
         executable = LAYOUT.executable,
         config = LINUX_CONFIG_PATH,
         keep = keep
@@ -201,7 +208,7 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
-fn install_cleanup_timer(keep: &[&str]) -> Result<()> {
+fn install_cleanup_timer(keep: &[String]) -> Result<()> {
     let service = cleanup_unit(keep);
     for (name, body) in [
         (LAYOUT.cleanup_unit, service.as_str()),
@@ -268,15 +275,15 @@ fn unit(
          RuntimeDirectory=kithara-ci\n\
          RuntimeDirectoryMode=0700\n\
          RuntimeDirectoryPreserve=yes\n\n\
-         ExecStartPre={executable} ci linux --config {config} firewall\n\
-         ExecStartPre={executable} ci linux --config {config} configure --runner {name} \
+         ExecStartPre={executable} ci host linux --config {config} firewall\n\
+         ExecStartPre={executable} ci host linux --config {config} configure --runner {name} \
          --env-file {env_file}\n",
         name = runner.name,
         config = LINUX_CONFIG_PATH,
         env_file = env_file(runner),
     )?;
 
-    let job = container(host, runner, cpuset.to_owned(), pins);
+    let job = container(host, runner, cpuset.to_owned(), pins)?;
     write!(
         unit,
         "\nExecStart=/usr/bin/docker run --rm --name {name} \
@@ -366,7 +373,7 @@ mod tests {
         Cli,
         ci::{
             config::fixture,
-            linux::{permissions, profile::tests::host_fixture},
+            host::linux::{permissions, profile::tests::host_fixture},
         },
     };
 
@@ -390,20 +397,18 @@ mod tests {
     }
 
     /// A machine serving both lanes needs both images, and the emulator image
-    /// is named once however many emulator runners there are.
+    /// is named once however many emulator runners there are. What is required
+    /// is the floating tag: the units run that, and a pin the machine has not
+    /// built yet is not what would be missing at start.
     #[test]
     fn the_profile_asks_for_every_image_its_runners_start_from() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let images = required_images(&host, pins);
-        assert!(
-            images.contains(&pins.linux_runner_image.as_str()),
-            "{images:?}"
-        );
-        assert!(
-            images.contains(&pins.linux_android_runner_image.as_str()),
-            "{images:?}"
-        );
+        let images = required_images(&host, pins).expect("the pins carry tags");
+        for pin in [&pins.linux_runner_image, &pins.linux_android_runner_image] {
+            let floating = floating_tag(pin).expect("the pin carries a tag");
+            assert!(images.contains(&floating), "{floating}: {images:?}");
+        }
         assert_eq!(images.len(), 2, "each image is named once: {images:?}");
     }
 
@@ -414,7 +419,7 @@ mod tests {
     fn the_cleanup_unit_is_a_command_this_executable_accepts() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins));
+        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
 
         let command = text
             .lines()
@@ -452,17 +457,25 @@ mod tests {
     fn the_cleanup_unit_names_every_image_the_fleet_runs() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins));
-        for image in [
+        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
+        for pin in [
             &pins.linux_image,
             &pins.linux_runner_image,
             &pins.linux_android_image,
             &pins.linux_android_runner_image,
         ] {
-            assert!(
-                text.contains(&format!("--keep {image}")),
-                "{image}:\n{text}"
-            );
+            // The pin is what a rebuild compares against and the floating tag
+            // is what the containers hold; reclaiming either one takes the
+            // fleet's image out from under it.
+            for image in [
+                pin.clone(),
+                floating_tag(pin).expect("the pin carries a tag"),
+            ] {
+                assert!(
+                    text.contains(&format!("--keep {image}")),
+                    "{image}:\n{text}"
+                );
+            }
         }
     }
 
@@ -721,10 +734,9 @@ mod tests {
         // Without it the emulator interprets the guest instead of virtualising
         // it, which is the whole reason the lane runs on this machine.
         assert!(android.contains("--group-add 994"), "{android}");
-        assert!(
-            android.contains(pins.linux_android_runner_image.as_str()),
-            "{android}"
-        );
+        let emulator =
+            floating_tag(&pins.linux_android_runner_image).expect("the pin carries a tag");
+        assert!(android.contains(&emulator), "{emulator}: {android}");
         for unit in [&plain, &gpu, &android] {
             assert!(unit.contains("--security-opt no-new-privileges"), "{unit}");
             assert!(!unit.contains("docker.sock"), "{unit}");

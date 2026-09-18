@@ -1,5 +1,5 @@
 mod cleanup;
-mod command;
+pub(crate) mod command;
 mod compose;
 mod container;
 mod firewall;
@@ -10,4 +10,4 @@ mod services;
 mod system;
 mod windows;
 
-pub(crate) use command::{LinuxArgs, run};
+pub(crate) use command::run;

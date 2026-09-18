@@ -432,7 +432,7 @@ impl RunnerManager<'_> {
             address,
             &format!(
                 "export PATH={path}; \
-                 {shared}/kithara-tools/kithara-ci ci host --config \
+                 {shared}/kithara-tools/kithara-ci ci host mac --config \
                  {shared}/kithara-tools/mac-host.toml --pins \
                  {shared}/kithara-tools/pins.toml guest-prepare"
             ),
@@ -555,6 +555,18 @@ fn valid_digest(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both hosts have to agree on the one name a Linux job runs under: this
+    /// machine writes it into the runner configuration, and the Linux fleet
+    /// derives it from the same pin.
+    #[test]
+    fn the_runner_runs_the_floating_tag_of_the_pinned_image() {
+        assert_eq!(
+            crate::ci::image::floating_tag(&crate::ci::config::fixture().pins.linux_image)
+                .expect("the pin carries a tag"),
+            LINUX_LATEST_IMAGE
+        );
+    }
 
     #[test]
     fn image_digest_is_strict() {
