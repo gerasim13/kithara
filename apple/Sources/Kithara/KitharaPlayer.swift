@@ -244,7 +244,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Target playback speed used by ``play()``. Mirrors the iOS
     /// `playingRate`: while playing, ``rate`` equals
-    /// this value; on pause, ``rate`` falls to `0`.
+    /// this value; on pause, ``rate`` falls to `0`. The initial value
+    /// belongs in ``Config/playingRate``.
     public var playingRate: Float {
         get { _inner.playingRate() }
         set { _inner.setPlayingRate(rate: newValue) }
@@ -333,6 +334,14 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             self.queryParams = queryParams
             self.salt = salt
         }
+
+        /// The common "one processor for every host" rule: a match-any
+        /// domain pattern carrying a freshly generated lowercase-hex salt,
+        /// mirrored into the player-wide `X-Encrypted-Key` header. A pure
+        /// constructor — put the result into ``Config/keyRules``.
+        public static func wildcard(processor: KeyProcessor) -> KeyRule {
+            KeyRule(processor: processor, domains: ["*"], salt: drmLowercaseHexSalt())
+        }
     }
 
     /// Configuration for player creation.
@@ -345,35 +354,44 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
+        /// Auth token sent on every player HTTP request. Empty means no
+        /// token; replace it later with ``KitharaPlayer/setupNetwork(authToken:)``.
+        public var authToken: String
+        /// Crossfade window in seconds applied from construction. Replace
+        /// it later through ``KitharaPlayer/crossfadeDuration``.
+        public var crossfadeDuration: Float
+        /// Playback-rate target applied from construction (1.0 = normal).
+        /// Replace it later through ``KitharaPlayer/playingRate``.
+        public var playingRate: Float
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
-            store: AssetStore = AssetStore()
+            store: AssetStore = AssetStore(),
+            authToken: String = "",
+            crossfadeDuration: Float = defaultCrossfadeDuration(),
+            playingRate: Float = defaultPlayingRate()
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.store = store
+            self.authToken = authToken
+            self.crossfadeDuration = crossfadeDuration
+            self.playingRate = playingRate
         }
     }
 
     /// Create a new player instance.
     public init(config: Config = Config()) {
-        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
-            FfiKeyRule(
-                processor: KeyProcessorBridge(processor: rule.processor),
-                headers: rule.headers,
-                queryParams: rule.queryParams,
-                salt: rule.salt,
-                domains: rule.domains
-            )
-        }
         let ffiConfig = FfiPlayerConfig(
             store: config.store.inner,
-            keyOptions: FfiKeyOptions(rules: ffiRules),
-            eqBandCount: UInt32(config.eqBandCount)
+            keyOptions: FfiKeyOptions(rules: config.keyRules.map { $0.toFfi() }),
+            eqBandCount: UInt32(config.eqBandCount),
+            authToken: config.authToken,
+            crossfadeDuration: config.crossfadeDuration,
+            playingRate: config.playingRate
         )
         self._inner = AudioPlayer(config: ffiConfig)
 
@@ -724,7 +742,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// Crossfade duration in seconds applied on item transitions.
+    /// Crossfade duration in seconds applied on item transitions. The
+    /// initial value belongs in ``Config/crossfadeDuration``.
     public var crossfadeDuration: Float {
         get { _inner.crossfadeDuration() }
         set { _inner.setCrossfadeDuration(seconds: newValue) }
@@ -748,10 +767,24 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     // MARK: - Network / DRM hooks
 
-    /// Configure the auth token sent on every player HTTP request.
-    /// Pass an empty string to clear.
+    /// Replace the auth token sent on every player HTTP request.
+    /// Pass an empty string to clear. The initial value belongs in
+    /// ``Config/authToken``.
     public func setupNetwork(authToken: String) {
         _inner.setupNetwork(authToken: authToken)
+    }
+
+    /// Register a wildcard DRM key processor at runtime with a fresh salt.
+    /// Items already queued keep their rules. Initial rules belong in
+    /// ``Config/keyRules``, which is applied through the same path.
+    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
+        _inner.setupHlsAes(processor: ClosureKeyProcessorBridge(decrypt: keyDecryptor))
+    }
+
+    /// Append a domain-scoped DRM key rule at runtime; see
+    /// ``setupHlsAes(keyDecryptor:)``.
+    public func setupHlsAes(rule: KeyRule) {
+        _inner.setupHlsAesWithRule(rule: rule.toFfi())
     }
 
     /// Per-network bitrate ceilings (bits/sec). Pass `0` for either
@@ -759,31 +792,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// every variant.
     public func updatePeakBitrate(wifi: Double, cellular: Double) {
         _inner.updatePeakBitrate(wifiBps: wifi, cellularBps: cellular)
-    }
-
-    /// Register a runtime DRM key decryptor on every host (default
-    /// `"*"` wildcard). The closure receives the encrypted key bytes
-    /// plus the player-generated salt that was attached to outgoing
-    /// requests under `X-Encrypted-Key`. Returning `nil` from the
-    /// closure preserves the input ciphertext unchanged.
-    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
-        let bridge = ClosureKeyProcessorBridge(decrypt: keyDecryptor)
-        _inner.setupHlsAes(processor: bridge)
-    }
-
-    /// Register a runtime DRM key processor with explicit rule control
-    /// (custom domains, headers, query params, salt). The rule's salt,
-    /// if any, is mirrored into the player-wide HTTP header set so it
-    /// accompanies every outgoing request matching the rule's domains.
-    public func setupHlsAes(rule: KeyRule) {
-        let ffiRule = FfiKeyRule(
-            processor: KeyProcessorBridge(processor: rule.processor),
-            headers: rule.headers,
-            queryParams: rule.queryParams,
-            salt: rule.salt,
-            domains: rule.domains
-        )
-        _inner.setupHlsAesWithRule(rule: ffiRule)
     }
 
 }
@@ -822,19 +830,18 @@ public protocol KeyProcessor: Sendable {
     func processKey(_ key: Data, salt: String) -> Data
 }
 
-private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
-    private let processor: KeyProcessor
-
-    init(processor: KeyProcessor) {
-        self.processor = processor
-    }
-
-    func processKey(key: Data, salt: String) -> Data {
-        processor.processKey(key, salt: salt)
+extension KitharaPlayer.KeyRule {
+    fileprivate func toFfi() -> FfiKeyRule {
+        FfiKeyRule(
+            processor: KeyProcessorBridge(processor: processor),
+            headers: headers,
+            queryParams: queryParams,
+            salt: salt,
+            domains: domains
+        )
     }
 }
 
-/// Closure-based bridge for ``KitharaPlayer/setupHlsAes(keyDecryptor:)``.
 private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
     private let decrypt: (Data, String) -> Data?
 
@@ -844,6 +851,18 @@ private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unch
 
     func processKey(key: Data, salt: String) -> Data {
         decrypt(key, salt) ?? key
+    }
+}
+
+private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
+    private let processor: KeyProcessor
+
+    init(processor: KeyProcessor) {
+        self.processor = processor
+    }
+
+    func processKey(key: Data, salt: String) -> Data {
+        processor.processKey(key, salt: salt)
     }
 }
 

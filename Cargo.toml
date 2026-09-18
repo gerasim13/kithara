@@ -4,6 +4,7 @@ members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-analysis",
+    "crates/kithara-android",
     "crates/kithara-app",
     "crates/kithara-apple",
     "crates/kithara-assets",
@@ -71,6 +72,7 @@ default-members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-analysis",
+    "crates/kithara-android",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -251,6 +253,7 @@ homepage = "https://github.com/zvuk/kithara"
 kithara = { path = "crates/kithara", version = "0.0.1-alpha4", default-features = false }
 kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha4", default-features = false }
 kithara-analysis = { path = "crates/kithara-analysis", version = "0.0.1-alpha4", default-features = false }
+kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha4" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha4" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha4", default-features = false }

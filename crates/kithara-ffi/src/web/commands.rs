@@ -93,8 +93,7 @@ pub(crate) enum WorkerCmd {
     /// Register a DRM key rule on the worker. The worker builds a
     /// cross-thread key processor (the real JS callback stays on the main
     /// thread) keyed on `salt`, then folds the rule into the player-wide
-    /// `KeyOptions` and header map. Mirrors
-    /// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
+    /// `KeyOptions` and header map.
     SetupHlsAes {
         salt: String,
         domains: Vec<String>,

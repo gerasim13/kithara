@@ -33,7 +33,7 @@ kithara = { workspace = true, features = [
     "resampler",
     "signal",
 ] }
-kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-integration-tests = { workspace = true, features = ["all", "analysis"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["usdt"] }

@@ -8,7 +8,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerMember,
+    effects::LimiterConfig, player::PlayerMember,
 };
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
@@ -116,7 +116,14 @@ where
         SyncMemberKind::Group,
     );
     let root_view = RootView::new(&root, sample_rate);
-    SessionState::new(root, root_view, sample_rate, None, start_stream_fn)
+    SessionState::new(
+        root,
+        root_view,
+        sample_rate,
+        None,
+        LimiterConfig::default(),
+        start_stream_fn,
+    )
 }
 
 #[cfg(test)]

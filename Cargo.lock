@@ -4522,6 +4522,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-android"
+version = "0.0.1-alpha4"
+dependencies = [
+ "derive_more",
+ "fieldwork",
+ "jni 0.22.4",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "ndk-context",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-app"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4823,8 +4836,8 @@ dependencies = [
  "fdk-aac",
  "fieldwork",
  "hotpath",
- "jni 0.22.4",
  "js-sys",
+ "kithara-android",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-decode",
@@ -4839,7 +4852,6 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "ndk-context",
  "num-traits",
  "re_mp4",
  "serde",
@@ -5024,13 +5036,13 @@ dependencies = [
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-android",
  "kithara-audio",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "ndk-context",
  "num-traits",
  "rand 0.10.2",
  "rustls-platform-verifier",

@@ -9,8 +9,8 @@ import java.io.FileNotFoundException
 /**
  * Read the cipher key for zvuk DRM from the bundled `.env` asset.
  *
- * The salt is supplied per-call by the player (see
- * `KitharaPlayer.setupHlsAes`) — the demo no longer pre-generates a
+ * The salt is supplied per-call by the configured key rule (see
+ * `KitharaPlayer.KeyRule.wildcard`) — the demo no longer pre-generates a
  * seed; [ZvukKeyProcessor] builds the cipher on every decrypt from
  * `cipherKey + salt`.
  */

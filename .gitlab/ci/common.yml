@@ -95,15 +95,6 @@
     - if: $KITHARA_PIPELINE_KIND == "branch"
     - !reference [.rules-verify, rules]
 
-.rules-integration-and-review:
-  interruptible: false
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "branch"
-      interruptible: true
-    - if: $KITHARA_PIPELINE_KIND == "merge-request"
-      interruptible: true
-    - !reference [.rules-integration, rules]
-
 # Long lanes a review ref asks for on purpose. Keeping them off `main` leaves
 # the merge queue as short as it is today; the nightly channel is where they
 # guard the default branch.

@@ -2,13 +2,11 @@
 
 use std::sync::atomic::AtomicU64;
 
+use kithara_android::media::OwnedFormat;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, ByteMap, PrerollHint, SegmentDescriptor};
 
-use super::{
-    aformat::OwnedFormat,
-    media_extractor::{AndroidMediaExtractor, TrackFormatInfo},
-};
+use super::media_extractor::{AndroidMediaExtractor, TrackFormatInfo};
 use crate::{
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},

@@ -12,6 +12,9 @@ import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
+import com.kithara.ffi.defaultCrossfadeDuration
+import com.kithara.ffi.defaultPlayingRate
+import com.kithara.ffi.drmLowercaseHexSalt
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -47,7 +50,19 @@ class KitharaPlayer(config: Config = Config()) {
         val headers: Map<String, String>? = null,
         val queryParams: Map<String, String>? = null,
         val salt: String? = null,
-    )
+    ) {
+        companion object {
+            /**
+             * The common "one processor for every host" rule: a match-any
+             * domain pattern carrying a freshly generated lowercase-hex salt,
+             * mirrored into the player-wide `X-Encrypted-Key` header. A pure
+             * constructor — put the result into [Config.keyRules].
+             */
+            @JvmStatic
+            fun wildcard(processor: KeyProcessor): KeyRule =
+                KeyRule(processor = processor, domains = listOf("*"), salt = drmLowercaseHexSalt())
+        }
+    }
 
     /** Configuration for [KitharaPlayer] creation. */
     data class Config(
@@ -55,6 +70,21 @@ class KitharaPlayer(config: Config = Config()) {
         val keyRules: List<KeyRule> = emptyList(),
         /** Shared asset store used by every item created by this player. */
         val store: AssetStore = Kithara.defaultStore,
+        /**
+         * Auth token sent on every player HTTP request. Empty means no token;
+         * replace it later with [setupNetwork].
+         */
+        val authToken: String = "",
+        /**
+         * Crossfade window in seconds applied from construction. Replace it
+         * later through [crossfadeDuration].
+         */
+        val crossfadeDuration: Float = defaultCrossfadeDuration(),
+        /**
+         * Playback-rate target applied from construction (1.0 = normal).
+         * Replace it later through [playingRate].
+         */
+        val playingRate: Float = defaultPlayingRate(),
     )
 
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
@@ -116,7 +146,8 @@ class KitharaPlayer(config: Config = Config()) {
     /**
      * Target playback speed used by [play]. While the player is
      * playing, [rate] equals this; on pause [rate] falls to `0`.
-     * Mirrors the iOS `AudioPlayerProtocol.playingRate`.
+     * Mirrors the iOS `AudioPlayerProtocol.playingRate`. The initial
+     * value belongs in [Config.playingRate].
      */
     var playingRate: Float
         get() = inner.playingRate()
@@ -213,11 +244,25 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Configure the auth token sent on every player HTTP request. Pass
-     * an empty string to clear.
+     * Replace the auth token sent on every player HTTP request. Pass an
+     * empty string to clear. The initial value belongs in [Config.authToken].
      */
     fun setupNetwork(authToken: String) {
         inner.setupNetwork(authToken)
+    }
+
+    /**
+     * Register a wildcard DRM key processor at runtime with a fresh salt.
+     * Items already queued keep their rules. Initial rules belong in
+     * [Config.keyRules], which is applied through the same path.
+     */
+    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
+        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
+    }
+
+    /** Append a domain-scoped DRM key rule at runtime; see [setupHlsAes]. */
+    fun setupHlsAes(rule: KeyRule) {
+        inner.setupHlsAesWithRule(rule.toFfi())
     }
 
     /**
@@ -226,29 +271,6 @@ class KitharaPlayer(config: Config = Config()) {
      */
     fun updatePeakBitrate(wifi: Double, cellular: Double) {
         inner.updatePeakBitrate(wifi, cellular)
-    }
-
-    /**
-     * Register a runtime DRM key processor on every host (default
-     * `"*"` wildcard).
-     */
-    fun setupHlsAes(processor: KeyProcessor) {
-        inner.setupHlsAes(KeyProcessorBridge(processor))
-    }
-
-    /**
-     * Register a runtime DRM key processor with explicit rule control.
-     */
-    fun setupHlsAes(rule: KeyRule) {
-        inner.setupHlsAesWithRule(
-            FfiKeyRule(
-                processor = KeyProcessorBridge(rule.processor),
-                headers = rule.headers,
-                queryParams = rule.queryParams,
-                domains = rule.domains,
-                salt = rule.salt,
-            )
-        )
     }
 
     /**
@@ -442,25 +464,34 @@ interface KeyProcessor {
     fun processKey(key: ByteArray, salt: String): ByteArray
 }
 
+private class ClosureKeyProcessorBridge(
+    private val decrypt: (ByteArray, String) -> ByteArray?,
+) : FfiKeyProcessor {
+    override fun processKey(key: ByteArray, salt: String): ByteArray = decrypt(key, salt) ?: key
+}
+
 private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
     override fun processKey(key: ByteArray, salt: String): ByteArray =
         processor.processKey(key, salt)
 }
 
+private fun KitharaPlayer.KeyRule.toFfi(): FfiKeyRule =
+    FfiKeyRule(
+        processor = KeyProcessorBridge(processor),
+        headers = headers,
+        queryParams = queryParams,
+        domains = domains,
+        salt = salt,
+    )
+
 internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
-    val ffiRules = keyRules.map { rule ->
-        FfiKeyRule(
-            processor = KeyProcessorBridge(rule.processor),
-            headers = rule.headers,
-            queryParams = rule.queryParams,
-            domains = rule.domains,
-            salt = rule.salt,
-        )
-    }
     return FfiPlayerConfig(
-        keyOptions = FfiKeyOptions(rules = ffiRules),
+        keyOptions = FfiKeyOptions(rules = keyRules.map { it.toFfi() }),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
+        authToken = authToken,
+        crossfadeDuration = crossfadeDuration,
+        playingRate = playingRate,
     )
 }
 

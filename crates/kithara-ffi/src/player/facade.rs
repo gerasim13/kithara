@@ -223,6 +223,8 @@ impl AudioPlayer {
         self.inner.set_abr_mode(mode);
     }
 
+    /// Change the crossfade window at runtime. The initial value belongs in
+    /// [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
     pub fn set_crossfade_duration(&self, seconds: f32) {
         self.inner.set_crossfade_duration(seconds);
     }
@@ -242,6 +244,9 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
+    /// Replace the playback-rate target at runtime. The initial value
+    /// belongs in
+    /// [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
     pub fn set_playing_rate(&self, rate: f32) {
         self.inner.set_playing_rate(rate);
     }
@@ -260,34 +265,27 @@ impl AudioPlayer {
         self.inner.set_volume(volume);
     }
 
-    /// Register a runtime DRM key processor for every host (`"*"`).
-    ///
-    /// Generates a fresh 16-character alphanumeric `salt`, mirrors it
-    /// into the player-wide `SALT_HEADER` (so it accompanies every
-    /// outgoing manifest/segment/key request), and forwards it to
-    /// `processor.process_key(key, salt)` on each decrypt.
-    ///
-    /// Items already in the queue keep their original key registry —
-    /// re-call this method *before* [`Self::insert`] for the new processor
-    /// to apply.
+    /// Replace the player-wide auth header at runtime. Stores `auth_token`
+    /// under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+    /// every subsequent [`Self::insert`]. Pass an empty string to clear.
+    /// The initial value belongs in
+    /// [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
+    pub fn setup_network(&self, auth_token: String) {
+        self.inner.setup_network(auth_token);
+    }
+
+    /// Register a wildcard DRM key processor at runtime with a fresh salt.
+    /// Items already in the queue keep their registry; initial rules belong
+    /// in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
+    /// which is applied through the same path.
     pub fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         self.inner.setup_hls_aes(processor);
     }
 
-    /// Register a runtime DRM key processor with explicit rule control
-    /// (custom domains, headers, salt). The rule's salt — if any — is
-    /// mirrored into the player-wide header map under `SALT_HEADER`.
-    ///
-    /// Items already in the queue keep their original key registry.
+    /// Append a domain-scoped DRM key rule at runtime; see
+    /// [`Self::setup_hls_aes`].
     pub fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
         self.inner.setup_hls_aes_with_rule(rule);
-    }
-
-    /// Player-wide auth header. Stores `auth_token` under
-    /// `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
-    /// every subsequent [`Self::insert`]. Pass an empty string to clear.
-    pub fn setup_network(&self, auth_token: String) {
-        self.inner.setup_network(auth_token);
     }
 
     /// Return a snapshot of the player's current state.

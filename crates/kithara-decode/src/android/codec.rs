@@ -1,24 +1,21 @@
-#![allow(unsafe_code)]
-
-use std::{ffi::c_void, ptr::NonNull};
-
+use kithara_android::{
+    AndroidBackendError,
+    media::{
+        AndroidPcmEncoding, DequeueOutput, InputBuffer, OutputFormat, OwnedCodec, OwnedFormat,
+        QueueInput,
+        sys::{
+            KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE,
+            MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM, MIME_AAC, MIME_ALAC, MIME_FLAC, MIME_MP3,
+            MIME_RAW, PCM_ENCODING_16BIT,
+        },
+    },
+};
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
-use super::{
-    aformat::OwnedFormat,
-    ensure_current_thread_attached,
-    error::AndroidBackendError,
-    ffi::{
-        self, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MIME_AAC,
-        MIME_ALAC, MIME_FLAC, MIME_MP3, MIME_RAW, PCM_ENCODING_16BIT,
-    },
-    media_codec::{
-        AndroidPcmEncoding, DequeueOutput, InputBuffer, OutputFormat, OwnedCodec, QueueInput,
-    },
-};
+use super::output_spec;
 use crate::{
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
@@ -76,7 +73,6 @@ impl AndroidCodec {
     }
 
     pub(crate) fn open_with_format(track: &TrackInfo, format: &OwnedFormat) -> DecodeResult<Self> {
-        ensure_current_thread_attached().map_err(DecodeError::from)?;
         let input_mime = format.get_str(KEY_MIME).ok_or(DecodeError::InvalidData {
             detail: "track format has no input MIME",
         })?;
@@ -88,7 +84,9 @@ impl AndroidCodec {
             });
         }
         let codec = OwnedCodec::create_with_format(format)?;
-        let OutputFormat { spec, pcm_encoding } = OutputFormat::read(&codec.output_format()?)?;
+        let output = OutputFormat::read(&codec.output_format()?)?;
+        let spec = output_spec(&output)?;
+        let pcm_encoding = output.pcm_encoding;
 
         Ok(Self {
             codec,
@@ -139,7 +137,7 @@ impl FrameCodec for AndroidCodec {
                 size: frame_data.len(),
                 presentation_time_us: i64::try_from(pts.as_micros()).unwrap_or(i64::MAX),
                 flags: if end_of_stream {
-                    ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM
+                    MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM
                 } else {
                     0
                 },
@@ -243,7 +241,7 @@ impl AndroidCodec {
                     timeout = Consts::NO_WAIT_US;
                 }
                 DequeueOutput::OutputFormatChanged(format) => {
-                    self.spec = format.spec;
+                    self.spec = output_spec(&format)?;
                     self.pcm_encoding = format.pcm_encoding;
                 }
                 DequeueOutput::TryAgainLater => {
@@ -288,15 +286,8 @@ fn build_format(
     mime: &std::ffi::CStr,
     track: &TrackInfo,
 ) -> Result<OwnedFormat, AndroidBackendError> {
-    // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
-    let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
-        .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
-    let mut format = OwnedFormat::from(raw);
-
-    // SAFETY: format is live; key/value are static null-terminated CStrs.
-    unsafe {
-        ffi::AMediaFormat_setString(format.raw(), KEY_MIME.as_ptr(), mime.as_ptr());
-    }
+    let mut format = OwnedFormat::new()?;
+    format.set_str(KEY_MIME, mime);
 
     let sample_rate = i32::try_from(track.sample_rate).map_err(|_| {
         AndroidBackendError::operation(
@@ -320,15 +311,7 @@ fn build_format(
         } else {
             track.extra_data.as_slice()
         };
-        // SAFETY: format is live; setBuffer copies the readable configuration bytes.
-        unsafe {
-            ffi::AMediaFormat_setBuffer(
-                format.raw(),
-                KEY_CSD_0.as_ptr(),
-                config.as_ptr() as *const c_void,
-                config.len(),
-            );
-        }
+        format.set_buffer(KEY_CSD_0, config);
     }
 
     Ok(format)

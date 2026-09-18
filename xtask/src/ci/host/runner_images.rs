@@ -11,6 +11,10 @@ use super::{
 };
 use crate::ci::image::linux_build_args;
 
+/// The floating tag the Linux runner runs. It always names the image the most
+/// recent pipeline pinned, so the runner configuration never changes with a pin.
+pub(super) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
+
 /// The throwaway VM the macOS lane clones for every job.
 pub(super) struct JobVm;
 
@@ -38,6 +42,13 @@ impl JobVm {
 }
 
 impl RunnerManager<'_> {
+    /// Makes the image this commit pins the one every Linux job runs.
+    ///
+    /// The runner names `LINUX_LATEST_IMAGE`, not the pin, so a pin bump no
+    /// longer strands the lane on an image nobody built by hand: the pipeline
+    /// runs this first, and it builds the pinned image only when the host does
+    /// not have it yet. When it does, this only moves the floating tag, which
+    /// takes seconds, so the step is cheap enough to run on every pipeline.
     pub(super) fn build_linux_image(&self, dockerfile: &Path) -> Result<()> {
         require_macos()?;
         self.require_ci_user()?;
@@ -45,6 +56,40 @@ impl RunnerManager<'_> {
             bail!("missing Linux CI Dockerfile: {}", dockerfile.display());
         }
         let home = self.ci_home();
+        let digest = match self.linux_image_digest(&home) {
+            Ok(digest) => {
+                info!(image = self.config.pins.linux_image, %digest, "pinned Linux CI image already present");
+                digest
+            }
+            Err(error) => {
+                info!(image = self.config.pins.linux_image, %error, "pinned Linux CI image missing, building");
+                self.build_pinned_linux_image(&home, dockerfile)?;
+                self.linux_image_digest(&home)?
+            }
+        };
+        if !valid_digest(&digest) {
+            bail!("Docker returned invalid Linux image digest: {digest}");
+        }
+        let mut command = self.process.command(self.config.host.brew_tool("docker"));
+        command
+            .env(
+                "DOCKER_HOST",
+                docker_host(&home, &self.config.host.colima_profile),
+            )
+            .args(["tag", &self.config.pins.linux_image, LINUX_LATEST_IMAGE]);
+        self.process
+            .run_command(&mut command, "tag pinned Linux CI image as latest")?;
+        let config_root = home.join(".config/kithara-ci");
+        fs::create_dir_all(&config_root)?;
+        write_secure(
+            &config_root.join("linux-image.digest"),
+            &format!("{digest}\n"),
+        )?;
+        info!(image = self.config.pins.linux_image, latest = LINUX_LATEST_IMAGE, %digest, "Linux CI image active");
+        Ok(())
+    }
+
+    fn build_pinned_linux_image(&self, home: &Path, dockerfile: &Path) -> Result<()> {
         let context = self
             .config
             .host
@@ -63,7 +108,7 @@ impl RunnerManager<'_> {
             command
                 .env(
                     "DOCKER_HOST",
-                    docker_host(&home, &self.config.host.colima_profile),
+                    docker_host(home, &self.config.host.colima_profile),
                 )
                 .args([
                     "buildx",
@@ -84,19 +129,7 @@ impl RunnerManager<'_> {
             }
             command.arg(path_text(&context)?);
             self.process
-                .run_command(&mut command, "build pinned Linux CI image")?;
-            let digest = self.linux_image_digest(&home)?;
-            if !valid_digest(&digest) {
-                bail!("Docker returned invalid Linux image digest: {digest}");
-            }
-            let config_root = home.join(".config/kithara-ci");
-            fs::create_dir_all(&config_root)?;
-            write_secure(
-                &config_root.join("linux-image.digest"),
-                &format!("{digest}\n"),
-            )?;
-            info!(image = self.config.pins.linux_image, %digest, "Linux CI image built");
-            Ok(())
+                .run_command(&mut command, "build pinned Linux CI image")
         })();
         let cleanup = fs::remove_dir_all(&context)
             .with_context(|| format!("removing Docker build context {}", context.display()));

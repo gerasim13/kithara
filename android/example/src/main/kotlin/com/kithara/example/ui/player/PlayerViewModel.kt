@@ -225,17 +225,22 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             .apply { mkdirs() }
             .absolutePath
 
+        // The wildcard HLS-AES key rule, the auth token and the demo
+        // crossfade window are all initial state, so they are declared in
+        // the configuration rather than set after construction.
         return KitharaPlayer(
-            config = KitharaPlayer.Config(store = AssetStore(root = cacheDir)),
-        ).apply {
-            playingRate = _uiState.value.selectedRate
-
-            // The native player initializes to 1.0s; the demo wants 5.0s.
-            crossfadeDuration = DEFAULT_CROSSFADE_SECONDS
-
-            setupHlsAes(ZvukKeyProcessor(readZvukCipherKey(application)))
-            readZvukAuthToken(application)?.let(::setupNetwork)
-        }
+            config = KitharaPlayer.Config(
+                store = AssetStore(root = cacheDir),
+                keyRules = listOf(
+                    KitharaPlayer.KeyRule.wildcard(
+                        ZvukKeyProcessor(readZvukCipherKey(application))
+                    )
+                ),
+                authToken = readZvukAuthToken(application).orEmpty(),
+                crossfadeDuration = DEFAULT_CROSSFADE_SECONDS,
+                playingRate = _uiState.value.selectedRate,
+            ),
+        )
     }
 
     private fun itemFor(trackId: String): KitharaPlayerItem? =

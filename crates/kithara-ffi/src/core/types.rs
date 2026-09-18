@@ -106,8 +106,7 @@ pub struct FfiKeyRule {
     /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
     /// on every decrypt. `None` is treated as an empty string.
     ///
-    /// `setup_hls_aes` populates this automatically with a freshly
-    /// generated 16-character alphanumeric value and mirrors it into
+    /// A rule carrying a salt also mirrors it into
     /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
     pub salt: Option<String>,
     /// Domain patterns — exact (`"example.com"`), wildcard subdomain

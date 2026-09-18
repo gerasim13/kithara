@@ -1,46 +1,44 @@
-#![allow(unsafe_code)]
-
 use std::ptr::NonNull;
 
-use kithara_signal::AudioSpec;
-
 use super::{
-    aformat::OwnedFormat,
-    error::AndroidBackendError,
-    ffi::{
+    format::OwnedFormat,
+    sys::{
         self, KEY_CHANNEL_COUNT, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
         PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
 };
+use crate::{error::AndroidBackendError, runtime};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AndroidPcmEncoding {
+pub enum AndroidPcmEncoding {
     Pcm16,
     Float,
 }
 
-pub(crate) struct OutputFormat {
-    pub(crate) pcm_encoding: AndroidPcmEncoding,
-    pub(crate) spec: AudioSpec,
+pub struct OutputFormat {
+    pub pcm_encoding: AndroidPcmEncoding,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
-pub(crate) struct InputBuffer {
-    pub(crate) index: usize,
+pub struct InputBuffer {
+    pub index: usize,
     ptr: NonNull<u8>,
     len: usize,
 }
 
 impl InputBuffer {
-    pub(crate) fn data_mut(&mut self) -> &mut [u8] {
+    pub fn data_mut(&mut self) -> &mut [u8] {
         // SAFETY: `ptr` covers `len` bytes of codec-owned storage, exclusively
         // borrowed for as long as the returned slice lives.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 }
 
-pub(crate) struct OutputBuffer {
-    pub(crate) index: usize,
-    pub(crate) presentation_time_us: i64,
-    pub(crate) end_of_stream: bool,
+pub struct OutputBuffer {
+    pub index: usize,
+    pub presentation_time_us: i64,
+    pub end_of_stream: bool,
     ptr: NonNull<u8>,
     len: usize,
 }
@@ -48,15 +46,16 @@ pub(crate) struct OutputBuffer {
 /// Parameters for `OwnedCodec::queue_input_buffer`. Bundles the related
 /// FFI primitives so callers can't accidentally swap argument positions.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct QueueInput {
-    pub(crate) presentation_time_us: i64,
-    pub(crate) flags: u32,
-    pub(crate) index: usize,
-    pub(crate) size: usize,
+pub struct QueueInput {
+    pub presentation_time_us: i64,
+    pub flags: u32,
+    pub index: usize,
+    pub size: usize,
 }
 
 impl OutputBuffer {
-    pub(crate) fn data(&self) -> &[u8] {
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
         // SAFETY: `ptr` covers `len` bytes of codec-owned storage, borrowed for
         // as long as the returned slice lives.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
@@ -69,14 +68,14 @@ impl AsRef<[u8]> for OutputBuffer {
     }
 }
 
-pub(crate) enum DequeueOutput {
+pub enum DequeueOutput {
     TryAgainLater,
     OutputFormatChanged(OutputFormat),
     Output(OutputBuffer),
 }
 
-pub(crate) struct OwnedCodec {
-    raw: NonNull<ffi::AMediaCodec>,
+pub struct OwnedCodec {
+    raw: NonNull<sys::AMediaCodec>,
     started: bool,
 }
 
@@ -87,13 +86,18 @@ unsafe impl Send for OwnedCodec {}
 impl OwnedCodec {
     /// Select and start a decoder using the input MIME and parameters in
     /// the track format, whether extracted by Android or built by the demuxer.
-    pub(crate) fn create_with_format(format: &OwnedFormat) -> Result<Self, AndroidBackendError> {
-        let mime = format.get_str(ffi::KEY_MIME).ok_or_else(|| {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError`] when the runtime is unreachable or the
+    /// platform refuses the format.
+    pub fn create_with_format(format: &OwnedFormat) -> Result<Self, AndroidBackendError> {
+        runtime::attach_current_thread()?;
+        let mime = format.get_str(sys::KEY_MIME).ok_or_else(|| {
             AndroidBackendError::operation("codec-create-decoder", "track format has no MIME")
         })?;
         // SAFETY: `mime` is a NUL-terminated C string.
         let codec_raw =
-            NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
+            NonNull::new(unsafe { sys::AMediaCodec_createDecoderByType(mime.as_ptr()) })
                 .ok_or_else(|| {
                     AndroidBackendError::operation(
                         "codec-create-decoder",
@@ -107,7 +111,7 @@ impl OwnedCodec {
         // SAFETY: both handles are live; a null surface and crypto configure a
         // decoder that writes into codec-owned buffers.
         let status = unsafe {
-            ffi::AMediaCodec_configure(
+            sys::AMediaCodec_configure(
                 codec.raw(),
                 format.raw(),
                 std::ptr::null_mut(),
@@ -122,7 +126,7 @@ impl OwnedCodec {
             ));
         }
         // SAFETY: `codec` is live and configured.
-        let status = unsafe { ffi::AMediaCodec_start(codec.raw()) };
+        let status = unsafe { sys::AMediaCodec_start(codec.raw()) };
         if status != MEDIA_STATUS_OK {
             return Err(AndroidBackendError::operation(
                 "codec-start",
@@ -133,13 +137,17 @@ impl OwnedCodec {
         Ok(codec)
     }
 
-    pub(crate) fn dequeue_input_buffer(
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError::Operation`] when the platform reports a
+    /// failure instead of a buffer.
+    pub fn dequeue_input_buffer(
         &mut self,
         timeout_us: i64,
     ) -> Result<Option<InputBuffer>, AndroidBackendError> {
         // SAFETY: `raw` is live and exclusively borrowed.
-        let index = unsafe { ffi::AMediaCodec_dequeueInputBuffer(self.raw(), timeout_us) };
-        if index == ffi::MEDIA_CODEC_INFO_TRY_AGAIN_LATER as isize {
+        let index = unsafe { sys::AMediaCodec_dequeueInputBuffer(self.raw(), timeout_us) };
+        if index == sys::MEDIA_CODEC_INFO_TRY_AGAIN_LATER as isize {
             return Ok(None);
         }
         if index < 0 {
@@ -160,7 +168,7 @@ impl OwnedCodec {
         // SAFETY: `raw` is live; the NDK bounds-checks `index` and writes the
         // buffer length into `size`.
         let data =
-            NonNull::new(unsafe { ffi::AMediaCodec_getInputBuffer(self.raw(), index, &mut size) })
+            NonNull::new(unsafe { sys::AMediaCodec_getInputBuffer(self.raw(), index, &mut size) })
                 .ok_or_else(|| {
                     AndroidBackendError::operation(
                         "codec-get-input-buffer",
@@ -174,11 +182,15 @@ impl OwnedCodec {
         }))
     }
 
-    pub(crate) fn dequeue_output_buffer(
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError`] when the platform reports a failure or
+    /// an output format the wrappers cannot express.
+    pub fn dequeue_output_buffer(
         &mut self,
         timeout_us: i64,
     ) -> Result<DequeueOutput, AndroidBackendError> {
-        let mut info = ffi::AMediaCodecBufferInfo {
+        let mut info = sys::AMediaCodecBufferInfo {
             offset: 0,
             size: 0,
             presentation_time_us: 0,
@@ -186,13 +198,13 @@ impl OwnedCodec {
         };
         // SAFETY: `raw` is live and exclusively borrowed; `info` is an out-param.
         let index =
-            unsafe { ffi::AMediaCodec_dequeueOutputBuffer(self.raw(), &mut info, timeout_us) };
-        if index == ffi::MEDIA_CODEC_INFO_TRY_AGAIN_LATER as isize
-            || index == ffi::MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize
+            unsafe { sys::AMediaCodec_dequeueOutputBuffer(self.raw(), &mut info, timeout_us) };
+        if index == sys::MEDIA_CODEC_INFO_TRY_AGAIN_LATER as isize
+            || index == sys::MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize
         {
             return Ok(DequeueOutput::TryAgainLater);
         }
-        if index == ffi::MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
+        if index == sys::MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
             let format = OutputFormat::read(&self.output_format()?)?;
             return Ok(DequeueOutput::OutputFormatChanged(format));
         }
@@ -204,7 +216,7 @@ impl OwnedCodec {
         // SAFETY: `raw` is live; the NDK bounds-checks `index` and writes the
         // buffer length into `size`.
         let data =
-            NonNull::new(unsafe { ffi::AMediaCodec_getOutputBuffer(self.raw(), index, &mut size) })
+            NonNull::new(unsafe { sys::AMediaCodec_getOutputBuffer(self.raw(), index, &mut size) })
                 .ok_or_else(|| {
                     AndroidBackendError::operation(
                         "codec-get-output-buffer",
@@ -240,7 +252,7 @@ impl OwnedCodec {
         Ok(DequeueOutput::Output(OutputBuffer {
             index,
             presentation_time_us: info.presentation_time_us,
-            end_of_stream: info.flags & ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
+            end_of_stream: info.flags & sys::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
             // SAFETY: `offset` is within the `size` bytes `data` points at.
             ptr: NonNull::new(unsafe { data.as_ptr().add(offset) }).ok_or_else(|| {
                 AndroidBackendError::operation(
@@ -252,9 +264,13 @@ impl OwnedCodec {
         }))
     }
 
-    pub(crate) fn flush(&mut self) -> Result<(), AndroidBackendError> {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError::Operation`] when the codec refuses the
+    /// flush.
+    pub fn flush(&mut self) -> Result<(), AndroidBackendError> {
         // SAFETY: `raw` is live and exclusively borrowed.
-        let status = unsafe { ffi::AMediaCodec_flush(self.raw()) };
+        let status = unsafe { sys::AMediaCodec_flush(self.raw()) };
         if status != MEDIA_STATUS_OK {
             return Err(AndroidBackendError::operation(
                 "codec-flush",
@@ -264,19 +280,24 @@ impl OwnedCodec {
         Ok(())
     }
 
-    pub(crate) fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError::Operation`] when the codec has no output
+    /// format.
+    pub fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {
         // SAFETY: `raw` is live; the caller owns the returned format.
-        let raw = NonNull::new(unsafe { ffi::AMediaCodec_getOutputFormat(self.raw()) })
+        let raw = NonNull::new(unsafe { sys::AMediaCodec_getOutputFormat(self.raw()) })
             .ok_or_else(|| {
                 AndroidBackendError::operation("codec-output-format", "output format was null")
             })?;
         Ok(OwnedFormat::from(raw))
     }
 
-    pub(crate) fn queue_input_buffer(
-        &mut self,
-        request: QueueInput,
-    ) -> Result<(), AndroidBackendError> {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError::Operation`] when the codec refuses the
+    /// buffer.
+    pub fn queue_input_buffer(&mut self, request: QueueInput) -> Result<(), AndroidBackendError> {
         let QueueInput {
             index,
             size,
@@ -292,7 +313,7 @@ impl OwnedCodec {
         // SAFETY: `raw` is live; `index` names a buffer dequeued from it and
         // `size` is within that buffer.
         let status = unsafe {
-            ffi::AMediaCodec_queueInputBuffer(
+            sys::AMediaCodec_queueInputBuffer(
                 self.raw(),
                 index,
                 0,
@@ -310,16 +331,17 @@ impl OwnedCodec {
         Ok(())
     }
 
-    pub(crate) fn raw(&self) -> *mut ffi::AMediaCodec {
+    pub(crate) fn raw(&self) -> *mut sys::AMediaCodec {
         self.raw.as_ptr()
     }
 
-    pub(crate) fn release_output_buffer(
-        &mut self,
-        index: usize,
-    ) -> Result<(), AndroidBackendError> {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError::Operation`] when the codec refuses the
+    /// release.
+    pub fn release_output_buffer(&mut self, index: usize) -> Result<(), AndroidBackendError> {
         // SAFETY: `raw` is live; `index` names a buffer dequeued from it.
-        let status = unsafe { ffi::AMediaCodec_releaseOutputBuffer(self.raw(), index, false) };
+        let status = unsafe { sys::AMediaCodec_releaseOutputBuffer(self.raw(), index, false) };
         if status != MEDIA_STATUS_OK {
             return Err(AndroidBackendError::operation(
                 "codec-release-output-buffer",
@@ -334,15 +356,20 @@ impl Drop for OwnedCodec {
     fn drop(&mut self) {
         if self.started {
             // SAFETY: `raw` is live and was started.
-            let _ = unsafe { ffi::AMediaCodec_stop(self.raw()) };
+            let _ = unsafe { sys::AMediaCodec_stop(self.raw()) };
         }
         // SAFETY: `raw` is live and freed exactly once, here.
-        let _ = unsafe { ffi::AMediaCodec_delete(self.raw()) };
+        let _ = unsafe { sys::AMediaCodec_delete(self.raw()) };
     }
 }
 
 impl OutputFormat {
-    pub(crate) fn read(output: &OwnedFormat) -> Result<Self, AndroidBackendError> {
+    /// # Errors
+    ///
+    /// Returns [`AndroidBackendError`] when the format lacks the sample rate
+    /// or channel count, or carries a PCM encoding the wrappers cannot
+    /// express.
+    pub fn read(output: &OwnedFormat) -> Result<Self, AndroidBackendError> {
         let sample_rate = output.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
             AndroidBackendError::operation("codec-output-format", "missing sample-rate")
         })?;
@@ -357,11 +384,11 @@ impl OutputFormat {
             }
         };
 
-        let spec = crate::types::checked_audio_spec(channels, sample_rate, "android.codec.output")
-            .map_err(|error| {
-                AndroidBackendError::operation("codec-output-format", error.to_string())
-            })?;
-        Ok(Self { pcm_encoding, spec })
+        Ok(Self {
+            pcm_encoding,
+            channels,
+            sample_rate,
+        })
     }
 }
 

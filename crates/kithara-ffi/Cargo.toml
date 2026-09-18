@@ -168,8 +168,9 @@ wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
+kithara-android = { workspace = true }
+
 jni = { workspace = true }
-ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 

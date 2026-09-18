@@ -54,6 +54,13 @@ class KitharaPlayerTest {
     }
 
     @Test
+    fun configuredCrossfadeDurationAppliesAtConstruction() {
+        val player = KitharaPlayer(KitharaPlayer.Config(crossfadeDuration = 3.5f))
+
+        assertEquals(3.5f, player.crossfadeDuration, 0.0f)
+    }
+
+    @Test
     fun itemsStartsEmpty() {
         val player = KitharaPlayer()
 

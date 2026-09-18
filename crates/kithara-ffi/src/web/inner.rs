@@ -81,7 +81,7 @@ fn store_f32(a: &AtomicU32, v: f32) {
 
 impl WasmInner {
     /// Default crossfade window in seconds, matching the worker default.
-    const DEFAULT_CROSSFADE_SECONDS: f32 = 5.0;
+    const DEFAULT_CROSSFADE_SECONDS: f32 = kithara::play::DEFAULT_CROSSFADE_DURATION;
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
     /// Default output volume, matching the legacy wasm player.

@@ -124,15 +124,16 @@ apple:ios:
 # The suite plays audio and asserts on what came back, so it takes the measured
 # group: a simulator sharing the host with a full build reports on the load
 # rather than on the commit.
-# It carries the merge-request kind on top of the branch one: this is the only
-# lane that runs the iOS regressions, and a push stops producing pipelines once
-# a merge request is open, so without it a merge request carrying one of those
-# regressions would go through without ever running it.
+#
+# It blocks rather than reports, and it runs wherever a change is judged —
+# quarantine included. The simulator runs on one Mac mini and nowhere else, so
+# no other lane and no other host can answer for the iOS surface: a red here
+# that only reached the verdict as a report let a change reach the default
+# branch with the surface it breaks never having run green.
 apple:ios-test:
   extends:
     - .macos-job
-    - .judged
-    - .rules-integration-and-review
+    - .rules-verify-and-branch
     - .measured
   stage: apple
   timeout: 60 minutes

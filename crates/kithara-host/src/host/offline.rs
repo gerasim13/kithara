@@ -5,7 +5,7 @@ use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
 };
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_play::{GroupState, PlayError, player::PlayerMember};
+use kithara_play::{GroupState, PlayError, effects::LimiterConfig, player::PlayerMember};
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
@@ -57,6 +57,7 @@ impl<S> HostConfig<S> {
         #[builder(default = Defaults::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = Defaults::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
+        #[builder(default)] limiter: LimiterConfig,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
         #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
         #[builder(default = TaskConfig::new())] task: TaskConfig,
@@ -67,6 +68,7 @@ impl<S> HostConfig<S> {
             max_block_frames,
             declick_frames,
             declared_latency,
+            limiter,
             worker,
             task,
             dispatcher: Box::new(dispatcher),
@@ -99,6 +101,7 @@ where
             max_block_frames,
             declick_frames,
             declared_latency,
+            limiter,
             worker,
             dispatcher,
             task,
@@ -119,6 +122,7 @@ where
                 max_block_frames,
                 declick_frames,
                 declared_latency,
+                limiter,
             },
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();

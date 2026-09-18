@@ -85,9 +85,6 @@ pub(crate) fn worker_main(
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
 ) {
-    /// Default crossfade window, in seconds. Mirrors the legacy worker.
-    const CROSSFADE_SECONDS: f32 = 5.0;
-
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
     // the Worker, killing the command + tick loops.
@@ -117,7 +114,7 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        queue.set_crossfade_duration(CROSSFADE_SECONDS);
+        queue.set_crossfade_duration(kithara::play::DEFAULT_CROSSFADE_DURATION);
 
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
@@ -336,8 +333,8 @@ struct SetupHlsAesArgs {
 /// cross-thread [`KeyRequestFactory`] (the real JS callback lives on the
 /// main thread; the worker-side processor routes each decrypt through
 /// [`key_processor_bridge`]) and writes the salt / static headers into the
-/// player-wide header map. Mirrors
-/// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
+/// player-wide header map. The wasm counterpart of the native
+/// [`build_initial_key_state`](crate::native::inner) fold.
 fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
     let SetupHlsAesArgs {
         salt,

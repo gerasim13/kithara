@@ -65,7 +65,6 @@ impl Consts {
 #[case::accelerate_clear(vec![1.0, -2.0, 3.0])]
 #[case::accelerate_ramp(vec![0.0, 1.0, 2.0, 3.0])]
 #[case::accelerate_wave(vec![0.0, 1.0, 0.0, -1.0, 0.0])]
-#[case::limiter_unity(vec![0.5, -0.3, 0.1, -0.7, 0.0, 0.97, -0.97])]
 #[case::limiter_peak(vec![2.0_f32; 8])]
 #[case::limiter_negative(vec![-2.0_f32; 8])]
 #[case::limiter_right((0u16..512).map(|i| (f32::from(i) * 0.07).cos() * 2.5).collect())]
@@ -75,6 +74,15 @@ impl Consts {
 #[case::limiter_attack(vec![2.0_f32; 4])]
 #[case::limiter_half(vec![0.5_f32])]
 #[case::limiter_spike(vec![4.0_f32])]
+#[case::limiter_smooth((0u16..256)
+        .map(|i| 0.5 * (core::f32::consts::TAU * f32::from(i) / 64.0).sin())
+        .collect())]
+#[case::limiter_sine((0u16..256)
+        .map(|i| 2.0 * (core::f32::consts::TAU * f32::from(i) / 64.0).sin())
+        .collect())]
+#[case::limiter_intersample((0u16..256)
+        .map(|i| (core::f32::consts::FRAC_PI_2 * f32::from(i) + core::f32::consts::FRAC_PI_4).sin())
+        .collect())]
 #[case::limiter_silence(vec![0.0_f32; 16])]
 #[case::limiter_recovery(vec![0.5_f32; 64])]
 #[case::limiter_negative_infinity(vec![f32::NEG_INFINITY])]

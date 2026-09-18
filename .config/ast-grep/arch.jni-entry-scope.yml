@@ -1,0 +1,54 @@
+id: arch.jni-entry-scope
+message: |
+  A `Java_*` entry point whose work can escape the scope that turns errors
+  and panics into Java exceptions. Give the function one expression -
+  `env.with_env(|env| ...).resolve::<ThrowRuntimeExAndDefault>()` - and put
+  the work in a plain function returning a typed error.
+
+      // ❌
+      pub extern "system" fn Java_com_example_App_nativeRun(
+          mut env: EnvUnowned<'_>,
+          _class: JClass<'_>,
+      ) -> jint {
+          let value = run();
+          let _ = env.with_env_no_catch(|env| report(env, value));
+          value
+      }
+
+      // ✅
+      pub extern "system" fn Java_com_example_App_nativeRun(
+          mut env: EnvUnowned<'_>,
+          _class: JClass<'_>,
+      ) {
+          env.with_env(|env| run(env)).resolve::<ThrowRuntimeExAndDefault>()
+      }
+
+  `with_env_no_catch` and the deprecated `JNIEnv` carry the same defect: the
+  first drops the panic-catching scope, the second is the API that predates
+  it. A panic that escapes an `extern "system"` function aborts the process
+  instead of reaching the host, even in a build that unwinds.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  any:
+    - pattern: $E.with_env_no_catch($$$)
+    - pattern: JNIEnv
+    - all:
+        - kind: function_item
+        - has:
+            field: name
+            regex: '^Java_'
+        - not:
+            has:
+              field: body
+              all:
+                - has:
+                    nthChild: 1
+                    any:
+                      - pattern: $ENV.with_env($C).resolve::<$P>()
+                      - pattern: $ENV.with_env($C).resolve::<$P>();
+                - not:
+                    has:
+                      nthChild: 2

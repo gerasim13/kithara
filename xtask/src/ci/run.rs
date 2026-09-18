@@ -12,7 +12,7 @@ use tracing::{info, warn};
 
 use super::{
     config::CiConfig,
-    environment::{CiEnvironment, PROVISIONED_LINUX_IMAGE_ENV, is_gitlab},
+    environment::CiEnvironment,
     process::{Process, Recording},
     verdict,
 };
@@ -183,13 +183,6 @@ pub(crate) struct RunArgs {
     dry_run: bool,
 }
 
-#[derive(Debug)]
-struct LinuxImageAttestation {
-    runner: String,
-    commit: String,
-    provisioned: Option<String>,
-}
-
 struct Consts;
 
 impl Consts {
@@ -210,76 +203,6 @@ impl Consts {
         None
     };
     const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
-}
-
-impl LinuxImageAttestation {
-    fn from_gitlab() -> Result<Option<Self>> {
-        if !is_gitlab() {
-            return Ok(None);
-        }
-        Ok(Some(Self {
-            runner: env::var("CI_RUNNER_DESCRIPTION")
-                .context("CI_RUNNER_DESCRIPTION must name the Linux executor")?,
-            commit: env::var("CI_COMMIT_SHA").context("CI_COMMIT_SHA must name the CI checkout")?,
-            provisioned: env::var(PROVISIONED_LINUX_IMAGE_ENV).ok(),
-        }))
-    }
-}
-
-fn linux_image_diagnosis(
-    config: &CiConfig,
-    runner: &str,
-    commit: &str,
-    provisioned: &str,
-) -> String {
-    let expected = &config.pins.linux_image;
-    let host_config = config.host.host_root.join("services/mac-host.toml");
-    format!(
-        "Linux CI image `{expected}` is not provisioned on runner `{runner}`; the runner declares \
-         `{provisioned}`. On the Mac mini that owns `{runner}`, log in as `kithara-ci`, check out \
-         commit `{commit}`, and run from that checkout:\n\
-         `cargo build --locked --release -p xtask`\n\
-         `export KITHARA_CI_HOST_CONFIG={}`\n\
-         `export KITHARA_CI_PINS=$PWD/.config/ci-pins.toml`\n\
-         `target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile`\n\
-         `target/release/xtask ci host configure-runners`\n\
-         `target/release/xtask ci host activate`",
-        host_config.display()
-    )
-}
-
-fn require_provisioned_linux_image(
-    cache_group: CacheGroup,
-    config: &CiConfig,
-    attestation: Option<&LinuxImageAttestation>,
-) -> Result<()> {
-    if cache_group != CacheGroup::Linux {
-        return Ok(());
-    }
-    let Some(attestation) = attestation else {
-        return Ok(());
-    };
-    match attestation.provisioned.as_deref() {
-        Some(provisioned) if provisioned == config.pins.linux_image => Ok(()),
-        Some(provisioned) => bail!(
-            "{}",
-            linux_image_diagnosis(
-                config,
-                &attestation.runner,
-                &attestation.commit,
-                provisioned
-            )
-        ),
-        None => bail!(
-            "{}",
-            linux_image_diagnosis(
-                config,
-                &attestation.runner,
-                &attestation.commit,
-                "not declared by runner",
-            )
-        ),
-    }
 }
 
 fn sccache_server_is_stopped(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
@@ -358,8 +281,6 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
-    let image_attestation = LinuxImageAttestation::from_gitlab()?;
-    require_provisioned_linux_image(lane.cache_group(), &ci_config, image_attestation.as_ref())?;
     let environment = CiEnvironment::prepare(
         ctx,
         &ci_config,
@@ -510,8 +431,8 @@ mod tests {
 
     use super::{
         super::{config::fixture, process::Recording},
-        CacheGroup, Consts, Lane, LinuxImageAttestation, PipelineKind, command_lane, execute_lane,
-        linux_image_diagnosis, require_provisioned_linux_image, sccache_server_is_stopped,
+        CacheGroup, Consts, Lane, PipelineKind, command_lane, execute_lane,
+        sccache_server_is_stopped,
     };
     use crate::{
         Cli,
@@ -1017,6 +938,47 @@ mod tests {
         }
     }
 
+    /// The iOS simulator suite runs on one Mac mini and nowhere else, so no
+    /// other lane answers for that surface. A `.judged` lane only reports, and
+    /// a rule set without the quarantine kind skips the pipeline that judges an
+    /// imported pull request — together they let an iOS regression merge.
+    #[test]
+    fn the_ios_suite_blocks_every_pipeline_that_judges_a_change() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let apple = fs::read_to_string(root.join(".gitlab/ci/apple.yml"))
+            .expect("the Apple pipeline definition is readable");
+        let (_, after_ios_test) = apple
+            .split_once("apple:ios-test:")
+            .expect("the iOS test job exists");
+        let ios_test = after_ios_test
+            .split_once("\napple:")
+            .map_or(after_ios_test, |(job, _)| job);
+
+        assert!(
+            !ios_test.contains(".judged"),
+            "the iOS suite reports instead of blocking"
+        );
+        assert!(
+            ios_test.contains(".rules-verify-and-branch"),
+            "the iOS suite skips a pipeline kind that judges a change"
+        );
+
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+        let (_, after_verify) = common
+            .split_once(".rules-verify:")
+            .expect("the verify rule set exists");
+        let verify = after_verify
+            .split_once("\n.")
+            .map_or(after_verify, |(rules, _)| rules);
+        assert!(
+            verify.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
+            "the rule set the iOS suite takes does not carry the quarantine kind"
+        );
+    }
+
     #[test]
     fn linux_tests_do_not_disappear_when_linux_check_fails() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1032,7 +994,10 @@ mod tests {
             .expect("the coverage job follows Linux test");
 
         for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
-            assert!(job.contains("needs: []"), "{name} waits on an earlier job");
+            assert!(
+                job.contains("needs:\n    - job: linux:image\n      optional: true\n  script:"),
+                "{name} waits on a job other than the image it runs in"
+            );
             assert!(
                 !job.contains("linux:check"),
                 "{name} disappears when linux:check fails"
@@ -1097,72 +1062,6 @@ mod tests {
                 "target/xcresult/swift-test.junit.xml",
             ]
         );
-    }
-
-    #[test]
-    fn image_drift_diagnosis_names_the_image_host_and_build_command() {
-        let config = fixture();
-        let diagnosis = linux_image_diagnosis(
-            &config,
-            "kithara-mac-mini-linux",
-            "0123456789abcdef",
-            "kithara-ci:old",
-        );
-
-        assert!(diagnosis.contains(&config.pins.linux_image));
-        assert!(diagnosis.contains("kithara-mac-mini-linux"));
-        assert!(diagnosis.contains("0123456789abcdef"));
-        assert!(diagnosis.contains("kithara-ci:old"));
-        assert!(
-            diagnosis.contains(
-                "target/release/xtask ci host build-linux-image $PWD/docker/ci.Dockerfile"
-            )
-        );
-    }
-
-    #[test]
-    fn a_local_linux_lane_does_not_require_runner_attestation() {
-        let config = fixture();
-
-        require_provisioned_linux_image(CacheGroup::Linux, &config, None).unwrap();
-    }
-
-    fn image_attestation(provisioned: Option<&str>) -> LinuxImageAttestation {
-        LinuxImageAttestation {
-            runner: "kithara-mac-mini-linux".to_owned(),
-            commit: "0123456789abcdef".to_owned(),
-            provisioned: provisioned.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn a_gitlab_linux_lane_accepts_the_provisioned_image() {
-        let config = fixture();
-        let attestation = image_attestation(Some(&config.pins.linux_image));
-
-        require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation)).unwrap();
-    }
-
-    #[test]
-    fn a_gitlab_linux_lane_rejects_a_different_image() {
-        let config = fixture();
-        let attestation = image_attestation(Some("kithara-ci:old"));
-
-        let error = require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation))
-            .unwrap_err();
-
-        assert!(error.to_string().contains("kithara-ci:old"));
-    }
-
-    #[test]
-    fn a_gitlab_linux_lane_rejects_a_missing_image_declaration() {
-        let config = fixture();
-        let attestation = image_attestation(None);
-
-        let error = require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation))
-            .unwrap_err();
-
-        assert!(error.to_string().contains("not declared by runner"));
     }
 
     #[test]

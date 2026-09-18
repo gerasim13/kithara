@@ -679,11 +679,10 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    use kithara_android::media::sys::{KEY_ENCODER_DELAY, KEY_ENCODER_PADDING};
+
     use crate::{
-        android::{
-            AndroidCodec, AndroidMediaExtractorDemuxer,
-            ffi::{KEY_ENCODER_DELAY, KEY_ENCODER_PADDING},
-        },
+        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
         gapless::probe_mp4_gapless,
