@@ -22,7 +22,6 @@ use ringbuf::{
     traits::{Observer, Producer, Split},
 };
 use smallvec::SmallVec;
-use triple_buffer::{Input, Output, triple_buffer};
 
 use super::PlaybackShared;
 use crate::{
@@ -30,7 +29,6 @@ use crate::{
         PlayerCmd, PlayerNotification, PreparedLaunchIdentity, ScheduledSeekDisposition, SharedEq,
     },
     rt::{PlayerNodeProcessor, track::PlayerTrack},
-    sync::DeckGrid,
 };
 
 /// A move of a track's pending synchronized seek onto a successor activation.
@@ -46,7 +44,6 @@ pub(crate) struct ScheduledSeekReanchor {
 /// RT-owned channel halves and playback atomics for one player node.
 #[non_exhaustive]
 pub struct NodeInputs {
-    pub(crate) grid: Output<DeckGrid>,
     pub(crate) stretch: Arc<StretchControls>,
     pub(crate) rate_smoothing: SmootherConfig,
     pub(crate) playback: Arc<PlaybackShared>,
@@ -113,7 +110,6 @@ impl LiveOutput for MixTapWriter {
 /// Control-owned channel halves and shared controls for one allocated slot.
 #[non_exhaustive]
 pub struct SlotControl {
-    pub(crate) grid: Input<DeckGrid>,
     pub playback: Arc<PlaybackShared>,
     pub notif_rx: HeapCons<PlayerNotification>,
     pub trash_rx: HeapCons<PlayerTrack>,
@@ -1299,9 +1295,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
     let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
     let playback = Arc::new(PlaybackShared::default());
 
-    let (grid_tx, grid_rx) = triple_buffer(&DeckGrid::default());
     let inputs = NodeInputs {
-        grid: grid_rx,
         stretch: StretchControls::new(1.0),
         rate_smoothing: DEFAULT_RATE_SMOOTHING,
         cmd_rx,
@@ -1310,7 +1304,6 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         playback: Arc::clone(&playback),
     };
     let control = SlotControl {
-        grid: grid_tx,
         playback,
         notif_rx,
         trash_rx,

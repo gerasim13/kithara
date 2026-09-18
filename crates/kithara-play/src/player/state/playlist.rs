@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_warp::{
-    AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, RegionPlan, RegionPlanSlot,
-    SegmentSet,
+    AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, WarpPlan, WarpPlanSlot,
 };
 
 use crate::resource::Resource;
@@ -14,13 +13,12 @@ pub(crate) struct TrackGrid {
     pub(crate) id: BeatGridId,
     pub(crate) revision: BeatGridRevision,
     pub(crate) snapshot: BeatGridSnapshot,
-    pub(crate) segments: SegmentSet,
 }
 
 #[derive(Default)]
 struct TrackState {
-    slot: Option<Arc<RegionPlanSlot>>,
-    plan: Option<Arc<RegionPlan>>,
+    slot: Option<Arc<WarpPlanSlot>>,
+    plan: Option<Arc<WarpPlan>>,
     grid: Option<TrackGrid>,
     initial_source_cue: InitialSourceCue,
     free_adoption: Option<crate::worker::FreeAdoptionControl>,
@@ -114,7 +112,7 @@ impl Playlist {
     pub(crate) fn track_loaded(
         &mut self,
         item: TrackId,
-        slot: Option<Arc<RegionPlanSlot>>,
+        slot: Option<Arc<WarpPlanSlot>>,
         free_adoption: Option<crate::worker::FreeAdoptionControl>,
     ) {
         let Some(slot) = slot else {
@@ -282,7 +280,7 @@ impl Playlist {
         }
     }
 
-    pub(crate) fn set_track_plan(&mut self, item: TrackId, plan: Option<Arc<RegionPlan>>) {
+    pub(crate) fn set_track_plan(&mut self, item: TrackId, plan: Option<Arc<WarpPlan>>) {
         let track = self.tracks.entry(item).or_default();
         if let Some(slot) = &track.slot {
             slot.install(plan.clone());
@@ -294,7 +292,7 @@ impl Playlist {
         &mut self,
         item: TrackId,
         stamp: kithara_warp::BeatGridStamp,
-        plan: Arc<RegionPlan>,
+        plan: Arc<WarpPlan>,
         commit: impl FnOnce() -> Result<R, crate::PlayError>,
     ) -> Result<R, crate::PlayError> {
         if self.item_id(self.current) != Some(item) {
@@ -398,10 +396,9 @@ mod tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment,
-        LoadGeneration, MapAxis, RegionPlan, RegionPlanSlot, SessionAnchor, SessionAxis,
-        SessionBeat, SessionEpoch, SessionFrame, SyncOperationId, TransportRevision,
-        WarpMapRevision,
+        AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, LoadGeneration,
+        MapAxis, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+        SyncOperationId, TransportRevision, WarpMapRevision, WarpPlan, WarpPlanSlot,
     };
 
     use super::{Playlist, Slot};
@@ -425,12 +422,12 @@ mod tests {
         ];
         playlist.track_loaded(
             first,
-            Some(Arc::new(RegionPlanSlot::default())),
+            Some(Arc::new(WarpPlanSlot::default())),
             Some(first_adoption),
         );
         playlist.track_loaded(
             second,
-            Some(Arc::new(RegionPlanSlot::default())),
+            Some(Arc::new(WarpPlanSlot::default())),
             Some(second_adoption),
         );
 
@@ -478,16 +475,11 @@ mod tests {
         }
     }
 
-    /// The rate the fixture plans count asset frames of.
-    fn fixture_rate() -> std::num::NonZeroU32 {
-        std::num::NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
-    }
-
-    fn plan() -> Arc<RegionPlan> {
-        Arc::new(
-            RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 48_000, 1.0)])
-                .expect("fixture plan"),
-        )
+    fn plan() -> Arc<WarpPlan> {
+        Arc::new(WarpPlan::new(grid(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+        )))
     }
 
     fn grid(id: BeatGridId, revision: BeatGridRevision) -> BeatGridSnapshot {
@@ -499,17 +491,6 @@ mod tests {
                 48_000,
             )),
         )
-    }
-
-    fn segments() -> kithara_warp::SegmentSet {
-        kithara_warp::SegmentSet::new(
-            MapAxis::Asset(AssetAxis::new(
-                std::num::NonZeroU32::new(48_000).expect("fixture sample rate"),
-                48_000,
-            )),
-            Vec::new(),
-        )
-        .expect("empty fixture segments are valid")
     }
 
     #[kithara::test(native, flash(false))]
@@ -609,7 +590,7 @@ mod tests {
         let item = TrackId(7);
         let plan = plan();
         playlist.set_track_plan(item, Some(plan.clone()));
-        let slot = Arc::new(RegionPlanSlot::default());
+        let slot = Arc::new(WarpPlanSlot::default());
 
         playlist.track_loaded(item, Some(slot.clone()), None);
 
@@ -623,7 +604,7 @@ mod tests {
     fn a_plan_set_after_the_lane_loads_is_installed_at_once() {
         let mut playlist = Playlist::default();
         let item = TrackId(7);
-        let slot = Arc::new(RegionPlanSlot::default());
+        let slot = Arc::new(WarpPlanSlot::default());
         playlist.track_loaded(item, Some(slot.clone()), None);
         assert!(slot.load().is_none());
 
@@ -644,7 +625,7 @@ mod tests {
         let grid_id = BeatGridId::allocate().expect("fixture grid identity");
         let stamp = grid(grid_id, BeatGridRevision::first()).stamp();
         let existing = plan();
-        let slot = Arc::new(RegionPlanSlot::default());
+        let slot = Arc::new(WarpPlanSlot::default());
         playlist.items = vec![
             Some(Slot {
                 resource: None,
@@ -662,7 +643,6 @@ mod tests {
                 id: grid_id,
                 revision: BeatGridRevision::first(),
                 snapshot: grid(grid_id, BeatGridRevision::first()),
-                segments: segments(),
             },
         );
         playlist.track_loaded(stale, Some(slot.clone()), None);
@@ -691,7 +671,7 @@ mod tests {
         let first = grid(grid_id, BeatGridRevision::first());
         let stamp = first.stamp();
         let existing = plan();
-        let slot = Arc::new(RegionPlanSlot::default());
+        let slot = Arc::new(WarpPlanSlot::default());
         playlist.items = vec![Some(Slot {
             resource: None,
             item_id: item,
@@ -702,7 +682,6 @@ mod tests {
                 id: grid_id,
                 revision: BeatGridRevision::first(),
                 snapshot: first,
-                segments: segments(),
             },
         );
         playlist.track_loaded(item, Some(slot.clone()), None);
@@ -720,7 +699,6 @@ mod tests {
                         .checked_next()
                         .expect("fixture grid revision advances"),
                 ),
-                segments: segments(),
             },
         );
         let replacement = plan();

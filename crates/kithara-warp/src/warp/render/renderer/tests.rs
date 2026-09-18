@@ -8,9 +8,8 @@ use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    GridSegment, PresentationFrontier, RateTarget, RegionPlan, RegionPlanSlot, RenderContext,
-    RenderPublisher, SessionBeat, SessionEpoch, SessionFrame, SyncMode, TransportRevision, Warp,
-    WarpConfig, WarpMap, WarpMapRevision,
+    PresentationFrontier, RateTarget, RenderContext, RenderPublisher, SessionBeat, SessionEpoch,
+    SessionFrame, TransportRevision, Warp, WarpConfig, WarpMap, WarpMapRevision, WarpPlanSlot,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -96,14 +95,14 @@ fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
     Warp::new((), &config).renderer(spec(), pools())
 }
 
-fn planned_renderer(controls: Arc<StretchControls>) -> (WarpRenderer, Arc<RegionPlanSlot>) {
+fn planned_renderer(controls: Arc<StretchControls>) -> (WarpRenderer, Arc<WarpPlanSlot>) {
     let (renderer, slot, _) = planned_renderer_with_publisher(controls);
     (renderer, slot)
 }
 
 fn planned_renderer_with_publisher(
     controls: Arc<StretchControls>,
-) -> (WarpRenderer, Arc<RegionPlanSlot>, RenderPublisher) {
+) -> (WarpRenderer, Arc<WarpPlanSlot>, RenderPublisher) {
     let rate_target = controls.rate_target();
     let config = WarpConfig::builder().stretch(controls).build();
     let mut warp = Warp::new((), &config);
@@ -116,7 +115,7 @@ fn planned_renderer_with_publisher(
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(SyncMode::HostSync, rate_target);
+    .with_rate(rate_target);
     publisher.publish(
         &context,
         PresentationFrontier::builder()
@@ -178,9 +177,7 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
         .expect("quantum is prepared");
     controls.set_speed(2.0);
     publisher.publish(
-        &context
-            .clone()
-            .with_rate(SyncMode::Off, controls.rate_target()),
+        &context.clone().with_rate(controls.rate_target()),
         PresentationFrontier::builder()
             .source(41)
             .output(SessionFrame::new(1_000))
@@ -209,12 +206,11 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     let manual_rate = controls.rate_target();
     let (mut renderer, slot, publisher) = planned_renderer_with_publisher(Arc::clone(&controls));
     let revision = WarpMapRevision::first();
-    let plan = RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-        .expect("fixture plan")
-        .with_free_activation(
+    let plan = crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate)
+        .with_free_activation(crate::FreeActivation::new(
             WarpMap::identity(revision).reanchor(0, SessionFrame::new(0), SessionBeat::default()),
             manual_rate,
-        );
+        ));
     slot.install(Some(Arc::new(plan)));
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
@@ -239,7 +235,6 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         .committed
         .as_ref()
         .expect("render commits Free context");
-    assert_eq!(committed.context().mode(), SyncMode::Off);
     assert_eq!(committed.context().rate(), manual_rate);
 
     let mut next = chunk(&pools, &[0.0; 256]);
@@ -255,19 +250,9 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     assert_eq!(
         kithara_signal::render_rate_revision(next.meta.render_revision),
         manual_rate.revision(),
-        "Free rate remains authoritative while the callback still reports HostSync"
+        "the Free rate remains authoritative after its activation"
     );
-    assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .expect("post-activation render commits context")
-            .context()
-            .mode(),
-        SyncMode::Off
-    );
-
-    publish_context(&publisher, SyncMode::Off, manual_rate, 512);
+    publish_context(&publisher, manual_rate, 512);
     let mut converged = chunk(&pools, &[0.0; 256]);
     converged.meta.frame_offset = 512;
     renderer.prepare(spec());
@@ -294,7 +279,7 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
 
     controls.set_speed(1.25);
     let resumed_rate = controls.rate_target();
-    publish_context(&publisher, SyncMode::Off, resumed_rate, 768);
+    publish_context(&publisher, resumed_rate, 768);
     let mut resumed = chunk(&pools, &[0.0; 256]);
     resumed.meta.frame_offset = 768;
     renderer.prepare(spec());
@@ -309,25 +294,14 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         resumed_rate.revision(),
         "a later Off revision wins after the captured Free rate converges"
     );
-    assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .expect("replacement plan commits live context")
-            .context()
-            .mode(),
-        SyncMode::Off
-    );
-
     let reset_revision = revision
         .checked_next()
         .expect("fixture map revision advances");
     controls.set_speed(0.5);
     let reset_rate = controls.rate_target();
     slot.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("replacement Free plan")
-            .with_free_activation(
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_free_activation(
+            crate::FreeActivation::new(
                 WarpMap::identity(reset_revision).reanchor(
                     1_024,
                     SessionFrame::new(1_024),
@@ -335,8 +309,9 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
                 ),
                 reset_rate,
             ),
+        ),
     )));
-    publish_context(&publisher, SyncMode::HostSync, reset_rate, 1_024);
+    publish_context(&publisher, reset_rate, 1_024);
     let mut reset_activation = chunk(&pools, &[0.0; 256]);
     reset_activation.meta.frame_offset = 1_024;
     renderer.prepare(spec());
@@ -357,9 +332,8 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         .checked_next()
         .expect("fixture map revision advances again");
     slot.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("supersedable Free plan")
-            .with_free_activation(
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_free_activation(
+            crate::FreeActivation::new(
                 WarpMap::identity(superseded_revision).reanchor(
                     1_280,
                     SessionFrame::new(1_280),
@@ -367,8 +341,9 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
                 ),
                 reset_rate,
             ),
+        ),
     )));
-    publish_context(&publisher, SyncMode::HostSync, reset_rate, 1_280);
+    publish_context(&publisher, reset_rate, 1_280);
     let mut superseded_activation = chunk(&pools, &[0.0; 256]);
     superseded_activation.meta.frame_offset = 1_280;
     renderer.prepare(spec());
@@ -376,10 +351,11 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
         .prepare_quantum(superseded_activation.meta, superseded_activation.frames())
         .expect("supersedable Free activation is plannable");
     assert!(renderer.free_handoff_latch.is_some());
-    slot.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("plan superseding the Free map"),
-    )));
+    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+        60.0,
+        60.0,
+        spec().sample_rate,
+    ))));
     renderer.prepare(spec());
     assert!(
         renderer.free_handoff_latch.is_none(),
@@ -420,13 +396,13 @@ fn adoption_frontier_reports_only_committed_pcm() {
 fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_frames: usize) {
     let controls = StretchControls::new(1.0);
     let (mut renderer, slot) = planned_renderer(controls);
-    let plan = RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-        .expect("fixture plan")
-        .with_activation(WarpMap::identity(WarpMapRevision::first()).reanchor(
+    let plan = crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_activation(
+        WarpMap::identity(WarpMapRevision::first()).reanchor(
             16,
             SessionFrame::new(16),
             SessionBeat::default(),
-        ));
+        ),
+    );
     slot.install(Some(Arc::new(plan)));
     let meta = AudioChunkInfo {
         spec: spec(),
@@ -450,13 +426,9 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let mut renderer = warp.renderer(spec(), pools());
     let revision = WarpMapRevision::from_raw(NonZero::new(3).expect("fixture revision"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("fixture plan")
-            .with_activation(WarpMap::identity(revision).reanchor(
-                16,
-                SessionFrame::new(16),
-                SessionBeat::default(),
-            )),
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_activation(
+            WarpMap::identity(revision).reanchor(16, SessionFrame::new(16), SessionBeat::default()),
+        ),
     )));
     let publish = |source| {
         let frame = SessionFrame::new(i64::try_from(source).expect("fixture frame fits"));
@@ -468,7 +440,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
             None,
         )
         .expect("fixture context")
-        .with_rate(SyncMode::Off, controls.rate_target());
+        .with_rate(controls.rate_target());
         publisher.publish(
             &context,
             PresentationFrontier::builder()
@@ -536,7 +508,7 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(SyncMode::HostSync, controls.rate_target());
+    .with_rate(controls.rate_target());
     publisher.publish_preparation(&context);
     assert!(reader.load().is_none());
     let cue = 30_000;
@@ -544,13 +516,9 @@ fn post_seek_pcm_prepares_at_the_future_activation_without_advancing_presentatio
     let revision =
         WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(spec.sample_rate, vec![GridSegment::new(0, u64::MAX, 1.6)])
-            .expect("fixture plan")
-            .with_activation(WarpMap::identity(revision).reanchor(
-                cue,
-                activation_output,
-                SessionBeat::default(),
-            )),
+        crate::test_grids::projected_plan(96.0, 124.0, spec.sample_rate).with_activation(
+            WarpMap::identity(revision).reanchor(cue, activation_output, SessionBeat::default()),
+        ),
     )));
     renderer.reset();
     renderer.prepare(spec);
@@ -599,13 +567,13 @@ fn the_activation_source_awaits_a_published_render_context() {
     let revision =
         WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("fixture plan")
-            .with_activation(WarpMap::identity(revision).reanchor(
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_activation(
+            WarpMap::identity(revision).reanchor(
                 cue,
                 SessionFrame::new(92_903),
                 SessionBeat::default(),
-            )),
+            ),
+        ),
     )));
     renderer.reset();
     renderer.prepare(spec());
@@ -622,7 +590,7 @@ fn the_activation_source_awaits_a_published_render_context() {
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(SyncMode::HostSync, controls.rate_target());
+    .with_rate(controls.rate_target());
     publisher.publish_preparation(&context);
 
     assert!(!renderer.awaits_render_context(cue));
@@ -644,19 +612,19 @@ fn post_seek_pcm_passing_the_activation_source_keeps_its_own_output_frontier() {
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(SyncMode::HostSync, controls.rate_target());
+    .with_rate(controls.rate_target());
     publisher.publish_preparation(&context);
     let cue = 30_000;
     let revision =
         WarpMapRevision::from_raw(NonZero::new(2).expect("fixture revision is non-zero"));
     warp.region_plan().install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("fixture plan")
-            .with_activation(WarpMap::identity(revision).reanchor(
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_activation(
+            WarpMap::identity(revision).reanchor(
                 cue,
                 SessionFrame::new(92_903),
                 SessionBeat::default(),
-            )),
+            ),
+        ),
     )));
     renderer.reset();
     renderer.prepare(spec());
@@ -700,10 +668,11 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     renderer
         .prepare_quantum(input.meta, input.frames())
         .expect("current plan accepts the source quantum");
-    slot.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, u64::MAX, 1.0)])
-            .expect("replacement plan"),
-    )));
+    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+        60.0,
+        60.0,
+        spec().sample_rate,
+    ))));
     renderer.prepare(spec());
 
     let output = renderer
@@ -713,16 +682,15 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
 }
 
 fn publish_rate(publisher: &RenderPublisher, rate: RateTarget, source: u64) {
-    publish_context_at_epoch(publisher, SyncMode::Off, rate, source, SessionEpoch::new(1));
+    publish_context_at_epoch(publisher, rate, source, SessionEpoch::new(1));
 }
 
-fn publish_context(publisher: &RenderPublisher, mode: SyncMode, rate: RateTarget, source: u64) {
-    publish_context_at_epoch(publisher, mode, rate, source, SessionEpoch::new(0));
+fn publish_context(publisher: &RenderPublisher, rate: RateTarget, source: u64) {
+    publish_context_at_epoch(publisher, rate, source, SessionEpoch::new(0));
 }
 
 fn publish_context_at_epoch(
     publisher: &RenderPublisher,
-    mode: SyncMode,
     rate: RateTarget,
     source: u64,
     epoch: SessionEpoch,
@@ -730,7 +698,7 @@ fn publish_context_at_epoch(
     let frame = SessionFrame::new(i64::try_from(source).expect("fixture frame fits"));
     let context = RenderContext::new(frame..frame, spec().sample_rate, None, epoch, None)
         .expect("fixture context is valid")
-        .with_rate(mode, rate);
+        .with_rate(rate);
     publisher.publish(
         &context,
         PresentationFrontier::builder()

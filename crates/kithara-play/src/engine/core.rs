@@ -29,7 +29,6 @@ use crate::{
     error::PlayError,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
-    sync::DeckGrid,
 };
 
 type SlotHandle = SlotControl;
@@ -694,7 +693,6 @@ impl<S> EngineImpl<S> {
 
     delegate::delegate! {
         to self.slots.lock() {
-            pub(crate) fn publish_deck_grid(&self, grid: DeckGrid);
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]

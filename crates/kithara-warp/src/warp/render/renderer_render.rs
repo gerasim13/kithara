@@ -177,18 +177,6 @@ where
         }
 
         let channels = usize::from(self.spec.channels.max(1));
-        let region = self.region_for(meta.frame_offset);
-        let region_frames = usize::try_from(
-            region
-                .end()
-                .checked_sub(meta.frame_offset)
-                .ok_or(ElasticError::SampleCountOverflow)?
-                .min(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?),
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        if region_frames == 0 {
-            return Err(ElasticError::StationarySourceSpan);
-        }
         let stretch = 1.0 / f64::from(speed);
         let capabilities = self
             .engine
@@ -211,7 +199,14 @@ where
         if available == 0 {
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
-        Ok(self.cap_before_activation(meta.frame_offset, region_frames.min(available)))
+        let projected = self
+            .projected_source_span(output_limit, meta.frame_offset)
+            .and_then(|span| usize::try_from(span).ok())
+            .unwrap_or(remaining);
+        if projected == 0 {
+            return Err(ElasticError::StationarySourceSpan);
+        }
+        Ok(self.cap_before_activation(meta.frame_offset, projected.min(available).min(remaining)))
     }
 }
 
@@ -233,13 +228,8 @@ where
             if consumed == frames {
                 return Ok(());
             }
-            let region = self.region_for(frame);
-            let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
-            let span = region.end().saturating_sub(frame).min(left).max(1);
-            let rate = self
-                .rate_context
-                .as_ref()
-                .map_or_else(|| f64::from(speed), |context| context.rate_for(region));
+            let span = u64::try_from(frames - consumed).unwrap_or(u64::MAX).max(1);
+            let rate = self.projected_rate().unwrap_or_else(|| f64::from(speed));
             let stretch = 1.0 / rate;
             self.apply_pitch(if self.controls.keylock() { 1.0 } else { rate })?;
             let capabilities = self

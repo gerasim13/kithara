@@ -188,7 +188,7 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
             now,
         )
         .expect("latch local tempo");
-    assert!(matches!(admission.0, SyncAdmission::StateChanged { .. }));
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     let admission = group
         .transact_at(
             SyncOperation::Tempo {
@@ -198,7 +198,7 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
             now,
         )
         .expect("commit local tempo");
-    assert!(matches!(admission.0, SyncAdmission::StateChanged { .. }));
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     let grid = group.snapshot();
     let beat = |frame| match grid.beat_at(MapPoint::new(
         grid.stamp(),
@@ -256,7 +256,7 @@ fn enabling_without_a_parent_withdraws_local_geometry() {
             SessionFrame::new(0),
         )
         .expect("enable waiting for parent geometry");
-    assert!(matches!(admission.0, SyncAdmission::StateChanged { .. }));
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     assert_eq!(group.mode, SyncMode::HostSync);
     assert!(matches!(
         group.snapshot().state(),
@@ -288,7 +288,7 @@ fn local_tempo_on_a_group_without_geometry_starts_at_its_target() {
             now,
         )
         .expect("a group without geometry commits its local tempo");
-    assert!(matches!(admission.0, SyncAdmission::StateChanged { .. }));
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     let grid = group.snapshot();
     let beat = |frame| match grid.beat_at(MapPoint::new(
         grid.stamp(),

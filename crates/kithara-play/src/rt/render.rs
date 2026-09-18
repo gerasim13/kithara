@@ -16,7 +16,6 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use tracing::warn;
-use triple_buffer::Output;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
@@ -25,7 +24,6 @@ use super::{
 use crate::{
     bridge::{PlayerNotification, RtMetrics, TrackState},
     rt::{TrackSlot, TrackSlots},
-    sync::DeckGrid,
 };
 
 type ActiveTrackEntry = (usize, TrackSlot, bool);
@@ -44,7 +42,6 @@ pub(crate) struct RenderTargets<'a> {
 }
 
 pub(crate) struct RenderPass {
-    grid: Output<DeckGrid>,
     stretch: Arc<StretchControls>,
     rate: SmoothedParam,
     gate: MixDSP,
@@ -65,14 +62,12 @@ impl RenderPass {
         shape: StreamShape,
         stretch: Arc<StretchControls>,
         smoothing: SmootherConfig,
-        grid: Output<DeckGrid>,
         gate_smoothing: SmootherConfig,
     ) -> Self
     where
         S: HasPool<f32>,
     {
         let mut pass = Self {
-            grid,
             rate: SmoothedParam::new(stretch.speed(), smoothing, shape.sample_rate),
             stretch,
             scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
@@ -157,6 +152,9 @@ impl RenderPass {
             active_slots,
         } = BlockTracks::of(tracks, prepared_ready);
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
+        if let Some((incoming, _)) = prepared_ready.filter(|_| !launching_from_stop) {
+            open_seam(tracks, &active_tracks, incoming);
+        }
 
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
@@ -344,17 +342,11 @@ impl RenderPass {
             target_bits = target.speed().to_bits(),
             multiplier_bits = multiplier.to_bits()
         );
-        let grid = *self.grid.read();
         let projected =
-            context.and_then(|context| grid.project(context, target.with_speed(multiplier)));
+            context.map(|context| context.clone().with_rate(target.with_speed(multiplier)));
         if let Some(context) = &projected {
             kithara::probe_event!(
                 deck_render_context,
-                mode = match context.mode() {
-                    kithara_warp::SyncMode::Off => 0_u64,
-                    kithara_warp::SyncMode::LocalSync => 1,
-                    kithara_warp::SyncMode::HostSync => 2,
-                },
                 rate_bits = context.rate().speed().to_bits(),
                 output = i64::from(context.output_frames().end)
             );
@@ -422,6 +414,29 @@ impl BlockTracks {
             active,
             active_slots,
         }
+    }
+}
+
+/// Crossfades into the launch this block starts.
+///
+/// The incoming track sounds from its activation frame, so both envelopes
+/// begin in the block that carries it: the tracks that were leading fade out
+/// while it fades in, and the seam needs no clock of its own.
+fn open_seam(
+    tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    active: &[ActiveTrackEntry],
+    incoming: TrackSlot,
+) {
+    for (_, handle, was_leading) in active {
+        if *was_leading
+            && *handle != incoming
+            && let Some(track) = tracks.at_mut(*handle)
+        {
+            track.fade_out();
+        }
+    }
+    if let Some(track) = tracks.at_mut(incoming) {
+        track.fade_in();
     }
 }
 

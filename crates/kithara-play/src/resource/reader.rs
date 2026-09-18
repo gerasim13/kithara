@@ -13,8 +13,8 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_test_macros as kithara;
 use kithara_warp::{
-    PresentationFrontier, RegionPlanSlot, RenderContext, RenderPublisher, RenderReader,
-    SessionFrame, StretchControls,
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, SessionFrame,
+    StretchControls, WarpPlanSlot,
 };
 use tracing::warn;
 
@@ -78,7 +78,7 @@ pub struct Resource {
     playback_rate: PlaybackRate,
     /// Region plan slot of the resident Warp lane; `None` for a plain reader.
     #[field(get, deref = false)]
-    region_plan: Option<Arc<RegionPlanSlot>>,
+    region_plan: Option<Arc<WarpPlanSlot>>,
     #[field(get, copy)]
     activation_blend_frames: Option<NonZeroUsize>,
     free_adoption: Option<crate::worker::FreeAdoptionControl>,
@@ -145,9 +145,9 @@ impl Drop for CancelGuard {
 impl Resource {
     pub(crate) fn render_activation(&self) -> Option<RenderActivation> {
         let plan = self.region_plan.as_deref()?.load()?;
-        let activation = plan.activation().copied()?;
+        let activation = plan.activation()?;
         let rate = plan
-            .free_handoff()
+            .free_activation()
             .map_or(0, |activation| activation.rate().revision());
         let revision =
             kithara_signal::pack_render_revision(rate, u64::from(activation.revision()))?;

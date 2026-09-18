@@ -10,7 +10,7 @@ use super::{
     ScheduledActivationProgress,
     renderer::{PreparedActivation, PreparedDisposition, PreparedQuantum, WarpRenderer},
 };
-use crate::{RenderSnapshot, SyncMode, WarpCursor};
+use crate::{BeatGridQuery, RenderContext, RenderSnapshot, SessionFrame, WarpCursor};
 
 impl<S> WarpRenderer<S>
 where
@@ -232,16 +232,18 @@ where
 
     pub(super) fn select_state(&mut self, frame: u64) -> Option<crate::RenderState> {
         let mut state = self.context.load_state()?;
-        if let Some(free) = self.plan.as_ref().and_then(|plan| plan.free_handoff()) {
+        if let Some(free) = self.plan.as_ref().and_then(|plan| plan.free_activation()) {
             let handoff = (free.cursor(), free.rate());
             if self.free_handoff_latch.is_none() && frame == free.cursor().source() {
                 self.free_handoff_latch = Some(handoff);
             }
             if self.free_handoff_latch == Some(handoff) {
-                if state.context.mode() == SyncMode::Off && state.context.rate() == free.rate() {
+                if self.applied_warp_map == Some(free.cursor().revision())
+                    && state.context.rate() == free.rate()
+                {
                     self.free_handoff_latch = None;
                 } else {
-                    state.context = state.context.clone().with_rate(SyncMode::Off, free.rate());
+                    state.context = state.context.clone().with_rate(free.rate());
                     state.snapshot = state
                         .snapshot
                         .map(|snapshot| snapshot.with_context(state.context.clone()));
@@ -249,12 +251,10 @@ where
             }
         }
         if !self.awaiting_activation_before(frame) {
-            let region = self.region_for(frame);
             self.rate = state
                 .context
                 .rate()
-                .with_speed(state.context.rate_for(region).as_());
-            self.rate_context = Some(state.context.clone());
+                .with_speed(self.projected_speed(&state.context));
         }
         Some(state)
     }
@@ -277,7 +277,7 @@ where
             |value| value.frontier().output(),
         );
         let selected = output == activation.output();
-        selected.then_some(*activation)
+        selected.then_some(activation)
     }
 
     pub(super) fn prepare_discontinuity_context(
@@ -328,7 +328,6 @@ where
                 current_source
             );
             self.plan = want;
-            self.region = None;
             self.prepared_context = None;
             self.free_handoff_latch = None;
         }
@@ -340,17 +339,18 @@ where
         self.pending_unity_meta.is_some()
     }
 
+    /// Whether the next block is heard untouched.
+    ///
+    /// A plan that does not place this item on the output axis sounds the same
+    /// as no plan at all. A gap inside a projection does not: the item still
+    /// follows that grid, and the renderer stays active across the gap.
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        (self.plan.as_ref().is_none_or(|plan| {
-            plan.segments().is_empty()
+        self.plan.as_ref().is_none_or(|plan| {
+            !plan.follows_output()
                 || plan
                     .activation()
                     .is_some_and(|activation| self.applied_warp_map != Some(activation.revision()))
-        }) || self
-            .rate_context
-            .as_ref()
-            .is_none_or(|context| context.mode() == SyncMode::Off))
-            && (speed - 1.0).abs() <= f32::EPSILON
+        }) && (speed - 1.0).abs() <= f32::EPSILON
     }
 
     fn awaiting_activation_before(&self, source: u64) -> bool {
@@ -361,6 +361,67 @@ where
                 self.applied_warp_map != Some(activation.revision())
                     && source != activation.source()
             })
+    }
+
+    /// The output frame the next render continues from.
+    ///
+    /// Every projected answer is taken from this frame, so a block's rounding
+    /// error is absorbed by the block that follows rather than carried.
+    ///
+    /// The committed render answers once one exists; before the first commit
+    /// the frontier the callback published answers; and while a seek is being
+    /// prepared, where no presentation exists yet, the published window's own
+    /// start answers, because that is where the next render lands.
+    pub(super) fn output_frontier(&self) -> Option<SessionFrame> {
+        if let Some(committed) = self.committed.as_ref() {
+            return Some(committed.frontier().output());
+        }
+        let state = self.context.load_state()?;
+        Some(state.snapshot.map_or_else(
+            || state.context.output_frames().start,
+            |snapshot| snapshot.frontier().output(),
+        ))
+    }
+
+    /// Source frames the projection prescribes between `source` and the end of
+    /// the next `output` frames.
+    ///
+    /// The span is the distance from where the recording actually stands to
+    /// where the projection says it must stand, so a block that rounded short
+    /// is made whole by the next one instead of drifting.
+    pub(super) fn projected_source_span(&self, output: usize, source: u64) -> Option<u64> {
+        let plan = self.plan.as_ref()?;
+        let start = self.output_frontier()?;
+        let end = SessionFrame::new(i64::from(start).checked_add(i64::try_from(output).ok()?)?);
+        let BeatGridQuery::Resolved(target) = plan.source_at(end) else {
+            return None;
+        };
+        f64::from(target)
+            .round()
+            .to_u64()
+            .and_then(|target| target.checked_sub(source))
+    }
+
+    /// Rate the projection prescribes at the output frontier.
+    pub(super) fn projected_rate(&self) -> Option<f64> {
+        let plan = self.plan.as_ref()?;
+        let output = self.output_frontier()?;
+        match plan.rate_at(output) {
+            BeatGridQuery::Resolved(rate) => Some(rate),
+            _ => None,
+        }
+    }
+
+    /// Speed published to the stretch backend for the next render.
+    ///
+    /// An item the projection does not place on the output axis is the bypass
+    /// case: the listener's own target owns the speed. Otherwise the projection
+    /// owns it, and nothing else may answer.
+    pub(super) fn projected_speed(&self, context: &RenderContext) -> f32 {
+        if self.plan.as_ref().is_none_or(|plan| !plan.follows_output()) {
+            return context.rate().speed();
+        }
+        self.projected_rate().map_or(1.0, AsPrimitive::as_)
     }
 
     pub(super) fn cap_before_activation(&self, source: u64, frames: usize) -> usize {
@@ -382,7 +443,12 @@ where
             distance
         }
     }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Select the next source span that fits the configured output quantum.
     pub fn prepare_quantum(
         &mut self,

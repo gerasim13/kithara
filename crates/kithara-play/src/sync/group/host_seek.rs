@@ -8,7 +8,7 @@ use super::super::{
     prepare::{PreparedDisposition, PreparedSync, align_member, host_seek_policy},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PreparedHostReconcile {
     alignment: super::super::prepare::MemberAlignment,
     pub(crate) expected_generation: (kithara_warp::LoadGeneration, TransportRevision),
@@ -85,6 +85,17 @@ where
             source: alignment.source,
             target,
             disposition: PreparedDisposition::Lock,
+            projection: kithara_warp::BeatGridSnapshot::projection(
+                member.clone(),
+                group.grid.clone(),
+                *alignment.alignment.source().value(),
+                alignment.activation,
+            )
+            .map_err(|reason| SyncError::GridNotProjectable {
+                group_id: group.grid.id(),
+                member_id: target,
+                reason,
+            })?,
         },
         topology: TopologyStamp::new(group.grid.id(), group.topology_revision),
     })
@@ -123,15 +134,16 @@ where
     }
     *alignment = Some(candidate.alignment.alignment);
     group.generations = candidate.expected_generation;
+    let admission = SyncAdmission::Prepared {
+        operation: candidate.prepared.operation,
+        topology: candidate.topology,
+        warp_map: candidate.prepared.warp_map,
+        activation: candidate.prepared.activation,
+    };
     group.warp_map = candidate.prepared.warp_map;
     group.prepared.insert(candidate.prepared);
     group.unavailable = None;
     group.waiting = None;
     group.next_operation = group.next_operation.and_then(SyncOperationId::checked_next);
-    Ok(SyncAdmission::Prepared {
-        operation: candidate.prepared.operation,
-        topology: candidate.topology,
-        warp_map: candidate.prepared.warp_map,
-        activation: candidate.prepared.activation,
-    })
+    Ok(admission)
 }

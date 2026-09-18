@@ -26,8 +26,8 @@ use kithara_signal::AudioSpec;
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    GridSegment, RegionPlan, RegionPlanSlot, SessionEpoch, SessionFrame, StretchControls, Warp,
-    WarpConfig, WarpMap, WarpMapRevision,
+    AssetAxis, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapAxis, SessionEpoch, SessionFrame,
+    StretchControls, Warp, WarpConfig, WarpMap, WarpMapRevision, WarpPlan, WarpPlanSlot,
 };
 use ringbuf::traits::{Consumer, Producer};
 
@@ -343,6 +343,15 @@ fn fixture_rate() -> NonZeroU32 {
     NonZeroU32::new(Consts::SAMPLE_RATE).expect("invariant: fixture rate is non-zero")
 }
 
+/// A grid the fixture plans carry when the plan's geometry is not under test.
+fn fixture_grid() -> BeatGridSnapshot {
+    BeatGridSnapshot::unavailable(
+        BeatGridId::allocate().expect("fixture identity"),
+        BeatGridRevision::first(),
+        MapAxis::Asset(AssetAxis::new(fixture_rate(), u64::MAX)),
+    )
+}
+
 fn scheduled_revision_resource(
     activation_output: i64,
     replacement_frames: usize,
@@ -352,10 +361,8 @@ fn scheduled_revision_resource(
         SessionFrame::new(activation_output),
         kithara_warp::SessionBeat::default(),
     );
-    let plan = RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 10_000, 2.0)])
-        .expect("fixture plan")
-        .with_activation(activation);
-    let slot = Arc::new(RegionPlanSlot::default());
+    let plan = WarpPlan::new(fixture_grid()).with_activation(activation);
+    let slot = Arc::new(WarpPlanSlot::default());
     slot.install(Some(Arc::new(plan)));
     let mut resource = Resource::from_reader(RevisionReader::new(replacement_frames), None);
     resource.region_plan = Some(slot);
@@ -411,11 +418,10 @@ fn free_activation_replaces_a_128_frame_refill_before_its_target_is_presented() 
         SessionFrame::new(128),
         kithara_warp::SessionBeat::default(),
     );
-    let slot = Arc::new(RegionPlanSlot::default());
+    let slot = Arc::new(WarpPlanSlot::default());
     slot.install(Some(Arc::new(
-        RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 10_000, 2.0)])
-            .expect("fixture plan")
-            .with_free_activation(activation, manual_rate),
+        WarpPlan::new(fixture_grid())
+            .with_free_activation(kithara_warp::FreeActivation::new(activation, manual_rate)),
     )));
     let observed_revision = Arc::new(AtomicU64::new(0));
     let mut resource = Resource::from_reader(
@@ -566,7 +572,6 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         shape,
         inputs.stretch,
         inputs.rate_smoothing,
-        inputs.grid,
         crate::DEFAULT_GATE_SMOOTHING,
     );
     let item = TrackId::allocate();
@@ -641,7 +646,6 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         shape,
         activation_inputs.stretch,
         activation_inputs.rate_smoothing,
-        activation_inputs.grid,
         crate::DEFAULT_GATE_SMOOTHING,
     );
 
@@ -681,7 +685,6 @@ fn unarmed_prepared_launch_remains_silent_at_its_ready_activation() {
         shape,
         inputs.stretch,
         inputs.rate_smoothing,
-        inputs.grid,
         crate::DEFAULT_GATE_SMOOTHING,
     );
     let item = TrackId::allocate();

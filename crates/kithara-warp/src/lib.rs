@@ -10,6 +10,8 @@ mod sync;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
+#[cfg(test)]
+mod test_grids;
 mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
@@ -44,12 +46,11 @@ pub(crate) use temporal::RenderState;
 ))]
 pub use temporal::StretchKind;
 pub use temporal::{
-    ActiveRegion, GridSegment, RateTarget, RegionPlan, RegionPlanError, RegionPlanSlot,
-    RenderContext, RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
+    RateTarget, RenderContext, RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
 pub use warp::{
-    DEFAULT_RATE_SMOOTHING, DEFAULT_TEMPO_SMOOTHING_SECONDS, Warp, WarpConfig, WarpConfigPatch,
-    WarpCursor, WarpMap, supports_playback_rate,
+    DEFAULT_RATE_SMOOTHING, DEFAULT_TEMPO_SMOOTHING_SECONDS, FreeActivation, Warp, WarpConfig,
+    WarpConfigPatch, WarpCursor, WarpMap, WarpPlan, WarpPlanSlot, supports_playback_rate,
 };
 #[cfg(feature = "render")]
 pub use warp::{ScheduledActivationProgress, WarpRenderer};

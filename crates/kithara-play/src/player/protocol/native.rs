@@ -13,7 +13,6 @@ pub(crate) struct PreparedHostSeek {
     pub(crate) activation_floor: kithara_warp::SessionFrame,
     pub(crate) item: TrackId,
     pub(crate) grid_stamp: kithara_warp::BeatGridStamp,
-    pub(crate) plan: kithara_platform::sync::Arc<kithara_warp::RegionPlan>,
     pub(crate) slot: crate::api::SlotId,
     pub(crate) source_frame: u64,
 }

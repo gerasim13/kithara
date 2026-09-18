@@ -58,6 +58,13 @@ pub enum SyncError {
     /// The real-time command queue cannot admit this transaction yet; retry it unchanged.
     #[error("real-time command queue is full")]
     SlotChannelFull,
+    /// The member's grid cannot be projected onto the grid it must follow.
+    #[error("member {member_id:?} cannot be projected onto group {group_id:?}: {reason}")]
+    GridNotProjectable {
+        group_id: BeatGridId,
+        member_id: BeatGridId,
+        reason: crate::GridProjectionError,
+    },
     /// The canonical group owner stopped before accepting an operation.
     #[error("canonical synchronization-group owner is unavailable")]
     OwnerUnavailable,

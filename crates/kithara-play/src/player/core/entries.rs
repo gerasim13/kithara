@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use kithara_warp::{
-    AlignmentSource, MapAxis, ReconcileCause, SyncAdmission, SyncRejected, WarpMap,
+    AlignmentSource, MapAxis, ReconcileCause, SyncAdmission, SyncRejected, WarpMap, WarpPlan,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -15,7 +15,6 @@ use crate::{
     player::{
         core::grids::{native_frame, source_cue_beat, source_duration},
         protocol::PlayerMember,
-        state::TrackGrid,
     },
     sync::EntryRefusal,
 };
@@ -93,7 +92,7 @@ where
             match self.sync.prepare_entry(grid.id, window, cue) {
                 Ok(_) => {
                     if let Some(prepared) = self.sync.prepared().get(grid.id) {
-                        self.deliver_prepared_map(item, &grid, prepared, true);
+                        self.deliver_prepared_map(item, &prepared, true);
                     }
                 }
                 Err(EntryRefusal::Geometry(required)) => {
@@ -108,18 +107,17 @@ where
 
     /// Carries one prepared map of `item` into the renderer.
     ///
-    /// The track's region plan holds the map for the decoder, and the
+    /// The track's plan holds the map for the decoder, and the
     /// scheduled seek carries the source frame the map activates on. A track
     /// the deck has yet to play enters as a launch, so the renderer starts it
     /// on its activation instead of seeking an audible stream.
     pub(super) fn deliver_prepared_map(
         &self,
         item: TrackId,
-        grid: &TrackGrid,
-        prepared: crate::sync::prepare::PreparedSync,
+        prepared: &crate::sync::prepare::PreparedSync,
         launch: bool,
     ) {
-        self.install_prepared_plan(item, grid, prepared);
+        self.install_prepared_plan(item, prepared);
         kithara::probe_event!(
             prepared_map_delivered,
             item = item.as_u64(),
@@ -154,27 +152,27 @@ where
         }
     }
 
-    /// Installs the track's region plan activated by `prepared`.
+    /// Installs the plan `prepared` activated, measured against its projection.
+    ///
+    /// The projection was frozen when the map was prepared, against the owner
+    /// grid the map aligns to, so the renderer cannot measure spans against a
+    /// grid the activation was never computed from.
     pub(super) fn install_prepared_plan(
         &self,
         item: TrackId,
-        grid: &TrackGrid,
-        prepared: crate::sync::prepare::PreparedSync,
+        prepared: &crate::sync::prepare::PreparedSync,
     ) {
-        let plan = grid
-            .segments
-            .region_plan()
-            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-            .ok()
-            .map(|plan| {
-                let activation = WarpMap::identity(prepared.warp_map).reanchor(
-                    prepared.source,
-                    prepared.activation,
-                    prepared.activation_beat,
-                );
-                Arc::new(plan.with_activation(activation))
-            });
-        self.runtime.core.items.set_track_plan(item, plan);
+        let activation = WarpMap::identity(prepared.warp_map).reanchor(
+            prepared.source,
+            prepared.activation,
+            prepared.activation_beat,
+        );
+        self.runtime.core.items.set_track_plan(
+            item,
+            Some(Arc::new(
+                WarpPlan::new(prepared.projection.clone()).with_activation(activation),
+            )),
+        );
     }
 
     pub(crate) fn reconcile_current_grid(

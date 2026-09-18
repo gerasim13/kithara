@@ -12,7 +12,7 @@ use kithara_warp::{
 use {
     kithara_platform::sync::Arc,
     kithara_test_macros as kithara,
-    kithara_warp::{TransportRevision, WarpMap},
+    kithara_warp::{TransportRevision, WarpMap, WarpPlan},
     num_traits::ToPrimitive,
 };
 
@@ -148,7 +148,7 @@ where
     S: Send + Sync + 'static,
 {
     /// Whether the current track can hand its own mapping to a free
-    /// adoption: it must be resident, planned on the output frame axis and
+    /// adoption: it must be resident, measured on its own asset axis and
     /// already holding a transition to adopt.
     fn owns_free_adoption(&self) -> bool {
         let Some(item) = self.runtime.core.items.current_item_id() else {
@@ -157,7 +157,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return false;
         };
-        grid.segments.region_plan().is_ok()
+        matches!(grid.snapshot.axis(), kithara_warp::MapAxis::Asset(_))
             && self
                 .runtime
                 .core
@@ -277,10 +277,7 @@ where
         } else {
             self.sync.transact_at(operation, now)
         };
-        let (admission, projection) = result?;
-        if let Some(projection) = projection {
-            self.runtime.core.engine.publish_deck_grid(projection);
-        }
+        let admission = result?;
         if free && matches!(admission, SyncAdmission::Preparing { .. }) {
             self.prepare_free_handoff();
         }
@@ -415,13 +412,15 @@ where
                 .map_err(PlayError::from)?;
         let output_rate = self.runtime.core.engine.output_sample_rate();
         let destination = target::duration_for_source(reconcile.prepared.source, output_rate.get());
-        let plan = Arc::new(prepared.plan.as_ref().clone().with_activation(
-            WarpMap::identity(reconcile.prepared.warp_map).reanchor(
-                reconcile.prepared.source,
-                reconcile.prepared.activation,
-                reconcile.prepared.activation_beat,
+        let plan = Arc::new(
+            WarpPlan::new(reconcile.prepared.projection.clone()).with_activation(
+                WarpMap::identity(reconcile.prepared.warp_map).reanchor(
+                    reconcile.prepared.source,
+                    reconcile.prepared.activation,
+                    reconcile.prepared.activation_beat,
+                ),
             ),
-        ));
+        );
         let disposition = target::host_seek_disposition(
             reconcile.prepared.activation,
             reconcile.prepared.warp_map,
@@ -445,7 +444,7 @@ where
                         prepared.grid_stamp,
                         plan,
                         || {
-                            let result = crate::sync::host_seek::commit(sync, reconcile)
+                            let result = crate::sync::host_seek::commit(sync, reconcile.clone())
                                 .map_err(PlayError::from);
                             revoke.set(preparing_before.is_some_and(|identity| {
                                 result.is_ok()
@@ -582,11 +581,6 @@ where
             .track_grid(item)
             .ok_or(PlayError::MissingTrackGrid { item })?;
         let grid_stamp = grid.snapshot.stamp();
-        let plan = Arc::new(
-            grid.segments
-                .region_plan()
-                .map_err(|_| PlayError::InvalidTrackGrid { item })?,
-        );
         let slot = self.runtime.slot().ok_or(PlayError::NoActiveSlot)?;
         self.runtime.core.engine.validate_track_seek(slot, item)?;
         let axis = grid.snapshot.axis();
@@ -605,7 +599,6 @@ where
             activation_floor,
             item,
             grid_stamp,
-            plan,
             slot,
             source_frame,
         })

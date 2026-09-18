@@ -10,8 +10,8 @@ use kithara_test_macros as kithara;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RegionPlanSlot, RenderContext, RenderReader, RenderSnapshot,
-    StretchControls, WarpConfig, WarpMapRevision, temporal::RateTarget,
+    RenderReader, RenderSnapshot, StretchControls, WarpConfig, WarpMapRevision, WarpPlan,
+    WarpPlanSlot, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -67,7 +67,6 @@ pub struct WarpRenderer<S> {
     /// The latch belongs to the loaded immutable plan and its map cursor;
     /// `sync_plan` clears it before another plan can be selected.
     pub(super) free_handoff_latch: Option<(crate::WarpCursor, RateTarget)>,
-    pub(super) rate_context: Option<RenderContext>,
     pub(super) prepared_context: Option<RenderSnapshot>,
     pub(super) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
@@ -88,15 +87,12 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan cached from `plan_slot`; `Arc::ptr_eq` detects a live swap.
-    pub(super) plan: Option<Arc<RegionPlan>>,
+    /// Plan cached from `plan_slot`; `Arc::ptr_eq` detects a live swap.
+    pub(super) plan: Option<Arc<WarpPlan>>,
     /// Live plan of the rendered item, shared with the deck that installs it.
-    pub(super) plan_slot: Arc<RegionPlanSlot>,
+    pub(super) plan_slot: Arc<WarpPlanSlot>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
-    /// Region covering the playhead - the lookup cursor. `None` forces a
-    /// fresh binary search (first chunk, plan swap, region exit, seek).
-    pub(super) region: Option<ActiveRegion>,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
@@ -152,7 +148,7 @@ where
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
-        plan_slot: Arc<RegionPlanSlot>,
+        plan_slot: Arc<WarpPlanSlot>,
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
@@ -187,7 +183,6 @@ where
             rate,
             free_handoff_latch: None,
             prepared_context: None,
-            rate_context: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -208,7 +203,6 @@ where
             activation_scratch: target.activation_scratch,
             deferred_scratch: None,
             plan,
-            region: None,
         }
     }
 
@@ -265,7 +259,6 @@ where
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
-        self.region = None;
     }
     pub(super) fn commit_rate_render(
         &mut self,
@@ -415,26 +408,6 @@ where
             admitted.saturating_sub(held_source_frames),
             meta.spec.sample_rate,
         ));
-    }
-
-    /// Region covering the decoded frame `frame`, plus whether the playhead
-    /// just crossed out of a previously resolved region (a plan boundary or a
-    /// seek).
-    ///
-    /// The plan measures the asset, so the boundaries reach this axis through
-    /// the rate the decoded stream carries. The resolved region is cached, and
-    /// the conversion runs only when the playhead leaves it.
-    pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return r;
-        }
-        let next = self.plan.as_ref().map_or(ActiveRegion::UNBOUNDED, |p| {
-            p.region_at(frame, self.spec.sample_rate)
-        });
-        self.region = Some(next);
-        next
     }
 
     /// Exact decoded-source boundary represented by the latest emitted samples.

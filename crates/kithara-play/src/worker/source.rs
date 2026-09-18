@@ -6,7 +6,7 @@ use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::SeekObserve;
-use kithara_warp::{RegionPlanSlot, WarpMap};
+use kithara_warp::{WarpMap, WarpPlanSlot};
 
 use super::{FreeAdoptionCommit, FreeAdoptionInstalled, FreeAdoptionWorker};
 use crate::effects::{
@@ -48,7 +48,7 @@ pub(crate) struct WarpSourceParts<S> {
     pub(crate) spec: AudioSpec,
     pub(crate) pools: PoolRegion<S>,
     pub(crate) free_adoption: Option<FreeAdoptionWorker>,
-    pub(crate) region_plan: Arc<RegionPlanSlot>,
+    pub(crate) region_plan: Arc<WarpPlanSlot>,
 }
 
 /// The sole producer-side Warp/effect stage before the play output ring.
@@ -72,7 +72,7 @@ pub(crate) struct WarpSource<T, S> {
     warp: kithara_warp::WarpRenderer<S>,
     free_adoption: Option<FreeAdoptionWorker>,
     free_adoption_generation: u64,
-    region_plan: Arc<RegionPlanSlot>,
+    region_plan: Arc<WarpPlanSlot>,
     quantum_failed: bool,
     /// Whether the staged span waits for the callback to publish a render
     /// context before Warp can install its activation map.
@@ -448,8 +448,10 @@ where
             return;
         };
         let plan = Arc::new(request.plan.as_ref().clone().with_free_activation(
-            WarpMap::identity(request.warp_map).reanchor(source, output, activation_beat),
-            request.manual_rate,
+            kithara_warp::FreeActivation::new(
+                WarpMap::identity(request.warp_map).reanchor(source, output, activation_beat),
+                request.manual_rate,
+            ),
         ));
         let seek_epoch = self.seek.epoch();
         let installed = FreeAdoptionInstalled {
@@ -801,10 +803,10 @@ mod tests {
     };
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment, LoadGeneration,
-        PresentationFrontier, RegionPlan, RenderContext, SessionAnchor, SessionAxis, SessionBeat,
-        SessionEpoch, SessionFrame, StretchControls, StretchKind, SyncMode, SyncOperationId,
-        TransportRevision, Warp, WarpMapRevision,
+        AssetAxis, BeatGridId, BeatGridRevision, BeatGridSnapshot, LoadGeneration, MapAxis,
+        PresentationFrontier, RenderContext, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+        SessionFrame, StretchControls, StretchKind, SyncOperationId, TransportRevision, Warp,
+        WarpMapRevision, WarpPlan,
     };
 
     use super::*;
@@ -813,6 +815,15 @@ mod tests {
     /// The rate the fixture plans count asset frames of.
     fn fixture_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
+    /// A grid the fixture plans carry when the plan's geometry is not under test.
+    fn fixture_grid() -> BeatGridSnapshot {
+        BeatGridSnapshot::unavailable(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+            MapAxis::Asset(AssetAxis::new(fixture_rate(), u64::MAX)),
+        )
     }
 
     fn flush_deferred<S>(source: &mut S)
@@ -1247,13 +1258,13 @@ mod tests {
         let region_plan = Arc::clone(warp.region_plan());
         let old_warp_map = WarpMapRevision::first();
         region_plan.install(Some(Arc::new(
-            RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
-                .expect("fixture old plan")
-                .with_activation(WarpMap::identity(old_warp_map).reanchor(
+            WarpPlan::new(fixture_grid()).with_activation(
+                WarpMap::identity(old_warp_map).reanchor(
                     0,
                     SessionFrame::new(0),
                     SessionBeat::default(),
-                )),
+                ),
+            ),
         )));
         let renderer = warp.renderer(spec, pools.clone());
         let drain = EffectDrain::new(0, &pools).expect("fixture drain");
@@ -1336,10 +1347,7 @@ mod tests {
             decode_epoch: 0,
             manual_rate,
             owner,
-            plan: Arc::new(
-                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
-                    .expect("fixture plan"),
-            ),
+            plan: Arc::new(WarpPlan::new(fixture_grid())),
         });
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -1707,10 +1715,7 @@ mod tests {
             decode_epoch: 0,
             manual_rate,
             owner,
-            plan: Arc::new(
-                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, u64::MAX, 2.0)])
-                    .expect("fixture plan"),
-            ),
+            plan: Arc::new(WarpPlan::new(fixture_grid())),
         });
         let TrackStep::Produced(Fetch::Data { data: target, .. }) = source.step_track() else {
             panic!("the next source step adopts Free before it produces PCM");
@@ -1877,7 +1882,7 @@ mod tests {
             None,
         )
         .expect("fixture context")
-        .with_rate(SyncMode::Off, controls.rate_target());
+        .with_rate(controls.rate_target());
         publisher.publish(
             &context,
             PresentationFrontier::builder()

@@ -10,7 +10,7 @@ use super::WarpConfig;
 use super::WarpRenderer;
 #[cfg(feature = "render")]
 use crate::RenderReader;
-use crate::{RegionPlanSlot, RenderPublisher, StretchControls};
+use crate::{RenderPublisher, StretchControls, WarpPlanSlot};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
@@ -27,7 +27,7 @@ pub struct Warp<S> {
     reader: RenderReader,
     /// Region plan of this resident item, installed by its deck.
     #[field(get, deref = false)]
-    region_plan: Arc<RegionPlanSlot>,
+    region_plan: Arc<WarpPlanSlot>,
     #[field(get, get_mut)]
     source: S,
 }

@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara_events::TrackId;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_warp::{
-    BeatGridSnapshot, LoadGeneration, RateTarget, RegionPlan, SyncOperationId, TransportRevision,
-    WarpMapRevision,
+    BeatGridSnapshot, LoadGeneration, RateTarget, SyncOperationId, TransportRevision,
+    WarpMapRevision, WarpPlan,
 };
 
 mod receipt;
@@ -24,7 +24,7 @@ pub(crate) struct FreeAdoptionRequest {
     pub(crate) decode_epoch: u64,
     pub(crate) manual_rate: RateTarget,
     pub(crate) owner: BeatGridSnapshot,
-    pub(crate) plan: Arc<RegionPlan>,
+    pub(crate) plan: Arc<WarpPlan>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -290,8 +290,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        BeatGridId, BeatGridRevision, BeatGridSnapshot, GridSegment, RegionPlan, SessionAnchor,
-        SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+        AssetAxis, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapAxis, SessionAnchor,
+        SessionAxis, SessionBeat, SessionEpoch, SessionFrame, WarpPlan,
     };
 
     use super::*;
@@ -299,6 +299,15 @@ mod tests {
     /// The rate the fixture plans count asset frames of.
     fn fixture_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
+    /// A grid the fixture plans carry when the plan's geometry is not under test.
+    fn fixture_grid() -> BeatGridSnapshot {
+        BeatGridSnapshot::unavailable(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+            MapAxis::Asset(AssetAxis::new(fixture_rate(), u64::MAX)),
+        )
     }
 
     fn request(item: TrackId) -> FreeAdoptionRequest {
@@ -327,10 +336,7 @@ mod tests {
             decode_epoch: 0,
             manual_rate: RateTarget::default(),
             owner,
-            plan: Arc::new(
-                RegionPlan::new(fixture_rate(), vec![GridSegment::new(0, 48_000, 2.0)])
-                    .expect("fixture plan is valid"),
-            ),
+            plan: Arc::new(WarpPlan::new(fixture_grid())),
         }
     }
 

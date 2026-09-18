@@ -16,7 +16,7 @@ use kithara_warp::{
 };
 
 use super::{
-    DeckGrid, EntryRefusal, TempoSource,
+    EntryRefusal, TempoSource,
     prepare::{self, EntryWindow, FreePreparing, PreparedDisposition, PreparedSync, PreparedSyncs},
     topology::materialize_topology,
     transaction,
@@ -73,6 +73,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             self.prepared.clear();
             return true;
         };
+        let Some(member) = self.member_grid(preparing.target) else {
+            self.prepared.clear();
+            return true;
+        };
         self.prepared.insert(PreparedSync {
             operation: preparing.operation,
             warp_map: preparing.warp_map,
@@ -80,6 +84,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             activation: receipt.output,
             activation_beat: receipt.activation_beat,
             target: preparing.target,
+            projection: member,
             disposition: PreparedDisposition::Free,
         });
         true
@@ -132,7 +137,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         &mut self,
         operation: SyncOperation<G>,
         now: SessionFrame,
-    ) -> Result<(SyncAdmission, Option<DeckGrid>), SyncRejected<G>> {
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
         let state = if operation.target() == self.grid.id() {
             match &operation {
                 SyncOperation::Sync {
@@ -169,20 +174,29 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             Err(error) => return Err(SyncRejected::new(error, operation)),
         };
         if let Some(candidate) = &candidate
-            && let Err(error) = self.validate_grid(&candidate.0)
+            && let Err(error) = self.validate_grid(candidate)
         {
             return Err(SyncRejected::new(error, operation));
         }
         let admission = self.transact(operation)?;
-        let projection = if matches!(admission, SyncAdmission::StateChanged { .. }) {
-            candidate.map(|(grid, projection)| {
-                self.grid = grid;
-                projection
-            })
-        } else {
-            None
-        };
-        Ok((admission, projection))
+        if matches!(admission, SyncAdmission::StateChanged { .. })
+            && let Some(candidate) = candidate
+        {
+            self.grid = candidate;
+        }
+        Ok(admission)
+    }
+
+    /// The grid of one member of this group.
+    ///
+    /// A deck that follows nothing measures its spans against the recording's
+    /// own grid, so a Free adoption installs this snapshot where a following
+    /// deck installs a projection onto the owner.
+    fn member_grid(&self, target: BeatGridId) -> Option<BeatGridSnapshot> {
+        self.members.iter().find_map(|member| match member {
+            SyncMember::Grid { grid, .. } if grid.id() == target => Some(grid.snapshot()),
+            SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
+        })
     }
 
     fn state_grid(
@@ -190,15 +204,12 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         mode: SyncMode,
         tempo: TempoSource,
         now: SessionFrame,
-    ) -> Result<(BeatGridSnapshot, DeckGrid), SyncError> {
+    ) -> Result<BeatGridSnapshot, SyncError> {
         match (mode, tempo) {
-            (SyncMode::HostSync, _) => self
-                .parent_anchor
-                .map_or_else(
-                    || self.unavailable_session_candidate(),
-                    |anchor| self.session_candidate(anchor),
-                )
-                .map(|grid| (grid, DeckGrid::Host)),
+            (SyncMode::HostSync, _) => self.parent_anchor.map_or_else(
+                || self.unavailable_session_candidate(),
+                |anchor| self.session_candidate(anchor),
+            ),
             (SyncMode::LocalSync, TempoSource::Local(tempo)) => {
                 let origin = MapPoint::new(self.grid.stamp(), MapPosition::Session(now));
                 let beat = match (self.grid.state(), self.grid.beat_at(origin)) {
@@ -216,16 +227,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 })?;
                 self.session_candidate(anchor)
-                    .map(|grid| (grid, DeckGrid::Local(anchor)))
             }
             (SyncMode::LocalSync, TempoSource::Inherited) => {
                 Err(SyncError::InvalidGroupGridState {
                     state: self.grid.state(),
                 })
             }
-            (SyncMode::Off, _) => self
-                .unavailable_session_candidate()
-                .map(|grid| (grid, DeckGrid::Off)),
+            (SyncMode::Off, _) => self.unavailable_session_candidate(),
         }
     }
 
@@ -530,15 +538,16 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
     }
 
-    /// Drops the entry a waiting member prepared against a stale deadline.
+    /// Drops the entry a waiting member prepared against a stale window.
     ///
-    /// The deadline moves whenever another track becomes audible, and an entry
-    /// placed past the new deadline would never sound.
+    /// The window moves whenever another track becomes audible. An entry past
+    /// the new deadline would never sound, and one before the window opens
+    /// belongs to a handover that already happened without it: both leave the
+    /// member holding a map the renderer can no longer activate.
     pub(crate) fn discard_stale_entry(&mut self, target: BeatGridId, window: EntryWindow) {
-        let stale = self
-            .prepared
-            .get(target)
-            .is_some_and(|prepared| prepared.activation > window.deadline);
+        let stale = self.prepared.get(target).is_some_and(|prepared| {
+            !(window.earliest..=window.deadline).contains(&prepared.activation)
+        });
         if stale && self.is_waiting(target) {
             self.prepared.remove(target);
         }

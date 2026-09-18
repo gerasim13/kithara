@@ -9,7 +9,7 @@ use super::{
     Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, planned_renderer,
     publish_rate, render_serviced, spec,
 };
-use crate::{GridSegment, RegionPlan, Warp, WarpConfig, test_pools::pools};
+use crate::{Warp, WarpConfig, test_pools::pools};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -93,175 +93,6 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn one_frame_regions_accumulate_into_one_portable_request(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let (mut fx, plan) = planned_renderer(controls);
-    plan.install(Some(Arc::new(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![
-                GridSegment::new(0, 1, 0.125),
-                GridSegment::new(1, 2, 0.25),
-                GridSegment::new(2, 3, 0.125),
-                GridSegment::new(3, 4, 0.5),
-            ],
-        )
-        .expect("one-frame regions are ordered and non-empty"),
-    )));
-    let pools = fx.pools.clone();
-    let source = warp_sine[..(4) * 2].to_vec();
-
-    for frame in 0..3_u64 {
-        let start = usize::try_from(frame).unwrap_or_default() * usize::from(Consts::CH);
-        let mut input = chunk(&pools, &source[start..start + usize::from(Consts::CH)]);
-        input.meta.frame_offset = frame;
-        assert!(render_serviced(&mut fx, input).is_none());
-    }
-
-    let mut input = chunk(&pools, &source[3 * usize::from(Consts::CH)..]);
-    input.meta.frame_offset = 3;
-    let output = render_serviced(&mut fx, input)
-        .expect("the fourth source frame completes one output frame");
-    assert_eq!(output.frames(), 1);
-    assert_eq!(output.meta.frame_offset, 0);
-    let mut tail_chunks = 0;
-    while let Some(tail) = flush_serviced(&mut fx) {
-        assert!(tail.frames() > 0, "a flush chunk contains real frames");
-        assert_eq!(tail.spec(), spec());
-        tail_chunks += 1;
-        assert!(tail_chunks < 32, "terminal drain must converge");
-    }
-    assert!(
-        tail_chunks > 0,
-        "an active engine exposes its terminal tail"
-    );
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_uses_earliest_start_and_latest_frontier(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let (mut fx, plan) = planned_renderer(controls);
-    plan.install(Some(Arc::new(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![
-                GridSegment::new(0, 1, 1.0),
-                GridSegment::new(1, 2, 0.75),
-                GridSegment::new(2, 3, 0.25),
-            ],
-        )
-        .expect("fixture regions are contiguous"),
-    )));
-    let pools = fx.pools.clone();
-    let source = warp_sine[..(3) * 2].to_vec();
-    let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
-    first.meta.end_timestamp = Duration::from_millis(20);
-    first.meta.segment_index = Some(1);
-    first.meta.variant_index = Some(1);
-    first.meta.epoch = 1;
-    first.meta.source_byte_offset = Some(10);
-    first.meta.source_bytes = 20;
-    let first_output = render_serviced(&mut fx, first).expect("first frame renders");
-
-    let mut second = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
-    second.meta.frame_offset = 2;
-    second.meta.timestamp = Duration::from_millis(20);
-    second.meta.end_timestamp = Duration::from_millis(30);
-    second.meta.segment_index = Some(2);
-    second.meta.variant_index = Some(2);
-    second.meta.epoch = 2;
-    second.meta.source_byte_offset = Some(30);
-    second.meta.source_bytes = 10;
-    let second_output =
-        render_serviced(&mut fx, second).expect("pending span completes on the next chunk");
-
-    assert!(first_output.meta.end_timestamp < second_output.meta.end_timestamp);
-    assert_eq!(second_output.meta.frame_offset, 1);
-    assert_eq!(
-        second_output.meta.timestamp,
-        spec().duration_for(1).expect("test timestamp fits")
-    );
-    assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
-    assert_eq!(second_output.meta.segment_index, Some(2));
-    assert_eq!(second_output.meta.variant_index, Some(2));
-    assert_eq!(second_output.meta.epoch, 2);
-    assert_eq!(second_output.meta.source_byte_offset, None);
-    assert_eq!(second_output.meta.source_bytes, 0);
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_pending_source(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
-    let pools = fx.pools.clone();
-    let source_latency = fx
-        .engine
-        .as_ref()
-        .expect("compiled backend is available")
-        .capabilities()
-        .latency()
-        .source_frames();
-    assert!(source_latency <= fx.source_block_frames.get());
-    plan.install(Some(Arc::new(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![GridSegment::new(
-                u64::try_from(source_latency).expect("source latency fits u64") + 1,
-                u64::try_from(source_latency).expect("source latency fits u64") + 2,
-                0.25,
-            )],
-        )
-        .expect("fixture region is valid"),
-    )));
-
-    let source = warp_sine[..(source_latency + 2) * 2].to_vec();
-    let split = source_latency * usize::from(Consts::CH);
-    render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
-
-    let mut input = chunk(&pools, &source[split..]);
-    input.meta.frame_offset = u64::try_from(source_latency).expect("source latency fits u64");
-    let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
-
-    assert_eq!(output.frames(), 1);
-    assert_eq!(fx.pending_frames(usize::from(Consts::CH)), 1);
-    assert_eq!(
-        fx.rendered_source_end(),
-        Some((1, spec().sample_rate)),
-        "frontier excludes the source frame not yet submitted to the backend"
-    );
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn pending_span_is_committed_before_live_unity_passthrough(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
@@ -270,10 +101,11 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     controls.set_keylock(true);
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
-    plan.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 0.75)])
-            .expect("fixture region is valid"),
-    )));
+    plan.install(Some(Arc::new(crate::test_grids::spaced_plan(
+        &[(0.0, 1.0 / 0.75, 1)],
+        1.0,
+        spec().sample_rate,
+    ))));
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
     let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
@@ -495,10 +327,11 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
     let (mut reference, reference_plan) = planned_renderer(Arc::clone(&reference_controls));
-    reference_plan.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 2.0)])
-            .expect("fixture region is valid"),
-    )));
+    reference_plan.install(Some(Arc::new(crate::test_grids::spaced_plan(
+        &[(0.0, 1.0 / 2.0, 1)],
+        1.0,
+        spec().sample_rate,
+    ))));
     let pools = reference.pools.clone();
     let reference_first = render_serviced(
         &mut reference,
@@ -521,13 +354,11 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     controls.set_keylock(true);
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
-    plan.install(Some(Arc::new(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![GridSegment::new(0, 1, 1.6), GridSegment::new(1, 2, 0.25)],
-        )
-        .expect("fixture regions are contiguous"),
-    )));
+    plan.install(Some(Arc::new(crate::test_grids::spaced_plan(
+        &[(0.0, 1.0 / 1.6, 1), (1.0 / 1.6, 1.0 / 0.25, 1)],
+        1.0,
+        spec().sample_rate,
+    ))));
     let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
         .expect("the first span rounds to two frames");
     assert_eq!(first.frames(), 2);
@@ -572,10 +403,11 @@ fn reset_discards_pending_span_before_new_timeline(
     controls.set_keylock(true);
     controls.set_backend(backend);
     let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
-    plan.install(Some(Arc::new(
-        RegionPlan::new(spec().sample_rate, vec![GridSegment::new(0, 1, 0.75)])
-            .expect("fixture region is valid"),
-    )));
+    plan.install(Some(Arc::new(crate::test_grids::spaced_plan(
+        &[(0.0, 1.0 / 0.75, 1)],
+        1.0,
+        spec().sample_rate,
+    ))));
     let pools = fx.pools.clone();
     let source = warp_sine[..(2) * 2].to_vec();
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());

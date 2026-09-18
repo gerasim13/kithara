@@ -2,7 +2,6 @@ mod context;
 mod controls;
 mod live;
 mod rate;
-mod region;
 
 pub use context::RenderContext;
 pub use controls::StretchControls;
@@ -15,4 +14,3 @@ pub use kithara_stretch::StretchKind;
 pub(crate) use live::RenderState;
 pub use live::{RenderPublisher, RenderReader, RenderSnapshot};
 pub use rate::RateTarget;
-pub use region::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RegionPlanSlot};

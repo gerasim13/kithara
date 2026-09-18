@@ -7,6 +7,7 @@ use kithara_warp::{
     BeatGridSnapshot, BeatGridState, MapAxis, MapPoint, MapPosition, MemberArm,
     PresentationFrontier, ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError,
     SyncGroup, SyncMember, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    WarpPlan,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -67,7 +68,7 @@ where
                 ReconcileCause::GridAvailable,
             ),
         };
-        let snapshot = BeatGridSnapshot::segments(id, revision, state, segments.clone())?;
+        let snapshot = BeatGridSnapshot::segments(id, revision, state, segments)?;
         let base = self.sync.topology()?.stamp();
         let member = SyncMember::Grid {
             alignment: None,
@@ -92,7 +93,6 @@ where
                 id,
                 revision,
                 snapshot: snapshot.clone(),
-                segments,
             },
         );
         self.replan_track(item);
@@ -180,9 +180,7 @@ where
             let sync = &self.sync;
             sync.prepared().get(grid.id)
         };
-        if let Some(prepared) = prepared
-            && let Some(grid) = self.runtime.core.items.track_grid(item)
-        {
+        if let Some(prepared) = prepared {
             kithara::probe_event!(
                 warp_plan_published,
                 warp_map_revision = u64::from(prepared.warp_map),
@@ -191,7 +189,7 @@ where
                 activation_source = prepared.source,
                 activation_output = i64::from(prepared.activation)
             );
-            self.deliver_prepared_map(item, &grid, prepared, prepared_launch);
+            self.deliver_prepared_map(item, &prepared, prepared_launch);
             if prepared_source_cue && let Some(slot) = self.runtime.slot() {
                 self.arm_prepared_launch_while_playing(slot, item);
             }
@@ -270,17 +268,6 @@ where
             warp_map_revision = u64::from(prepared.warp_map),
             activation_output = i64::from(prepared.activation)
         );
-        if free {
-            self.runtime
-                .core
-                .engine
-                .publish_deck_grid(crate::sync::DeckGrid::Off);
-            kithara::probe_event!(
-                deck_grid_off_published,
-                warp_map_revision = u64::from(prepared.warp_map),
-                activation_output = i64::from(prepared.activation)
-            );
-        }
         Ok(Some(status))
     }
 
@@ -294,9 +281,7 @@ where
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
-        let Some(plan) = grid.segments.region_plan().ok().map(Arc::new) else {
-            return;
-        };
+        let plan = Arc::new(WarpPlan::new(grid.snapshot.clone()));
         let (load, transport) = self.sync.generations();
         let published = self.runtime.core.items.publish_free_adoption(
             item,
@@ -482,7 +467,6 @@ where
         if let (Some(expected), Some(successor), Some(slot)) =
             (expected, reanchored, self.runtime.slot())
         {
-            let grid = self.runtime.core.items.track_grid(item);
             let reanchor = ScheduledSeekReanchor {
                 item_id: item,
                 position: source_duration(
@@ -500,9 +484,7 @@ where
                 .core
                 .engine
                 .reanchor_scheduled_seek(slot, reanchor, || {
-                    if let Some(grid) = &grid {
-                        self.install_prepared_plan(item, grid, successor);
-                    }
+                    self.install_prepared_plan(item, &successor);
                 })
             {
                 self.sync.adopt_reanchored(successor);
@@ -607,18 +589,17 @@ where
                 .await_initial_source_cue_if(item, source_cue.is_some())
     }
 
+    /// Installs the track's own grid as its plan, unprojected.
+    ///
+    /// A track that holds no prepared map follows nothing yet, so it is heard
+    /// as recorded. The projection arrives only with the map that aligns it.
     fn replan_track(&self, item: TrackId) {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
-        let plan = grid
-            .segments
-            .region_plan()
-            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-            .ok();
         self.runtime
             .core
             .items
-            .set_track_plan(item, plan.map(Arc::new));
+            .set_track_plan(item, Some(Arc::new(WarpPlan::new(grid.snapshot.clone()))));
     }
 }

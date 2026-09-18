@@ -7,8 +7,9 @@ use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, war
 use kithara_test_utils::kithara;
 
 use crate::{
-    GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
-    SessionEpoch, SessionFrame, StretchControls, SyncMode, TransportRevision, Warp, WarpConfig,
+    PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame, StretchControls,
+    TransportRevision, Warp, WarpConfig, WarpPlan,
+    test_grids::spaced_plan,
     test_pools::{Pools, pools, sample_buffer},
 };
 
@@ -31,12 +32,12 @@ fn f64_of(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()
 }
 
-fn u64_of(x: usize) -> u64 {
-    u64::try_from(x).unwrap_or(u64::MAX)
+fn i64_of(x: usize) -> i64 {
+    i64::try_from(x).unwrap_or(i64::MAX)
 }
 
-fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
-    GridSegment::new(u64_of(start), u64_of(end), ratio)
+fn u64_of(x: usize) -> u64 {
+    u64::try_from(x).unwrap_or(u64::MAX)
 }
 
 fn spec() -> AudioSpec {
@@ -65,25 +66,18 @@ fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
 /// Render `source` through a key-locked renderer with `plan`, feeding
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
-fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
-    render_on_grid(
-        backend,
-        speed,
-        plan,
-        source,
-        (SyncMode::HostSync, 1.0),
-        None,
-    )
+fn render(backend: StretchKind, speed: f32, plan: Option<WarpPlan>, source: &[f32]) -> Vec<f32> {
+    render_on_grid(backend, speed, plan, source, 1.0, None)
 }
 
 #[kithara::hang_watchdog]
 fn render_on_grid(
     backend: StretchKind,
     speed: f32,
-    plan: Option<RegionPlan>,
+    plan: Option<WarpPlan>,
     source: &[f32],
-    grid: (SyncMode, f64),
-    swap: Option<(usize, RegionPlan)>,
+    session_beats: f64,
+    swap: Option<(usize, WarpPlan)>,
 ) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
@@ -95,12 +89,12 @@ fn render_on_grid(
     let context = RenderContext::new(
         SessionFrame::new(0)..SessionFrame::new(i64::from(SR)),
         spec().sample_rate,
-        Some(SessionBeat::default()..SessionBeat::new(grid.1).expect("beat")),
+        Some(SessionBeat::default()..SessionBeat::new(session_beats).expect("beat")),
         SessionEpoch::new(0),
         Some(TransportRevision::first()),
     )
     .expect("fixture context")
-    .with_rate(grid.0, controls.rate_target());
+    .with_rate(controls.rate_target());
     publisher.publish(
         &context,
         PresentationFrontier::builder()
@@ -203,67 +197,6 @@ fn rms_profile(mono: &[f32]) -> (f32, f32) {
     (rms[0], rms[rms.len() / 2])
 }
 
-#[kithara::test]
-fn plan_rejects_inverted_overlapping_and_bad_tempo_segments() {
-    assert!(matches!(
-        RegionPlan::new(spec().sample_rate, vec![seg(10, 10, 1.0)]),
-        Err(RegionPlanError::Inverted { index: 0 })
-    ));
-    assert!(matches!(
-        RegionPlan::new(spec().sample_rate, vec![seg(0, 10, 0.0)]),
-        Err(RegionPlanError::Ratio { index: 0, .. })
-    ));
-    assert!(matches!(
-        RegionPlan::new(spec().sample_rate, vec![seg(0, 10, f64::NAN)]),
-        Err(RegionPlanError::Ratio { index: 0, .. })
-    ));
-    assert!(matches!(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]
-        ),
-        Err(RegionPlanError::Overlap { index: 1 })
-    ));
-    assert!(matches!(
-        RegionPlan::new(
-            spec().sample_rate,
-            vec![seg(100, 200, 1.0), seg(0, 50, 1.0)]
-        ),
-        Err(RegionPlanError::Overlap { index: 1 })
-    ));
-    let valid = RegionPlan::new(
-        spec().sample_rate,
-        vec![seg(0, 100, 1.1), seg(100, 200, 0.9)],
-    );
-    assert!(valid.is_ok(), "adjacent segments are legal");
-}
-
-#[kithara::test]
-fn region_lookup_covers_segments_and_gaps() {
-    let plan = RegionPlan::new(
-        spec().sample_rate,
-        vec![seg(100, 200, 1.1), seg(300, 400, 0.9)],
-    )
-    .expect("valid plan");
-    let cases = [
-        (0_u64, 0_u64, 100_u64, None),
-        (150, 100, 200, Some(1.1)),
-        (250, 200, 300, None),
-        (350, 300, 400, Some(0.9)),
-        (450, 400, u64::MAX, None),
-    ];
-    for (frame, start, end, correction) in cases {
-        let r = plan.region_at(frame, spec().sample_rate);
-        assert_eq!(
-            (r.start(), r.end()),
-            (start, end),
-            "bounds at frame {frame}"
-        );
-        assert_eq!(r.beats_per_second(), correction);
-        assert!(r.contains(frame));
-    }
-}
-
 /// A click track whose bars drift off the nominal grid (fast region, then
 /// slow region) must land back on the nominal grid once the plan's per-region
 /// corrections are applied: every output click interval ~= NOMINAL.
@@ -278,14 +211,14 @@ fn corrections_align_drifting_clicks_to_nominal_grid(
     warp_clicks: Vec<f32>,
 ) {
     let src = warp_clicks;
-    let plan = RegionPlan::new(
-        spec().sample_rate,
-        vec![
-            seg(0, BOUNDARY, f64_of(NOMINAL) / f64_of(P1)),
-            seg(BOUNDARY, TOTAL, f64_of(NOMINAL) / f64_of(P2)),
+    let plan = spaced_plan(
+        &[
+            (0.0, f64_of(P1), i64_of(BARS)),
+            (f64_of(BOUNDARY), f64_of(P2), i64_of(BARS)),
         ],
-    )
-    .expect("valid plan");
+        f64_of(NOMINAL),
+        spec().sample_rate,
+    );
 
     let raw_clicks = click_positions(&mono(&src));
     assert_eq!(
@@ -332,17 +265,22 @@ fn corrections_align_drifting_clicks_to_nominal_grid(
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
-    let plan = RegionPlan::new(
+    let switch = NOMINAL * BARS;
+    let plan = spaced_plan(
+        &[
+            (0.0, f64_of(NOMINAL), i64_of(BARS)),
+            (f64_of(switch), f64_of(NOMINAL) / 1.04, i64_of(BARS)),
+        ],
+        f64_of(NOMINAL),
         spec().sample_rate,
-        vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)],
-    )
-    .expect("valid plan");
+    );
     let out = mono(&render(backend, 1.0, Some(plan), &src));
-    assert!(out.len() > BOUNDARY + 16_384, "output too short");
+    assert!(out.len() > switch + 16_384, "output too short");
 
-    // Region 1 runs at ratio 1.0, so the boundary sits near BOUNDARY frames.
-    let background = max_step(&out[16_384..BOUNDARY - 8192]);
-    let boundary = max_step(&out[BOUNDARY - 8192..BOUNDARY + 16_384]);
+    // The first segment repeats the host spacing, so the boundary lands on the
+    // same output frame it occupies in the recording.
+    let background = max_step(&out[16_384..switch - 8192]);
+    let boundary = max_step(&out[switch - 8192..switch + 16_384]);
     assert!(background > 0.0, "background must carry signal");
     assert!(
         boundary <= background * 3.0,
@@ -363,13 +301,20 @@ fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, wa
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
-    let merged =
-        RegionPlan::new(spec().sample_rate, vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
-    let split = RegionPlan::new(
+    let spacing = f64_of(NOMINAL) / 1.05;
+    let merged = spaced_plan(
+        &[(0.0, spacing, i64_of(BARS * 2))],
+        f64_of(NOMINAL),
         spec().sample_rate,
-        vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)],
-    )
-    .expect("valid plan");
+    );
+    let split = spaced_plan(
+        &[
+            (0.0, spacing, i64_of(BARS)),
+            (spacing * f64_of(BARS), spacing, i64_of(BARS)),
+        ],
+        f64_of(NOMINAL),
+        spec().sample_rate,
+    );
     let a = render(backend, 1.0, Some(merged), &src);
     let b = render(backend, 1.0, Some(split), &src);
     assert_eq!(
@@ -395,17 +340,16 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL / 4) * 2].to_vec();
-    let empty = RegionPlan::new(spec().sample_rate, Vec::new()).expect("empty plan is valid");
-    let with = render(backend, 0.5, Some(empty), &src);
+    let unprojected = WarpPlan::new(crate::test_grids::asset_grid_spaced(
+        &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
+        spec().sample_rate,
+    ));
+    let with = render(backend, 0.5, Some(unprojected), &src);
     let without = render(backend, 0.5, None, &src);
-    assert_eq!(
-        without, src,
-        "HostSync without asset geometry must preserve original audio and ignore manual speed"
-    );
     assert_eq!(
         with.len(),
         without.len(),
-        "empty plan must not change output sizing"
+        "a plan that places the item on no output axis must not change output sizing"
     );
     let (min_rms, median_rms) = rms_profile(&mono(&with));
     assert!(
@@ -424,22 +368,25 @@ fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
     #[case] backend: StretchKind,
     warp_nominal_clicks: Vec<f32>,
 ) {
-    let frames = NOMINAL * BARS;
     let source = warp_nominal_clicks;
-    for (mode, bps, interval) in [
-        (SyncMode::HostSync, 2.0, NOMINAL),
-        (SyncMode::LocalSync, 1.5, NOMINAL * 4 / 3),
-    ] {
-        let plan =
-            RegionPlan::new(spec().sample_rate, vec![seg(0, frames, 2.0)]).expect("120 BPM asset");
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, (mode, bps), None);
+    for (bps, interval) in [(2.0, NOMINAL), (1.5, NOMINAL * 4 / 3)] {
+        let plan = spaced_plan(
+            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
+            f64_of(interval),
+            spec().sample_rate,
+        );
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, bps, None);
         let clicks = click_positions(&mono(&output));
-        assert_eq!(clicks.len(), BARS, "every source beat survives {mode:?}");
+        assert_eq!(
+            clicks.len(),
+            BARS,
+            "every source beat survives {bps} beats/s"
+        );
         for pair in clicks.windows(2) {
             let actual = pair[1] - pair[0];
             assert!(
                 actual.abs_diff(interval) <= interval / 20,
-                "{mode:?}: beat interval {actual}, expected {interval}"
+                "{bps} beats/s: beat interval {actual}, expected {interval}"
             );
         }
     }
@@ -466,20 +413,15 @@ fn host_sync_stretches_each_asset_tempo_onto_the_host_grid(
     const HOST_BPS: f64 = 2.0;
     const QUEUE_BPM: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
 
-    let frames = NOMINAL * BARS;
     let source = warp_nominal_clicks;
     for bpm in QUEUE_BPM {
-        let asset_bps = HOST_BPS * bpm / HOST_BPM;
-        let plan = RegionPlan::new(spec().sample_rate, vec![seg(0, frames, asset_bps)])
-            .expect("asset tempo is a valid region");
-        let output = render_on_grid(
-            backend,
-            0.5,
-            Some(plan),
-            &source,
-            (SyncMode::HostSync, HOST_BPS),
-            None,
+        let host_spacing = f64_of(NOMINAL) * bpm / HOST_BPM;
+        let plan = spaced_plan(
+            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
+            host_spacing,
+            spec().sample_rate,
         );
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, HOST_BPS, None);
         let clicks = click_positions(&mono(&output));
         assert_eq!(clicks.len(), BARS, "every source beat survives {bpm} BPM");
         let interval = f64_of(NOMINAL) * bpm / HOST_BPM;
@@ -514,22 +456,21 @@ fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
     const LEAVING_BPM: f64 = 124.0;
     const ARRIVING_BPM: f64 = 140.0;
 
-    let frames = NOMINAL * BARS;
     let source = warp_nominal_clicks;
     let switch_at = NOMINAL * BARS / 2;
     let plan_of = |bpm: f64| {
-        RegionPlan::new(
+        spaced_plan(
+            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
+            f64_of(NOMINAL) * bpm / HOST_BPM,
             spec().sample_rate,
-            vec![seg(0, frames, HOST_BPS * bpm / HOST_BPM)],
         )
-        .expect("asset tempo is a valid region")
     };
     let output = render_on_grid(
         backend,
         1.0,
         Some(plan_of(LEAVING_BPM)),
         &source,
-        (SyncMode::HostSync, HOST_BPS),
+        HOST_BPS,
         Some((switch_at, plan_of(ARRIVING_BPM))),
     );
     let clicks = click_positions(&mono(&output));

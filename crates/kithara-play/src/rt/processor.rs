@@ -437,7 +437,6 @@ impl PlayerNodeProcessor {
                 shape,
                 inputs.stretch,
                 inputs.rate_smoothing,
-                inputs.grid,
                 gate_smoothing,
             ),
             crossfade: CrossfadeSettings::default(),

@@ -11,7 +11,7 @@ use portable_atomic::{AtomicF32, Ordering};
 use crate::{
     api::TrackId,
     sync::{
-        DeckGrid, GroupState, PreparedSync,
+        GroupState, PreparedSync,
         prepare::{FreePreparing, PreparedSyncs},
     },
 };
@@ -99,7 +99,7 @@ impl PlayerSync {
         &mut self,
         operation: SyncOperation<PlayerMember>,
         now: SessionFrame,
-    ) -> Result<(SyncAdmission, Option<DeckGrid>), SyncRejected<PlayerMember>> {
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
         match self.owned.as_mut() {
             Some(owned) => owned.transact_at(operation, now),
             None => Err(SyncRejected::new(SyncError::OwnerUnavailable, operation)),

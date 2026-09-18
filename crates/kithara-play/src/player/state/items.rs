@@ -4,7 +4,7 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::{AssetFrame, RegionPlan};
+use kithara_warp::{AssetFrame, WarpPlan};
 use tracing::debug;
 
 use super::{
@@ -181,7 +181,7 @@ impl ItemQueue {
         &self,
         item: TrackId,
         stamp: kithara_warp::BeatGridStamp,
-        plan: Arc<RegionPlan>,
+        plan: Arc<WarpPlan>,
         commit: impl FnOnce() -> Result<R, crate::PlayError>,
     ) -> Result<R, crate::PlayError> {
         self.playlist
@@ -196,7 +196,7 @@ impl ItemQueue {
             #[expr($.cloned())]
             pub(crate) fn track_grid(&self, item: TrackId) -> Option<TrackGrid>;
             pub(crate) fn publish_track_grid(&self, item: TrackId, grid: TrackGrid);
-            pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<RegionPlan>>);
+            pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<WarpPlan>>);
             pub(crate) fn publish_free_adoption(&self, item: TrackId, request: crate::worker::FreeAdoptionRequest) -> bool;
             pub(crate) fn free_adoption_receipt(&self, item: TrackId) -> Option<crate::worker::FreeAdoptionReceipt>;
             pub(crate) fn cancel_outgoing_free_adoption(&self, item: TrackId);

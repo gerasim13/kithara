@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 
 /// A warp map admitted for one grid member and awaiting the renderer's
 /// acknowledgement.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreparedSync {
     pub(crate) operation: SyncOperationId,
     pub(crate) warp_map: WarpMapRevision,
@@ -16,6 +16,12 @@ pub(crate) struct PreparedSync {
     pub(crate) source: u64,
     pub(crate) target: BeatGridId,
     pub(crate) disposition: PreparedDisposition,
+    /// The member's grid as it sounds on the owner's, frozen with this map.
+    ///
+    /// The map and the projection are prepared together from the same owner
+    /// grid, so a renderer cannot hear a map aligned against one grid while
+    /// measuring its spans against another.
+    pub(crate) projection: BeatGridSnapshot,
 }
 
 /// Every warp map this group has prepared, one per member it targets.
@@ -37,16 +43,16 @@ impl PreparedSyncs {
     pub(crate) fn get(&self, target: BeatGridId) -> Option<PreparedSync> {
         self.0
             .iter()
-            .copied()
             .find(|prepared| prepared.target == target)
+            .cloned()
     }
 
     /// The map prepared by one operation, which a renderer acknowledges by.
     pub(crate) fn by_operation(&self, operation: SyncOperationId) -> Option<PreparedSync> {
         self.0
             .iter()
-            .copied()
             .find(|prepared| prepared.operation == operation)
+            .cloned()
     }
 
     /// The most recently prepared map.
@@ -56,8 +62,8 @@ impl PreparedSyncs {
     pub(crate) fn latest(&self) -> Option<PreparedSync> {
         self.0
             .iter()
-            .copied()
             .max_by_key(|prepared| prepared.operation)
+            .cloned()
     }
 
     /// Drops what one member had prepared.
@@ -95,7 +101,7 @@ pub(crate) enum PreparedDisposition {
 }
 
 impl PreparedSync {
-    pub(crate) fn frees_deck(self) -> bool {
+    pub(crate) fn frees_deck(&self) -> bool {
         self.disposition == PreparedDisposition::Free
     }
 }

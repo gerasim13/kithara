@@ -61,7 +61,7 @@ pub(super) fn status(topology: TopologyStamp, slots: &StatusSlots) -> SyncStatus
             warp_map: preparing.warp_map,
         };
     }
-    if let Some(prepared) = slots.prepared {
+    if let Some(prepared) = &slots.prepared {
         return SyncStatusSnapshot::Prepared {
             operation: prepared.operation,
             topology,
@@ -314,7 +314,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         Ok(aligned) => aligned,
         Err(required) => return deferred(grid, &mut slots, operation, required),
     };
-    match commit_alignment(grid, &mut slots, *target, aligned) {
+    match commit_alignment(grid, &member_grid, &mut slots, *target, aligned) {
         Ok(admission) => Ok(admission),
         Err(error) => Err(SyncRejected::new(error, operation)),
     }
@@ -350,7 +350,13 @@ pub(super) fn prepare_entry<G: SyncGroup<NestedGroup = G>>(
         .into());
     }
     match enter_member(grid, &member_grid, window, source_cue) {
-        Ok(aligned) => Ok(commit_alignment(grid, &mut slots, target, aligned)?),
+        Ok(aligned) => Ok(commit_alignment(
+            grid,
+            &member_grid,
+            &mut slots,
+            target,
+            aligned,
+        )?),
         Err(required) => Err(EntryRefusal::Geometry(required)),
     }
 }
@@ -369,6 +375,7 @@ pub(crate) enum EntryRefusal {
 /// Records one member's new alignment and the map prepared to carry it.
 fn commit_alignment<G: SyncGroup<NestedGroup = G>>(
     grid: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
     slots: &mut GroupSlots<'_, G>,
     target: BeatGridId,
     aligned: MemberAlignment,
@@ -389,6 +396,17 @@ fn commit_alignment<G: SyncGroup<NestedGroup = G>>(
             .ok_or_else(|| SyncError::WarpMapRevisionExhausted {
                 group_id: grid.id(),
             })?;
+    let projection = BeatGridSnapshot::projection(
+        member.clone(),
+        grid.clone(),
+        *aligned.alignment.source().value(),
+        aligned.activation,
+    )
+    .map_err(|reason| SyncError::GridNotProjectable {
+        group_id: grid.id(),
+        member_id: target,
+        reason,
+    })?;
     let operation_id = take_operation(grid.id(), slots.next_operation)?;
     if let SyncMember::Grid { alignment, .. } = &mut slots.members[slot] {
         *alignment = Some(aligned.alignment);
@@ -405,6 +423,7 @@ fn commit_alignment<G: SyncGroup<NestedGroup = G>>(
         source: aligned.source,
         target,
         disposition: PreparedDisposition::Lock,
+        projection,
     });
     Ok(SyncAdmission::Prepared {
         operation: operation_id,

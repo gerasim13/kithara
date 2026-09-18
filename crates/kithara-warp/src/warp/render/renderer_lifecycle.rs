@@ -210,7 +210,6 @@ where
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
-        self.region = None;
     }
 
     fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
@@ -307,7 +306,6 @@ where
         self.primed_source_debt = 0;
         self.reset_pending = false;
         self.active = false;
-        self.region = None;
     }
 }
 
@@ -382,9 +380,6 @@ where
         prepared: Option<PreparedQuantum>,
         carrier_activation: bool,
     ) -> Option<AudioChunk> {
-        if let Some(snapshot) = &snapshot {
-            self.rate_context = Some(snapshot.context().clone());
-        }
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,

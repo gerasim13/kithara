@@ -7,9 +7,9 @@ use kithara_warp::{
     BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable,
     BeatMarker, BeatOrdinal, BeatsPerMinute, FrameUncertainty, LoadGeneration, MapAxis, MapPoint,
     MapPosition, MapSegment, MemberArm, Meter, MeterFacts, PresentationFrontier, RateTarget,
-    ReconcileCause, RenderContext, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis,
-    SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError,
-    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
+    ReconcileCause, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat,
+    SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
     TopologyOperation, TransportRevision,
 };
 
@@ -1714,20 +1714,10 @@ fn different_bpm_grids_produce_one_coherent_phase_and_rate_decision() {
         SessionBeat::new(1.0).expect("beat")
     );
 
-    let context = RenderContext::new(
-        SessionFrame::new(24_000)..SessionFrame::new(24_480),
-        NonZeroU32::new(48_000).expect("sample rate"),
-        Some(SessionBeat::new(1.0).expect("beat")..SessionBeat::new(1.02).expect("beat")),
-        SessionEpoch::new(0),
-        Some(TransportRevision::first()),
-    )
-    .expect("render context")
-    .with_rate(SyncMode::HostSync, RateTarget::default());
-    let plan = segments.region_plan().expect("track tempo plan");
-    let rate = context.rate_for(plan.region_at(
-        prepared.source,
-        NonZeroU32::new(48_000).expect("fixture rate"),
-    ));
+    let plan = kithara_warp::WarpPlan::new(prepared.projection.clone());
+    let BeatGridQuery::Resolved(rate) = plan.rate_at(prepared.activation) else {
+        panic!("the prepared projection answers a rate at the activation it was built for");
+    };
     assert!((rate - 1.25).abs() < 1e-9, "{rate}");
 }
 
@@ -2020,7 +2010,7 @@ fn a_knob_turned_every_block_lands_every_tempo_it_passes() {
             .transact_at(tempo(deck.id(), target), SessionFrame::new(step * 128))
             .expect("every knob position is admitted");
         assert!(
-            matches!(admission.0, SyncAdmission::StateChanged { .. }),
+            matches!(admission, SyncAdmission::StateChanged { .. }),
             "step {step}: {admission:?}"
         );
         let played = grid_tempo_at(&deck, step * 128);
@@ -2170,7 +2160,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
         .reanchored_prepared(planned.target, faster)
         .expect("the activation beat maps onto the live tempo")
         .expect("the unreached activation moves");
-    assert_eq!(group.prepared().get(planned.target), Some(planned));
+    assert_eq!(group.prepared().get(planned.target), Some(planned.clone()));
     group.adopt_reanchored(successor);
 
     let prepared = group
