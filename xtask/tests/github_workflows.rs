@@ -80,7 +80,7 @@ incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
-    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+    and not (name in {"deep", "mutants", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
     and not (name == "ui" and job["result"] == "skipped" and not ui_required)
     and not (name == "android" and job["result"] == "skipped" and not android_required)
 }
@@ -714,7 +714,7 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
         }
         let role = lane["role"].as_str().expect("a lane names a role");
         assert!(
-            matches!(role, "deep" | "quality"),
+            matches!(role, "deep" | "mutants" | "quality"),
             "lane `{name}` queues with the heavy lanes under role `{role}`, \
              which holds no group"
         );
@@ -1800,7 +1800,7 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
-    let fan_out = ["gate", "platforms", "deep", "quality"];
+    let fan_out = ["gate", "platforms", "deep", "mutants", "quality"];
 
     for (name, job) in jobs {
         let name = name.as_str().expect("a dispatcher job name is a string");
