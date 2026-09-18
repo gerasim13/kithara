@@ -247,10 +247,9 @@ impl WaveformAnalyzer {
         }
 
         let total = self.window_count(extent);
-        if buckets == 0 || total == 0 {
-            return Waveform::default();
-        }
-
+        // `bucketize` answers a zero bucket count with no buckets, and a zero
+        // window count leaves every bucket range empty, so neither needs a
+        // guard of its own here.
         let mut raw = vec![[0.0; Band::COUNT]; total];
         for (&index, energy) in &self.bands {
             if let Ok(index) = usize::try_from(index)
@@ -359,10 +358,13 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::WaveformAnalyzer;
+    use super::{WaveformAnalyzer, hann_window, normalize_bands};
     use crate::{
+        BlobError,
+        coverage::{Coverage, FrameRange},
+        progress::{WaveformPartialResume, WaveformResume},
         test_pools::{TestPools, pools},
-        waveform::{AnalysisParams, bucket::Bucket},
+        waveform::{AnalysisParams, Band, bucket::Bucket},
     };
 
     struct Consts;
@@ -403,16 +405,238 @@ mod tests {
         }
     }
 
-    fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() <= Consts::EPS
+    /// Both helpers are macros so the mutation lane judges the contracts under
+    /// test rather than a fixture it can rewrite without any test noticing.
+    macro_rules! assert_approx {
+        ($actual:expr, $want:expr, $($msg:tt)+) => {
+            let (actual, want) = ($actual, $want);
+            assert!((actual - want).abs() <= Consts::EPS, $($msg)+);
+        };
     }
 
-    fn peak(b: &Bucket) -> f32 {
-        b.low().max(b.mid()).max(b.high())
+    macro_rules! flat {
+        () => {
+            AnalysisParams::builder().band_gain([1.0; 3]).build()
+        };
     }
 
-    fn flat() -> AnalysisParams {
-        AnalysisParams::builder().band_gain([1.0; 3]).build()
+    impl Pass {
+        /// The resume record this pass would hand its successor, rebuilt from
+        /// the state itself so a test can bend one field at a time.
+        fn resume(&self) -> WaveformResume {
+            WaveformResume {
+                bands: self
+                    .analyzer
+                    .bands
+                    .iter()
+                    .map(|(&index, &energy)| (index, energy))
+                    .collect(),
+                partials: self
+                    .analyzer
+                    .partial
+                    .iter()
+                    .map(|(&index, partial)| WaveformPartialResume {
+                        samples: partial.samples.to_vec().into_boxed_slice(),
+                        written: partial.written.clone(),
+                        index,
+                        seq: partial.seq,
+                    })
+                    .collect(),
+                opened: self.analyzer.opened,
+            }
+        }
+
+        fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
+            self.analyzer.restore(&self.pools, resume)
+        }
+    }
+
+    /// A pass stopped mid-window: enough PCM to reduce some windows and leave
+    /// one partial behind, which is the only state worth resuming.
+    fn interrupted_pass(pcm: &[f32]) -> Pass {
+        let mut pass = Pass::new(flat!());
+        let head = pcm.len() / 2;
+        pass.push(&pcm[..head], 1, 0);
+        assert!(
+            pass.analyzer.partial_len() > 0,
+            "the fixture must leave a partial window to resume"
+        );
+        pass
+    }
+
+    #[kithara::test]
+    fn a_restored_pass_snapshots_what_the_stopped_one_would_have(waveform_tone: Vec<f32>) {
+        let stopped = interrupted_pass(&waveform_tone);
+        let expected = Pass::new(flat!())
+            .analyzer
+            .snapshot(0, None)
+            .buckets()
+            .to_vec();
+        assert!(expected.is_empty(), "a fresh pass has nothing to show");
+
+        let mut resumed = Pass::new(flat!());
+        resumed
+            .restore(stopped.resume())
+            .expect("the record is its own state");
+
+        let mut stopped = stopped;
+        let extent = u64::try_from(waveform_tone.len()).unwrap_or(0);
+        assert_eq!(
+            resumed.analyzer.snapshot(8, Some(extent)).buckets(),
+            stopped.analyzer.snapshot(8, Some(extent)).buckets(),
+            "a resumed pass stands exactly where the stopped one did"
+        );
+    }
+
+    #[kithara::test]
+    fn the_partial_limit_is_the_last_count_a_record_may_carry(waveform_tone: Vec<f32>) {
+        let stopped = interrupted_pass(&waveform_tone);
+        let held = stopped
+            .resume()
+            .partials
+            .pop()
+            .expect("the stopped pass holds a partial");
+        let fill = |count: usize| {
+            let mut resume = stopped.resume();
+            resume.partials = (0..count)
+                .map(|slot| WaveformPartialResume {
+                    samples: held.samples.clone(),
+                    written: Coverage::default(),
+                    index: u64::try_from(slot).unwrap_or(0) + u64::from(u32::MAX),
+                    seq: 0,
+                })
+                .collect();
+            resume.opened = u64::try_from(count).unwrap_or(0) + 1;
+            resume
+        };
+
+        assert!(
+            Pass::new(flat!())
+                .restore(fill(super::Consts::MAX_PARTIAL))
+                .is_ok(),
+            "a record holding exactly the limit is still a record"
+        );
+        assert!(
+            matches!(
+                Pass::new(flat!()).restore(fill(super::Consts::MAX_PARTIAL + 1)),
+                Err(BlobError::Corrupt)
+            ),
+            "one partial past the limit is not a record this pass wrote"
+        );
+    }
+
+    #[kithara::test]
+    #[case::samples_shorter("a window whose samples do not fill it")]
+    #[case::seq_at_open("a window opened no earlier than the counter that opened it")]
+    #[case::already_reduced("a window that is both partial and already reduced")]
+    #[case::run_before_window("coverage reaching before the window starts")]
+    #[case::run_past_window("coverage reaching past the window's end")]
+    fn a_record_that_disagrees_with_itself_is_corrupt(#[case] flaw: &str, waveform_tone: Vec<f32>) {
+        let stopped = interrupted_pass(&waveform_tone);
+        let mut resume = stopped.resume();
+        let held = resume.partials.first_mut().expect("a held window");
+        let span = FrameRange::new(held.index * stopped.analyzer.hop(), stopped.analyzer.size());
+        match flaw {
+            "a window whose samples do not fill it" => {
+                let mut samples = held.samples.to_vec();
+                samples.pop();
+                held.samples = samples.into_boxed_slice();
+            }
+            "a window opened no earlier than the counter that opened it" => {
+                held.seq = resume.opened;
+            }
+            "a window that is both partial and already reduced" => {
+                let index = held.index;
+                resume.bands.push((index, [0.0; Band::COUNT]));
+            }
+            "coverage reaching before the window starts" => {
+                let mut written = Coverage::default();
+                written.insert(FrameRange::new(span.start().saturating_sub(1), 2));
+                held.written = written;
+            }
+            _ => {
+                let mut written = Coverage::default();
+                written.insert(FrameRange::new(span.end(), 1));
+                held.written = written;
+            }
+        }
+
+        assert!(
+            matches!(Pass::new(flat!()).restore(resume), Err(BlobError::Corrupt)),
+            "{flaw} cannot be resumed"
+        );
+    }
+
+    #[kithara::test]
+    fn a_record_may_cover_the_window_up_to_its_last_frame(waveform_tone: Vec<f32>) {
+        let stopped = interrupted_pass(&waveform_tone);
+        let mut resume = stopped.resume();
+        let held = resume.partials.first_mut().expect("a held window");
+        let span = FrameRange::new(held.index * stopped.analyzer.hop(), stopped.analyzer.size());
+        let mut written = Coverage::default();
+        // The window's last frame is inside the window: coverage that ends
+        // exactly where the window ends is a held window, not a corrupt one.
+        written.insert(FrameRange::new(span.end().saturating_sub(1), 1));
+        held.written = written;
+
+        assert!(
+            Pass::new(flat!()).restore(resume).is_ok(),
+            "coverage ending on the window's own end is within it"
+        );
+    }
+
+    #[kithara::test]
+    fn a_record_carries_the_state_that_makes_it_differ(waveform_tone: Vec<f32>) {
+        let mut empty = Vec::new();
+        Pass::new(flat!()).analyzer.write_resume(&mut empty);
+
+        let mut stopped = Vec::new();
+        interrupted_pass(&waveform_tone)
+            .analyzer
+            .write_resume(&mut stopped);
+
+        assert!(
+            stopped.len() > empty.len(),
+            "a pass with windows behind it writes more than a fresh one"
+        );
+    }
+
+    #[kithara::test]
+    fn the_analysis_window_rises_from_zero_to_one_and_back() {
+        let pools = pools();
+        let hann = hann_window(5, &pools).expect("the window fits the test region");
+        let expected = [0.0, 0.5, 1.0, 0.5, 0.0];
+        for (n, (&actual, &want)) in hann.iter().zip(expected.iter()).enumerate() {
+            assert_approx!(
+                actual,
+                want,
+                "sample {n} of a 5-point window is {actual}, expected {want}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    #[case(0)]
+    #[case(1)]
+    fn a_window_too_short_to_taper_is_flat(#[case] size: usize) {
+        let pools = pools();
+        let hann = hann_window(size, &pools).expect("the window fits the test region");
+        assert_eq!(hann.len(), size);
+        assert!(
+            hann.iter()
+                .all(|&sample| (sample - 1.0).abs() <= Consts::EPS),
+            "a window with no slope to describe leaves every sample as it was"
+        );
+    }
+
+    #[kithara::test]
+    fn band_gain_scales_a_band_before_the_shared_normalisation() {
+        let energy = vec![[1.0, 1.0, 1.0]];
+        let bands = normalize_bands(energy, [1.0, 0.5, 0.25]);
+        let scaled = bands.first().expect("one bucket in, one bucket out");
+        assert_approx!(scaled[0], 1.0, "the loudest band normalises to one");
+        assert_approx!(scaled[1], 0.5, "half the gain is half the height");
+        assert_approx!(scaled[2], 0.25, "a quarter of the gain is a quarter");
     }
 
     #[kithara::test]
@@ -436,13 +660,13 @@ mod tests {
         // Broadband square wave: after shared normalization the single loudest
         // band-bucket reaches exactly 1.0.
         let pcm = waveform_square;
-        let wave = Pass::new(flat()).whole(&pcm, 1, 10);
+        let wave = Pass::new(flat!()).whole(&pcm, 1, 10);
         assert_eq!(wave.len(), 10);
-        let max = wave.iter().map(peak).fold(0.0_f32, f32::max);
-        assert!(
-            approx(max, 1.0),
-            "loudest band must normalise to 1.0, got {max}"
-        );
+        let max = wave
+            .iter()
+            .map(|b| b.low().max(b.mid()).max(b.high()))
+            .fold(0.0_f32, f32::max);
+        assert_approx!(max, 1.0, "loudest band must normalise to 1.0, got {max}");
     }
 
     #[kithara::test]
@@ -476,13 +700,13 @@ mod tests {
 
         // Above the window count: native resolution, never fabricated.
         assert_eq!(
-            Pass::new(flat()).whole(&pcm, 1, 100_000).len(),
+            Pass::new(flat!()).whole(&pcm, 1, 100_000).len(),
             10,
             "large = native count"
         );
         // Below it: still decimates (long-track cap).
         assert_eq!(
-            Pass::new(flat()).whole(&pcm, 1, 4).len(),
+            Pass::new(flat!()).whole(&pcm, 1, 4).len(),
             4,
             "small request decimates"
         );
@@ -508,11 +732,11 @@ mod tests {
     #[kithara::test]
     fn window_split_across_chunks_matches_unsplit(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let whole = Pass::new(flat()).whole(&pcm, 1, 12);
+        let whole = Pass::new(flat!()).whole(&pcm, 1, 12);
 
         // Split at 1500 frames: no boundary lands on a window edge, so every
         // window is assembled from two blocks.
-        let mut split = Pass::new(flat());
+        let mut split = Pass::new(flat!());
         for (index, part) in pcm.chunks(1500).enumerate() {
             let at = u64::try_from(index * 1500).unwrap_or(0);
             split.push(part, 1, at);
@@ -528,14 +752,14 @@ mod tests {
     #[kithara::test]
     fn shuffled_and_duplicated_blocks_match_ascending(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let ascending = Pass::new(flat()).whole(&pcm, 1, 12);
+        let ascending = Pass::new(flat!()).whole(&pcm, 1, 12);
 
         let blocks: Vec<(u64, &[f32])> = pcm
             .chunks(2048)
             .enumerate()
             .map(|(index, part)| (u64::try_from(index * 2048).unwrap_or(0), part))
             .collect();
-        let mut shuffled = Pass::new(flat());
+        let mut shuffled = Pass::new(flat!());
         for &(at, part) in [6, 1, 7, 0, 3, 5, 2, 4, 3, 0]
             .iter()
             .filter_map(|i| blocks.get(*i))
@@ -553,10 +777,10 @@ mod tests {
     #[kithara::test]
     fn a_gap_leaves_its_windows_out_until_it_is_filled(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let complete = Pass::new(flat()).whole(&pcm, 1, 12);
+        let complete = Pass::new(flat!()).whole(&pcm, 1, 12);
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
 
-        let mut gapped = Pass::new(flat());
+        let mut gapped = Pass::new(flat!());
         gapped.push(&pcm[..4096], 1, 0);
         gapped.push(&pcm[8192..], 1, 8192);
         let partial = gapped.analyzer.snapshot(12, Some(extent));
@@ -578,7 +802,7 @@ mod tests {
     fn partial_windows_are_capped(waveform_half: Vec<f32>) {
         // Isolated single-frame blocks complete no window, so each one only
         // opens the windows that contain it.
-        let mut pass = Pass::new(flat());
+        let mut pass = Pass::new(flat!());
         for block in 0..90_u64 {
             pass.push(&waveform_half[..1], 1, block * 100_000);
         }
@@ -599,7 +823,7 @@ mod tests {
         // holds the first half: reducing it now would publish a half-silent
         // window instead of leaving the span unanalysed.
         let pcm = &waveform_tone[..4096];
-        let mut pass = Pass::new(flat());
+        let mut pass = Pass::new(flat!());
         pass.push(&pcm[..2048], 1, 0);
         for block in 1..90_u64 {
             pass.push(&waveform_half[..1], 1, block * 100_000);
@@ -616,7 +840,7 @@ mod tests {
     fn snapshot_leaves_the_pass_usable(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
-        let mut pass = Pass::new(flat());
+        let mut pass = Pass::new(flat!());
 
         pass.push(&pcm[..8192], 1, 0);
         let early = pass.analyzer.snapshot(12, Some(extent));
@@ -631,7 +855,7 @@ mod tests {
         );
         assert_eq!(
             late.buckets(),
-            Pass::new(flat()).whole(&pcm, 1, 12),
+            Pass::new(flat!()).whole(&pcm, 1, 12),
             "two snapshots must not change the final result"
         );
     }
@@ -640,13 +864,18 @@ mod tests {
         // Floor disabled so routing isn't coupled to the gate; unity gain so it
         // isn't coupled to the perceptual balance.
         let params = AnalysisParams::builder()
-            .band_gain(flat().band_gain())
+            .band_gain(flat!().band_gain())
             .energy_floor(0.0)
             .build();
         Pass::new(params)
             .whole(pcm, 1, 4)
             .into_iter()
-            .find(|b| peak(b) > 0.0)
+            .max_by(|a, b| {
+                a.low()
+                    .max(a.mid())
+                    .max(a.high())
+                    .total_cmp(&b.low().max(b.mid()).max(b.high()))
+            })
             .unwrap_or_default()
     }
 
@@ -683,7 +912,75 @@ mod tests {
         // columns with no bar. Every column of a full-spectrum track must carry
         let pcm = waveform_mix;
         let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1500);
-        let gaps = wave.iter().filter(|b| peak(b) <= 0.0).count();
+        let gaps = wave
+            .iter()
+            .filter(|b| b.low().max(b.mid()).max(b.high()) <= 0.0)
+            .count();
         assert_eq!(gaps, 0, "every column must carry a bar");
+    }
+
+    #[kithara::test]
+    fn a_stereo_push_carries_the_average_of_its_channels(waveform_tone: Vec<f32>) {
+        // A silent right channel halves the signal, and an interleaved pair
+        // spans half as many frames as it carries samples.
+        let halved: Vec<f32> = waveform_tone.iter().map(|s| s * 0.5).collect();
+        let mut mono = Pass::new(flat!());
+        mono.push(&halved, 1, 0);
+
+        let interleaved: Vec<f32> = waveform_tone.iter().flat_map(|&s| [s, 0.0]).collect();
+        let mut stereo = Pass::new(flat!());
+        stereo.push(&interleaved, 2, 0);
+
+        assert_eq!(
+            stereo.analyzer.bands, mono.analyzer.bands,
+            "the downmix of a half-silent pair is the mono take at half amplitude"
+        );
+        assert_eq!(
+            Pass::new(flat!()).whole(&interleaved, 2, 8),
+            Pass::new(flat!()).whole(&halved, 1, 8),
+            "an interleaved take spans the frames it holds, not the samples"
+        );
+    }
+
+    #[kithara::test]
+    #[case::just_past_the_first_window(1)]
+    #[case::far_down_the_stream(3)]
+    fn a_push_reaches_exactly_the_windows_its_span_overlaps(
+        #[case] windows_in: u64,
+        waveform_tone: Vec<f32>,
+    ) {
+        let mut pass = Pass::new(flat!());
+        let hop = pass.analyzer.hop();
+        let size = pass.analyzer.size();
+        // Start off the hop grid and end on it: both ends of the reached range
+        // have to be computed, and the window starting at `end` touches nothing.
+        let at = size * windows_in + hop / 2;
+        let end = (at + size * 2).div_ceil(hop) * hop;
+        let span = end - at;
+        let pcm: Vec<f32> = waveform_tone
+            .iter()
+            .copied()
+            .cycle()
+            .take(usize::try_from(span).unwrap_or(0))
+            .collect();
+        pass.push(&pcm, 1, at);
+
+        let reached: std::collections::BTreeSet<u64> = pass
+            .analyzer
+            .bands
+            .keys()
+            .chain(pass.analyzer.partial.keys())
+            .copied()
+            .collect();
+        let expected: std::collections::BTreeSet<u64> = (0..=end / hop)
+            .filter(|index| {
+                let start = index * hop;
+                start < end && start + size > at
+            })
+            .collect();
+        assert_eq!(
+            reached, expected,
+            "a push must reach every window its span overlaps, and no other"
+        );
     }
 }
