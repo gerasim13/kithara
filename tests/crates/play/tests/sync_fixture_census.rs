@@ -59,6 +59,6 @@ async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources
     }
     assert!(
         blocked.is_empty(),
-        "library fixtures are unavailable: {blocked:?}"
+        "providers without materialised fixtures: {blocked:?}"
     );
 }

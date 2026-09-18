@@ -1367,12 +1367,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / platforms
@@ -1382,12 +1384,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / merge-request
@@ -1397,12 +1401,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / quarantine
@@ -1412,12 +1418,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / main
@@ -1427,12 +1435,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / nightly
@@ -1442,12 +1452,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / weekly
@@ -1457,12 +1469,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / release
@@ -1472,12 +1486,14 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / branch
