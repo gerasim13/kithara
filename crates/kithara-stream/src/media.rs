@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(AudioCodec::transform_padded(codec), expected, "{label}");
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case("mp4a.40.2", Some(AudioCodec::AacLc), "AAC-LC standard")]
     #[case("MP4A.40.2", Some(AudioCodec::AacLc), "AAC-LC uppercase")]
     #[case("mp4a.40.5", Some(AudioCodec::AacHe), "AAC-HE")]
@@ -402,7 +402,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(ContainerFormat::Fmp4)]
     #[case(ContainerFormat::MpegTs)]
     #[case(ContainerFormat::MpegAudio)]
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(44100)]
     #[case(48000)]
     #[case(88200)]
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(1)]
     #[case(2)]
     #[case(6)]
@@ -533,6 +533,133 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case(AudioCodec::AacLc, 1024, "AAC frames prime a full transform window")]
+    #[case(AudioCodec::AacHe, 1024, "AAC-HE primes the same window as AAC-LC")]
+    #[case(
+        AudioCodec::AacHeV2,
+        1024,
+        "AAC-HE v2 primes the same window as AAC-LC"
+    )]
+    #[case(AudioCodec::Mp3, 576, "MP3 primes half of its 1152-frame granule pair")]
+    #[case(AudioCodec::Opus, 312, "Opus primes its pre-skip default")]
+    #[case(AudioCodec::Flac, 0, "FLAC starts at the first frame it carries")]
+    #[case(AudioCodec::Vorbis, 0, "Vorbis carries its priming in the container")]
+    #[case(AudioCodec::Alac, 0, "ALAC starts at the first frame it carries")]
+    #[case(AudioCodec::Pcm, 0, "PCM has nothing to prime")]
+    #[case(AudioCodec::Adpcm, 0, "ADPCM has nothing to prime")]
+    fn encoder_priming_is_the_codec_family_default(
+        #[case] codec: AudioCodec,
+        #[case] expected: u64,
+        #[case] label: &str,
+    ) {
+        assert_eq!(
+            AudioCodec::encoder_priming_frames(codec),
+            expected,
+            "{label}"
+        );
+    }
+
+    #[kithara::test]
+    #[case(
+        "audio/mpeg",
+        Some(AudioCodec::Mp3),
+        "the MP3 mime carries no codec name"
+    )]
+    #[case("audio/mp3", Some(AudioCodec::Mp3), "the codec name alone is enough")]
+    #[case(
+        "AUDIO/MPEG",
+        Some(AudioCodec::Mp3),
+        "the mime is matched case-insensitively"
+    )]
+    #[case("audio/aac", Some(AudioCodec::AacLc), "an AAC mime is AAC-LC")]
+    #[case("audio/flac", Some(AudioCodec::Flac), "a FLAC mime is FLAC")]
+    #[case("audio/vorbis", Some(AudioCodec::Vorbis), "a Vorbis mime is Vorbis")]
+    #[case("audio/opus", Some(AudioCodec::Opus), "an Opus mime is Opus")]
+    #[case("audio/ogg", Some(AudioCodec::Vorbis), "a bare Ogg mime is Vorbis")]
+    #[case("audio/wav", Some(AudioCodec::Pcm), "a WAV mime is PCM")]
+    #[case("audio/wave", Some(AudioCodec::Pcm), "the WAVE spelling is PCM too")]
+    #[case("audio/x-wav", Some(AudioCodec::Pcm), "the x- spelling is PCM too")]
+    #[case("audio/mp4", Some(AudioCodec::AacLc), "an MP4 mime carries AAC")]
+    #[case(
+        "audio/x-m4a",
+        Some(AudioCodec::AacLc),
+        "the m4a spelling carries AAC too"
+    )]
+    #[case("audio/basic", None, "an unknown mime names no codec")]
+    #[case("", None, "an empty mime names no codec")]
+    fn mime_parsing_names_the_codec(
+        #[case] mime: &str,
+        #[case] expected: Option<AudioCodec>,
+        #[case] label: &str,
+    ) {
+        assert_eq!(AudioCodec::parse_mime(mime), expected, "{label}");
+    }
+
+    #[kithara::test]
+    #[case(
+        "audio/mp4",
+        ContainerFormat::Mp4,
+        "an MP4 mime keeps its own container"
+    )]
+    #[case("audio/x-m4a", ContainerFormat::Mp4, "the m4a spelling is MP4 too")]
+    #[case("audio/aac", ContainerFormat::Adts, "a bare AAC mime is ADTS")]
+    #[case("audio/aacp", ContainerFormat::Adts, "the aacp spelling is ADTS too")]
+    #[case(
+        "audio/mpeg",
+        ContainerFormat::MpegAudio,
+        "the container follows the codec"
+    )]
+    #[case("audio/flac", ContainerFormat::Flac, "FLAC implies its own container")]
+    #[case("audio/wav", ContainerFormat::Wav, "PCM implies WAV")]
+    fn a_mime_carries_both_the_codec_and_its_container(
+        #[case] mime: &str,
+        #[case] expected: ContainerFormat,
+        #[case] label: &str,
+    ) {
+        let info = MediaInfo::parse_mime(mime).expect("a known mime parses");
+        assert_eq!(info.container, Some(expected), "{label}");
+        assert_eq!(
+            info.codec,
+            AudioCodec::parse_mime(mime),
+            "both entry points agree on the codec"
+        );
+    }
+
+    #[kithara::test]
+    fn an_unknown_mime_carries_no_media_info() {
+        assert_eq!(MediaInfo::parse_mime("audio/basic"), None);
+    }
+
+    #[kithara::test]
+    #[case(
+        AudioCodec::Mp3,
+        Some(ContainerFormat::MpegAudio),
+        "MP3 implies MPEG audio"
+    )]
+    #[case(AudioCodec::Pcm, Some(ContainerFormat::Wav), "PCM implies WAV")]
+    #[case(
+        AudioCodec::Flac,
+        Some(ContainerFormat::Flac),
+        "FLAC implies its own container"
+    )]
+    #[case(AudioCodec::Vorbis, Some(ContainerFormat::Ogg), "Vorbis implies Ogg")]
+    #[case(AudioCodec::Opus, Some(ContainerFormat::Ogg), "Opus implies Ogg")]
+    #[case(AudioCodec::Alac, Some(ContainerFormat::Caf), "ALAC implies CAF")]
+    #[case(AudioCodec::AacLc, None, "AAC is ADTS or MP4, so the codec cannot say")]
+    #[case(AudioCodec::AacHe, None, "AAC-HE is just as ambiguous")]
+    #[case(AudioCodec::AacHeV2, None, "AAC-HE v2 is just as ambiguous")]
+    #[case(AudioCodec::Adpcm, None, "ADPCM rides several containers")]
+    fn a_codec_alone_fills_the_container_only_when_it_implies_one(
+        #[case] codec: AudioCodec,
+        #[case] expected: Option<ContainerFormat>,
+        #[case] label: &str,
+    ) {
+        let info = MediaInfo::from(codec);
+        assert_eq!(info.codec, Some(codec), "the codec is carried through");
+        assert_eq!(info.container, expected, "{label}");
+    }
+
+    #[kithara::test]
     fn try_from_rejects_short_buffer() {
         assert_eq!(
             AudioCodec::try_from(&b"ID"[..]),
@@ -544,6 +671,7 @@ mod tests {
     #[case::random(&[0x00, 0x01, 0x02, 0x03])]
     #[case::almost_riff_no_wave(b"RIFF\x00\x00\x00\x00XXXX____")]
     #[case::sync_byte_alone(&[0xFE, 0xFB, 0x00, 0x00])]
+    #[case::sync_word_without_framing(&[0xFF, 0x00, 0x00, 0x00])]
     fn try_from_unknown_magic_errors(#[case] bytes: &[u8]) {
         assert_eq!(AudioCodec::try_from(bytes), Err(CodecMagicError::Unknown));
     }
