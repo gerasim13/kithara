@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn grid_queries_keep_typed_outside_domain_results() {
+    fn grid_queries_keep_their_typed_results() {
         let binding = binding(PlaybackDirection::Forward);
 
         assert!(matches!(
@@ -212,6 +212,10 @@ mod tests {
         ));
         assert!(matches!(
             binding.position_at(session_beat(12.0)),
+            Ok(BeatGridQuery::Resolved(_))
+        ));
+        assert!(matches!(
+            binding.position_at(session_beat(14.0)),
             Ok(BeatGridQuery::OutsideDomain)
         ));
     }

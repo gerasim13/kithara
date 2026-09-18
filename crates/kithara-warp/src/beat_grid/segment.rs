@@ -514,6 +514,53 @@ mod tests {
         );
     }
 
+    /// A grid the analysis marked only in part answers everywhere.
+    ///
+    /// The unmarked spans are cut into beats of their neighbours' spacing, so
+    /// a gap between two marked runs and the tail after the last marker both
+    /// resolve, and their answers say they were extended rather than observed.
+    #[kithara::test]
+    fn a_partly_marked_asset_grid_answers_its_unmarked_spans() {
+        let first = MapSegment::new(
+            asset_marker(0.0, 0),
+            asset_marker(12_000.0, 1),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let second = MapSegment::new(
+            asset_marker(36_000.0, 3),
+            asset_marker(42_000.0, 4),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let grid = BeatGridSnapshot::segments(
+            BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            SegmentSet::new(
+                MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+                vec![first, second],
+            )
+            .expect("invariant: the fixture segments are ordered and disjoint"),
+        )
+        .expect("invariant: complete state is valid for a bounded asset grid");
+
+        for (frame, expected_beat) in [(24_000.0, 2.0), (45_000.0, 4.5)] {
+            let answer = match grid.beat_at(MapPoint::new(
+                grid.stamp(),
+                MapPosition::Asset(asset_frame(frame)),
+            )) {
+                BeatGridQuery::Resolved(beat) => beat,
+                other => panic!("frame {frame} must resolve, got {other:?}"),
+            };
+            assert_eq!(
+                *answer.value().value(),
+                Beat::new(expected_beat).expect("invariant: fixture beat is finite")
+            );
+            assert_eq!(answer.evidence(), BeatEvidence::Extrapolated);
+        }
+    }
+
     #[kithara::test]
     fn asset_grid_round_trips_a_nonzero_first_beat() {
         let first = asset_frame(6_000.0);
@@ -553,13 +600,78 @@ mod tests {
             assert_eq!(*round_trip.value(), position);
         }
 
-        assert!(matches!(
-            grid.beat_at(MapPoint::new(
-                grid.stamp(),
-                MapPosition::Asset(asset_frame(5_999.0))
-            )),
-            BeatGridQuery::OutsideDomain
-        ));
+        let unmarked = match grid.beat_at(MapPoint::new(
+            grid.stamp(),
+            MapPosition::Asset(asset_frame(5_999.0)),
+        )) {
+            BeatGridQuery::Resolved(beat) => beat,
+            other => panic!("a frame before the first marked beat must resolve, got {other:?}"),
+        };
+        let unmarked_position =
+            MapPoint::new(grid.stamp(), MapPosition::Asset(asset_frame(5_999.0)));
+        assert!(
+            *unmarked.value().value() < Beat::new(0.0).expect("invariant: zero is a finite beat"),
+            "the head reaches back from the first marked beat, so the beats it answers are negative"
+        );
+        assert_eq!(unmarked.evidence(), BeatEvidence::Extrapolated);
+        let round_trip = match grid.position_at(*unmarked.value()) {
+            BeatGridQuery::Resolved(position) => position,
+            other => panic!("an extrapolated beat must resolve back to its frame, got {other:?}"),
+        };
+        assert_eq!(*round_trip.value(), unmarked_position);
+    }
+
+    #[kithara::test]
+    fn an_extrapolated_span_reports_the_meter_it_inherits_as_extrapolated() {
+        let meter = Meter::new(4).expect("invariant: fixture meter is non-zero");
+        let segment = MapSegment::new(
+            asset_marker(0.0, 0),
+            asset_marker(24_000.0, 1),
+            SegmentFacts::new(
+                BeatEvidence::Observed,
+                FrameUncertainty::ZERO,
+                Some(MeterFacts::new(
+                    meter,
+                    BeatEvidence::Observed,
+                    FrameUncertainty::ZERO,
+                )),
+            ),
+        )
+        .expect("invariant: the fixture segment spans one whole beat");
+        let grid = BeatGridSnapshot::segments(
+            BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            SegmentSet::new(
+                MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+                vec![segment],
+            )
+            .expect("invariant: one marked segment extends over the rest of the axis"),
+        )
+        .expect("invariant: fixture asset grid is valid");
+
+        let marked = MapPoint::new(
+            grid.stamp(),
+            Beat::new(0.5).expect("invariant: fixture beat is finite"),
+        );
+        let BeatGridQuery::Resolved(marked) = grid.meter_at(marked) else {
+            panic!("the marked span must carry meter");
+        };
+        assert_eq!(marked.evidence(), BeatEvidence::Observed);
+
+        let tail = MapPoint::new(
+            grid.stamp(),
+            Beat::new(1.5).expect("invariant: fixture beat is finite"),
+        );
+        let BeatGridQuery::Resolved(tail) = grid.meter_at(tail) else {
+            panic!("the extrapolated tail must carry the meter it inherits");
+        };
+        assert_eq!(*tail.value(), meter);
+        assert_eq!(
+            tail.evidence(),
+            BeatEvidence::Extrapolated,
+            "a meter carried into a span no marker describes is no longer observed there"
+        );
     }
 
     #[kithara::test]
