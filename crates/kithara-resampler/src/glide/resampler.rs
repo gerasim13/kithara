@@ -21,6 +21,7 @@ pub struct GlideResampler {
     mode: ResamplerMode,
     options: ResamplerOptions,
     previous: SmallVec<[SampleBuffer; 8]>,
+    previous_valid: bool,
     current_ratio: f64,
     cursor: f64,
     input_frames: usize,
@@ -51,6 +52,7 @@ impl GlideResampler {
             engine,
             glide,
             previous,
+            previous_valid: false,
             channels: settings.channels,
             current_ratio: ratio,
             input_frames: settings.options.chunk_size,
@@ -144,6 +146,20 @@ impl GlideResampler {
             .for_each(|(previous, input)| {
                 previous[0] = input[frame];
             });
+        self.previous_valid = true;
+    }
+
+    fn seed_previous(&mut self, input: &[&[f32]]) {
+        if self.previous_valid {
+            return;
+        }
+        self.previous[..self.channels.get()]
+            .iter_mut()
+            .zip(&input[..self.channels.get()])
+            .for_each(|(previous, input)| {
+                previous[0] = input.first().copied().unwrap_or(0.0);
+            });
+        self.previous_valid = true;
     }
 }
 
@@ -199,6 +215,7 @@ impl Resampler for GlideResampler {
         if input_frames == 0 || output_capacity == 0 {
             return Ok(ResamplerProcess::new(0, 0));
         }
+        self.seed_previous(input);
 
         let produced = if self.can_passthrough() {
             let frames = input_frames.min(output_capacity);
@@ -217,6 +234,7 @@ impl Resampler for GlideResampler {
         for previous in &mut self.previous {
             previous[0] = 0.0;
         }
+        self.previous_valid = false;
         self.engine.reset();
         self.cursor = 0.0;
     }
