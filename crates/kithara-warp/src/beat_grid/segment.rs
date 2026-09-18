@@ -517,6 +517,42 @@ mod tests {
     /// A grid the analysis marked only in part answers everywhere.
     ///
     /// The unmarked spans are cut into beats of their neighbours' spacing, so
+    /// A set answers the beats it states, each exactly once.
+    ///
+    /// The overlay and the tick counter consume a grid as a sequence of beats,
+    /// so a seam between segments must not repeat the beat it carries and the
+    /// final beat of the set must not be dropped.
+    #[kithara::test]
+    fn a_set_lists_every_whole_beat_once_including_the_last() {
+        let first = MapSegment::new(
+            asset_marker(0.0, 0),
+            asset_marker(12_000.0, 1),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let second = MapSegment::new(
+            asset_marker(36_000.0, 3),
+            asset_marker(42_000.0, 4),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let set = SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+            vec![first, second],
+        )
+        .expect("invariant: the fixture segments are ordered and disjoint");
+
+        let beats: Vec<MapPosition> = set.beat_positions().collect();
+
+        assert_eq!(
+            beats,
+            [0.0, 12_000.0, 24_000.0, 36_000.0, 42_000.0, 48_000.0]
+                .map(|frame| MapPosition::Asset(asset_frame(frame)))
+                .to_vec(),
+            "every whole beat of the extended set is listed once, in order"
+        );
+    }
+
     /// a gap between two marked runs and the tail after the last marker both
     /// resolve, and their answers say they were extended rather than observed.
     #[kithara::test]

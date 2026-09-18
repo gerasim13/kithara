@@ -4497,6 +4497,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-warp",
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",

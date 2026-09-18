@@ -23,6 +23,7 @@ use kithara::{
     prelude::EngineLoadSnapshot,
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
+    warp::MapPosition,
 };
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 use tracing::warn;
@@ -119,22 +120,53 @@ impl UiState {
     }
 
     pub(crate) fn set_analysis(&mut self, analysis: Option<TrackAnalysis>) {
-        let (beats, downbeats) = analysis
+        let downbeats = analysis
             .as_ref()
             .and_then(|a| {
-                a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
-                    (
-                        frames_to_fractions(grid.artifact().beats(), a.source_frames()),
-                        frames_to_fractions(grid.artifact().downbeats(), a.source_frames()),
-                    )
-                })
+                a.beat()
+                    .filter(|_| a.source_frames() > 0)
+                    .map(|grid| frames_to_fractions(grid.artifact().downbeats(), a.source_frames()))
             })
-            .unwrap_or_else(|| (empty_marks(), empty_marks()));
-        self.beat_marks = beats;
+            .unwrap_or_else(empty_marks);
+        self.beat_marks = analysis.as_ref().map_or_else(empty_marks, beat_marks);
         self.downbeat_marks = downbeats;
         self.unready_ranges = analysis.as_ref().map_or_else(Arc::default, unready_ranges);
         self.analysis = analysis;
     }
+}
+
+/// Places every beat the analysis grid states along the track, as fractions.
+fn beat_marks(analysis: &TrackAnalysis) -> Arc<[f32]> {
+    let total = analysis.source_frames();
+    if total == 0 {
+        return empty_marks();
+    }
+    let grid = match analysis.beat_grid() {
+        Some(Ok(grid)) => grid,
+        Some(Err(error)) => {
+            warn!(%error, "the analysis states beats that form no grid");
+            return empty_marks();
+        }
+        None => return empty_marks(),
+    };
+    let total_f: f64 = total.as_();
+    let marks: Option<Vec<f32>> = grid
+        .beat_positions()
+        .map(|position| match position {
+            MapPosition::Asset(frame) => {
+                let frac: f32 = (f64::from(frame) / total_f).clamp(0.0, 1.0).as_();
+                Some(frac)
+            }
+            _ => None,
+        })
+        .collect();
+    marks.map_or_else(
+        || {
+            warn!("the analysis grid answers on the session axis, not the track");
+            empty_marks()
+        },
+        Arc::from,
+    )
 }
 
 fn fraction(frame: u64, total: f64) -> f32 {
@@ -651,8 +683,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
-        unready_ranges,
+        NonZeroU32, UiState, beat_marks, bpm_info_from_state, codec_label, covered,
+        frames_to_fractions, listen, unready_ranges,
     };
     use crate::{
         analysis::{
@@ -662,6 +694,36 @@ mod tests {
         pools::AppQueueControl,
         waveform::TrackAnalysis,
     };
+
+    /// The beat overlay places the beats the grid states, tail included.
+    ///
+    /// The analysis marks beats only where the pass found them, and the
+    /// overlay must draw the grid built from them rather than those raw
+    /// markers, so the spans the pass left unmarked are drawn too.
+    #[kithara::test]
+    fn the_beat_overlay_draws_the_grid_not_the_raw_markers() {
+        const EXTENT: u64 = 44_100;
+        let beats = (0..3).map(|beat| (beat * 11_025, Some(1.0))).collect();
+        let analysis = TrackAnalysis::builder()
+            .token("track".into())
+            .revision(1)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
+            .extent(EXTENT)
+            .beat(BeatSnapshot::new(
+                BeatArtifact::new(240.0, beats, Vec::new()),
+                BeatState::Final,
+                Vec::new(),
+            ))
+            .build();
+
+        let marks = beat_marks(&analysis);
+
+        assert_eq!(
+            marks.as_ref(),
+            [0.0, 0.25, 0.5, 0.75, 1.0],
+            "three marked beats, then the extended tail to the end of the track"
+        );
+    }
 
     fn progress(revision: u64) -> AnalysisProgress {
         let mut analysis = covered(&[(0, 1_000)], Some(1_000));

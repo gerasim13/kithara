@@ -68,7 +68,6 @@ pub mod flash_pace;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod gapless;
 #[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
-pub mod grid;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod hls_blob_store;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]

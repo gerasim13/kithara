@@ -1,18 +1,16 @@
-//! Expresses a fixture's [`BeatArtifact`] as the warp [`SegmentSet`] a deck
-//! publishes for a track. Fixture support: the product publishes grids from
-//! its own analysis bridge, not through this module.
+//! Expresses a [`BeatArtifact`] as the warp [`SegmentSet`] a deck publishes
+//! for a track.
 
 use std::{cmp::Reverse, collections::BTreeMap};
 
-use kithara::{
-    analysis::BeatArtifact,
-    warp::{
-        AssetAxis, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
-        MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError, SegmentFacts,
-        SegmentSet,
-    },
+use kithara_warp::{
+    AssetAxis, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
+    MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError, SegmentFacts,
+    SegmentSet,
 };
 use num_traits::cast::AsPrimitive;
+
+use crate::BeatArtifact;
 
 /// Failure to express a [`BeatArtifact`] as a warp [`SegmentSet`].
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +33,16 @@ pub enum BeatGridError {
 /// comes from the downbeats that sit on beats: the most frequent beat count
 /// between neighbours is the bar length, the most frequent ordinal residue the
 /// bar phase, so an irregular intro bar or a stray downbeat does not set it.
-pub fn segment_set(artifact: &BeatArtifact, axis: AssetAxis) -> Result<SegmentSet, BeatGridError> {
+///
+/// # Errors
+///
+/// Returns [`BeatGridError`] when the artifact carries fewer than two beats,
+/// when its bar is longer than a meter can state, or when its beats do not
+/// form a valid segment set on `axis`.
+pub(crate) fn segment_set(
+    artifact: &BeatArtifact,
+    axis: AssetAxis,
+) -> Result<SegmentSet, BeatGridError> {
     if artifact.beats().len() < 2 {
         return Err(BeatGridError::TooFewBeats);
     }
@@ -71,7 +78,7 @@ pub fn segment_set(artifact: &BeatArtifact, axis: AssetAxis) -> Result<SegmentSe
 
 fn meter(artifact: &BeatArtifact) -> Result<Option<Meter>, BeatGridError> {
     let beats = artifact.beats();
-    let ordinals: Vec<usize> = artifact
+    let ordinals: Box<[usize]> = artifact
         .downbeats()
         .iter()
         .filter_map(|frame| beats.binary_search(frame).ok())
@@ -109,11 +116,11 @@ fn most_frequent(values: impl Iterator<Item = usize>) -> Option<usize> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use ::kithara::warp::{
-        Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-        MapPoint,
-    };
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridState,
+        MapPoint, MapPosition,
+    };
 
     use super::*;
 
@@ -141,14 +148,18 @@ mod tests {
         AssetAxis::new(NonZeroU32::new(48_000).expect("rate"), 8 * BEAT_FRAMES)
     }
 
-    fn meter_at(set: SegmentSet, beat: f64) -> Meter {
-        let snapshot = BeatGridSnapshot::segments(
+    fn snapshot(set: SegmentSet) -> BeatGridSnapshot {
+        BeatGridSnapshot::segments(
             BeatGridId::allocate().expect("grid id"),
             BeatGridRevision::first(),
             BeatGridState::Complete,
             set,
         )
-        .expect("asset snapshot");
+        .expect("asset snapshot")
+    }
+
+    fn meter_at(set: SegmentSet, beat: f64) -> Meter {
+        let snapshot = snapshot(set);
         let point = MapPoint::new(snapshot.stamp(), Beat::new(beat).expect("finite beat"));
         match snapshot.meter_at(point) {
             BeatGridQuery::Resolved(estimate) => *estimate.value(),
@@ -160,7 +171,23 @@ mod tests {
     fn every_beat_interval_becomes_one_segment() {
         let set = segment_set(&artifact(&[]), axis()).expect("segment set");
 
-        assert_eq!(set.segments().len(), 7);
+        assert_eq!(
+            set.segments().len(),
+            8,
+            "seven marked intervals plus the extended tail"
+        );
+    }
+
+    #[kithara::test]
+    fn the_grid_answers_past_the_last_marked_beat() {
+        let snapshot = snapshot(segment_set(&artifact(&[]), axis()).expect("segment set"));
+        let last_frame = AssetFrame::new((8 * BEAT_FRAMES - 1).as_()).expect("frame inside axis");
+        let point = MapPoint::new(snapshot.stamp(), MapPosition::Asset(last_frame));
+
+        let BeatGridQuery::Resolved(beat) = snapshot.beat_at(point) else {
+            panic!("the frame after the last marked beat must resolve");
+        };
+        assert!(*beat.value().value() > Beat::new(7.0).expect("finite beat"));
     }
 
     #[kithara::test]

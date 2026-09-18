@@ -6,7 +6,10 @@ use std::{env, io};
 
 #[cfg(not(target_os = "android"))]
 use kithara::{
-    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
+    analysis::{
+        AnalysisFile, AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatSnapshot, BeatState,
+        TrackAnalysis,
+    },
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
     host::Host,
@@ -48,7 +51,6 @@ use kithara_integration_tests::{
         marked_synchronization_failures, synchronization_failures,
     },
     fixture_protocol::EncryptionRequest,
-    grid::segment_set,
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
@@ -526,14 +528,16 @@ fn uniform_grid(bpm: f64) -> SegmentSet {
         .collect::<Vec<_>>();
     let downbeats = beats.iter().step_by(4).copied().collect();
     let artifact = BeatArtifact::new(bpm, beats, downbeats);
-    segment_set(
-        &artifact,
-        AssetAxis::new(
-            NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate"),
-            SAMPLE_RATE as u64 * SECONDS,
-        ),
-    )
-    .expect("uniform fixture grid")
+    TrackAnalysis::builder()
+        .token(AnalysisToken::from("uniform-fixture"))
+        .source_sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate"))
+        .beat(BeatSnapshot::new(artifact, BeatState::Final, Vec::new()))
+        .extent(SAMPLE_RATE as u64 * SECONDS)
+        .revision(0)
+        .build()
+        .beat_grid()
+        .expect("the fixture analysis carries a beat pass")
+        .expect("uniform fixture grid")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1729,15 +1733,13 @@ fn fixture_grid(source: &str) -> SegmentSet {
     )
     .unwrap_or_else(|error| panic!("decode `{analysis_name}`: {error}"));
     let analysis = file.latest().analysis();
-    let beat = analysis
-        .beat()
-        .unwrap_or_else(|| panic!("`{analysis_name}` has no beat analysis"));
-    let artifact: &BeatArtifact = beat.artifact();
-    let extent = analysis
-        .extent()
-        .unwrap_or_else(|| panic!("`{analysis_name}` has no source extent"));
-    let axis = AssetAxis::new(analysis.source_sample_rate(), extent);
-    segment_set(artifact, axis)
+    assert!(
+        analysis.extent().is_some(),
+        "`{analysis_name}` states the source extent its grid is laid on"
+    );
+    analysis
+        .beat_grid()
+        .unwrap_or_else(|| panic!("`{analysis_name}` has no beat analysis"))
         .unwrap_or_else(|error| panic!("`{analysis_name}` has no usable beat grid: {error}"))
 }
 

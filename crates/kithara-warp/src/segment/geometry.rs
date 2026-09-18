@@ -444,6 +444,33 @@ impl SegmentSet {
         segment.beat_at(position)
     }
 
+    /// The position of every whole beat this set states, in coordinate order.
+    ///
+    /// A grid is consumed as the sequence of beats it asserts — drawn on a
+    /// waveform, counted into ticks — and that sequence is the set's own
+    /// answer rather than something a caller may re-derive from tempo. A beat
+    /// landing on a seam belongs to the segment that follows it, so it is
+    /// answered once; the final beat of the set is answered by its last
+    /// segment.
+    pub fn beat_positions(&self) -> impl Iterator<Item = MapPosition> + '_ {
+        let last = self.segments.last();
+        let spans = self.segments.iter().flat_map(|segment| {
+            let first = f64::from(segment.start_beat()).ceil();
+            let count = (f64::from(segment.end_beat()) - first)
+                .ceil()
+                .max(0.0)
+                .to_usize()
+                .unwrap_or(0);
+            (0..count)
+                .filter_map(move |step| Beat::new(step.to_f64()? + first).ok())
+                .filter_map(|beat| Some(segment.position_at(beat)?.0))
+        });
+        let tail = last
+            .filter(|segment| f64::from(segment.end_beat()).fract() == 0.0)
+            .and_then(|segment| Some(segment.position_at(segment.end_beat())?.0));
+        spans.chain(tail)
+    }
+
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {
         let upper = self
             .segments

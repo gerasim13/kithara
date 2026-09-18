@@ -2,10 +2,12 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
+use kithara_warp::{AssetAxis, SegmentSet};
 
 use super::snapshot::BeatSnapshot;
 use crate::{
     coverage::{Coverage, FrameRange},
+    segments::{BeatGridError, segment_set},
     waveform::bucket::Waveform,
 };
 
@@ -91,6 +93,27 @@ impl TrackAnalysis {
         self.beat.as_ref()
     }
 
+    /// The warp grid this analysis states for the track, on the source axis.
+    ///
+    /// `None` until a beat pass has run over a track whose extent is known:
+    /// the grid is laid on the declared source axis, and a covered frontier is
+    /// not that axis. The grid answers over the whole axis, extending the
+    /// spans the pass left unmarked from the beats it did mark.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatGridError`] when the beats the pass found cannot form a
+    /// grid on the source axis.
+    #[must_use]
+    pub fn beat_grid(&self) -> Option<Result<SegmentSet, BeatGridError>> {
+        let beat = self.beat.as_ref()?;
+        let frames = self.extent?;
+        Some(segment_set(
+            beat.artifact(),
+            AssetAxis::new(self.source_sample_rate, frames),
+        ))
+    }
+
     #[must_use]
     pub const fn coverage(&self) -> &Coverage {
         &self.coverage
@@ -160,5 +183,54 @@ impl TrackAnalysis {
     #[must_use]
     pub const fn waveform(&self) -> Option<&Waveform> {
         self.waveform.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{AnalysisToken, BeatSnapshot, NonZeroU32, TrackAnalysis};
+    use crate::{BeatArtifact, BeatState};
+
+    struct Consts;
+
+    impl Consts {
+        const EXTENT: u64 = 48_000;
+        const SAMPLE_RATE: u32 = 48_000;
+    }
+
+    fn analysis(extent: Option<u64>) -> TrackAnalysis {
+        let beats = (0..4).map(|beat| (beat * 12_000, Some(1.0))).collect();
+        let artifact = BeatArtifact::new(120.0, beats, Vec::new());
+        TrackAnalysis::builder()
+            .token(AnalysisToken::from("fixture"))
+            .source_sample_rate(
+                NonZeroU32::new(Consts::SAMPLE_RATE).expect("invariant: fixture rate is non-zero"),
+            )
+            .beat(BeatSnapshot::new(artifact, BeatState::Final, Vec::new()))
+            .maybe_extent(extent)
+            .revision(0)
+            .build()
+    }
+
+    /// A grid is laid on the extent the track declares, never on a frontier.
+    ///
+    /// A covered frontier moves while a pass runs, so a grid built on it would
+    /// answer over an axis the track does not have, and the beats past that
+    /// frontier would be refused as outside the extent.
+    #[kithara::test]
+    fn a_grid_exists_only_once_the_track_states_its_extent() {
+        assert!(
+            analysis(None).beat_grid().is_none(),
+            "no extent is stated, so the analysis states no grid"
+        );
+        assert!(
+            analysis(Some(Consts::EXTENT))
+                .beat_grid()
+                .expect("the stated extent carries a grid")
+                .is_ok(),
+            "the stated extent carries the grid the beats form"
+        );
     }
 }
