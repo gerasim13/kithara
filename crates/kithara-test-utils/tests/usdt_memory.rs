@@ -3,48 +3,20 @@
 //! them far past its history cap.
 
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
     mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Barrier,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Barrier,
     thread,
 };
 
 use kithara_test_utils::{
+    memory::{self, Counting},
     test::{
         setup_tracing,
         usdt::{MAX_EVENTS, ProbeEvent, scope},
     },
     tracing::{Level, event},
 };
-
-/// Heap bytes live right now, and the highest value since the last reset.
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to `System` unchanged; the counters only observe.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: forwarded verbatim to the system allocator.
-        let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() {
-            let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-            PEAK.fetch_max(live, Ordering::Relaxed);
-        }
-        ptr
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded verbatim to the system allocator.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
@@ -89,12 +61,12 @@ fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
             });
         }
         warm.wait();
-        baseline = LIVE.load(Ordering::Relaxed);
-        PEAK.store(baseline, Ordering::Relaxed);
+        baseline = memory::live_bytes();
+        memory::reset_peak();
         go.wait();
     });
-    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(baseline);
+    let peak = memory::peak_bytes().saturating_sub(baseline);
+    let left = memory::live_bytes().saturating_sub(baseline);
     (peak, left)
 }
 
@@ -118,7 +90,7 @@ fn continuous_probes_keep_the_heap_bounded() {
         "unobserved probes grew the heap by {peak} B"
     );
 
-    let before = LIVE.load(Ordering::Relaxed);
+    let before = memory::live_bytes();
     let history = scope();
     let (peak, _) = hammer("unobserved", "history");
     let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
@@ -146,7 +118,7 @@ fn continuous_probes_keep_the_heap_bounded() {
     );
     drop(history);
 
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(before);
+    let left = memory::live_bytes().saturating_sub(before);
     eprintln!("after the scopes: left +{left} B");
     assert!(
         left <= STEADY_BUDGET,
