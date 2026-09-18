@@ -642,6 +642,40 @@ impl WasmPlayerSelenium {
     async fn collect_browser_logs(&self) -> String {
         let mut logs = Vec::new();
 
+        // The page pumps the host from `requestAnimationFrame`, so a window
+        // that saw no motion has to say whether that loop was still running:
+        // a throttled or hidden page stops it, and the snapshots alone read
+        // exactly like a stalled decode.
+        let frames_script = r#"
+            const callback = arguments[arguments.length - 1];
+            let frames = 0;
+            const started = performance.now();
+            const report = () => "visibility=" + document.visibilityState
+              + " frames=" + frames
+              + " over=" + Math.round(performance.now() - started) + "ms";
+            // A loop that never runs is the answer this report exists for, so
+            // it is read off the clock rather than waited for forever.
+            const timer = setTimeout(() => callback(report()), 1000);
+            const done = (text) => { clearTimeout(timer); callback(text); };
+            const step = () => {
+              frames += 1;
+              if (performance.now() - started < 250) {
+                requestAnimationFrame(step);
+                return;
+              }
+              done(report());
+            };
+            requestAnimationFrame(step);
+        "#;
+        if let Ok(ret) = self
+            .driver
+            .execute_async(frames_script, Vec::<Value>::new())
+            .await
+            && let Ok(s) = ret.convert::<String>()
+        {
+            logs.push(format!("--- page loop ---\n{s}"));
+        }
+
         let script = r#"
             return [...document.querySelectorAll('#event-log > div')]
                 .slice(-30)

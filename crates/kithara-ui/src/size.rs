@@ -1423,6 +1423,15 @@ mod tests {
             254.0,
             "a split reading no room stands every cell it holds",
         );
+        let edge = Cells::new(
+            Axis::Horizontal,
+            vec![cell(0.0, None, 40.0), cell(194.0, None, 60.0)],
+        );
+        assert_eq!(
+            edge.rooms(MeasureAxis::Width, 194.0),
+            vec![(194.0, 100.0)],
+            "a cell opening at the narrowest room is that room, not a second answer beside it",
+        );
     }
 
     #[kithara::test]
