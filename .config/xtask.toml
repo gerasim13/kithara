@@ -1746,7 +1746,7 @@ queue = "heavy-linux"
 artifact = { name = "mutants-analysis", path = "target/mutants-ci" }
 timeout_minutes = 60
 
-[ext.ci.lanes.deep-mutants-ui]
+[ext.ci.lanes.deep-mutants-ui-1]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1761,14 +1761,94 @@ steps = [
     "4",
     "--group",
     "ui",
-  ], label = "ui mutation suites" },
+    "--shard",
+    "1/4",
+  ], label = "ui mutation suites, shard 1 of 4" },
 ]
 role = "mutants"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-artifact = { name = "mutants-ui", path = "target/mutants-ci" }
-timeout_minutes = 120
+artifact = { name = "mutants-ui-1", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-2]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "2/4",
+  ], label = "ui mutation suites, shard 2 of 4" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-2", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-3]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "3/4",
+  ], label = "ui mutation suites, shard 3 of 4" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-3", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-4]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "4/4",
+  ], label = "ui mutation suites, shard 4 of 4" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-4", path = "target/mutants-ci" }
+timeout_minutes = 60
 
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody

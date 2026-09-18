@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeSet,
-    fs,
+    fmt, fs,
     path::{Component, Path, PathBuf},
     process::Command,
+    str::FromStr,
 };
 
 use anyhow::{Context, Result, bail};
@@ -33,6 +34,9 @@ enum MutantsCommand {
         /// Concurrent cargo-mutants jobs.
         #[arg(long, default_value_t = 1)]
         jobs: usize,
+        /// Run only this slice of the suite's mutants, written `i/n`.
+        #[arg(long)]
+        shard: Option<Shard>,
     },
     /// Run every explicitly allowed mutation suite sequentially.
     RunAll {
@@ -51,7 +55,53 @@ enum MutantsCommand {
         /// another is still red.
         #[arg(long)]
         group: Option<String>,
+        /// Run only this slice of each suite's mutants, written `i/n`.
+        ///
+        /// A suite over one file cannot be split between groups; this splits
+        /// its mutants instead, so a lane reports a verdict inside its window.
+        #[arg(long)]
+        shard: Option<Shard>,
     },
+}
+
+/// One slice of a suite's mutants, written `i/n` on the command line.
+///
+/// A group divides suites between lanes, but a suite over a single file cannot
+/// be divided that way: the UI size rules are 128 mutants in one file, and each
+/// rebuilds a heavy crate. Two runs in a row spent the lane's whole window and
+/// were cut without reporting a verdict. A shard divides the mutants of the
+/// suites a lane already holds, so the lane finishes inside its window without
+/// the window being widened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Shard {
+    index: usize,
+    total: usize,
+}
+
+impl FromStr for Shard {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        let (index, total) = text
+            .split_once('/')
+            .with_context(|| format!("a shard reads `i/n`, got `{text}`"))?;
+        let index: usize = index
+            .parse()
+            .with_context(|| format!("shard index in `{text}`"))?;
+        let total: usize = total
+            .parse()
+            .with_context(|| format!("shard count in `{text}`"))?;
+        if total == 0 || index == 0 || index > total {
+            bail!("a shard is `i/n` with 1 <= i <= n, got `{text}`");
+        }
+        Ok(Self { index, total })
+    }
+}
+
+impl fmt::Display for Shard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.index, self.total)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,23 +150,25 @@ pub(crate) fn run(args: &MutantsArgs, ctx: &Ctx) -> Result<()> {
             suite,
             output,
             jobs,
+            shard,
         } => {
             let suite = config.named(suite)?;
             let output = output.as_deref().map_or_else(
                 || ctx.root.join("target/mutants").join(&suite.name),
                 |path| rooted(&ctx.root, path),
             );
-            suite.execute(&ctx.root, &output, *jobs)
+            suite.execute(&ctx.root, &output, *jobs, *shard)
         }
         MutantsCommand::RunAll {
             output,
             jobs,
             group,
+            shard,
         } => {
             let output = rooted(&ctx.root, output);
             let selected = config.in_group(group.as_deref())?;
             for suite in selected {
-                suite.execute(&ctx.root, &output.join(&suite.name), *jobs)?;
+                suite.execute(&ctx.root, &output.join(&suite.name), *jobs, *shard)?;
             }
             Ok(())
         }
@@ -263,15 +315,19 @@ impl MutationSuite {
         Ok(())
     }
 
-    fn execute(&self, root: &Path, output: &Path, jobs: usize) -> Result<()> {
+    fn execute(&self, root: &Path, output: &Path, jobs: usize, shard: Option<Shard>) -> Result<()> {
         if jobs == 0 {
             bail!("mutation jobs must be positive");
         }
         fs::create_dir_all(output)
             .with_context(|| format!("creating mutation output {}", output.display()))?;
-        info!(suite = self.name, "starting mutation suite");
+        info!(
+            suite = self.name,
+            shard = shard.map(|s| s.to_string()),
+            "starting mutation suite"
+        );
         let status = self
-            .command(root, output, jobs)
+            .command(root, output, jobs, shard)
             .status()
             .with_context(|| format!("running mutation suite {}", self.name))?;
         if !status.success() {
@@ -280,7 +336,7 @@ impl MutationSuite {
         Ok(())
     }
 
-    fn command(&self, root: &Path, output: &Path, jobs: usize) -> Command {
+    fn command(&self, root: &Path, output: &Path, jobs: usize, shard: Option<Shard>) -> Command {
         let mut command = Command::new("cargo");
         // cargo-mutants gives every mutant its own copied source tree. A CI
         // runner's shared target directory would make concurrent mutant builds
@@ -325,6 +381,9 @@ impl MutationSuite {
         }
         if !self.features.is_empty() {
             command.arg("--features").arg(self.features.join(","));
+        }
+        if let Some(shard) = shard {
+            command.arg("--shard").arg(shard.to_string());
         }
         command
     }
@@ -386,7 +445,7 @@ timeout_seconds = 30
         );
         let config = MutationConfig::load(root.path()).unwrap();
         let suite = config.named("small").unwrap();
-        let command = suite.command(root.path(), Path::new("out"), 2);
+        let command = suite.command(root.path(), Path::new("out"), 2, None);
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -503,5 +562,46 @@ timeout_seconds = 30
         let config = MutationConfig::load(root.path()).expect("a valid fixture");
 
         assert!(config.in_group(Some("no-such-group")).is_err());
+    }
+
+    /// A lane addresses its slice on the command line, so the flag has to reach
+    /// cargo-mutants verbatim; a shard the tool never sees would run the whole
+    /// suite twice and report it as two verdicts.
+    #[test]
+    fn a_shard_reaches_the_mutation_tool() {
+        let root = tempdir().unwrap();
+        write_fixture(
+            root.path(),
+            r#"
+[[suite]]
+name = "small"
+group = "ui"
+package = "example"
+files = ["crates/example/src/lib.rs"]
+test_filters = ["test(/tests::value/)"]
+timeout_seconds = 30
+"#,
+        );
+        let config = MutationConfig::load(root.path()).unwrap();
+        let suite = config.named("small").unwrap();
+        let shard = Shard::from_str("2/4").unwrap();
+        let command = suite.command(root.path(), Path::new("out"), 2, Some(shard));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.windows(2).any(|args| args == ["--shard", "2/4"]));
+    }
+
+    /// `0/4` and `5/4` name no slice of anything. Accepting either would leave
+    /// the mutants they stand for untested while the lane reported success.
+    #[test]
+    fn a_shard_outside_its_own_count_is_refused() {
+        assert!(Shard::from_str("0/4").is_err());
+        assert!(Shard::from_str("5/4").is_err());
+        assert!(Shard::from_str("1/0").is_err());
+        assert!(Shard::from_str("half").is_err());
+        assert_eq!(Shard::from_str("1/4").unwrap().to_string(), "1/4");
     }
 }
