@@ -2,32 +2,24 @@ use kithara_platform::time::Duration;
 use kithara_test_macros as kithara;
 use url::Url;
 
-use crate::{
-    context::BuildContext,
-    remote_file::{RemoteFileError, fetch_verified},
-};
+use crate::remote_file::fetch_verified;
 
 enum Library {}
 
 impl Library {
     const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const ENV: &str = "KITHARA_REMOTE_FIXTURES";
     const TIMEOUT: Duration = Duration::from_secs(600);
+
+    fn fetch(file: &str, sha256: &str, length: u64) -> Vec<u8> {
+        let url = Url::parse(Self::BASE)
+            .and_then(|base| base.join(file))
+            .unwrap_or_else(|error| panic!("library fixture `{file}` has no URL: {error}"));
+        fetch_verified(&url, sha256, length, Self::TIMEOUT)
+            .unwrap_or_else(|error| panic!("library fixture `{file}` failed verification: {error}"))
+    }
 }
 
-fn enabled() -> Result<(), RemoteFileError> {
-    std::env::var_os(Library::ENV)
-        .filter(|value| !value.is_empty())
-        .map(|_| ())
-        .ok_or(RemoteFileError::Missing(Library::ENV))
-}
-
-#[kithara::asset(
-    ext = "flac",
-    content_type = "audio/flac",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "flac", content_type = "audio/flac")]
 #[case::newtechno(
     "newtechno.flac",
     "7ee0e157a3dd1ea44554c9e22f81a72ed1100942a2f17982e90043f40801f1b2",
@@ -83,27 +75,14 @@ fn enabled() -> Result<(), RemoteFileError> {
     "92dd30f8dace371e081685ee18b2ad34407360fd279b7b3a0f0ded78d3436789",
     55173208
 )]
-fn library_flac(
-    _context: &BuildContext<'_>,
-    file: &str,
-    sha256: &str,
-    length: u64,
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let url = Url::parse(Library::BASE)?.join(file)?;
-    Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
-    )
+fn library_flac(file: &str, sha256: &str, length: u64) -> Vec<u8> {
+    Library::fetch(file, sha256, length)
 }
 
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
     depends_on = ["library_flac_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
 )]
 #[case::newtechno()]
 #[case::ryabina()]
@@ -116,14 +95,13 @@ fn library_flac(
 #[case::c343()]
 #[case::e101()]
 #[case::g242()]
-fn library_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let flac = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
+fn library_analysis(inputs: &[&[u8]]) -> Vec<u8> {
+    let [flac] = inputs else {
+        panic!(
+            "library_analysis expects one dependency, got {}",
+            inputs.len()
+        );
+    };
     let (artifact, frames) = super::rhythm::beat_flac(flac);
-    Ok(super::rhythm::analysis_file(artifact, frames))
+    super::rhythm::analysis_file(artifact, frames)
 }
