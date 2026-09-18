@@ -647,11 +647,12 @@ mod default_priming_tests {
     /// Pull `chunks` prepared chunks from each decoder and compare them as one
     /// PCM stream, returning how many the decoder under test produced.
     ///
-    /// Only the stream is a contract. How many packets a chunk carries is the
-    /// codec's own bookkeeping — the Android `MediaCodec` backend hands back
-    /// whatever its output buffers hold, so two decoders reading the same MP3
-    /// agree on the samples and on where the stream starts while cutting them
-    /// into different chunks.
+    /// Only the stream is a contract. Where a window opens is not: a chunk
+    /// carries whatever the codec's output buffers hold — the Android
+    /// `MediaCodec` backend hands back one or several frames as it pleases — so
+    /// one decoder can already stand a frame further along than the other when
+    /// the window starts. The frame offset each side reports says where its
+    /// samples sit on the track, and the streams are compared where they meet.
     fn assert_same_mp3_stream(
         decoder: &mut dyn Decoder,
         reference: &mut dyn Decoder,
@@ -662,12 +663,14 @@ mod default_priming_tests {
         let mut expected = Vec::new();
         let mut start = None;
         let mut expected_start = None;
+        let mut channels = None;
         for _ in 0..chunks {
             decoder.prepare_next_chunk();
             if let DecoderChunkOutcome::Chunk(chunk) =
                 checked_mp3_chunk(decoder).expect("checked decode")
             {
-                start.get_or_insert((chunk.meta.timestamp, chunk.meta.frame_offset));
+                start.get_or_insert(chunk.meta.frame_offset);
+                channels.get_or_insert(chunk.meta.spec.channels);
                 actual.extend_from_slice(&chunk.samples);
                 produced += 1;
             }
@@ -675,13 +678,25 @@ mod default_priming_tests {
             if let DecoderChunkOutcome::Chunk(chunk) =
                 reference.next_chunk_prepared().expect("reference decode")
             {
-                expected_start.get_or_insert((chunk.meta.timestamp, chunk.meta.frame_offset));
+                expected_start.get_or_insert(chunk.meta.frame_offset);
+                channels.get_or_insert(chunk.meta.spec.channels);
                 expected.extend_from_slice(&chunk.samples);
             }
         }
-
-        assert_eq!(start, expected_start, "the streams start at the same frame");
+        let (Some(start), Some(expected_start)) = (start, expected_start) else {
+            assert_eq!(start, expected_start, "both decoders reach the same stream");
+            return produced;
+        };
+        let channels = usize::from(channels.expect("a chunk carries its format")).max(1);
+        let meeting = start.max(expected_start);
+        let actual = &actual[usize::try_from(meeting - start).expect("frame index") * channels..];
+        let expected =
+            &expected[usize::try_from(meeting - expected_start).expect("frame index") * channels..];
         let shared = actual.len().min(expected.len());
+        assert!(
+            shared > 0,
+            "the two decoders cover a common stretch of track"
+        );
         assert_eq!(
             actual[..shared],
             expected[..shared],
