@@ -9,7 +9,9 @@ use realfft::RealFftPlanner;
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
     PresentationFrontier, RateTarget, RenderContext, RenderPublisher, SessionBeat, SessionEpoch,
-    SessionFrame, TransportRevision, Warp, WarpConfig, WarpMap, WarpMapRevision, WarpPlanSlot,
+    SessionFrame, TransportRevision, Warp, WarpConfig, WarpMap, WarpMapRevision, WarpPlan,
+    WarpPlanSlot,
+    test_grids::projected_plan,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -91,8 +93,16 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
+    renderer_over(controls, None)
+}
+
+/// A renderer built with `plan` already installed, as a deck hands one over
+/// before the first chunk rather than between chunks.
+fn renderer_over(controls: Arc<StretchControls>, plan: Option<WarpPlan>) -> WarpRenderer {
     let config = WarpConfig::builder().stretch(controls).build();
-    Warp::new((), &config).renderer(spec(), pools())
+    let warp = Warp::new((), &config);
+    warp.region_plan().install(plan.map(Arc::new));
+    warp.renderer(spec(), pools())
 }
 
 fn planned_renderer(controls: Arc<StretchControls>) -> (WarpRenderer, Arc<WarpPlanSlot>) {
@@ -705,5 +715,51 @@ fn publish_context_at_epoch(
             .source(source)
             .output(frame)
             .build(),
+    );
+}
+
+/// A renderer built over a projection starts at no rate of its own.
+///
+/// The projection owns the speed of an item it places, and it has named none
+/// before the first render context arrives. Reading the listener's target
+/// there would sound the recording at a rate the projection never prescribed,
+/// which is the manual speed leaking into a synced deck.
+#[kithara::test]
+fn a_projected_renderer_does_not_start_at_the_manual_target() {
+    let controls = StretchControls::new(2.0);
+    let renderer = renderer_over(
+        Arc::clone(&controls),
+        Some(projected_plan(
+            Consts::HOST_BPM,
+            Consts::HOST_BPM,
+            spec().sample_rate,
+        )),
+    );
+
+    assert!(
+        (renderer.rate.speed() - WarpRenderer::UNNAMED_SPEED).abs() <= f32::EPSILON,
+        "a projected item starts at {}, not at {} while the projection has named \
+         no rate; the manual target is {}",
+        renderer.rate.speed(),
+        WarpRenderer::UNNAMED_SPEED,
+        controls.rate_target().speed()
+    );
+}
+
+/// An item no projection places starts at the listener's target.
+///
+/// That target is the whole rate of an unprojected item, so a renderer built
+/// without a plan must carry it from the first chunk rather than waiting for a
+/// projection that will never answer.
+#[kithara::test]
+fn an_unprojected_renderer_starts_at_the_manual_target() {
+    let controls = StretchControls::new(2.0);
+    let renderer = renderer_over(Arc::clone(&controls), None);
+
+    assert!(
+        (renderer.rate.speed() - controls.rate_target().speed()).abs() <= f32::EPSILON,
+        "an unprojected item starts at {}, not at the manual target {}",
+        renderer.rate.speed(),
+        controls.rate_target().speed()
     );
 }

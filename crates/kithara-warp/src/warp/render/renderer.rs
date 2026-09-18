@@ -145,6 +145,14 @@ where
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
+    /// Speed of an item whose projection owns the rate but has named none yet.
+    ///
+    /// The recording is heard as recorded until the projection answers. It is
+    /// not the listener's target: that target belongs to an item the
+    /// projection does not place, and reading it here would let a projected
+    /// item start at a rate the projection never prescribed.
+    pub(super) const UNNAMED_SPEED: f32 = 1.0;
+
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
         config: &WarpConfig,
@@ -158,6 +166,11 @@ where
         let current_keylock = controls.keylock();
         let plan = plan_slot.load();
         let rate = controls.rate_target();
+        let rate = if plan.as_deref().is_some_and(WarpPlan::follows_output) {
+            rate.with_speed(Self::UNNAMED_SPEED)
+        } else {
+            rate
+        };
         let target = Self::prepare_target(
             current_kind,
             current_keylock,

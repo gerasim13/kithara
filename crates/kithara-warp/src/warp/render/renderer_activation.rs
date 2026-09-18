@@ -424,8 +424,9 @@ where
     /// case: the listener's own target owns the speed. Otherwise the projection
     /// owns it, and nothing else may answer: past the end of the recording the
     /// projection names no rate, and the item finishes on the rate it was
-    /// already running at rather than stepping to unity mid-item. Unity is the
-    /// speed only while the projection has never named one.
+    /// already running at rather than stepping to unity mid-item.
+    /// [`UNNAMED_SPEED`](Self::UNNAMED_SPEED) is the speed only while the
+    /// projection has never named one.
     pub(super) fn projected_speed(&mut self, context: &RenderContext) -> f32 {
         if self.plan.as_ref().is_none_or(|plan| !plan.follows_output()) {
             return context.rate().speed();
@@ -433,7 +434,8 @@ where
         if let Some(rate) = self.projected_rate() {
             self.projected_rate_held = Some(rate);
         }
-        self.projected_rate_held.map_or(1.0, AsPrimitive::as_)
+        self.projected_rate_held
+            .map_or(Self::UNNAMED_SPEED, AsPrimitive::as_)
     }
 
     pub(super) fn cap_before_activation(&self, source: u64, frames: usize) -> usize {
