@@ -1,7 +1,7 @@
 mod bundle;
 #[cfg(feature = "hls")]
 mod gapless;
-#[cfg(test)]
+#[cfg(all(test, feature = "library"))]
 pub(crate) mod hydrate;
 #[cfg(feature = "hls")]
 mod long;

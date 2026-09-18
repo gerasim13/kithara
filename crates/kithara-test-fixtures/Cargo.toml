@@ -37,7 +37,7 @@ encoded = ["wav"]
 hls = ["dep:aes", "dep:cbc", "dep:rayon", "packaged"]
 # The segment inputs and the variant catalog reach consumers through one module;
 # the catalog packages its variants from the `packaged` pools.
-hls-inputs = ["packaged"]
+hls-inputs = ["hls"]
 # The verified download and the playlist hydrator are one transport module, so
 # the two fetching families ship together. `library_analysis` then runs the beat
 # analysis over each downloaded track.
@@ -52,6 +52,7 @@ remote = [
     "dep:rayon",
     "dep:reqwest",
     "dep:url",
+    "hls",
     "native-fixtures",
 ]
 rhythm = [

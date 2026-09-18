@@ -1,4 +1,6 @@
 mod common;
+mod signal;
+mod wav;
 
 pub mod analysis;
 pub mod beat;
@@ -11,16 +13,16 @@ pub mod stretch;
 pub mod unit;
 
 pub(crate) use common::samples;
-#[cfg(feature = "wav")]
-pub use common::stress_wav;
-#[cfg(feature = "signal")]
-pub use common::tone_mp3;
-#[cfg(all(feature = "signal", not(target_arch = "wasm32")))]
-pub use common::tone_wav;
 pub use common::{
     ascending_pcm, ascending_wrap_pcm, channel_signals, descending_pcm, descending_wrap_pcm,
     direction_channel_less, direction_step, negative_pcm_ramp, pcm_ramp, phase_endpoints,
     provenance_silence, silence_pcm, stereo_pair,
 };
+#[cfg(feature = "signal")]
+pub use signal::tone_mp3;
+#[cfg(all(feature = "signal", not(target_arch = "wasm32")))]
+pub use signal::tone_wav;
+#[cfg(feature = "wav")]
+pub use wav::stress_wav;
 #[cfg(all(feature = "wav", not(target_arch = "wasm32")))]
-pub use common::{decoder_wav, seek_decoder_wav, short_decoder_wav};
+pub use wav::{decoder_wav, seek_decoder_wav, short_decoder_wav};

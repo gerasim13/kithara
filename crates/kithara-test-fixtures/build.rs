@@ -16,7 +16,7 @@ mod defs;
 #[path = "src/registry.rs"]
 mod registry;
 // The fetching half compiles only for the families that fetch.
-#[cfg(feature = "remote")]
+#[cfg(feature = "library")]
 #[path = "src/remote_file.rs"]
 mod remote_file;
 #[cfg(feature = "hls-inputs")]
