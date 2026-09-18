@@ -532,6 +532,14 @@ struct Snapshot {
     dur: Option<f64>,
     playlist: Vec<String>,
     pos: Option<f64>,
+    /// Audio-thread process calls the session has served. The render callback
+    /// runs inside an `AudioWorkletProcessor` no page script can see, so two
+    /// snapshots that stand at the same count say the browser stopped calling
+    /// it — which reads exactly like a stalled decode from `pos` alone.
+    rt_process_calls: Option<u64>,
+    /// Underruns recorded over the same window: a callback that keeps running
+    /// while this climbs is starving rather than stopped.
+    rt_underruns: Option<u64>,
     status: String,
 }
 
@@ -542,6 +550,8 @@ impl Default for Snapshot {
             dur: None,
             playlist: Vec::new(),
             pos: None,
+            rt_process_calls: None,
+            rt_underruns: None,
             status: "<snapshot-unavailable>".to_string(),
         }
     }
@@ -790,6 +800,8 @@ impl WasmPlayerSelenium {
             if (window.__player) {
                 out.pos = window.__player.currentTimeMs();
                 out.dur = window.__durationMs ?? 0;
+                out.rtProcessCalls = window.__player.rtProcessCalls();
+                out.rtUnderruns = window.__player.rtUnderruns();
             }
             return out;
         "#;
