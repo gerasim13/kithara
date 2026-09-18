@@ -44,10 +44,10 @@ pub mod store;
 pub use mp3::{Mp3Shape, without_xing_frame};
 pub use signal_asset::SignalAsset;
 
-#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "hls-inputs", not(target_arch = "wasm32")))]
 pub mod variant_input;
 
-#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "hls-inputs", not(target_arch = "wasm32")))]
 pub use fixtures::hls as hls_fixtures;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub use fixtures::{

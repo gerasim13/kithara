@@ -1,9 +1,9 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 use std::fs;
 
 use kithara_test_macros as kithara;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 use crate::hls;
 use crate::{assets, fixtures::samples};
 
@@ -43,7 +43,7 @@ pub fn poisoned_float_wav() -> &'static [u8] {
 }
 
 /// Prepared init or media bytes from the build-time HLS bundle.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 /// # Panics
@@ -56,7 +56,7 @@ pub fn aac_init() -> Vec<u8> {
 }
 
 /// Prepared init or media bytes from the build-time HLS bundle.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 /// # Panics
@@ -69,7 +69,7 @@ pub fn aac_segment() -> Vec<u8> {
 }
 
 /// Prepared init or media bytes from the build-time HLS bundle.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 /// # Panics
@@ -82,6 +82,7 @@ pub fn flac_init() -> Vec<u8> {
 }
 
 /// Prepared build-time FLAC input with unknown container duration.
+#[cfg(feature = "encoded")]
 #[kithara::fixture]
 #[must_use]
 pub fn flac_saw() -> &'static [u8] {

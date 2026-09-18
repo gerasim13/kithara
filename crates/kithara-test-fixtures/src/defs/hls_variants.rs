@@ -1,3 +1,5 @@
+#![cfg(feature = "hls-inputs")]
+
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest, PcmSource};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;

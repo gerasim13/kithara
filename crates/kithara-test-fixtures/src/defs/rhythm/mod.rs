@@ -1,3 +1,5 @@
+#![cfg(feature = "rhythm")]
+
 mod analyze;
 mod assets;
 mod score;

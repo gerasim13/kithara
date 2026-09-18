@@ -1,3 +1,5 @@
+#![cfg(feature = "hls")]
+
 use std::{borrow::Cow, io, sync::OnceLock};
 
 use aes::Aes128;

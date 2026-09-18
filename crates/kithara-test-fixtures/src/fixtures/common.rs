@@ -3,6 +3,7 @@ use kithara_test_macros as kithara;
 use crate::{asset::Asset, assets};
 
 /// Prepared bytes of the build-time generated 187-second MPEG tone.
+#[cfg(feature = "signal")]
 #[kithara::fixture]
 #[must_use]
 pub fn tone_mp3() -> &'static [u8] {
@@ -10,7 +11,7 @@ pub fn tone_mp3() -> &'static [u8] {
 }
 
 /// Prepared bytes of the build-time generated one-second stereo WAV tone.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "signal", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 pub fn tone_wav() -> &'static [u8] {
@@ -69,7 +70,7 @@ pub(crate) fn samples(asset: &Asset) -> Vec<f32> {
 }
 
 /// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "wav", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 pub fn short_decoder_wav() -> &'static [u8] {
@@ -77,7 +78,7 @@ pub fn short_decoder_wav() -> &'static [u8] {
 }
 
 /// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "wav", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 pub fn decoder_wav() -> &'static [u8] {
@@ -85,7 +86,7 @@ pub fn decoder_wav() -> &'static [u8] {
 }
 
 /// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "wav", not(target_arch = "wasm32")))]
 #[kithara::fixture]
 #[must_use]
 pub fn seek_decoder_wav() -> &'static [u8] {
@@ -93,6 +94,7 @@ pub fn seek_decoder_wav() -> &'static [u8] {
 }
 
 /// Prepared full-scale stereo 440 Hz WAV input.
+#[cfg(feature = "wav")]
 #[kithara::fixture]
 #[must_use]
 pub fn stress_wav() -> &'static [u8] {

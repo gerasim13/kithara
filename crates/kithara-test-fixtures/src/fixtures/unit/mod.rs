@@ -20,10 +20,12 @@ pub use beat::{
     clicks_120_4s, clicks_120_20s, clicks_150_12s, clicks_150_20s, clicks_change_24s,
     clicks_change_40s,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "encoded")]
+pub use decode::flac_saw;
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
 pub use decode::{aac_init, aac_segment, flac_init};
 pub use decode::{
-    flac_saw, poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
+    poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
     resampled_wav_seek,
 };
 pub use encode::{
