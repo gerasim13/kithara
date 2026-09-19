@@ -323,6 +323,29 @@ fn select_item_out_of_range_returns_typed_error() {
     ));
 }
 
+#[kithara::test]
+fn select_item_rejects_invalid_crossfade_before_index_or_engine_side_effects() {
+    let player = player();
+    let err = player
+        .select_item_with_crossfade(
+            5,
+            SelectTransition {
+                playback: kithara_play::SelectionPlayback::Pause,
+                crossfade: kithara_play::CrossfadeSettings {
+                    duration: -1.0,
+                    ..Default::default()
+                },
+            },
+        )
+        .expect_err("invalid crossfade must be rejected");
+    assert!(matches!(
+        err,
+        PlayError::InvalidParameter { ref name, value }
+            if name == "crossfade.duration" && value == -1.0
+    ));
+    assert!(!player.engine().is_running());
+}
+
 /// `enqueue_to_processor` takes the resource out of the slot, so a
 /// select against an emptied (consumed) slot has nothing to load: it
 /// must fail loudly instead of moving the playlist current index / announcing

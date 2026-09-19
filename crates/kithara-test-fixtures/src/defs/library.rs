@@ -1,3 +1,5 @@
+#![cfg(feature = "library")]
+
 use kithara_platform::time::Duration;
 use kithara_test_macros as kithara;
 use url::Url;

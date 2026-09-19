@@ -82,7 +82,7 @@ func bundledDrmProviders() -> [DrmProvider] {
 
 /// Adapts a `(Data, String) -> Data` closure into a `KeyProcessor`
 /// so that per-provider decryptors built from the baked cipher key
-/// can be registered through `KitharaPlayer.setupHlsAes(rule:)`.
+/// can be declared in `KitharaPlayer.Config.keyRules`.
 final class ClosureKeyProcessor: KeyProcessor, @unchecked Sendable {
     private let decrypt: (Data, String) -> Data
 

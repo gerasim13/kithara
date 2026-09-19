@@ -432,8 +432,8 @@ mod probed {
         let _id = register(&handle, node);
 
         receive_chunks(&trace, &handle, &mut pop, 2).await;
-        let epoch = seek.begin(Duration::from_secs(10));
         let seen = trace.events().len();
+        let epoch = seek.begin(Duration::from_secs(10));
         handle.wake_handle().wake();
         trace
             .wait_for(|events| {

@@ -68,14 +68,53 @@ pub(crate) fn run(args: &ImageArgs) -> Result<()> {
     let root = std::env::current_dir()?;
     let process = Process::new(&root, BTreeMap::new());
     process.require_tools(&["docker"])?;
+    // A disposable validation image is not what the fleet runs, so it builds
+    // under its own tag and leaves the floating one where it was.
+    let Some(disposable) = args.tag.as_deref() else {
+        return build_pinned(&process, args.command, &pins);
+    };
     build(
         &process,
         args.command.dockerfile(),
-        args.tag
-            .as_deref()
-            .unwrap_or_else(|| args.command.tag(&pins)),
+        disposable,
         &args.command.build_args(&pins)?,
     )
+}
+
+/// Build one pinned image and move the floating tag the hosts run onto it.
+pub(crate) fn build_pinned(process: &Process, command: ImageCommand, pins: &CiPins) -> Result<()> {
+    let tag = command.tag(pins);
+    build(
+        process,
+        command.dockerfile(),
+        tag,
+        &command.build_args(pins)?,
+    )?;
+    let floating = floating_tag(tag)?;
+    process.run(
+        "docker",
+        &["tag", tag, &floating],
+        "move the floating CI image tag",
+    )?;
+    info!(image = tag, floating, "floating CI image tag moved");
+    Ok(())
+}
+
+/// The tag a host actually runs, derived from a pin by dropping its
+/// generation: `kithara-ci:linux-20260915a` becomes `kithara-ci:linux-latest`.
+///
+/// A runner configuration that names the pin goes dead the moment the pin
+/// moves, because the machine still holds only the generation it built, and a
+/// job dies before it prints anything. The floating tag moves with the build
+/// instead, so the pin says what to build and this says what to run.
+pub(crate) fn floating_tag(pinned: &str) -> Result<String> {
+    let (repository, generation) = pinned
+        .split_once(':')
+        .with_context(|| format!("image pin carries no tag: {pinned}"))?;
+    let platform = generation
+        .split_once('-')
+        .map_or(generation, |(platform, _)| platform);
+    Ok(format!("{repository}:{platform}-latest"))
 }
 
 /// Build one image with no context at all. Every Dockerfile here downloads what
@@ -248,6 +287,23 @@ mod tests {
             .into_iter()
             .map(|(name, _)| name.to_owned())
             .collect()
+    }
+
+    /// Every pinned image the fleet runs resolves to one floating tag per
+    /// repository: the generation is what a rebuild replaces, and what a host
+    /// runs must not carry it.
+    #[test]
+    fn a_pin_floats_onto_its_repository_without_the_generation() {
+        let pins = &fixture().pins;
+        assert_eq!(
+            floating_tag(&pins.linux_image).unwrap(),
+            "kithara-ci:linux-latest"
+        );
+        assert_eq!(
+            floating_tag(&pins.linux_android_runner_image).unwrap(),
+            "kithara-ci-android-runner:linux-latest"
+        );
+        assert!(floating_tag("kithara-ci").is_err());
     }
 
     #[test]

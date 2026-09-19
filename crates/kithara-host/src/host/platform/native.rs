@@ -4,6 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError,
+    effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{BeatGridId, SyncAdmission, SyncOperation, SyncRejected};
@@ -48,12 +49,18 @@ impl<S> Platform<S> {
         view: RootView,
         sample_rate: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
+        limiter: LimiterConfig,
     ) -> StartedPlatform<S>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let dispatcher =
-            crate::session::native::spawn::<S>(group, view, sample_rate, output_block_frames);
+        let dispatcher = crate::session::native::spawn::<S>(
+            group,
+            view,
+            sample_rate,
+            output_block_frames,
+            limiter,
+        );
         (dispatcher, Self::owner())
     }
 

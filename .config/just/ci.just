@@ -16,7 +16,7 @@ lanes *ARGS:
 lane *ARGS:
     just _xtask ci lane "$@"
 
-# Provision or maintain the dedicated CI host.
+# Provision or maintain a CI machine: its images, runners and agents.
 [positional-arguments]
 host *ARGS:
     just _xtask ci host "$@"
@@ -25,11 +25,6 @@ host *ARGS:
 [positional-arguments]
 image *ARGS:
     just _xtask ci image "$@"
-
-# Provision or maintain a Linux CI machine and the runners it serves.
-[positional-arguments]
-linux *ARGS:
-    just _xtask ci linux "$@"
 
 # Reconcile the private GitLab repository with the public GitHub repository.
 [positional-arguments]

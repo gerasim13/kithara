@@ -4,7 +4,7 @@ use super::{
     CvId, FLASH, WaiterId,
     credit::WaitGuard,
     gate::TaskGate,
-    sched::{AsyncHandle, WakeBatch},
+    sched::{AsyncHandle, ParkRole, WakeBatch},
     wake::Token,
 };
 use crate::{
@@ -30,8 +30,12 @@ pub(crate) fn park_for(d: crate::flash::Duration) {
 
 /// Process-engine forward of
 /// [`FlashInner::park_timed_unparkable`](super::FlashInner::park_timed_unparkable).
-pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: ThreadKey) {
-    FLASH.park_timed_unparkable(d, thread_id);
+pub(crate) fn park_timed_unparkable(
+    d: crate::flash::Duration,
+    thread_id: ThreadKey,
+    role: ParkRole,
+) {
+    FLASH.park_timed_unparkable(d, thread_id, role);
 }
 
 /// Process-engine forward of [`FlashInner::sleep_timed`](super::FlashInner::sleep_timed).

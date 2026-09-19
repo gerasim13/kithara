@@ -30,6 +30,23 @@ fn boolean(value: &JsValue, key: &str) -> bool {
     get(value, key).as_bool().expect("analysis boolean field")
 }
 
+/// What a pass that never reached its end managed to publish, so a deadline
+/// says whether the analysis stalled at the start or merely ran out of budget.
+fn progress_report(events: &Events) -> String {
+    let received = events.borrow();
+    let Some(last) = received.last() else {
+        return "no publication at all".to_string();
+    };
+    format!(
+        "{} publication(s), last revision {} over {} source frame(s), settled={}, beatFinal={}",
+        received.len(),
+        number(last, "revision"),
+        number(last, "sourceFrames"),
+        boolean(last, "settled"),
+        boolean(last, "beatFinal"),
+    )
+}
+
 fn revisions(events: &Events) -> Vec<f64> {
     events
         .borrow()
@@ -72,8 +89,8 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
 
     let Some(waited) = settled else {
         panic!(
-            "no publication carries a final grid; {} publication(s) received",
-            events.borrow().len()
+            "no publication carries a final grid; {}",
+            progress_report(&events)
         );
     };
 
@@ -146,7 +163,11 @@ async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pas
         received.last().is_some_and(|e| boolean(e, "settled"))
     })
     .await;
-    assert!(settled.is_some(), "the first pass never settled");
+    assert!(
+        settled.is_some(),
+        "the first pass never settled after {DEADLINE_MS} ms; {}",
+        progress_report(&events)
+    );
 
     let before = events.borrow().len();
     player

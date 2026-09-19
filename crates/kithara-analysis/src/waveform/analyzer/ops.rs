@@ -117,6 +117,8 @@ impl WaveformAnalyzer {
         }
         let size = self.size();
         let start = index.saturating_mul(self.hop());
+        // The caller hands only windows its span overlaps, so the clipped
+        // range is never empty: no second overlap test belongs here.
         let from = start.max(at);
         let to = start.saturating_add(size).min(end);
         let (Ok(offset), Ok(source), Ok(len)) = (
@@ -126,9 +128,6 @@ impl WaveformAnalyzer {
         ) else {
             return Ok(());
         };
-        if len == 0 {
-            return Ok(());
-        }
         let window_size = self.window_size();
 
         let partial = match self.partial.entry(index) {

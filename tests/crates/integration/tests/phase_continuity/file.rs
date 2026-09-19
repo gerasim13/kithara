@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
 };
 use kithara_test_fixtures::{
-    SignalAsset, assets::by_name, integration_fixtures::listening_reference,
+    Mp3Shape, SignalAsset, assets::by_name, integration_fixtures::listening_reference,
 };
 use tracing::info;
 use url::Url;
@@ -41,6 +41,14 @@ type ServedSignal = (SignalAsset, TestServerHelper, Url);
 async fn served_signal(asset: SignalAsset) -> ServedSignal {
     let helper = TestServerHelper::new().await;
     let url = helper.signal(asset);
+    (asset, helper, url)
+}
+
+#[kithara::fixture]
+async fn headerless_mp3() -> ServedSignal {
+    let asset = SignalAsset::MP3_SINE440_60S_320K;
+    let helper = TestServerHelper::new().await;
+    let url = helper.signal_in(asset, Mp3Shape::Headerless);
     (asset, helper, url)
 }
 
@@ -986,6 +994,10 @@ async fn codec_distortion_profile(
 #[cfg_attr(
     target_os = "android",
     case::flac_android_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Android, true, 0)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple_eph_10seek_headerless(headerless_mp3().await, DecoderBackend::Apple, true, 10)
 )]
 async fn phase_continuity_file(
     #[case] asset: ServedSignal,

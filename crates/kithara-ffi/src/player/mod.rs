@@ -1,5 +1,6 @@
 mod facade;
 mod policy;
+mod selection;
 mod session;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

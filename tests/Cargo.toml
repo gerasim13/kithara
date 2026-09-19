@@ -37,6 +37,10 @@ all = [
     "kithara-app/beat-nn-small",
     "kithara-app/lib-only",
 ]
+# The beat-grid helper, kept out of `all` because the Android device suite
+# selects this crate: its artifact carries no analysis, and the composition
+# check rejects a test build whose closure exceeds the shipped product.
+analysis = ["audio", "kithara/analysis-beat"]
 # Helpers used by `kithara-audio-tests`. Cross-component recording and offline
 # player coverage lives in this crate's full integration suite, so this closure
 # excludes the app, analysis, queue and user-simulation support.
@@ -190,7 +194,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
 assert_no_alloc = { workspace = true }
 

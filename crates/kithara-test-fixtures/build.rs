@@ -15,10 +15,11 @@ mod defs;
 #[cfg(feature = "native-fixtures")]
 #[path = "src/registry.rs"]
 mod registry;
-#[cfg(feature = "native-fixtures")]
+// The fetching half compiles only for the families that fetch.
+#[cfg(feature = "library")]
 #[path = "src/remote_file.rs"]
 mod remote_file;
-#[cfg(feature = "native-fixtures")]
+#[cfg(feature = "hls-inputs")]
 #[path = "src/variant_input.rs"]
 pub mod variant_input;
 // `fmp4`, `signal`, and `store` keep the visibility they have in the library:
@@ -29,10 +30,10 @@ pub mod fmp4;
 #[cfg(feature = "native-fixtures")]
 #[path = "src/graph.rs"]
 mod graph;
-#[cfg(feature = "native-fixtures")]
+#[cfg(feature = "remote")]
 #[path = "src/hls/hydrate.rs"]
 mod hls_hydrate;
-#[cfg(feature = "native-fixtures")]
+#[cfg(feature = "hls")]
 #[path = "src/hls/manifest.rs"]
 mod hls_manifest;
 #[cfg(feature = "native-fixtures")]
@@ -178,10 +179,12 @@ fn materialize_one(
     let context = BuildContext::new(namespace, id);
     let bytes = match (def.build)(context, &inputs) {
         AssetBuild::Ready(bytes) => bytes,
+        #[cfg(feature = "remote")]
         AssetBuild::Unavailable(reason) if def.optional => {
             println!("cargo:warning=optional fixture `{name}` unavailable: {reason}");
             return Some((name.clone(), reason));
         }
+        #[cfg(feature = "remote")]
         AssetBuild::Unavailable(reason) => {
             panic!("kithara-test-fixtures: required fixture `{name}` unavailable: {reason}")
         }

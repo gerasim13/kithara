@@ -479,13 +479,6 @@ pub(crate) fn stands(from: f32, until: Option<f32>, room: f32) -> bool {
     from <= room && until.is_none_or(|until| room < until)
 }
 
-fn thresholds(cells: &[Cell]) -> usize {
-    cells
-        .iter()
-        .map(|cell| usize::from(cell.from > 0.0) + usize::from(cell.until.is_some()))
-        .sum()
-}
-
 pub(crate) struct Cells {
     along: Axis,
     pad: Pad,
@@ -571,11 +564,18 @@ impl Cells {
         let Some(axis) = measure else {
             return self.need(None);
         };
+        // Room a cell opens on can open the next one, so the answer is the
+        // first size that asks for no more room than it already stands in.
+        // Each round covers the last, and a round only ever adds cells, so the
+        // climb ends on the widest set the container holds.
         let mut size = self.need(Some(0.0));
-        for _ in 0..thresholds(&self.cells) + 2 {
-            size = covering(size, self.need(Some(axis_min(size, axis))));
+        loop {
+            let covered = covering(size, self.need(Some(axis_min(size, axis))));
+            if covered == size {
+                return size;
+            }
+            size = covered;
         }
-        size
     }
 }
 
@@ -766,6 +766,76 @@ mod tests {
     fn shrink_has_no_intrinsic_bounds() {
         assert_eq!(Dim::Shrink.min(), 0.0);
         assert_eq!(Dim::Shrink.max(), None);
+    }
+
+    #[kithara::test]
+    fn a_pair_of_equal_bounds_is_one_fixed_number() {
+        assert_eq!(
+            Dim::from(Bounds {
+                min: 12.0,
+                max: Some(12.0)
+            }),
+            Dim::Fixed(12.0),
+            "a bound that cannot move is a fixed size"
+        );
+        assert_eq!(
+            Dim::from(Bounds {
+                min: 12.0,
+                max: Some(20.0)
+            }),
+            Dim::Range {
+                min: 12.0,
+                max: Some(20.0)
+            },
+            "a ceiling above the floor is the range between them"
+        );
+    }
+
+    #[kithara::test]
+    fn an_open_bound_from_zero_is_fill() {
+        assert_eq!(
+            Dim::from(Bounds {
+                min: 0.0,
+                max: None
+            }),
+            Dim::Fill,
+            "nothing to ask for and no ceiling is what fill means"
+        );
+        assert_eq!(
+            Dim::from(Bounds {
+                min: 4.0,
+                max: None
+            }),
+            Dim::Range {
+                min: 4.0,
+                max: None
+            },
+            "a floor of its own is a range, however open the ceiling"
+        );
+    }
+
+    #[kithara::test]
+    fn a_dimension_grows_by_the_room_asked_for() {
+        assert_eq!(grow(Dim::Fixed(10.0), 4.0), Dim::Fixed(14.0));
+        assert_eq!(
+            grow(
+                Dim::Range {
+                    min: 10.0,
+                    max: Some(20.0)
+                },
+                4.0
+            ),
+            Dim::Range {
+                min: 14.0,
+                max: Some(24.0)
+            },
+            "both ends of a range move by the same room"
+        );
+        assert_eq!(
+            grow(Dim::Fixed(10.0), 0.0),
+            Dim::Fixed(10.0),
+            "no room asked for leaves the dimension where it was"
+        );
     }
 
     #[kithara::test]
@@ -1203,6 +1273,96 @@ mod tests {
     }
 
     #[kithara::test]
+    fn a_chain_of_reveals_settles_on_the_last_one_it_opens() {
+        // Each cell opens just inside the width the ones before it need, so the
+        // container only reaches its final width by following the whole chain.
+        let mut interner = Interner::new(1024);
+        let mut cell = |id, width| control(&mut interner, id, fixed(width, 20.0));
+        let base = cell("menu", 40.0);
+        let steps = [
+            (40.0, cell("a", 30.0)),
+            (70.0, cell("b", 30.0)),
+            (100.0, cell("c", 30.0)),
+            (130.0, cell("d", 30.0)),
+            (160.0, cell("e", 30.0)),
+        ];
+        let mut children = vec![base];
+        children.extend(steps.map(|(from, child)| reveal(from, None, child)));
+        let bar = row(
+            children,
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(
+            min_size(&bar, builtin::skin_doc()),
+            fixed(190.0, 42.0),
+            "the chain settles on the width where nothing further opens"
+        );
+    }
+
+    #[kithara::test]
+    fn the_rooms_a_bar_answers_are_its_own_openings() {
+        let mut interner = Interner::new(1024);
+        let mut cell = |id, width| control(&mut interner, id, fixed(width, 20.0));
+        let bar = row(
+            vec![
+                cell("menu", 40.0),
+                reveal(40.0, None, cell("wave", 30.0)),
+                reveal(120.0, None, cell("remain", 30.0)),
+            ],
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(
+            rooms(&bar, MeasureAxis::Width, builtin::skin_doc()),
+            vec![(70.0, 70.0), (120.0, 100.0)],
+            "the narrowest room the bar stands in, then each opening above it"
+        );
+    }
+
+    #[kithara::test]
+    fn a_measuring_column_sums_the_cells_standing_in_its_room() {
+        let mut interner = Interner::new(1024);
+        let cells = vec![
+            control(&mut interner, "head", fixed(20.0, 10.0)),
+            reveal(
+                10.0,
+                None,
+                control(&mut interner, "body", fixed(20.0, 25.0)),
+            ),
+        ];
+        let ExpandedNode::Column { children, .. } = column(cells, Some(4.0)) else {
+            panic!("expected a column");
+        };
+        let node = ExpandedNode::Column {
+            children,
+            gap: Some(4.0),
+            measure: Some(MeasureAxis::Height),
+            size: Some(SizeSpec::new(Dim::Fixed(20.0), Dim::Fill)),
+            id: None,
+            align: TextAlign::Start,
+            pad: None,
+            pad_x: None,
+            pad_y: None,
+            frame: None,
+            frame_color: None,
+            background: None,
+            background_alpha: None,
+            surface: None,
+        };
+
+        assert_eq!(
+            min_size(&node, builtin::skin_doc()),
+            fixed(20.0, 39.0),
+            "a column stacks the cells its room opens, gap included"
+        );
+    }
+
+    #[kithara::test]
     fn a_band_leaves_the_room_to_the_cell_opening_where_it_closes() {
         let mut interner = Interner::new(1024);
         let skin = builtin::skin_doc();
@@ -1263,6 +1423,15 @@ mod tests {
             254.0,
             "a split reading no room stands every cell it holds",
         );
+        let edge = Cells::new(
+            Axis::Horizontal,
+            vec![cell(0.0, None, 40.0), cell(194.0, None, 60.0)],
+        );
+        assert_eq!(
+            edge.rooms(MeasureAxis::Width, 194.0),
+            vec![(194.0, 100.0)],
+            "a cell opening at the narrowest room is that room, not a second answer beside it",
+        );
     }
 
     #[kithara::test]
@@ -1282,5 +1451,83 @@ mod tests {
 
         assert_eq!(min_size(&node, skin), fixed(180.0, 20.0));
         assert_eq!(compute_size(&node, skin, &Folded).w.min(), 100.0);
+    }
+
+    #[kithara::test]
+    fn a_control_with_no_box_of_its_own_offers_the_one_its_skin_gives_it() {
+        let mut interner = Interner::new(1024);
+        let origin = SourceUri("size-test.ron".to_owned());
+        let skin = builtin::skin_doc();
+        let id = interner.intern("knob", &origin).unwrap();
+        let bare = |spec| ExpandedNode::Control {
+            path: id,
+            id,
+            spec,
+            read: None,
+            write: None,
+            size: None,
+        };
+
+        assert_eq!(
+            effective_size(&bare(ControlSpec::Knob { label: None }), skin, DEFAULTS),
+            Some(skin.knob.size),
+            "a knob composes, so a parent may size itself on it",
+        );
+        assert_eq!(
+            effective_size(&bare(ControlSpec::TabLarge { label: id }), skin, DEFAULTS),
+            None,
+            "a tab fills the strip it sits in, so it offers no box to compose with",
+        );
+    }
+
+    #[kithara::test]
+    fn the_default_snapshot_answers_no_measurement() {
+        let mut interner = Interner::new(1024);
+        let origin = SourceUri("size-test.ron".to_owned());
+        let id = interner.intern("width", &origin).unwrap();
+        let binding = Binding {
+            kind: BindingKind::Model,
+            id,
+            key: id,
+            with: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            DEFAULTS.measure(&binding),
+            None,
+            "a tree measured outside a window takes its base branch, not a room of zero",
+        );
+    }
+
+    #[kithara::test]
+    fn a_split_that_blocks_nothing_keeps_the_box_it_was_compiled_with() {
+        let declared = fixed(300.0, 42.0);
+        let cell = |width| SplitCell {
+            node: CompiledNode::Split {
+                axis: Axis::Horizontal,
+                measure: None,
+                children: Vec::new(),
+                size: Some(fixed(width, 20.0)),
+                composed: fixed(width, 20.0),
+                blocks: false,
+            },
+            until: None,
+            from: 0.0,
+            weight: 1.0,
+        };
+        let split = CompiledNode::Split {
+            axis: Axis::Horizontal,
+            measure: None,
+            children: vec![cell(40.0), cell(60.0)],
+            size: Some(declared),
+            composed: fixed(100.0, 20.0),
+            blocks: false,
+        };
+
+        assert_eq!(
+            compiled_node_size_with_hidden(&split, builtin::skin_doc(), DEFAULTS),
+            declared,
+            "with no block under it there is nothing to recompute, so its own box stands",
+        );
     }
 }

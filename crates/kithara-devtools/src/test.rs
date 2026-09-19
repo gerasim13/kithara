@@ -189,14 +189,7 @@ fn lane_command(
     let passthrough = passthrough_position(lane)?;
     match passthrough {
         PassthroughPosition::BeforeSuffix if lane_name == test.default_lane => {
-            let toggles = LaneToggles {
-                flash: request
-                    .flash
-                    .unwrap_or_else(|| lane.default_flash.unwrap_or(test.flash.default)),
-                no_block: request
-                    .no_block
-                    .unwrap_or_else(|| lane.default_no_block.unwrap_or(test.no_block.default)),
-            };
+            let toggles = lane_toggles(test, lane, Some(request));
             let backend = backend_name(test, lane, request);
             let (_, cmd) = nextest_lane_command(project, toggles, backend, &request.passthrough)?;
             Ok(cmd)
@@ -275,6 +268,15 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
             config.loom_lane
         );
     }
+    for (name, lane) in &config.lanes {
+        for entry in &lane.undeclared_toggles {
+            if entry != FLASH_TOGGLE && entry != NO_BLOCK_TOGGLE {
+                bail!(
+                    "test.lanes.{name}.undeclared_toggles carries `{entry}`; valid toggles are `{FLASH_TOGGLE}` and `{NO_BLOCK_TOGGLE}`"
+                );
+            }
+        }
+    }
     if !config.net_backends.contains_key(&config.default_backend) {
         bail!(
             "test.default_backend `{}` is not defined in test.net_backends",
@@ -346,19 +348,65 @@ pub(crate) struct LaneToggles {
     pub(crate) no_block: bool,
 }
 
+pub(crate) const FLASH_TOGGLE: &str = "flash";
+pub(crate) const NO_BLOCK_TOGGLE: &str = "no-block";
+
+/// Resolve one toggle for a lane.
+///
+/// A lane lists a toggle in `undeclared_toggles` when none of its packages
+/// declares that feature: the tools have no `no-block`, the UI crates have no
+/// `flash`. Cargo applies an unqualified feature to every selected package and
+/// fails the run when none of them declares it, so a run-wide request — the
+/// gate asks every touched lane for the detector — must leave such a lane
+/// alone. A lane that merely defaults a toggle off still honours the request.
+fn toggle(
+    name: &str,
+    requested: Option<bool>,
+    lane_default: Option<bool>,
+    lane: &TestLaneConfig,
+    default: bool,
+) -> bool {
+    if lane.undeclared_toggles.iter().any(|entry| entry == name) {
+        return false;
+    }
+    requested.unwrap_or_else(|| lane_default.unwrap_or(default))
+}
+
+fn lane_toggles(
+    config: &TestCommandConfig,
+    lane: &TestLaneConfig,
+    request: Option<&TestRequest>,
+) -> LaneToggles {
+    LaneToggles {
+        flash: toggle(
+            FLASH_TOGGLE,
+            request.and_then(|request| request.flash),
+            lane.default_flash,
+            lane,
+            config.flash.default,
+        ),
+        no_block: toggle(
+            NO_BLOCK_TOGGLE,
+            request.and_then(|request| request.no_block),
+            lane.default_no_block,
+            lane,
+            config.no_block.default,
+        ),
+    }
+}
+
 fn features_for(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
     request: &TestRequest,
 ) -> Result<BTreeSet<String>> {
-    let flash = request
-        .flash
-        .unwrap_or_else(|| lane.default_flash.unwrap_or(config.flash.default));
-    let no_block = request
-        .no_block
-        .unwrap_or_else(|| lane.default_no_block.unwrap_or(config.no_block.default));
     let backend = backend_name(config, lane, request);
-    lane_features(config, lane, LaneToggles { flash, no_block }, backend)
+    lane_features(
+        config,
+        lane,
+        lane_toggles(config, lane, Some(request)),
+        backend,
+    )
 }
 
 fn backend_name<'a>(
@@ -444,10 +492,7 @@ pub fn nextest_command_for_lane(
         .lanes
         .get(lane_name)
         .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
-    let toggles = LaneToggles {
-        flash: lane.default_flash.unwrap_or(test.flash.default),
-        no_block: lane.default_no_block.unwrap_or(test.no_block.default),
-    };
+    let toggles = lane_toggles(test, lane, None);
     let backend = lane
         .default_backend
         .as_deref()
@@ -728,6 +773,7 @@ mod tests {
                 default_backend: None,
                 default_flash: None,
                 default_no_block: None,
+                undeclared_toggles: Vec::new(),
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -747,6 +793,23 @@ mod tests {
                 default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
+                undeclared_toggles: Vec::new(),
+                passthrough: String::new(),
+                env: BTreeMap::new(),
+                owns: Vec::new(),
+            },
+        );
+        lanes.insert(
+            "toolsmith".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
+                suffix_args: Vec::new(),
+                default_features: Vec::new(),
+                default_backend: None,
+                default_flash: None,
+                default_no_block: None,
+                undeclared_toggles: vec![FLASH_TOGGLE.to_owned(), NO_BLOCK_TOGGLE.to_owned()],
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -762,6 +825,7 @@ mod tests {
                 default_backend: None,
                 default_flash: None,
                 default_no_block: Some(true),
+                undeclared_toggles: Vec::new(),
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -777,6 +841,7 @@ mod tests {
                 default_backend: None,
                 default_flash: Some(false),
                 default_no_block: None,
+                undeclared_toggles: Vec::new(),
                 passthrough: "after-suffix".to_owned(),
                 env: BTreeMap::from([("DEMO_BROWSER".to_owned(), "firefox".to_owned())]),
                 owns: Vec::new(),
@@ -1039,6 +1104,36 @@ mod tests {
         let feats = features_for(test, lane, &request).expect("features");
 
         assert!(!feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn a_lane_without_the_detector_stays_without_it_when_the_gate_asks_for_it() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["toolsmith"];
+        let request = TestRequest::parse(&["--no-block=on".to_owned()]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(
+            !feats.contains("nb-detect"),
+            "a lane whose packages do not declare the feature cannot be given it",
+        );
+    }
+
+    #[test]
+    fn a_lane_without_the_virtual_clock_stays_without_it_when_asked_for_it() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["toolsmith"];
+        let request = TestRequest::parse(&["--flash=on".to_owned()]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(
+            !feats.contains("virtual-time"),
+            "a lane whose packages do not declare the feature cannot be given it",
+        );
     }
 
     #[test]

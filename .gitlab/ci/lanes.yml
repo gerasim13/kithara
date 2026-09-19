@@ -6,7 +6,9 @@
     - !reference [.rules-weekly, rules]
   stage: lanes
   timeout: 180 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
 
 lanes:doc:
   extends: .lane-job
@@ -59,7 +61,9 @@ lanes:usdt:
     - !reference [.rules-integration, rules]
   stage: lanes
   timeout: 180 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
   script:
     - just ci run linux-usdt
 

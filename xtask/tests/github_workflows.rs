@@ -80,7 +80,7 @@ incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
-    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+    and not (name in {"deep", "mutants", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
     and not (name == "ui" and job["result"] == "skipped" and not ui_required)
     and not (name == "android" and job["result"] == "skipped" and not android_required)
 }
@@ -714,7 +714,7 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
         }
         let role = lane["role"].as_str().expect("a lane names a role");
         assert!(
-            matches!(role, "deep" | "quality"),
+            matches!(role, "deep" | "mutants" | "quality"),
             "lane `{name}` queues with the heavy lanes under role `{role}`, \
              which holds no group"
         );
@@ -1800,7 +1800,7 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
-    let fan_out = ["gate", "platforms", "deep", "quality"];
+    let fan_out = ["gate", "platforms", "deep", "mutants", "quality"];
 
     for (name, job) in jobs {
         let name = name.as_str().expect("a dispatcher job name is a string");
@@ -2262,4 +2262,35 @@ fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
             "`{name}` pins a path instead of reading the machine's own"
         );
     }
+}
+
+/// Provisioning writes to the machine that serves the fleet, so it is never
+/// something a push starts: it is started by hand, on the machine itself, and
+/// one pass at a time.
+#[test]
+fn the_host_provisions_itself_only_when_someone_asks_it_to() {
+    let workflow = github_workflow("host.yml");
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    let triggers: BTreeSet<&str> = triggers
+        .keys()
+        .map(|key| key.as_str().expect("a trigger is named"))
+        .collect();
+    assert_eq!(triggers, BTreeSet::from(["workflow_dispatch"]));
+
+    let job = workflow_job(workflow_jobs(&workflow), "provision");
+    // A throwaway runner container holds neither the Docker daemon that keeps
+    // the images nor the systemd that owns the units.
+    assert_eq!(
+        mapping_field(job, "runs-on").as_str(),
+        Some("${{ vars.KITHARA_HOST_RUNNER_LABEL }}")
+    );
+    assert_eq!(
+        workflow_concurrency(&workflow)
+            .get("cancel-in-progress")
+            .and_then(Value::as_bool),
+        Some(false),
+        "a second pass would rebuild what the first is installing against"
+    );
 }

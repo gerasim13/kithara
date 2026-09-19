@@ -31,7 +31,9 @@ use kithara_integration_tests::{
     offline::resource_from_reader,
     temp_dir,
 };
-use kithara_test_fixtures::{SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments};
+use kithara_test_fixtures::{
+    Mp3Shape, SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments,
+};
 use tracing::info;
 
 use crate::{
@@ -87,10 +89,14 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
 /// (ok mp3 url with a `.mp3` extension, unavailable 503 url) on the shared server.
 #[kithara::fixture]
 async fn mp3_endpoints(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url, url::Url) {
+    mp3_endpoints_for_bytes(tone_mp3.to_vec()).await
+}
+
+async fn mp3_endpoints_for_bytes(bytes: Vec<u8>) -> (TestServerHelper, url::Url, url::Url) {
     let helper = TestServerHelper::new().await;
     let ok = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(tone_mp3.to_vec()),
+            bytes: Arc::new(bytes),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -428,38 +434,51 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
-    case::disk_symphonia(false, DecoderBackend::Symphonia)
+    case::disk_symphonia(false, DecoderBackend::Symphonia, Mp3Shape::Tagged)
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case::disk_symphonia_headerless(false, DecoderBackend::Symphonia, Mp3Shape::Headerless)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::disk_apple(false, DecoderBackend::Apple)
+    case::disk_apple(false, DecoderBackend::Apple, Mp3Shape::Tagged)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::disk_apple_headerless(false, DecoderBackend::Apple, Mp3Shape::Headerless)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::disk_android(false, DecoderBackend::Android)
+    case::disk_android(false, DecoderBackend::Android, Mp3Shape::Tagged)
 )]
 #[cfg_attr(
     not(target_os = "android"),
-    case::ephemeral_symphonia(true, DecoderBackend::Symphonia)
+    case::ephemeral_symphonia(true, DecoderBackend::Symphonia, Mp3Shape::Tagged)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::ephemeral_apple(true, DecoderBackend::Apple)
+    case::ephemeral_apple(true, DecoderBackend::Apple, Mp3Shape::Tagged)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::ephemeral_apple_headerless(true, DecoderBackend::Apple, Mp3Shape::Headerless)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::ephemeral_android(true, DecoderBackend::Android)
+    case::ephemeral_android(true, DecoderBackend::Android, Mp3Shape::Tagged)
 )]
 async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
-    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
+    tone_mp3: &'static [u8],
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
+    #[case] shape: Mp3Shape,
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_server, ok_url, _) = mp3_endpoints;
+    let (_server, ok_url, _) = mp3_endpoints_for_bytes(shape.apply(tone_mp3)).await;
     let region = pools();
     let store = asset_store(&temp_dir, ephemeral, &region);
 

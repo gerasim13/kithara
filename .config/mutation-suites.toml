@@ -9,9 +9,18 @@
 #
 # What earns a suite: dense decision logic - arithmetic, ordering, state
 # transitions, thresholds - with its own unit tests. Plumbing and glue do not.
+#
+# Each suite names a `group`, and a group is one CI lane: `stream` for the
+# container and playlist contracts, `playback` for the queue and the engine
+# feeding it, `analysis` for the waveform pass, `ui` for the size rules. Ten
+# suites in one lane overran its window with the last two unread; a group also
+# keeps the packages a lane builds down to what its own suites need, so a lane
+# rebuilds less of the workspace and a green group is not re-run because
+# another one is still red.
 
 [[suite]]
 name = "crossfader"
+group = "playback"
 package = "kithara-play"
 files = ["crates/kithara-play/src/engine/mix.rs"]
 test_filters = ["test(/engine::mix::tests::/)"]
@@ -22,6 +31,7 @@ timeout_seconds = 120
 # testing is best at.
 [[suite]]
 name = "throughput-estimator"
+group = "playback"
 package = "kithara-abr"
 files = ["crates/kithara-abr/src/estimator.rs"]
 test_filters = ["test(/estimator::tests::/)"]
@@ -32,6 +42,7 @@ timeout_seconds = 120
 # has finished. An off-by-one here is a silent wrong answer, not a crash.
 [[suite]]
 name = "seek-state"
+group = "stream"
 package = "kithara-stream"
 files = ["crates/kithara-stream/src/seek_state.rs"]
 # The suite protects seek protocol decisions. Its diagnostic `Debug` formatter
@@ -44,6 +55,7 @@ timeout_seconds = 180
 # Transition identity decides which of two sources a late event belongs to.
 [[suite]]
 name = "transition"
+group = "stream"
 package = "kithara-stream"
 files = ["crates/kithara-stream/src/transition.rs"]
 test_filters = ["test(/transition::tests::/)"]
@@ -54,6 +66,7 @@ timeout_seconds = 120
 # is what makes a surviving mutant here a statement rather than a gap.
 [[suite]]
 name = "hls-coordinator"
+group = "stream"
 package = "kithara-hls"
 files = ["crates/kithara-hls/src/stream/coord.rs"]
 test_filters = ["test(/stream::coord::tests::/)"]
@@ -64,6 +77,7 @@ timeout_seconds = 180
 # of `kithara-play` into the shared runtime, and its own tests moved with it.
 [[suite]]
 name = "worker-scheduler"
+group = "playback"
 package = "kithara-worker"
 files = ["crates/kithara-worker/src/dispatcher/core.rs"]
 test_filters = ["test(/dispatcher::tests::/)"]
@@ -73,6 +87,7 @@ timeout_seconds = 180
 # is a wrong answer the reader accepts rather than a panic it reports.
 [[suite]]
 name = "media-bounds"
+group = "stream"
 package = "kithara-stream"
 files = ["crates/kithara-stream/src/media.rs"]
 test_filters = ["test(/media::tests::/)"]
@@ -85,6 +100,7 @@ timeout_seconds = 120
 # every mutant survives a suite that ran no test at all.
 [[suite]]
 name = "waveform-analyzer"
+group = "analysis"
 package = "kithara-analysis"
 files = ["crates/kithara-analysis/src/waveform/analyzer.rs"]
 features = ["analysis-waveform"]
@@ -95,6 +111,7 @@ timeout_seconds = 180
 # passes every test that only asks whether a frame was produced.
 [[suite]]
 name = "ui-size"
+group = "ui"
 package = "kithara-ui"
 files = ["crates/kithara-ui/src/size.rs"]
 test_filters = ["test(/size::tests::/)"]
@@ -104,6 +121,7 @@ timeout_seconds = 180
 # does at the ends, and which of them is a no-op.
 [[suite]]
 name = "queue-track"
+group = "playback"
 package = "kithara-queue"
 files = ["crates/kithara-queue/src/track.rs"]
 test_filters = ["test(/track::tests::/)"]

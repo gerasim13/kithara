@@ -1,8 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 //! Decoder construction must remain bounded when media data is withheld.
-//! Init-only backends can open from the header; media-probing backends report
-//! the stream's typed readiness error. Releasing the body restores playback.
+//! Construction probes the container, so every platform reports the stream's
+//! typed readiness error. Releasing the body restores playback.
 use std::num::NonZeroUsize;
 
 use kithara::{
@@ -26,7 +26,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
-#[cfg(not(target_os = "android"))]
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -114,37 +113,20 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTes
     );
     gate.release();
 
-    #[cfg(target_os = "android")]
-    {
-        let mut audio = result.expect("the WAV init is sufficient for native construction");
-        let samples = tokio::task::spawn_blocking(move || {
-            kithara_integration_tests::reads::read_to_eof(&mut audio)
-        })
-        .await
-        .expect("read joins");
-        let expected = SEGMENT_COUNT * SEGMENT_SIZE / size_of::<i16>();
-        assert_eq!(
-            samples, expected as u64,
-            "released media must decode completely"
-        );
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let err = result
-            .err()
-            .expect("the container probe requires media bytes");
-        let message = err.to_string();
-        info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::open failed");
-        let lower = message.to_ascii_lowercase();
-        assert!(
-            lower.contains("not ready") || lower.contains("wait budget"),
-            "opening must preserve the stream readiness error: {message}"
-        );
-        assert!(
-            !lower.contains("timed out") && !lower.contains("timeout"),
-            "a source wait must not become a synthetic timeout: {message}"
-        );
-    }
+    let err = result
+        .err()
+        .expect("the container probe requires media bytes");
+    let message = err.to_string();
+    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::open failed");
+    let lower = message.to_ascii_lowercase();
+    assert!(
+        lower.contains("not ready") || lower.contains("wait budget"),
+        "opening must preserve the stream readiness error: {message}"
+    );
+    assert!(
+        !lower.contains("timed out") && !lower.contains("timeout"),
+        "a source wait must not become a synthetic timeout: {message}"
+    );
 }
 
 #[kithara::test(

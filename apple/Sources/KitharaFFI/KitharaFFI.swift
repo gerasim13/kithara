@@ -633,13 +633,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func actionAtItemEnd()  -> FfiActionAtItemEnd
 
     /**
-     * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-     * for an immediate cut.
-     */
-    func advanceToNextItem() throws
-
-    /**
      * Append an item to the tail of the queue. AVQueuePlayer-style
      * counterpart of [`Self::insert`], which follows the iOS protocol
      * shape (`after == nil` ⇒ head).
@@ -747,8 +740,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func resetEq() throws
 
-    func returnToPreviousItem() throws
-
     /**
      * Seek to a position in the current item.
      *
@@ -763,28 +754,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-    func selectItem(index: UInt32, transition: FfiTransition) throws
-
     func setAbrMode(mode: FfiAbrMode)
-
-    func setActionAtItemEnd(action: FfiActionAtItemEnd) throws
-
-    func setCrossfadeSettings(settings: FfiCrossfadeSettings) throws
 
     /**
      * # Errors
@@ -796,8 +766,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setMuted(muted: Bool)
 
     func setObserver(observer: PlayerObserver)
-
-    func setPlaybackOrder(order: FfiPlaybackOrder) throws
 
     func setPlayingRate(rate: Float)
 
@@ -871,6 +839,63 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func volume()  -> Float
 
     /**
+     * Advance to the next item, or do nothing at queue exhaustion.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+    func advanceToNextItem() throws
+
+    /**
+     * Return to the previous item in navigation history.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+    func returnToPreviousItem() throws
+
+    /**
+     * Set the automatic terminal action.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+    func setActionAtItemEnd(action: FfiActionAtItemEnd) throws
+
+    /**
+     * Set the profile captured by future transitions.
+     *
+     * # Errors
+     * Returns an error when the profile contains an invalid value.
+     */
+    func setCrossfadeSettings(settings: FfiCrossfadeSettings) throws
+
+    /**
+     * Set the queue traversal order.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+    func setPlaybackOrder(order: FfiPlaybackOrder) throws
+
+    /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+    func select(item: AudioPlayerItem, transition: FfiTransition) throws
+
+    /**
      * Notify the native player that the platform audio route changed.
      *
      * This does not change queue state. If playback is active, the
@@ -942,6 +967,10 @@ open class AudioPlayer: AudioPlayerProtocol, @unchecked Sendable {
     public func uniffiCloneHandle() -> UInt64 {
         return try! rustCall { uniffi_kithara_ffi_fn_clone_audioplayer(self.handle, $0) }
     }
+    /**
+     * # Errors
+     * Returns an error when the player configuration cannot be created.
+     */
 public convenience init(config: FfiPlayerConfig)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeFfiError_lift) {
@@ -970,18 +999,6 @@ open func actionAtItemEnd() -> FfiActionAtItemEnd  {
             self.uniffiCloneHandle(),$0
     )
 })
-}
-
-    /**
-     * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-     * for an immediate cut.
-     */
-open func advanceToNextItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_advance_to_next_item(
-            self.uniffiCloneHandle(),$0
-    )
-}
 }
 
     /**
@@ -1211,13 +1228,6 @@ open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift
 }
 }
 
-open func returnToPreviousItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_return_to_previous_item(
-            self.uniffiCloneHandle(),$0
-    )
-}
-}
-
     /**
      * Seek to a position in the current item.
      *
@@ -1240,50 +1250,10 @@ open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {
 }
 }
 
-    /**
-     * Select an item in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom — tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here —
-     * the engine continues playing if it was, pauses if it was.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `index` is out of range,
-     * [`FfiError::NotReady`] if the track's resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
-     */
-open func selectItem(index: UInt32, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_select_item(
-            self.uniffiCloneHandle(),
-        FfiConverterUInt32.lower(index),
-        FfiConverterTypeFfiTransition_lower(transition),$0
-    )
-}
-}
-
 open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_abr_mode(
             self.uniffiCloneHandle(),
         FfiConverterTypeFfiAbrMode_lower(mode),$0
-    )
-}
-}
-
-open func setActionAtItemEnd(action: FfiActionAtItemEnd)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_action_at_item_end(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiActionAtItemEnd_lower(action),$0
-    )
-}
-}
-
-open func setCrossfadeSettings(settings: FfiCrossfadeSettings)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_settings(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiCrossfadeSettings_lower(settings),$0
     )
 }
 }
@@ -1314,14 +1284,6 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_observer(
             self.uniffiCloneHandle(),
         FfiConverterTypePlayerObserver_lower(observer),$0
-    )
-}
-}
-
-open func setPlaybackOrder(order: FfiPlaybackOrder)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_playback_order(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiPlaybackOrder_lower(order),$0
     )
 }
 }
@@ -1458,6 +1420,98 @@ open func volume() -> Float  {
 }
 
     /**
+     * Advance to the next item, or do nothing at queue exhaustion.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+open func advanceToNextItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_advance_to_next_item(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+    /**
+     * Return to the previous item in navigation history.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+open func returnToPreviousItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_return_to_previous_item(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+    /**
+     * Set the automatic terminal action.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+open func setActionAtItemEnd(action: FfiActionAtItemEnd)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_action_at_item_end(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiActionAtItemEnd_lower(action),$0
+    )
+}
+}
+
+    /**
+     * Set the profile captured by future transitions.
+     *
+     * # Errors
+     * Returns an error when the profile contains an invalid value.
+     */
+open func setCrossfadeSettings(settings: FfiCrossfadeSettings)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_settings(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiCrossfadeSettings_lower(settings),$0
+    )
+}
+}
+
+    /**
+     * Set the queue traversal order.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+open func setPlaybackOrder(order: FfiPlaybackOrder)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_playback_order(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiPlaybackOrder_lower(order),$0
+    )
+}
+}
+
+    /**
+     * Select `item` in the queue with the given transition.
+     *
+     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
+     * user-initiated-selection idiom: tap a track in a list).
+     * `FfiTransition::Crossfade` uses the player's configured duration
+     * (typical for Next/Prev buttons). Play state is not changed here:
+     * the engine continues playing if it was, pauses if it was.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
+     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
+     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     */
+open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_select(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeAudioPlayerItem_lower(item),
+        FfiConverterTypeFfiTransition_lower(transition),$0
+    )
+}
+}
+
+    /**
      * Notify the native player that the platform audio route changed.
      *
      * This does not change queue state. If playback is active, the
@@ -1557,6 +1611,13 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
 
     /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+    func addObserver(observer: ItemObserver)  -> UInt64
+
+    /**
      * Caller-facing content id. Mirrors the iOS
      * `AudioPlayerItemProtocol.audioId: TrackId`.
      */
@@ -1607,7 +1668,16 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
      */
     func queueId()  -> TrackId
 
-    func setObserver(observer: ItemObserver)
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+    func removeObserver(id: UInt64)
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+    func state()  -> FfiItemState
 
     /**
      * Audio source string — either a network URL or an absolute local
@@ -1703,6 +1773,20 @@ public convenience init(config: FfiItemConfig) {
 
 
 
+
+    /**
+     * Subscribes `observer` to this item's events and returns the handle
+     * that [`Self::remove_observer`] unsubscribes it with. Every registered
+     * observer receives every event.
+     */
+open func addObserver(observer: ItemObserver) -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_add_observer(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeItemObserver_lower(observer),$0
+    )
+})
+}
 
     /**
      * Caller-facing content id. Mirrors the iOS
@@ -1805,12 +1889,27 @@ open func queueId() -> TrackId  {
 })
 }
 
-open func setObserver(observer: ItemObserver)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayeritem_set_observer(
+    /**
+     * Unsubscribes the observer registered under `id`.
+     */
+open func removeObserver(id: UInt64)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_remove_observer(
             self.uniffiCloneHandle(),
-        FfiConverterTypeItemObserver_lower(observer),$0
+        FfiConverterUInt64.lower(id),$0
     )
 }
+}
+
+    /**
+     * Consistent snapshot of status, duration, failure reason and
+     * buffered ranges.
+     */
+open func state() -> FfiItemState  {
+    return try!  FfiConverterTypeFfiItemState_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_state(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
 
     /**
@@ -3908,6 +4007,79 @@ public func FfiConverterTypeFfiItemLoadResult_lower(_ value: FfiItemLoadResult) 
 
 
 /**
+ * Snapshot of everything an item knows about itself. One getter so a
+ * caller reads a consistent set instead of three independently locked
+ * values.
+ */
+public struct FfiItemState: Equatable, Hashable {
+    public let status: FfiItemStatus
+    /**
+     * Playable duration once the metadata layer answers.
+     */
+    public let durationSeconds: Double?
+    public let error: String?
+    public let loadedRanges: [FfiTimeRange]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: FfiItemStatus,
+        /**
+         * Playable duration once the metadata layer answers.
+         */durationSeconds: Double?, error: String?, loadedRanges: [FfiTimeRange]) {
+        self.status = status
+        self.durationSeconds = durationSeconds
+        self.error = error
+        self.loadedRanges = loadedRanges
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiItemState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiItemState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemState {
+        return
+            try FfiItemState(
+                status: FfiConverterTypeFfiItemStatus.read(from: &buf),
+                durationSeconds: FfiConverterOptionDouble.read(from: &buf),
+                error: FfiConverterOptionString.read(from: &buf),
+                loadedRanges: FfiConverterSequenceTypeFfiTimeRange.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiItemState, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiItemStatus.write(value.status, into: &buf)
+        FfiConverterOptionDouble.write(value.durationSeconds, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+        FfiConverterSequenceTypeFfiTimeRange.write(value.loadedRanges, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lift(_ buf: RustBuffer) throws -> FfiItemState {
+    return try FfiConverterTypeFfiItemState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemState_lower(_ value: FfiItemState) -> RustBuffer {
+    return FfiConverterTypeFfiItemState.lower(value)
+}
+
+
+/**
  * FFI-friendly mirror of [`kithara::hls::KeyOptions`].
  *
  * Holds domain-scoped DRM rules — providers with different key
@@ -3975,8 +4147,7 @@ public struct FfiKeyRule {
      * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
      * on every decrypt. `None` is treated as an empty string.
      *
-     * `setup_hls_aes` populates this automatically with a freshly
-     * generated 16-character alphanumeric value and mirrors it into
+     * A rule carrying a salt also mirrors it into
      * [`crate::observer::SALT_HEADER`] in the player-wide header map.
      */
     public let salt: String?
@@ -3993,8 +4164,7 @@ public struct FfiKeyRule {
          * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
          * on every decrypt. `None` is treated as an empty string.
          *
-         * `setup_hls_aes` populates this automatically with a freshly
-         * generated 16-character alphanumeric value and mirrors it into
+         * A rule carrying a salt also mirrors it into
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
          */salt: String?,
         /**
@@ -4073,6 +4243,14 @@ public struct FfiPlayerConfig {
      * Number of EQ bands (log-spaced). Default: 10.
      */
     public let eqBandCount: UInt32
+    /**
+     * Player-wide auth token merged into item HTTP headers. Empty means no token.
+     */
+    public let authToken: String
+    /**
+     * Initial playback-rate target (1.0 = normal).
+     */
+    public let playingRate: Float
     public let playbackOrder: FfiPlaybackOrder
     public let actionAtItemEnd: FfiActionAtItemEnd
     public let crossfadeSettings: FfiCrossfadeSettings
@@ -4088,10 +4266,18 @@ public struct FfiPlayerConfig {
          */keyOptions: FfiKeyOptions,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
-         */eqBandCount: UInt32, playbackOrder: FfiPlaybackOrder, actionAtItemEnd: FfiActionAtItemEnd, crossfadeSettings: FfiCrossfadeSettings) {
+         */eqBandCount: UInt32,
+        /**
+         * Player-wide auth token merged into item HTTP headers. Empty means no token.
+         */authToken: String,
+        /**
+         * Initial playback-rate target (1.0 = normal).
+         */playingRate: Float, playbackOrder: FfiPlaybackOrder, actionAtItemEnd: FfiActionAtItemEnd, crossfadeSettings: FfiCrossfadeSettings) {
         self.store = store
         self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
+        self.authToken = authToken
+        self.playingRate = playingRate
         self.playbackOrder = playbackOrder
         self.actionAtItemEnd = actionAtItemEnd
         self.crossfadeSettings = crossfadeSettings
@@ -4116,6 +4302,8 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
                 store: FfiConverterTypeFfiAssetStore.read(from: &buf),
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf),
+                authToken: FfiConverterString.read(from: &buf),
+                playingRate: FfiConverterFloat.read(from: &buf),
                 playbackOrder: FfiConverterTypeFfiPlaybackOrder.read(from: &buf),
                 actionAtItemEnd: FfiConverterTypeFfiActionAtItemEnd.read(from: &buf),
                 crossfadeSettings: FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
@@ -4126,6 +4314,8 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+        FfiConverterString.write(value.authToken, into: &buf)
+        FfiConverterFloat.write(value.playingRate, into: &buf)
         FfiConverterTypeFfiPlaybackOrder.write(value.playbackOrder, into: &buf)
         FfiConverterTypeFfiActionAtItemEnd.write(value.actionAtItemEnd, into: &buf)
         FfiConverterTypeFfiCrossfadeSettings.write(value.crossfadeSettings, into: &buf)
@@ -8968,6 +9158,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 57426) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8992,7 +9185,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_queue_id() != 58096) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_observer() != 8440) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_remove_observer() != 50876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 41337) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 18833) {
@@ -9032,9 +9228,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 13245) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 21300) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
@@ -9097,22 +9290,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 48058) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 4878) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 51840) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 56189) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 41928) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
@@ -9122,9 +9303,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 21665) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
@@ -9157,6 +9335,24 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 33255) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 29933) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 50899) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9175,7 +9371,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 36907) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
         return InitializationResult.apiChecksumMismatch
     }
 

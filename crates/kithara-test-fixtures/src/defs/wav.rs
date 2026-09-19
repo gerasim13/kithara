@@ -1,3 +1,5 @@
+#![cfg(feature = "wav")]
+
 use kithara_test_macros as kithara;
 use num_traits::cast;
 

@@ -59,6 +59,8 @@ class KitharaPlayer(config: Config = Config()) {
         val keyRules: List<KeyRule> = emptyList(),
         /** Shared asset store used by every item created by this player. */
         val store: AssetStore = Kithara.defaultStore,
+        val authToken: String = "",
+        val playingRate: Float = 1.0f,
         val playbackOrder: PlaybackOrder = PlaybackOrder.Sequential,
         val actionAtItemEnd: ActionAtItemEnd = ActionAtItemEnd.Advance,
         val crossfadeSettings: CrossfadeSettings = CrossfadeSettings(),
@@ -540,6 +542,8 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
+        authToken = authToken,
+        playingRate = playingRate,
         playbackOrder = playbackOrder.toFfi(),
         actionAtItemEnd = actionAtItemEnd.toFfi(),
         crossfadeSettings = crossfadeSettings.toFfi(),

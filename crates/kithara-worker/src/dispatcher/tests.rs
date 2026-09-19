@@ -17,8 +17,8 @@ use kithara_test_utils::kithara;
 use super::{
     TaskError,
     core::{
-        cancel_all, park_after_outcome, produce_pass, recycle_all, refresh_priorities,
-        remove_terminal, reorder_slots, unregister_slot,
+        cancel_all, is_slow_tick, park_after_outcome, produce_pass, recycle_all,
+        refresh_priorities, remove_terminal, reorder_slots, run_pass, unregister_slot,
     },
     state::{SchedulerBudgets, Slot},
 };
@@ -43,6 +43,21 @@ impl Task for CountingTask {
     fn tick(&mut self) -> TickResult {
         self.ticks.fetch_add(1, Ordering::Relaxed);
         TickResult::Progress
+    }
+}
+
+struct ProgressThenWaitingTask {
+    ticks: usize,
+}
+
+impl Task for ProgressThenWaitingTask {
+    fn tick(&mut self) -> TickResult {
+        self.ticks += 1;
+        if self.ticks == 1 {
+            TickResult::Progress
+        } else {
+            TickResult::Waiting
+        }
     }
 }
 
@@ -399,6 +414,157 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
     }
 }
 
+#[kithara::test(flash(false))]
+fn a_tick_is_slow_only_once_it_costs_more_than_its_budget() {
+    assert!(
+        !is_slow_tick(Duration::ZERO, Duration::ZERO),
+        "a tick that spent nothing has not overspent"
+    );
+    assert!(
+        !is_slow_tick(Duration::from_millis(10), Duration::from_millis(10)),
+        "a tick that spent exactly its budget has not overspent"
+    );
+    assert!(is_slow_tick(
+        Duration::from_millis(11),
+        Duration::from_millis(10)
+    ));
+}
+
+#[kithara::test(flash(false))]
+fn reorder_keeps_the_order_of_slots_the_comparator_cannot_separate() {
+    let mut slots = vec![
+        slot(1, Priority::new(8), FixedTask(TickResult::Done)),
+        slot(2, Priority::new(8), FixedTask(TickResult::Done)),
+        slot(3, Priority::new(2), FixedTask(TickResult::Done)),
+    ];
+
+    reorder_slots(&mut slots);
+
+    assert_eq!(
+        slots.iter().map(|slot| slot.id.get()).collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "a settled roster is left where it stands"
+    );
+}
+
+#[kithara::test(flash(false))]
+fn a_lower_priority_slot_stays_behind_however_early_it_registered() {
+    let mut slots = vec![
+        slot(2, Priority::new(8), FixedTask(TickResult::Done)),
+        slot(1, Priority::new(5), FixedTask(TickResult::Done)),
+    ];
+
+    reorder_slots(&mut slots);
+
+    assert_eq!(
+        slots.iter().map(|slot| slot.id.get()).collect::<Vec<_>>(),
+        vec![2, 1],
+        "registration order never outranks priority"
+    );
+}
+
+#[kithara::test(flash(false))]
+fn removal_reports_a_roster_change_only_when_a_slot_left() {
+    let mut slots = vec![
+        slot(1, Priority::default(), FixedTask(TickResult::Done)),
+        slot(2, Priority::default(), FixedTask(TickResult::Done)),
+    ];
+
+    assert!(
+        !remove_terminal(&mut slots),
+        "a roster that kept every slot has not changed"
+    );
+
+    slots[0].is_terminal = true;
+    assert!(remove_terminal(&mut slots));
+    assert_eq!(slots.len(), 1);
+}
+
+#[kithara::test(flash(false))]
+fn a_visit_that_progressed_before_waiting_reports_progress() {
+    let mut slots = vec![slot(
+        1,
+        Priority::default(),
+        ProgressThenWaitingTask { ticks: 0 },
+    )];
+    let mut observer = Events::default();
+
+    let report = produce_pass(&mut slots, budgets(), &mut observer);
+
+    assert_eq!(
+        report.outcome,
+        PassOutcome::Progress,
+        "work the visit already did outranks the wait it ended on"
+    );
+}
+
+#[kithara::test(flash(false))]
+fn a_pass_reorders_a_roster_the_commands_left_unsorted() {
+    let mut slots = vec![
+        slot(1, Priority::new(1), FixedTask(TickResult::Progress)),
+        slot(2, Priority::new(9), FixedTask(TickResult::Progress)),
+    ];
+    let mut needs_reorder = true;
+    let mut observer = Events::default();
+
+    let report = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+
+    assert_eq!(
+        report.first_progress_task,
+        Some(TaskId::new(2)),
+        "a pass that was told the roster changed must sort it before producing"
+    );
+    assert!(
+        !needs_reorder,
+        "the pass consumed the reorder it was told of"
+    );
+}
+
+#[kithara::test(flash(false))]
+fn a_pass_drops_an_externally_cancelled_slot_before_producing() {
+    let scope = CancelScope::new(None);
+    let token = scope.token().child();
+    let mut slots = vec![slot(
+        1,
+        Priority::default(),
+        FixedTask(TickResult::Progress),
+    )];
+    slots[0].cancel = CancelGroup::from(slots[0].token.clone()) | CancelGroup::from(token.clone());
+    token.cancel();
+    let mut needs_reorder = false;
+    let mut observer = Events::default();
+
+    let report = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+
+    assert!(slots.is_empty(), "the cancelled slot left the roster");
+    assert_eq!(
+        report.active_tasks, 0,
+        "a pass never produces from a slot whose own cancel already fired"
+    );
+}
+
+#[kithara::test(flash(false))]
+fn a_pass_reports_its_outcome_to_the_observer() {
+    let mut slots = vec![slot(
+        1,
+        Priority::default(),
+        FixedTask(TickResult::Progress),
+    )];
+    let mut needs_reorder = false;
+    let mut observer = Events::default();
+
+    let _ = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+
+    assert!(
+        observer
+            .0
+            .iter()
+            .any(|event| matches!(event, Event::Progress(_))),
+        "the pass outcome reaches the observer: {:?}",
+        observer.0
+    );
+}
+
 #[kithara::test(native, browser, flash(false))]
 fn configured_capacity_rejects_a_second_reservation() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
@@ -480,6 +646,15 @@ mod native {
     use kithara_test_utils::hang::default_timeout;
 
     use super::*;
+
+    /// Long enough to tell a park apart from a return, short enough to pay for.
+    const PARK_BUDGET: Duration = Duration::from_millis(50);
+
+    fn backpressured_report(backpressured_tasks: usize) -> PassReport {
+        let mut report = pass_report(PassOutcome::Backpressured);
+        report.backpressured_tasks = backpressured_tasks;
+        report
+    }
 
     struct BackpressureCountingTask {
         ticks: Arc<AtomicUsize>,
@@ -593,6 +768,45 @@ mod native {
         assert_ne!(constructed_on, caller);
         assert_eq!(constructed_on, ticked_on);
         drop(task);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_plain_wait_parks_for_the_whole_wait_budget() {
+        let wake = Wake::default();
+        let mut configured = budgets();
+        configured.backpressure_poll_interval = Duration::ZERO;
+        configured.wait_timeout = PARK_BUDGET;
+        let mut streak = 0;
+        let started = Instant::now();
+
+        park_after_outcome(
+            &wake,
+            configured,
+            pass_report(PassOutcome::Waiting),
+            &mut streak,
+        );
+
+        assert!(
+            started.elapsed() >= PARK_BUDGET,
+            "a wait no task is backpressured on parks on the wait budget, not on the poll loop"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_backpressure_wait_without_a_poll_interval_returns_instead_of_spinning() {
+        let wake = Wake::default();
+        let mut configured = budgets();
+        configured.backpressure_poll_interval = Duration::ZERO;
+        configured.wait_timeout = PARK_BUDGET;
+        let mut streak = 0;
+        let started = Instant::now();
+
+        park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
+
+        assert!(
+            started.elapsed() < PARK_BUDGET,
+            "a poll interval of zero has no edge to poll for, so the wait returns at once"
+        );
     }
 
     #[kithara::test(native, flash(false))]

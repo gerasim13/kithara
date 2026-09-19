@@ -53,7 +53,7 @@ kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["packaged"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

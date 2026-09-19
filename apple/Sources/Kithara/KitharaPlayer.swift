@@ -349,6 +349,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
+        public var authToken: String
+        public var playingRate: Float
         public var playbackOrder: PlaybackOrder
         public var actionAtItemEnd: ActionAtItemEnd
         public var crossfadeSettings: CrossfadeSettings
@@ -359,6 +361,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
             store: AssetStore = AssetStore(),
+            authToken: String = "",
+            playingRate: Float = 1.0,
             playbackOrder: PlaybackOrder = .sequential,
             actionAtItemEnd: ActionAtItemEnd = .advance,
             crossfadeSettings: CrossfadeSettings = .default
@@ -366,6 +370,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.store = store
+            self.authToken = authToken
+            self.playingRate = playingRate
             self.playbackOrder = playbackOrder
             self.actionAtItemEnd = actionAtItemEnd
             self.crossfadeSettings = crossfadeSettings
@@ -387,6 +393,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             store: config.store.inner,
             keyOptions: FfiKeyOptions(rules: ffiRules),
             eqBandCount: UInt32(config.eqBandCount),
+            authToken: config.authToken,
+            playingRate: config.playingRate,
             playbackOrder: config.playbackOrder.ffi,
             actionAtItemEnd: config.actionAtItemEnd.ffi,
             crossfadeSettings: config.crossfadeSettings.ffi

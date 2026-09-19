@@ -110,8 +110,7 @@ pub struct FfiKeyRule {
     /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
     /// on every decrypt. `None` is treated as an empty string.
     ///
-    /// `setup_hls_aes` populates this automatically with a freshly
-    /// generated 16-character alphanumeric value and mirrors it into
+    /// A rule carrying a salt also mirrors it into
     /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
     pub salt: Option<String>,
     /// Domain patterns — exact (`"example.com"`), wildcard subdomain
@@ -163,6 +162,22 @@ pub struct FfiItemConfig {
     pub preferred_peak_bitrate_expensive: f64,
 }
 
+#[cfg(test)]
+impl FfiItemConfig {
+    pub(crate) fn for_test(url: &str) -> Self {
+        Self {
+            abr_mode: None,
+            audio_id: None,
+            headers: None,
+            uuid_i64: None,
+            url: url.to_owned(),
+            is_live_stream: false,
+            preferred_peak_bitrate: 0.0,
+            preferred_peak_bitrate_expensive: 0.0,
+        }
+    }
+}
+
 /// FFI-friendly mirror of [`PlayerStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -180,6 +195,19 @@ impl From<PlayerStatus> for FfiPlayerStatus {
             _ => Self::Unknown,
         }
     }
+}
+
+/// Snapshot of everything an item knows about itself. One getter so a
+/// caller reads a consistent set instead of three independently locked
+/// values.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FfiItemState {
+    pub status: FfiItemStatus,
+    /// Playable duration once the metadata layer answers.
+    pub duration_seconds: Option<f64>,
+    pub error: Option<String>,
+    pub loaded_ranges: Vec<FfiTimeRange>,
 }
 
 /// FFI-friendly mirror of [`ItemStatus`].
@@ -979,7 +1007,7 @@ impl From<KeySource> for FfiKeySource {
 }
 
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiItemEvent {
     DurationChanged {

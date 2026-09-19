@@ -6,7 +6,9 @@
     - !reference [.rules-verify, rules]
   stage: linux
   timeout: 60 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
 
 linux:secrets:
   extends: .linux-lane
@@ -35,7 +37,9 @@ linux:test:
     - !reference [.rules-integration, rules]
   stage: linux
   timeout: 60 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
   script:
     - just ci run linux-test-simulated-clock
   artifacts:
@@ -56,7 +60,9 @@ linux:coverage:
     - !reference [.rules-nightly, rules]
   stage: linux
   timeout: 90 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
   script:
     - just ci run linux-coverage
   artifacts:

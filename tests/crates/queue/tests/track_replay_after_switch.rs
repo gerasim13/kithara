@@ -271,6 +271,7 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .run(move |q| q.select(id_a, Transition::None))
         .await
         .expect("select A (first)");
+    queue.run(QueueControl::play).await;
     wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
 
     queue
@@ -393,6 +394,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         .run(move |q| q.select(id_a, Transition::None))
         .await
         .expect("select A");
+    queue.run(QueueControl::play).await;
     wait_for_position(&queue, Consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
     assert!(sounds_like_a(&queue), "arena must be sounding the mp3");
 

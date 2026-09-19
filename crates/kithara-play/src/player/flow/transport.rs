@@ -220,6 +220,7 @@ where
             playback,
             crossfade,
         } = transition;
+        let crossfade = crossfade.validate()?;
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::IndexOutOfRange {
