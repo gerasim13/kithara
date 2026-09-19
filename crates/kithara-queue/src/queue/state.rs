@@ -510,7 +510,7 @@ pub(crate) mod tests {
         });
 
         entered_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("mutation must enter the queue admission gate");
         let (close_tx, close_rx) = mpsc::channel();
         let close = thread::spawn(move || {
@@ -519,6 +519,11 @@ pub(crate) mod tests {
                 .expect("test receiver remains alive");
         });
 
+        // Every other wait here is on the event itself: under Miri the threads
+        // run two orders of magnitude slower, and a one-second budget made the
+        // test report a scheduling contract it had merely outrun. This one
+        // stays a timer because it asserts the absence of an event, which no
+        // amount of waiting can observe directly.
         assert!(
             matches!(
                 close_rx.recv_timeout(Duration::from_millis(50)),
@@ -528,11 +533,11 @@ pub(crate) mod tests {
         );
         release_tx.send(()).expect("mutation thread remains alive");
         mutation_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("mutation must complete after release")
             .expect("admitted mutation remains open");
         close_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("close must complete after the mutation")
             .expect("unstarted fixture must close");
         mutation.join().expect("mutation thread must not panic");
