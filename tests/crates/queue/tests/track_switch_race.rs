@@ -284,7 +284,9 @@ async fn assert_no_barge_in(
         | QueueEvent::TrackStatusChanged { .. }
         | QueueEvent::CurrentTrackAdvance { .. }
         | QueueEvent::TrackLoadFailed { .. }
-        | QueueEvent::CrossfadeDurationChanged { .. }
+        | QueueEvent::CrossfadeSettingsChanged { .. }
+        | QueueEvent::PlaybackOrderChanged { .. }
+        | QueueEvent::ActionAtItemEndChanged { .. }
         | QueueEvent::RepeatModeChanged { .. }
         | QueueEvent::NextTrackReady { .. }
         | QueueEvent::CrossfadeStarted { .. } => false,

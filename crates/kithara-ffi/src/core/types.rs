@@ -4,10 +4,12 @@ use kithara::{
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        ItemStatus, PlayError, PlayerStatus, RouteChangeReason, SessionDuckingMode,
-        StretchBackendKind, TimeControlStatus, TimeRange,
+        CrossfadeCurve, CrossfadeSettings, ItemStatus, PlayError, PlayerStatus, RouteChangeReason,
+        SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
     },
-    queue::{AdvanceReason, QueueRepeatMode, RepeatMode, Transition},
+    queue::{
+        ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueRepeatMode, RepeatMode, Transition,
+    },
     stream::{AudioCodec, ContainerFormat},
 };
 use kithara_audio::{
@@ -52,7 +54,8 @@ impl From<PlayError> for FfiError {
             err @ (PlayError::IndexOutOfRange { .. }
             | PlayError::ItemConsumed { .. }
             | PlayError::ArmIndexMismatch { .. }
-            | PlayError::EqBandOutOfRange { .. }) => Self::InvalidArgument {
+            | PlayError::EqBandOutOfRange { .. }
+            | PlayError::InvalidParameter { .. }) => Self::InvalidArgument {
                 reason: err.to_string(),
             },
             err => Self::Internal {
@@ -230,6 +233,7 @@ pub enum FfiTrackStatus {
 #[mirror(from = AdvanceReason)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiAdvanceReason {
+    InitialLoad,
     NaturalEof,
     CrossfadePreArm,
     UserSelect,
@@ -254,6 +258,117 @@ pub enum FfiRepeatMode {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiPlaybackOrder {
+    Sequential,
+    Shuffle,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiActionAtItemEnd {
+    Advance,
+    Pause,
+    None,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiCrossfadeCurve {
+    Linear,
+    EqualPower,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FfiCrossfadeSettings {
+    pub duration: f32,
+    pub curve: FfiCrossfadeCurve,
+    pub depth: f32,
+    pub position: f32,
+}
+
+impl From<CrossfadeSettings> for FfiCrossfadeSettings {
+    fn from(value: CrossfadeSettings) -> Self {
+        Self {
+            duration: value.duration,
+            curve: match value.curve {
+                CrossfadeCurve::Linear => FfiCrossfadeCurve::Linear,
+                CrossfadeCurve::EqualPower => FfiCrossfadeCurve::EqualPower,
+                _ => FfiCrossfadeCurve::Unknown,
+            },
+            depth: value.depth,
+            position: value.position,
+        }
+    }
+}
+
+impl TryFrom<FfiCrossfadeSettings> for CrossfadeSettings {
+    type Error = FfiError;
+    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {
+        let curve = match value.curve {
+            FfiCrossfadeCurve::Linear => CrossfadeCurve::Linear,
+            FfiCrossfadeCurve::EqualPower => CrossfadeCurve::EqualPower,
+            FfiCrossfadeCurve::Unknown => {
+                return Err(FfiError::InvalidArgument {
+                    reason: "unknown crossfade curve".into(),
+                });
+            }
+        };
+        Self::new(value.duration, curve, value.depth, value.position).map_err(FfiError::from)
+    }
+}
+
+impl TryFrom<FfiPlaybackOrder> for PlaybackOrder {
+    type Error = FfiError;
+    fn try_from(value: FfiPlaybackOrder) -> Result<Self, Self::Error> {
+        match value {
+            FfiPlaybackOrder::Sequential => Ok(Self::Sequential),
+            FfiPlaybackOrder::Shuffle => Ok(Self::Shuffle),
+            FfiPlaybackOrder::Unknown => Err(FfiError::InvalidArgument {
+                reason: "unknown playback order".into(),
+            }),
+        }
+    }
+}
+
+impl From<PlaybackOrder> for FfiPlaybackOrder {
+    fn from(value: PlaybackOrder) -> Self {
+        match value {
+            PlaybackOrder::Sequential => Self::Sequential,
+            PlaybackOrder::Shuffle => Self::Shuffle,
+            _ => Self::Unknown,
+        }
+    }
+}
+impl TryFrom<FfiActionAtItemEnd> for ActionAtItemEnd {
+    type Error = FfiError;
+    fn try_from(value: FfiActionAtItemEnd) -> Result<Self, Self::Error> {
+        match value {
+            FfiActionAtItemEnd::Advance => Ok(Self::Advance),
+            FfiActionAtItemEnd::Pause => Ok(Self::Pause),
+            FfiActionAtItemEnd::None => Ok(Self::None),
+            FfiActionAtItemEnd::Unknown => Err(FfiError::InvalidArgument {
+                reason: "unknown terminal action".into(),
+            }),
+        }
+    }
+}
+
+impl From<ActionAtItemEnd> for FfiActionAtItemEnd {
+    fn from(value: ActionAtItemEnd) -> Self {
+        match value {
+            ActionAtItemEnd::Advance => Self::Advance,
+            ActionAtItemEnd::Pause => Self::Pause,
+            ActionAtItemEnd::None => Self::None,
+            _ => Self::Unknown,
+        }
+    }
+}
 impl From<RepeatMode> for FfiRepeatMode {
     fn from(value: RepeatMode) -> Self {
         match value {
@@ -379,9 +494,11 @@ pub enum FfiPlayerEvent {
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is
     /// the configured crossfade window — UIs can drive progress from it.
-    CrossfadeStarted { duration_seconds: f32 },
+    CrossfadeStarted { settings: FfiCrossfadeSettings },
     /// The configured crossfade window changed at runtime.
-    CrossfadeDurationChanged { seconds: f32 },
+    CrossfadeSettingsChanged { settings: FfiCrossfadeSettings },
+    PlaybackOrderChanged { order: FfiPlaybackOrder },
+    ActionAtItemEndChanged { action: FfiActionAtItemEnd },
     TrackAdded { item_id: TrackId, index: u64 },
     TrackRemoved { item_id: TrackId },
     TrackLoadFailed { item_id: TrackId, reason: String, auto_skipped: bool },
@@ -414,13 +531,25 @@ pub enum FfiPlayerEvent {
 /// [`FfiTransition::Crossfade`] to use the player's configured
 /// duration (typical for auto-advance and Next/Prev buttons), or
 /// [`FfiTransition::CrossfadeWith`] to override per-call.
-#[derive(Clone, Copy, Debug, PartialEq, kithara_derive::Mirror)]
-#[mirror(into = Transition)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTransition {
     None,
     Crossfade,
-    CrossfadeWith { seconds: f32 },
+    CrossfadeWith { settings: FfiCrossfadeSettings },
+}
+
+impl TryFrom<FfiTransition> for Transition {
+    type Error = FfiError;
+    fn try_from(t: FfiTransition) -> Result<Self, Self::Error> {
+        Ok(match t {
+            FfiTransition::None => Self::None,
+            FfiTransition::Crossfade => Self::Crossfade,
+            FfiTransition::CrossfadeWith { settings } => Self::CrossfadeWith {
+                settings: settings.try_into()?,
+            },
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
@@ -935,6 +1064,7 @@ mod tests {
     #[kithara::test]
     fn advance_reason_conversion_preserves_known_variants() {
         for (source, expected) in [
+            (AdvanceReason::InitialLoad, FfiAdvanceReason::InitialLoad),
             (AdvanceReason::NaturalEof, FfiAdvanceReason::NaturalEof),
             (
                 AdvanceReason::CrossfadePreArm,
@@ -1094,6 +1224,47 @@ mod tests {
             RepeatMode::try_from(FfiRepeatMode::Unknown),
             Err(FfiRepeatMode::Unknown)
         );
+    }
+
+    #[kithara::test]
+    fn queue_policy_rejects_unknown_ffi_variants() {
+        assert!(PlaybackOrder::try_from(FfiPlaybackOrder::Unknown).is_err());
+        assert!(ActionAtItemEnd::try_from(FfiActionAtItemEnd::Unknown).is_err());
+        assert!(
+            CrossfadeSettings::try_from(FfiCrossfadeSettings {
+                duration: 1.0,
+                curve: FfiCrossfadeCurve::Unknown,
+                depth: 1.0,
+                position: 0.5,
+            })
+            .is_err()
+        );
+    }
+
+    #[kithara::test]
+    fn ffi_crossfade_settings_reject_every_invalid_float_class() {
+        for settings in [
+            FfiCrossfadeSettings {
+                duration: f32::NAN,
+                curve: FfiCrossfadeCurve::Linear,
+                depth: 1.0,
+                position: 0.5,
+            },
+            FfiCrossfadeSettings {
+                duration: 1.0,
+                curve: FfiCrossfadeCurve::Linear,
+                depth: f32::INFINITY,
+                position: 0.5,
+            },
+            FfiCrossfadeSettings {
+                duration: 1.0,
+                curve: FfiCrossfadeCurve::Linear,
+                depth: 1.0,
+                position: 0.0,
+            },
+        ] {
+            assert!(CrossfadeSettings::try_from(settings).is_err());
+        }
     }
 
     #[kithara::test]

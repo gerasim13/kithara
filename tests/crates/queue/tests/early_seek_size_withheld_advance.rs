@@ -271,7 +271,15 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
     let player = harness.take_player();
     let queue = harness
         .host
-        .insert_control(Queue::new(QueueConfig::builder().player(player).build()))
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        ))
         .await
         .expect("insert queue into product offline Host");
     let mut queue_events = queue.subscribe::<TestEvent>();

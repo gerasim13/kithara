@@ -143,6 +143,10 @@ async fn build_queue_with_tick_cf(
             QueueConfig::builder()
                 .player(player)
                 .store(store.clone())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: crossfade_seconds,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
                 .build(),
         ),
         RENDER_PACE,
@@ -203,10 +207,15 @@ async fn wait_for_current_track(
 ) {
     let wait = async {
         while let Ok(ev) = rx.recv().await.map(|env| env.event) {
-            if let TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
-                && id == expected
-            {
-                return;
+            if let TestEvent::Queue(event) = ev {
+                let id = match event {
+                    QueueEvent::CurrentTrackChanged { id }
+                    | QueueEvent::CurrentTrackAdvance { id, .. } => id,
+                    _ => None,
+                };
+                if id == Some(expected) {
+                    return;
+                }
             }
         }
         panic!("event bus closed before CurrentTrackChanged({expected:?})");

@@ -439,7 +439,12 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
-    ctx.queue.set_crossfade_duration(2.0);
+    ctx.queue
+        .set_crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: 2.0,
+            ..Default::default()
+        })
+        .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
     let mut ids = Vec::with_capacity(urls.len());
@@ -517,9 +522,9 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     )
     .await
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
-    let xf_duration = ctx.queue.crossfade_duration();
+    let xf_duration = ctx.queue.crossfade_settings().duration;
     ctx.queue
-        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+        .next(Transition::Crossfade)
         .expect("advance real-playlist crossfade");
     let started = wait_for_queue_event(
         &mut rx,
@@ -528,10 +533,11 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     )
     .await
     .expect("CrossfadeStarted event");
-    if let QueueEvent::CrossfadeStarted { duration_seconds } = started {
+    if let QueueEvent::CrossfadeStarted { settings } = started {
         assert!(
-            (duration_seconds - xf_duration).abs() < 0.01,
-            "crossfade duration mismatch: event={duration_seconds:.2} vs config={xf_duration:.2}"
+            (settings.duration - xf_duration).abs() < 0.01,
+            "crossfade duration mismatch: event={:.2} vs config={xf_duration:.2}",
+            settings.duration
         );
     }
     wait_for_queue_event(
@@ -865,7 +871,12 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let ctx = shared_test_ctx().await;
-    ctx.queue.set_crossfade_duration(CROSSFADE_SECS);
+    ctx.queue
+        .set_crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: CROSSFADE_SECS,
+            ..Default::default()
+        })
+        .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
     let hls = ctx

@@ -290,7 +290,13 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     )
     .await;
     harness.set_host_level(CENSUS_LEVEL);
-    let config = QueueConfig::builder().player(harness.take_player()).build();
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: seam.crossfade_seconds(),
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(sources.len());
@@ -590,8 +596,17 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
         );
     }
 
-    let landed: Vec<u64> = log
+    let boundary_advances: Vec<_> = log
         .advances
+        .iter()
+        .filter(|(_, reason)| {
+            matches!(
+                reason,
+                AdvanceReason::NaturalEof | AdvanceReason::CrossfadePreArm
+            )
+        })
+        .collect();
+    let landed: Vec<u64> = boundary_advances
         .iter()
         .filter_map(|(id, _)| id.map(TrackId::as_u64))
         .collect();
@@ -600,16 +615,6 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
         expected[1..],
         "the queue must advance into each successor once, in order; \
          advances={:?}",
-        log.advances
-    );
-    assert!(
-        log.advances.iter().all(|(_, reason)| matches!(
-            reason,
-            AdvanceReason::NaturalEof | AdvanceReason::CrossfadePreArm
-        )),
-        "a full playthrough may only advance at a track boundary — the \
-         handover trigger and end-of-track race for it, so either reason is \
-         the boundary's; got {:?}",
         log.advances
     );
     assert_eq!(

@@ -102,12 +102,12 @@ fn replacing_active_profile_accepts_the_new_spec(blend_multichannel: Vec<f32>) {
 }
 
 #[kithara::test]
-fn high_rate_join_uses_the_full_twenty_milliseconds() {
+fn high_rate_join_uses_the_full_forty_milliseconds() {
     let pools = pools();
     let spec = spec(2, 384_000);
     let blender = blender(&pools, BlenderProfile::new(spec));
 
-    assert_eq!(blender.join_frame_count(), 7_680);
+    assert_eq!(blender.join_frame_count(), 15_360);
 }
 
 #[kithara::test]
@@ -116,12 +116,16 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
     blend_incoming: Vec<f32>,
 ) {
     const CHUNK_FRAMES: usize = 128;
-    const JOIN_FRAMES: usize = 882;
+    const JOIN_FRAMES: usize = 1_764;
 
     let pools = pools();
     let spec = spec(2, 44_100);
     let channels = usize::from(spec.channels);
-    let outgoing = blend_outgoing;
+    let outgoing = blend_outgoing
+        .into_iter()
+        .cycle()
+        .take(JOIN_FRAMES.saturating_mul(channels))
+        .collect::<Vec<_>>();
     let incoming = blend_incoming;
     let mut blender = blender(&pools, BlenderProfile::new(spec));
     blender
@@ -170,8 +174,16 @@ fn reset_cancels_an_active_join(
 ) {
     let pools = pools();
     let spec = spec(2, 44_100);
-    let outgoing = blend_outgoing_constant;
     let mut blender = blender(&pools, BlenderProfile::new(spec));
+    let outgoing = blend_outgoing_constant
+        .into_iter()
+        .cycle()
+        .take(
+            usize::try_from(blender.join_frame_count())
+                .expect("join frame count fits usize")
+                .saturating_mul(usize::from(spec.channels)),
+        )
+        .collect::<Vec<_>>();
     blender
         .prepare_active(BlenderProfile::new(spec))
         .expect("join scratch fits test pools");

@@ -8,7 +8,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{
-    PlayError, PlayerImpl,
+    CrossfadeSettings, PlayError, PlayerImpl,
     player::{PlayerControl, PlayerControlSource},
 };
 
@@ -19,7 +19,7 @@ use super::{
 use crate::{
     config::QueueConfig,
     loader::Loader,
-    navigation::NavigationState,
+    navigation::{ActionAtItemEnd, NavigationState},
     track::{TrackRecord, Tracks},
 };
 
@@ -59,6 +59,8 @@ where
     pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
+    pub(super) action_at_item_end: Mutex<ActionAtItemEnd>,
+    pub(super) crossfade_settings: Mutex<CrossfadeSettings>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
     /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
@@ -145,6 +147,9 @@ where
             max_history_size,
             prefetch_duration,
             should_autoplay,
+            playback_order,
+            action_at_item_end,
+            crossfade_settings,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -155,6 +160,7 @@ where
         });
         player.set_auto_advance_enabled(false);
         player.set_prefetch_duration(prefetch_duration);
+        player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
         let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
@@ -166,13 +172,17 @@ where
             cancel.child(),
         ));
         let player_rx = player.subscribe();
+        let mut navigation = NavigationState::new(max_history_size);
+        navigation.set_playback_order(playback_order, &[]);
         let runtime = Arc::new(QueueRuntime {
             loader,
             tracks,
             bus,
             admission: Mutex::new(()),
             shutdown: cancel,
-            navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
+            navigation: Arc::new(Mutex::new(navigation)),
+            action_at_item_end: Mutex::new(action_at_item_end),
+            crossfade_settings: Mutex::new(crossfade_settings),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
             player_rx: Mutex::new(player_rx),

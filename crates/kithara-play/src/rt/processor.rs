@@ -4,10 +4,8 @@ use std::{
     sync::atomic::Ordering,
 };
 
-use bon::Builder;
 use firewheel::{
     StreamInfo,
-    dsp::fade::FadeCurve,
     event::ProcEvents,
     node::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
@@ -33,37 +31,11 @@ use crate::{
     session::SessionError,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) enum CrossfadeCurve {
-    #[default]
-    EqualPower,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ContextRequirement {
     #[default]
     Standalone,
     Session,
-}
-
-const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
-    match curve {
-        CrossfadeCurve::EqualPower => FadeCurve::SquareRoot,
-    }
-}
-
-#[derive(Clone, Debug, Builder, kithara_derive::BuiltDefault)]
-pub(crate) struct CrossfadeSettings {
-    #[builder(default)]
-    pub(crate) curve: CrossfadeCurve,
-    #[builder(default = 1.0)]
-    pub(crate) duration: f32,
-}
-
-impl CrossfadeSettings {
-    pub(crate) const fn fade_curve(&self) -> FadeCurve {
-        map_curve(self.curve)
-    }
 }
 
 /// The realtime audio processor for the player node.
@@ -75,7 +47,7 @@ impl CrossfadeSettings {
 pub struct PlayerNodeProcessor {
     #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) crossfade: CrossfadeSettings,
+    pub(super) crossfade: crate::CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
@@ -399,7 +371,7 @@ impl PlayerNodeProcessor {
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
             render: RenderPass::new(pools, shape, gate_smoothing),
-            crossfade: CrossfadeSettings::default(),
+            crossfade: crate::CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),

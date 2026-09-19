@@ -40,17 +40,27 @@ class KitharaPlayerTest {
     }
 
     @Test
-    fun crossfadeDurationRoundTrips() {
+    fun crossfadeSettingsRoundTripAndRejectInvalidValues() {
         val player = KitharaPlayer()
 
-        player.crossfadeDuration = 2.5f
-        assertEquals(2.5f, player.crossfadeDuration, 0.0f)
+        val settings = CrossfadeSettings(2.5f, CrossfadeCurve.Linear, 0.25f, 0.3f)
+        player.crossfadeSettings = settings
+        assertEquals(settings, player.crossfadeSettings)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            CrossfadeSettings(duration = -1f)
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            CrossfadeSettings(depth = Float.NaN)
+        }
+    }
 
-        player.crossfadeDuration = 0f
-        assertEquals(0f, player.crossfadeDuration, 0.0f)
-
-        player.crossfadeDuration = -1f
-        assertEquals(0f, player.crossfadeDuration, 0.0f)
+    @Test
+    fun queuePolicyRoundTrips() {
+        val player = KitharaPlayer()
+        player.playbackOrder = PlaybackOrder.Shuffle
+        player.actionAtItemEnd = ActionAtItemEnd.Pause
+        assertEquals(PlaybackOrder.Shuffle, player.playbackOrder)
+        assertEquals(ActionAtItemEnd.Pause, player.actionAtItemEnd)
     }
 
     @Test

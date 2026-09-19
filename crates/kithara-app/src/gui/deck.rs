@@ -2,7 +2,7 @@ use kithara::{
     abr::AbrMode,
     platform::sync::Arc,
     play::effects::eq::GainDb,
-    queue::{AdvanceReason, TrackId, Transition},
+    queue::{TrackId, Transition},
 };
 use kithara_derive::Ranged;
 use tracing::{debug, error};
@@ -83,20 +83,12 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::TogglePlayPause => toggle_play_pause(deck),
         DeckMsg::Pause => deck.controller.queue().pause(),
         DeckMsg::Next => {
-            if let Err(error) = deck
-                .controller
-                .queue()
-                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
-            {
+            if let Err(error) = deck.controller.queue().next(Transition::Crossfade) {
                 error!(%error, "advance to next track failed");
             }
         }
         DeckMsg::Prev => {
-            if let Err(error) = deck
-                .controller
-                .queue()
-                .return_to_previous(Transition::Crossfade)
-            {
+            if let Err(error) = deck.controller.queue().previous(Transition::Crossfade) {
                 error!(%error, "return to previous track failed");
             }
         }

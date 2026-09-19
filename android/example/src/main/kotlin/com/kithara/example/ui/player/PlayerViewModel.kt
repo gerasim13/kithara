@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kithara.AssetStore
+import com.kithara.CrossfadeSettings
 import com.kithara.Kithara
 import com.kithara.KitharaError
 import com.kithara.KitharaItemEvent
@@ -46,7 +47,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             it.copy(
                 volume = player.volume,
                 isMuted = player.isMuted,
-                crossfadeDuration = player.crossfadeDuration,
+                crossfadeDuration = player.crossfadeSettings.duration,
                 eqGains = List(EQ_BAND_COUNT) { band -> player.getEqGain(band) },
             )
         }
@@ -173,7 +174,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     private fun setCrossfadeDuration(duration: Float) {
-        player.crossfadeDuration = duration
+        player.crossfadeSettings = player.crossfadeSettings.copy(duration = duration)
         _uiState.update { it.copy(crossfadeDuration = duration) }
     }
 
@@ -237,7 +238,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
                     )
                 ),
                 authToken = readZvukAuthToken(application).orEmpty(),
-                crossfadeDuration = DEFAULT_CROSSFADE_SECONDS,
+                crossfadeSettings = CrossfadeSettings(duration = DEFAULT_CROSSFADE_SECONDS),
                 playingRate = _uiState.value.selectedRate,
             ),
         )

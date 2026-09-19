@@ -31,6 +31,13 @@ const CROSSFADE_SECONDS: f32 = 0.5;
 const CROSSFADE_BLOCKS: usize = 8;
 const AUDIBLE_FRACTION: f32 = 0.5;
 
+fn crossfade(duration: f32) -> kithara::play::CrossfadeSettings {
+    kithara::play::CrossfadeSettings {
+        duration,
+        ..kithara::play::CrossfadeSettings::default()
+    }
+}
+
 fn block_len() -> usize {
     usize::try_from(BLOCK_FRAMES).expect("block frames fit usize")
 }
@@ -170,14 +177,13 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let outgoing = load(&mut control, healthy_track(constant_half, "outgoing.mp3"));
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetFadeDuration(0.0))
-        .ok();
     control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(outgoing)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: outgoing,
+            settings: crossfade(0.0),
+        }))
         .ok();
     processor.drain_commands();
 
@@ -187,14 +193,13 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
         "the outgoing track plays at full level before the crossfade ({before})"
     );
 
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetFadeDuration(CROSSFADE_SECONDS))
-        .ok();
     let incoming = load(&mut control, faulty_track("incoming.mp3", Fault::Stall));
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(incoming)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: incoming,
+            settings: crossfade(CROSSFADE_SECONDS),
+        }))
         .ok();
     processor.drain_commands();
 

@@ -92,16 +92,20 @@ impl LaneBuild {
         })
     }
 
-    /// Records the job's builds as seen: a lane that succeeded built what it
-    /// reads from this checkout's content, and one that failed may still hold
-    /// everything the claim recorded.
+    /// Records the job's builds as seen. A failed lane invalidates every
+    /// tracked source because its cached artifacts did not prove trustworthy.
     pub(super) fn settle(&self, succeeded: bool) -> Result<()> {
-        let sources = if succeeded {
-            &self.tracked
-        } else {
-            &self.claimed
-        };
-        write_sources(&self.record, sources)
+        if succeeded {
+            return write_sources(&self.record, &self.tracked);
+        }
+        let mut uncertain = self.claimed.clone();
+        for path in self.tracked.keys() {
+            uncertain
+                .entry(path.clone())
+                .or_default()
+                .insert(Consts::UNKNOWN_BLOB.to_owned());
+        }
+        write_sources(&self.record, &uncertain)
     }
 }
 
@@ -379,5 +383,42 @@ mod tests {
             "a failed lane leaves the unseen content recorded"
         );
         claim.settle(true).unwrap();
+    }
+
+    #[test]
+    fn a_failed_lane_invalidates_every_tracked_source() {
+        let checkout = tempfile::tempdir().unwrap();
+        let lane = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .current_dir(checkout.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let file = checkout.path().join("lib.rs");
+        fs::write(&file, "one").unwrap();
+        let status = Command::new("git")
+            .current_dir(checkout.path())
+            .args(["add", "lib.rs"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let claim = LaneBuild::claim(checkout.path(), lane.path()).unwrap();
+        claim.settle(false).unwrap();
+        drop(claim);
+        let old = SystemTime::UNIX_EPOCH;
+        File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        let _claim = LaneBuild::claim(checkout.path(), lane.path()).unwrap();
+        assert!(
+            fs::metadata(file).unwrap().modified().unwrap() > old,
+            "a failed lane cannot certify cached artifacts"
+        );
     }
 }

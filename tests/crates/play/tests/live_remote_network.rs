@@ -336,8 +336,11 @@ async fn player_mp3_duration_matches_app_flow(
         .select_item_with_crossfade(
             0,
             SelectTransition {
-                autoplay: true,
-                crossfade_seconds: player.crossfade_duration(),
+                playback: kithara::play::SelectionPlayback::Play,
+                crossfade: kithara::play::CrossfadeSettings {
+                    duration: player.crossfade_duration(),
+                    ..Default::default()
+                },
             },
         )
         .expect("select live remote resource");

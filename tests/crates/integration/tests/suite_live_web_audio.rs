@@ -141,7 +141,7 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64
 
             control.insert(resource, TrackId(0), None);
             control
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select the fixture for playback");
             control.play();
             stage.store(6, Ordering::Relaxed);

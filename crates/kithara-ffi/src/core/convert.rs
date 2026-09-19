@@ -10,8 +10,9 @@ use kithara_hls::{DrmEvent, HlsEvent};
 
 use super::event_set::{ItemBusEvent, QueueBusEvent};
 use crate::types::{
-    FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTrackStatus, duration_to_seconds,
+    FfiActionAtItemEnd, FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlaybackOrder,
+    FfiPlayerEvent, FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTrackStatus,
+    duration_to_seconds,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,12 +588,18 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 reason: reason.clone(),
                 auto_skipped: *auto_skipped,
             },
-            QueueEvent::CrossfadeStarted { duration_seconds } => Self::CrossfadeStarted {
-                duration_seconds: *duration_seconds,
+            QueueEvent::CrossfadeStarted { settings } => Self::CrossfadeStarted {
+                settings: (*settings).into(),
             },
-            QueueEvent::CrossfadeDurationChanged { seconds } => {
-                Self::CrossfadeDurationChanged { seconds: *seconds }
-            }
+            QueueEvent::CrossfadeSettingsChanged { settings } => Self::CrossfadeSettingsChanged {
+                settings: (*settings).into(),
+            },
+            QueueEvent::PlaybackOrderChanged { order } => Self::PlaybackOrderChanged {
+                order: FfiPlaybackOrder::from(*order),
+            },
+            QueueEvent::ActionAtItemEndChanged { action } => Self::ActionAtItemEndChanged {
+                action: FfiActionAtItemEnd::from(*action),
+            },
             QueueEvent::RepeatModeChanged { mode } => Self::RepeatModeChanged {
                 mode: FfiRepeatMode::from(*mode),
             },
@@ -635,11 +642,11 @@ mod tests {
     };
     use crate::types::{
         FfiAdvanceReason, FfiAudioCodecKind, FfiCancelReason, FfiContainerKind,
-        FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend, FfiDecoderChangeCause,
-        FfiEvictReason, FfiFrameDomain, FfiKeyFailureStage, FfiKeySource, FfiPlaybackResamplerKind,
-        FfiPlayerStatus, FfiRepeatMode, FfiResamplerKind, FfiRouteChangeReason,
-        FfiStretchBackendKind, FfiTimeControlStatus, FfiTotalBytesSource, FfiTrackFailureKind,
-        FfiTrackStatus,
+        FfiCrossfadeSettings, FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend,
+        FfiDecoderChangeCause, FfiEvictReason, FfiFrameDomain, FfiKeyFailureStage, FfiKeySource,
+        FfiPlaybackResamplerKind, FfiPlayerStatus, FfiRepeatMode, FfiResamplerKind,
+        FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTotalBytesSource,
+        FfiTrackFailureKind, FfiTrackStatus,
     };
 
     type ItemEventCase<T> = (T, fn(&FfiItemEvent) -> bool);
@@ -1291,23 +1298,33 @@ mod tests {
             ),
             (
                 QueueEvent::CrossfadeStarted {
-                    duration_seconds: 3.5,
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 3.5,
+                        ..Default::default()
+                    },
                 },
                 |event| {
                     matches!(
                         event,
                         FfiPlayerEvent::CrossfadeStarted {
-                            duration_seconds: 3.5
+                            settings: FfiCrossfadeSettings { duration: 3.5, .. }
                         }
                     )
                 },
             ),
             (
-                QueueEvent::CrossfadeDurationChanged { seconds: 4.0 },
+                QueueEvent::CrossfadeSettingsChanged {
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 4.0,
+                        ..Default::default()
+                    },
+                },
                 |event| {
                     matches!(
                         event,
-                        FfiPlayerEvent::CrossfadeDurationChanged { seconds: 4.0 }
+                        FfiPlayerEvent::CrossfadeSettingsChanged {
+                            settings: FfiCrossfadeSettings { duration: 4.0, .. }
+                        }
                     )
                 },
             ),

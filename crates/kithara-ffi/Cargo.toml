@@ -177,7 +177,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["usdt", "download", "net", "offline", "signal"] }
+kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "offline", "signal"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 

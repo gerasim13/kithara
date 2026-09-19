@@ -902,7 +902,7 @@ async fn load_tagged_queue<const N: usize>(
                     .expect("replace gapless fixture item");
             }
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

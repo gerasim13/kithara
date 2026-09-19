@@ -3269,11 +3269,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5566,6 +5568,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "fieldwork",
+ "getrandom 0.4.2",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5580,8 +5583,10 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
+ "rand 0.10.2",
  "serde",
  "serde_yaml_ng",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]

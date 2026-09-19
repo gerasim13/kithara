@@ -2,24 +2,50 @@
 
 use kithara::{
     self,
-    platform::sync::Arc,
-    queue::{QueueControl, RepeatMode, TrackStatus, Transition},
+    events::{EventReceiver, TrackId},
+    platform::{
+        sync::Arc,
+        time::{self, Duration},
+    },
+    queue::{AdvanceReason, QueueControl, QueueEvent, RepeatMode, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
+    event::TestEvent,
     offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
 };
 use kithara_test_fixtures::assets;
 
-use crate::{
-    bufpool_ext::TestPools,
-    loader_fixture::{append_loaded, wait_loaded},
-};
+use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
+
+/// The advance a natural end asks for, named for the entry it lands on.
+async fn wait_for_eof_advance(events: &mut EventReceiver<TestEvent>, id: TrackId) {
+    let answered = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::CurrentTrackAdvance {
+                    id: Some(seen),
+                    reason: AdvanceReason::NaturalEof,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        answered,
+        "repeat-one must answer the end of {id:?} with an advance onto it"
+    );
+}
 
 #[derive(Clone, Copy)]
 enum InitialStart {
@@ -101,12 +127,10 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
         first_onset_frame(&first_pcm, 0.005).is_some(),
         "track A must play through on the first pass"
     );
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
-    wait_loaded(&mut reload_events, id_a).await;
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -154,12 +178,10 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("switch back to track A");
-    wait_loaded(&mut reload_events, id_a).await;
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
     assert!(
@@ -247,17 +269,20 @@ async fn reselect_playing_track_cancels_pending_switch() {
     harness.close().await;
 }
 
-/// Repeat-one advances onto the very item that just ended, so the reload runs
-/// while the render thread still reports the session as playing: it clears
-/// that flag only at the top of the block after it queued the end. The
-/// restart must not depend on the flag, and a prefetch reload is not a
+/// Repeat-one advances onto the very item that just ended, so the advance
+/// runs while the render thread still reports the session as playing: it
+/// clears that flag only at the top of the block after it queued the end.
+/// The restart must not depend on the flag, and a prefetch reload is not a
 /// substitute — it re-loads the resource without stashing a select, so
 /// nothing would sound again.
 ///
-/// The second pass waits for that reload the way its siblings do. Which
-/// status the advance finds decides whether the resource is already in hand
-/// or still on its way, so a fixed budget of immediate renders would assert
-/// the loader's latency rather than the restart.
+/// The second pass waits for the queue's own statement that it answered the
+/// end, not for a reload. Which of the three statuses the advance lands on
+/// is a race the product does not control, and each reaches the restart by
+/// its own route: in place, through a re-select of the reloaded entry, or
+/// through a select the load applies. Only the advance is common to all
+/// three, so waiting on a reload would assert whichever route won, and a
+/// fixed budget of immediate renders would assert the loader's latency.
 #[kithara::test(tokio, flash(false))]
 async fn repeat_one_restarts_the_track_its_own_eof_ended() {
     const PASS_BLOCKS: usize = 64;
@@ -271,13 +296,13 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
         .await
         .expect("select the only track");
 
-    let mut reload_events = queue.subscribe();
+    let mut advances = queue.subscribe();
     let first_pass = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&first_pass, 0.005).is_some(),
         "the track must play once before repeat-one is judged"
     );
-    wait_loaded(&mut reload_events, id).await;
+    wait_for_eof_advance(&mut advances, id).await;
 
     let after_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(

@@ -4,8 +4,9 @@ use super::marshal::{
     discriminant, get_bool, get_f64, get_id_req, get_opt_id, get_str, narrow_f32,
 };
 use crate::types::{
-    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+    FfiActionAtItemEnd, FfiAdvanceReason, FfiCrossfadeCurve, FfiCrossfadeSettings, FfiEvictReason,
+    FfiPlaybackOrder, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode, FfiRouteChangeReason,
+    FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
 };
 
 pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
@@ -51,10 +52,43 @@ pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
         },
         "QueueEnded" => FfiPlayerEvent::QueueEnded,
         "CrossfadeStarted" => FfiPlayerEvent::CrossfadeStarted {
-            duration_seconds: narrow_f32(get_f64(data, "seconds")?),
+            settings: FfiCrossfadeSettings {
+                duration: narrow_f32(get_f64(data, "duration")?),
+                curve: match get_str(data, "curve").as_deref() {
+                    Some("Linear") => FfiCrossfadeCurve::Linear,
+                    Some("EqualPower") => FfiCrossfadeCurve::EqualPower,
+                    _ => FfiCrossfadeCurve::Unknown,
+                },
+                depth: narrow_f32(get_f64(data, "depth")?),
+                position: narrow_f32(get_f64(data, "position")?),
+            },
         },
-        "CrossfadeDurationChanged" => FfiPlayerEvent::CrossfadeDurationChanged {
-            seconds: narrow_f32(get_f64(data, "seconds")?),
+        "CrossfadeSettingsChanged" => FfiPlayerEvent::CrossfadeSettingsChanged {
+            settings: FfiCrossfadeSettings {
+                duration: narrow_f32(get_f64(data, "duration")?),
+                curve: match get_str(data, "curve").as_deref() {
+                    Some("Linear") => FfiCrossfadeCurve::Linear,
+                    Some("EqualPower") => FfiCrossfadeCurve::EqualPower,
+                    _ => FfiCrossfadeCurve::Unknown,
+                },
+                depth: narrow_f32(get_f64(data, "depth")?),
+                position: narrow_f32(get_f64(data, "position")?),
+            },
+        },
+        "PlaybackOrderChanged" => FfiPlayerEvent::PlaybackOrderChanged {
+            order: match get_str(data, "order").as_deref() {
+                Some("Sequential") => FfiPlaybackOrder::Sequential,
+                Some("Shuffle") => FfiPlaybackOrder::Shuffle,
+                _ => FfiPlaybackOrder::Unknown,
+            },
+        },
+        "ActionAtItemEndChanged" => FfiPlayerEvent::ActionAtItemEndChanged {
+            action: match get_str(data, "action").as_deref() {
+                Some("Advance") => FfiActionAtItemEnd::Advance,
+                Some("Pause") => FfiActionAtItemEnd::Pause,
+                Some("None") => FfiActionAtItemEnd::None,
+                _ => FfiActionAtItemEnd::Unknown,
+            },
         },
         "TrackAdded" => FfiPlayerEvent::TrackAdded {
             item_id: get_id_req(data, "item_id")?,
@@ -151,6 +185,7 @@ fn decode_track_status(data: &JsValue) -> FfiTrackStatus {
 
 fn decode_advance_reason(value: Option<String>) -> FfiAdvanceReason {
     match value.as_deref() {
+        Some("InitialLoad") => FfiAdvanceReason::InitialLoad,
         Some("NaturalEof") => FfiAdvanceReason::NaturalEof,
         Some("CrossfadePreArm") => FfiAdvanceReason::CrossfadePreArm,
         Some("UserSelect") => FfiAdvanceReason::UserSelect,

@@ -1,14 +1,13 @@
 use std::num::NonZeroU32;
 
 use bon::bon;
-use firewheel::dsp::fade::FadeCurve;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::{bridge::TrackState, worker::ServiceClass};
+use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
 
 /// Per-track state in the processor arena.
 ///
@@ -74,8 +73,7 @@ impl PlayerTrack {
         #[builder(finish_fn)] resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
         item_id: TrackId,
-        #[builder(default)] fade_duration: f32,
-        #[builder(default = FadeCurve::SquareRoot)] fade_curve: FadeCurve,
+        #[builder(default)] crossfade: CrossfadeSettings,
         #[builder(default)] prefetch_duration: f32,
         /// Slot seek epoch already published when this track loaded — a track
         /// planted after earlier seeks starts level with them, not behind.
@@ -91,7 +89,7 @@ impl PlayerTrack {
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
-            fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
+            fade: TrackFade::new(crossfade, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
@@ -102,18 +100,18 @@ impl PlayerTrack {
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub fn fade_in(&mut self) {
+    pub fn fade_in(&mut self, settings: CrossfadeSettings) {
         self.set_state(TrackState::FadingIn);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.fade_in(sample_rate);
+        self.fade.fade_in(settings, sample_rate);
         self.triggers.reset();
     }
 
     /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub fn fade_out(&mut self) {
+    pub fn fade_out(&mut self, settings: CrossfadeSettings) {
         self.set_state(TrackState::FadingOut);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.fade_out(sample_rate);
+        self.fade.fade_out(settings, sample_rate);
     }
 
     /// Re-base this track onto a slot seek epoch the processor has applied.
@@ -181,12 +179,6 @@ impl PlayerTrack {
         self.set_state(TrackState::Finished);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.stop(sample_rate);
-    }
-
-    /// Apply a new duration to the next fade.
-    pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        self.fade.set_next_duration(fade_duration);
-        self.sample_rate = sample_rate.get();
     }
 
     /// Propagate a stream sample-rate change to the resource and fade.

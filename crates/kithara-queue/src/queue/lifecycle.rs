@@ -2,16 +2,20 @@ use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
+use smallvec::SmallVec;
 
 use super::{
     QueueControl,
-    types::{CachedPosition, CrossfadeArm, Placement, SelectPhase, Transition, extract_track_name},
+    types::{
+        CachedPosition, CrossfadeArm, PendingSelect, Placement, SelectPhase, Transition,
+        extract_track_name,
+    },
 };
 use crate::{
     attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, QueueEvent},
-    navigation::NavigationState,
+    navigation::{NavigationState, PlaybackOrder},
     track::{TrackRecord, TrackSource},
 };
 
@@ -69,10 +73,10 @@ where
             *self.lock_pending_select_mut() = SelectPhase::Idle;
             let mut navigation = self.lock_navigation_mut();
             let repeat = navigation.repeat_mode();
-            let shuffle = navigation.is_shuffle_enabled();
+            let order = navigation.playback_order();
             *navigation = NavigationState::new(navigation.history_limit());
             navigation.set_repeat(repeat);
-            navigation.set_shuffle(shuffle);
+            navigation.set_playback_order(order, &[]);
             drop(navigation);
             self.write_armed_for(CrossfadeArm::Disarmed);
             self.write_cached_position(CachedPosition::Unknown);
@@ -114,8 +118,17 @@ where
         placement: Placement,
     ) -> TrackId {
         let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
-        if self.should_autoplay && self.current().is_none() {
-            self.autoplay_target.arm_if_disarmed(id);
+        if self.current().is_none() && self.autoplay_target.arm_if_disarmed(id) {
+            self.override_pending_select(PendingSelect {
+                id,
+                settings: Transition::None.settings(self.crossfade_settings()),
+                playback: if self.should_autoplay {
+                    kithara_play::SelectionPlayback::Play
+                } else {
+                    kithara_play::SelectionPlayback::Pause
+                },
+                reason: AdvanceReason::InitialLoad,
+            });
         }
 
         let index = {
@@ -133,6 +146,15 @@ where
         };
         self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
+        let ids = self
+            .tracks()
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<SmallVec<[_; 16]>>();
+        let mut navigation = self.lock_navigation_mut();
+        navigation.reconcile(&ids);
+        navigation.insert(id);
+        drop(navigation);
         self.spawn_apply_after_load(id, source, LoadClass::Prefetch);
         id
     }
@@ -189,7 +211,11 @@ where
 
     fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
-        let was_playing = was_current && self.player.is_playing();
+        let playback = if self.player.is_playing() {
+            kithara_play::SelectionPlayback::Play
+        } else {
+            kithara_play::SelectionPlayback::Pause
+        };
         let successor_id = if was_current {
             let guard = self.lock_tracks();
             let pos = guard.iter().position(|e| e.id == id);
@@ -216,14 +242,28 @@ where
         let _ = self.player.remove_at(index)?;
         self.bus.publish(QueueEvent::TrackRemoved { id });
 
+        let entries = self.tracks();
+        let ids = entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<SmallVec<[_; 16]>>();
+        let order = self.lock_navigation().playback_order();
+        self.lock_navigation_mut().reconcile(&ids);
+
         if was_current {
-            if let Some(next) = successor_id {
-                let _ = self.select_with_start_intent(
+            let replacement = match order {
+                PlaybackOrder::Sequential => {
+                    successor_id.filter(|candidate| ids.contains(candidate))
+                }
+                PlaybackOrder::Shuffle => self.lock_navigation_mut().next(&ids, false, false),
+            };
+            if let Some(next) = replacement {
+                self.select_with(
                     next,
                     Transition::None,
                     AdvanceReason::RemovedCurrent,
-                    was_playing,
-                );
+                    playback,
+                )?;
             } else {
                 self.player.pause();
             }
@@ -334,7 +374,7 @@ mod tests {
         let old = queue
             .append("https://example.com/old.mp3")
             .expect("open queue accepts a track");
-        queue.lock_navigation_mut().select(0);
+        queue.lock_navigation_mut().select(old, &[old]);
         queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
             item: ItemRole::Leading(TrackRef::new(
                 old,
@@ -347,7 +387,9 @@ mod tests {
         let replacement = queue
             .append("https://example.com/replacement.mp3")
             .expect("open queue accepts a replacement track");
-        queue.lock_navigation_mut().select(0);
+        queue
+            .lock_navigation_mut()
+            .select(replacement, &[replacement]);
         queue.player.set_rate(1.0);
 
         queue

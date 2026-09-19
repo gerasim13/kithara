@@ -225,8 +225,8 @@ async fn hung_loads_must_not_starve_user_selected_track(
 
     assert_eq!(
         hung_still_loading.len(),
-        Consts::HUNG_TRACKS,
-        "setup invariant broken: hung tracks should still be Loading (permits held); \
+        Consts::HUNG_TRACKS - 1,
+        "the initial pending load is superseded while the other hung load still holds a permit; \
          statuses={:?}",
         hung_ids
             .iter()

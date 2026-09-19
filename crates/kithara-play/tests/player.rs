@@ -349,8 +349,11 @@ fn select_item_out_of_range_returns_typed_error() {
         .select_item_with_crossfade(
             5,
             SelectTransition {
-                autoplay: false,
-                crossfade_seconds: 0.0,
+                playback: kithara_play::SelectionPlayback::Pause,
+                crossfade: kithara_play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..Default::default()
+                },
             },
         )
         .expect_err("must error");
@@ -358,6 +361,29 @@ fn select_item_out_of_range_returns_typed_error() {
         err,
         PlayError::IndexOutOfRange { index: 5, len: 0 }
     ));
+}
+
+#[kithara::test]
+fn select_item_rejects_invalid_crossfade_before_index_or_engine_side_effects() {
+    let player = player();
+    let err = player
+        .select_item_with_crossfade(
+            5,
+            SelectTransition {
+                playback: kithara_play::SelectionPlayback::Pause,
+                crossfade: kithara_play::CrossfadeSettings {
+                    duration: -1.0,
+                    ..Default::default()
+                },
+            },
+        )
+        .expect_err("invalid crossfade must be rejected");
+    assert!(matches!(
+        err,
+        PlayError::InvalidParameter { ref name, value }
+            if name == "crossfade.duration" && value == -1.0
+    ));
+    assert!(!player.engine().is_running());
 }
 
 /// `enqueue_to_processor` takes the resource out of the slot, so a
@@ -371,8 +397,11 @@ fn select_item_on_consumed_slot_errors_without_bookkeeping() {
     let result = player.select_item_with_crossfade(
         1,
         SelectTransition {
-            autoplay: false,
-            crossfade_seconds: 0.0,
+            playback: kithara_play::SelectionPlayback::Pause,
+            crossfade: kithara_play::CrossfadeSettings {
+                duration: 0.0,
+                ..Default::default()
+            },
         },
     );
     assert!(result.is_err(), "selecting an emptied slot must fail");

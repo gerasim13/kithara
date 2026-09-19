@@ -337,9 +337,8 @@ async fn prepare_player(
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    // WHY: The fixture sine peaks at full scale, above the default session
-    // ceiling. A unity ceiling leaves the limiter bit-exact on it, so the
-    // control measures the decode path at the scale the oracle was calibrated on.
+    // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
+    // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
@@ -352,6 +351,7 @@ async fn prepare_player(
             .build(),
     )
     .await;
+    player.set_volume(0.9);
     player.load_and_fadein(resource).await;
 
     // Render to a capture point fixed in *frames*, not to whichever frame the

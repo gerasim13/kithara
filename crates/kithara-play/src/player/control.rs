@@ -8,7 +8,7 @@ use kithara_platform::sync::Arc;
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig, SessionDuckingMode, bridge::RtMetricsSnapshot,
+    ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -148,9 +148,9 @@ where
     }
 
     /// Apply a completed selection through the resident player runtime.
-    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+    pub fn select_item(&self, index: usize, playback: SelectionPlayback) -> Result<(), PlayError> {
         self.runtime
-            .with_open_result(|runtime| runtime.select_item(index, autoplay))
+            .with_open_result(|runtime| runtime.select_item(index, playback))
     }
 
     /// Apply a completed selection through the resident player runtime.

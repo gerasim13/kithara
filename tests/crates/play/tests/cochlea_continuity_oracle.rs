@@ -39,7 +39,7 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
                 None,
             );
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select no-switch control item");
         })
         .await;
