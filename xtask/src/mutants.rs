@@ -34,7 +34,8 @@ enum MutantsCommand {
         /// Concurrent cargo-mutants jobs.
         #[arg(long, default_value_t = 1)]
         jobs: usize,
-        /// Run only this slice of the suite's mutants, written `i/n`.
+        /// Run only this slice of the suite's mutants, written `k/n`,
+        /// numbered from zero.
         #[arg(long)]
         shard: Option<Shard>,
     },
@@ -55,7 +56,8 @@ enum MutantsCommand {
         /// another is still red.
         #[arg(long)]
         group: Option<String>,
-        /// Run only this slice of each suite's mutants, written `i/n`.
+        /// Run only this slice of each suite's mutants, written `k/n`,
+        /// numbered from zero.
         ///
         /// A suite over one file cannot be split between groups; this splits
         /// its mutants instead, so a lane reports a verdict inside its window.
@@ -64,7 +66,12 @@ enum MutantsCommand {
     },
 }
 
-/// One slice of a suite's mutants, written `i/n` on the command line.
+/// One slice of a suite's mutants, written `k/n` on the command line.
+///
+/// `cargo-mutants` numbers shards from zero, so `k` runs from `0` to `n - 1`
+/// and `n/n` names nothing. A lane that asked for `4/4` was refused outright,
+/// which also means the `0/4` nobody asked for would have gone untested while
+/// every lane reported success.
 ///
 /// A group divides suites between lanes, but a suite over a single file cannot
 /// be divided that way: the UI size rules are 128 mutants in one file, and each
@@ -91,8 +98,8 @@ impl FromStr for Shard {
         let total: usize = total
             .parse()
             .with_context(|| format!("shard count in `{text}`"))?;
-        if total == 0 || index == 0 || index > total {
-            bail!("a shard is `i/n` with 1 <= i <= n, got `{text}`");
+        if total == 0 || index >= total {
+            bail!("a shard is `k/n` with 0 <= k < n, got `{text}`");
         }
         Ok(Self { index, total })
     }
@@ -594,14 +601,17 @@ timeout_seconds = 30
         assert!(args.windows(2).any(|args| args == ["--shard", "2/4"]));
     }
 
-    /// `0/4` and `5/4` name no slice of anything. Accepting either would leave
-    /// the mutants they stand for untested while the lane reported success.
+    /// Shards are numbered from zero, the way the tool numbers them, so `4/4`
+    /// names nothing. A lane that asked for it was refused by cargo-mutants
+    /// itself -- and had the count been read the other way, the `0/4` nobody
+    /// asked for would have gone untested while every lane reported success.
     #[test]
     fn a_shard_outside_its_own_count_is_refused() {
-        assert!(Shard::from_str("0/4").is_err());
+        assert!(Shard::from_str("4/4").is_err());
         assert!(Shard::from_str("5/4").is_err());
         assert!(Shard::from_str("1/0").is_err());
         assert!(Shard::from_str("half").is_err());
-        assert_eq!(Shard::from_str("1/4").unwrap().to_string(), "1/4");
+        assert_eq!(Shard::from_str("0/4").unwrap().to_string(), "0/4");
+        assert_eq!(Shard::from_str("3/4").unwrap().to_string(), "3/4");
     }
 }

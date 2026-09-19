@@ -752,6 +752,38 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group stream
+# deep-mutants-ui-0 / branch
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / main
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
+# deep-mutants-ui-0 / release
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui --shard 0/4
 # deep-mutants-ui-1 / branch
   <require os> linux
   <require tools> cargo just
@@ -848,38 +880,6 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group ui --shard 3/4
-# deep-mutants-ui-4 / branch
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / platforms
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / merge-request
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / quarantine
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / main
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / nightly
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / weekly
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
-# deep-mutants-ui-4 / release
-  <require os> linux
-  <require tools> cargo just
-  just test mutants run-all --jobs 4 --group ui --shard 4/4
 # deep-perf / branch
   <require os> macos
   <require tools> cargo just
