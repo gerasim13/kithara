@@ -4725,7 +4725,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "assert_no_alloc",
  "kithara",
- "kithara-derive",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
