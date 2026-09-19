@@ -1,4 +1,4 @@
-use std::{fmt, ops::Deref};
+use std::ops::Deref;
 
 use kithara_bufpool::PooledString;
 
@@ -7,6 +7,8 @@ const SHARDS: usize = 1;
 type TextGuard = PooledString<SHARDS>;
 
 /// UTF-8 text whose allocation can return to its owning draw-pool family.
+#[derive(derive_more::Debug)]
+#[debug("{:?}", self.as_str())]
 pub struct PoolText {
     storage: TextStorage,
 }
@@ -53,12 +55,6 @@ impl From<&str> for PoolText {
 impl Clone for PoolText {
     fn clone(&self) -> Self {
         self.as_str().to_owned().into()
-    }
-}
-
-impl fmt::Debug for PoolText {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_str().fmt(formatter)
     }
 }
 

@@ -1,19 +1,15 @@
 use bon::Builder;
 
-use crate::{ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{ids::InternId, module::Tone};
 
 /// A caption with a value beside it, toned by the document.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.readout.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Readout {
     pub(crate) label: Option<InternId>,
     pub(crate) tone: Tone,
     pub(crate) framed: bool,
-}
-
-impl Control for Readout {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.readout.size
-    }
 }
 
 #[cfg(feature = "render")]

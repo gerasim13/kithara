@@ -8,6 +8,8 @@ use serde_yaml_ng::Value;
 /// is what tells an operator which of the two documents to fix.
 #[derive(Debug)]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct MissingEnv(BTreeSet<(String, String)>);
 
 impl fmt::Display for MissingEnv {
@@ -19,8 +21,6 @@ impl fmt::Display for MissingEnv {
         Ok(())
     }
 }
-
-impl std::error::Error for MissingEnv {}
 
 /// Replace every `$VAR` and `${VAR}` reference in `value` with what `lookup`
 /// resolves, walking the whole tree.

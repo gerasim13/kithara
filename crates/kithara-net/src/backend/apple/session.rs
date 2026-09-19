@@ -49,9 +49,11 @@ impl urlsession::DataTaskCompletion for DataCompletionSink {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, kithara_derive::Mirror)]
+#[mirror(from_ref = NetOptions)]
 struct SharedSessionKey {
     is_insecure: bool,
+    #[mirror(rename = pool_max_idle_per_host)]
     max_connections_per_host: usize,
 }
 
@@ -176,15 +178,6 @@ impl AppleSession {
         async move {
             let started = started?;
             wait_for_stream_head(started, events, cancel).await
-        }
-    }
-}
-
-impl From<&NetOptions> for SharedSessionKey {
-    fn from(options: &NetOptions) -> Self {
-        Self {
-            max_connections_per_host: options.pool_max_idle_per_host,
-            is_insecure: options.is_insecure,
         }
     }
 }

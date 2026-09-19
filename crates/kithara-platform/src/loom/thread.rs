@@ -9,8 +9,11 @@ use crate::common::{thread_id::thread_id_hash, time::Duration};
 
 pub(crate) type Thread = ::loom::thread::Thread;
 
+#[derive(derive_more::Debug)]
 pub struct JoinHandle<T> {
+    #[debug(skip)]
     inner: ::loom::thread::JoinHandle<T>,
+    #[debug(skip)]
     finished: LoomArc<AtomicBool>,
 }
 
@@ -26,12 +29,6 @@ impl<T> JoinHandle<T> {
             #[must_use]
             pub fn thread(&self) -> &Thread;
         }
-    }
-}
-
-impl<T> fmt::Debug for JoinHandle<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("JoinHandle").finish_non_exhaustive()
     }
 }
 

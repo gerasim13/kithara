@@ -139,7 +139,8 @@ pub enum ExpandedNode {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, kithara_derive::EnumStr)]
+#[enum_str(all = KINDS, method = kind)]
 #[non_exhaustive]
 pub enum ControlSpec {
     DeckSummary {

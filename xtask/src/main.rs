@@ -26,19 +26,12 @@ use release::ReleaseArgs;
 use self_cache::SelfCacheArgs;
 use wasm::WasmCommand;
 
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, clap::ValueEnum, derive_more::Display)]
 enum BuildProfile {
+    #[display("debug")]
     Debug,
+    #[display("release")]
     Release,
-}
-
-impl std::fmt::Display for BuildProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Debug => write!(f, "debug"),
-            Self::Release => write!(f, "release"),
-        }
-    }
 }
 
 #[derive(Debug, Parser)]

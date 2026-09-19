@@ -9,10 +9,9 @@ mod tests {
     use crate::{
         builtin,
         compile::{CompiledUi, compile},
-        expand::{Binding, BlockSpec},
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-        size::{DEFAULTS, Dim},
+        size::{DEFAULTS, Dim, SnapshotFixture},
         source::{MemResolver, UiConfig},
         view,
     };
@@ -44,30 +43,6 @@ mod tests {
         }
     }
 
-    struct AllHidden;
-
-    impl Snapshot for AllHidden {
-        fn hidden(&self, _: &BlockSpec) -> bool {
-            true
-        }
-
-        fn measure(&self, _: &Binding) -> Option<f32> {
-            None
-        }
-    }
-
-    struct Measured(f32);
-
-    impl Snapshot for Measured {
-        fn hidden(&self, _: &BlockSpec) -> bool {
-            false
-        }
-
-        fn measure(&self, _: &Binding) -> Option<f32> {
-            Some(self.0)
-        }
-    }
-
     fn compiled(module: &str) -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -92,7 +67,7 @@ mod tests {
         node_size(&ui.root, builtin::skin_doc(), snapshot)
     }
 
-    const HIDDEN: &dyn Snapshot = &AllHidden;
+    const HIDDEN: &dyn Snapshot = &SnapshotFixture::all_hidden();
 
     #[kithara::test]
     fn an_adaptive_bank_is_the_size_of_the_branch_its_measure_selects() {
@@ -122,8 +97,8 @@ mod tests {
                 ))"#,
         );
 
-        let three = size_of(&ui, &Measured(3.0));
-        let four = size_of(&ui, &Measured(4.0));
+        let three = size_of(&ui, &SnapshotFixture::measured(Some(3.0)));
+        let four = size_of(&ui, &SnapshotFixture::measured(Some(4.0)));
 
         assert_ne!(three, four, "each branch measures for itself");
         assert_eq!(

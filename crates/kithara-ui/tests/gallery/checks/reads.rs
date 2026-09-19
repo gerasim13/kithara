@@ -6,7 +6,7 @@
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
-    render::{ControlAction, ReadValue, Reads as _},
+    render::{ControlAction, ReadValue, Reads as _, Zoom},
 };
 
 use crate::demo::{DemoReads, consts::Consts, data::CATALOG};
@@ -77,10 +77,13 @@ fn wave_zoom_is_host_owned_and_clamped() {
 
     assert_eq!(
         reads.get("deck.view.zoom"),
-        Some(ReadValue::Scalar(Consts::ZOOM))
+        Some(ReadValue::Scalar(f64::from(f32::from(Zoom::DEFAULT))))
     );
     reads.apply("modules/deck/wave/zoom", &ControlAction::SetScalar(0.001));
-    assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.015)));
+    assert_eq!(
+        reads.get("deck.view.zoom"),
+        Some(ReadValue::Scalar(f64::from(f32::from(Zoom::MIN))))
+    );
     reads.apply("modules/deck/wave/zoom", &ControlAction::SetScalar(0.9));
     assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.5)));
 }

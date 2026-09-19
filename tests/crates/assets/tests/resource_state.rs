@@ -1,11 +1,8 @@
-use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
+use std::{collections::HashSet, num::NonZeroUsize, path::Path};
 
 use kithara::{
     self,
-    assets::{
-        AssetResourceState, AssetStore, ChunkSink, DiskAssetStore, ProcessCtx, ReadSide,
-        ResourceProcessor, StorageBackend, WriteSide,
-    },
+    assets::{AssetResourceState, AssetStore, DiskAssetStore, ReadSide, StorageBackend, WriteSide},
     platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::{
@@ -13,54 +10,7 @@ use kithara_integration_tests::{
 };
 use tempfile::tempdir;
 
-use super::support::{LiteralLayout, literal_layouts, pending, resource, source};
-
-#[derive(Debug)]
-struct XorProcessor {
-    identity: [u8; 1],
-    key: u8,
-}
-
-impl ResourceProcessor for XorProcessor {
-    fn identity(&self) -> &[u8] {
-        &self.identity
-    }
-
-    fn begin(&self) -> Box<dyn ChunkSink> {
-        Box::new(XorSink { key: self.key })
-    }
-}
-
-struct XorSink {
-    key: u8,
-}
-
-impl fmt::Debug for XorSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("XorSink").finish_non_exhaustive()
-    }
-}
-
-impl ChunkSink for XorSink {
-    fn process(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-        _is_last: bool,
-    ) -> Result<usize, String> {
-        for (idx, byte) in input.iter().copied().enumerate() {
-            output[idx] = byte ^ self.key;
-        }
-        Ok(input.len())
-    }
-}
-
-fn xor_processor(key: u8) -> ProcessCtx {
-    Arc::new(XorProcessor {
-        identity: [key],
-        key,
-    })
-}
+use super::support::{LiteralLayout, literal_layouts, pending, resource, source, xor_processor};
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
     let disk = DiskAssetStore::new(root_dir, CancelToken::never());
@@ -317,7 +267,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .scope::<LiteralLayout>(&source("asset-a"))
         .expect("scope");
     let key_a = scope_a.key(&resource("segments/0001.bin")).unwrap();
-    let proc_a = xor_processor(0x55);
+    let proc_a = xor_processor(0x55, None);
 
     assert_eq!(
         scope_a.store().resource_state(&key_a).unwrap(),
@@ -362,7 +312,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_b = pending(
         scope_b
             .store()
-            .acquire_resource_with_ctx(&key_b, None, Some(xor_processor(0x11)))
+            .acquire_resource_with_ctx(&key_b, None, Some(xor_processor(0x11, None)))
             .unwrap(),
     );
     res_b.write_at(0, b"bbb").unwrap();
@@ -389,7 +339,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_c = pending(
         scope_c
             .store()
-            .acquire_resource_with_ctx(&key_c, None, Some(xor_processor(0x22)))
+            .acquire_resource_with_ctx(&key_c, None, Some(xor_processor(0x22, None)))
             .unwrap(),
     );
     res_c.write_at(0, b"ccc").unwrap();

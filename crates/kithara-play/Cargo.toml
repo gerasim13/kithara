@@ -9,9 +9,6 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
-[package.metadata.cargo-machete]
-ignored = ["unimock"]
-
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -69,7 +66,7 @@ resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rub
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 usdt = ["kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
-mock = ["dep:unimock"]
+mock = ["dep:unimock", "kithara-stream/mock"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
@@ -86,7 +83,7 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
@@ -107,6 +104,7 @@ arc-swap = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 

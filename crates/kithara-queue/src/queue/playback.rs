@@ -140,7 +140,7 @@ where
                 });
                 self.promote_pending_load(id);
             }
-            _ => {}
+            TrackStatus::Failed(_) | TrackStatus::Consumed | TrackStatus::Cancelled => {}
         }
     }
 

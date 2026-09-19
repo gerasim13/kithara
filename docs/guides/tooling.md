@@ -32,8 +32,9 @@ count printed ahead of it.
 | `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes short unmarked prose |
 | `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
 | `style` | `qualified_path_depth` | trades a deep path for the `use` that shortens it |
-| `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
+| `idioms` | `derivable_from`, `derivable_display`, `derivable_error`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto an existing derive or delegation macro |
 | `idioms` | `derivable_ranged` | detect-only: choose the range and clamp policy at the type declaration |
+| `idioms` | `derivable_built_default`, `derivable_patch`, `derivable_phase` | collapses builder-backed defaults, verbose patch attributes, and closed typestate impls onto the owning derive |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
 
 Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds only

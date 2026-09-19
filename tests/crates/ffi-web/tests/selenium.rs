@@ -145,9 +145,11 @@ impl SeleniumConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct PortLease {
     listener: Option<TcpListener>,
+    #[field(get, vis = "")]
     port: u16,
 }
 
@@ -176,19 +178,18 @@ impl PortLease {
         })
     }
 
-    fn port(&self) -> u16 {
-        self.port
-    }
-
     fn release(&mut self) {
         self.listener = None;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct Endpoints {
     test_server_port: u16,
+    #[field(get, vis = "")]
     page_url: String,
+    #[field(get, vis = "")]
     webdriver_url: String,
 }
 
@@ -209,16 +210,8 @@ impl Endpoints {
         format!("{}/assets/drm/master.m3u8", self.test_server_base_url())
     }
 
-    fn page_url(&self) -> &str {
-        &self.page_url
-    }
-
     fn webdriver_status_url(&self) -> String {
         format!("{}/status", self.webdriver_url())
-    }
-
-    fn webdriver_url(&self) -> &str {
-        &self.webdriver_url
     }
 }
 

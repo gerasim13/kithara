@@ -16,20 +16,11 @@ fn assert_message_send<S: Send + Sync>() {
 }
 
 /// Worker-side endpoint for the canonical Host owned by the main thread.
+#[derive_where::derive_where(Clone)]
 pub struct HostSender<S> {
     id: BeatGridId,
     root_view: RootView,
     tx: mpsc::Sender<HostCmdMsg<S>>,
-}
-
-impl<S> Clone for HostSender<S> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            root_view: self.root_view.clone(),
-            tx: self.tx.clone(),
-        }
-    }
 }
 
 /// Main-thread receiver for one canonical Host command route.

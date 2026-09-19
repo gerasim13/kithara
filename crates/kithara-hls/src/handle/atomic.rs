@@ -37,6 +37,7 @@ impl AtomicResource for Key {
 
 /// Typed handle for fetching a small atomic body (playlist or DRM key)
 /// through the disk cache + unified downloader pipeline.
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub(crate) struct AtomicFetch<R, S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -45,20 +46,6 @@ where
     downloader: PeerHandle,
     _marker: PhantomData<R>,
     pools: PoolRegion<S>,
-}
-
-impl<R, S> Clone for AtomicFetch<R, S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            downloader: self.downloader.clone(),
-            scope: self.scope.clone(),
-            pools: self.pools.clone(),
-            _marker: PhantomData,
-        }
-    }
 }
 
 pub(crate) type PlaylistPeer<S> = AtomicFetch<Playlist, S>;

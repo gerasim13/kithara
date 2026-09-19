@@ -21,7 +21,8 @@ use crate::{
     rfc6381::audio_codec_supports_fmp4_packaging,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ResolvedHlsSpec {
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
@@ -37,6 +38,7 @@ pub(crate) struct ResolvedHlsSpec {
     pub(crate) segments_per_variant: usize,
     pub(crate) variant_count: usize,
     pub(crate) codecs: Option<String>,
+    #[field(get, vis = "pub(crate)")]
     cache_key: String,
 }
 
@@ -129,12 +131,6 @@ pub(crate) enum HlsSpecError {
     UnsupportedPackagedCodec(AudioCodec),
     #[error("failed to materialize packaged audio: {0}")]
     PackagedAudio(String),
-}
-
-impl ResolvedHlsSpec {
-    pub(crate) fn cache_key(&self) -> &str {
-        &self.cache_key
-    }
 }
 
 pub(crate) fn parse_hls_spec_with<F>(

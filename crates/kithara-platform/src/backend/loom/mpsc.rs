@@ -8,17 +8,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     (Sender(sender), Receiver(receiver))
 }
 
+#[derive_where::derive_where(Clone)]
 pub struct Sender<T>(::loom::sync::mpsc::Sender<T>);
 
 impl<T> Sender<T> {
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         self.0.send(value)
-    }
-}
-
-impl<T> Clone for Sender<T> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
     }
 }
 

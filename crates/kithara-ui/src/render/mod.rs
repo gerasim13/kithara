@@ -76,4 +76,4 @@ pub(crate) use {
     window::{ControlsProgram, TitleProgram},
 };
 
-pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};
+pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};

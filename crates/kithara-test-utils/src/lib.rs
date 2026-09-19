@@ -31,8 +31,8 @@ pub mod test;
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        Probe, allow_block, asset, fixture, hang_watchdog, measure, measure_block, mock, no_block,
-        probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test,
+        IntoProbeArg, Probe, allow_block, asset, fixture, hang_watchdog, measure, measure_block,
+        mock, no_block, probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test,
         test_utils_flash as flash,
     };
 }

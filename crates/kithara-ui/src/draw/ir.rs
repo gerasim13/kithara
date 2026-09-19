@@ -13,6 +13,8 @@ use crate::shaping::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(from = iced::Color, into = iced::Color))]
 pub struct Rgba {
     pub a: f32,
     pub b: f32,
@@ -30,8 +32,12 @@ pub(crate) const TRANSPARENT: Rgba = Rgba {
 
 /// A toolkit-neutral rectangle in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(from = iced::Rectangle))]
 pub struct Rect {
+    #[cfg_attr(feature = "iced", mirror(rename = height))]
     pub h: f32,
+    #[cfg_attr(feature = "iced", mirror(rename = width))]
     pub w: f32,
     pub x: f32,
     pub y: f32,

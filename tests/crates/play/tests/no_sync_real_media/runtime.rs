@@ -368,6 +368,5 @@ const fn resampler_name(kind: PlaybackResamplerKind) -> &'static str {
         PlaybackResamplerKind::Rubato => "rubato",
         PlaybackResamplerKind::Glide => "glide",
         PlaybackResamplerKind::None => "none",
-        _ => "unknown",
     }
 }

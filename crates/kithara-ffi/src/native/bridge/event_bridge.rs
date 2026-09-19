@@ -18,8 +18,8 @@ use crate::{
     pools::FfiQueueControl,
     registry::ItemRegistry,
     types::{
-        FfiAdvanceReason, FfiCrossfadeSettings, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode,
-        FfiTimeRange, FfiTrackStatus,
+        FfiActionAtItemEnd, FfiAdvanceReason, FfiCrossfadeSettings, FfiItemEvent, FfiPlaybackOrder,
+        FfiPlayerEvent, FfiRepeatMode, FfiTimeRange, FfiTrackStatus,
     },
 };
 
@@ -125,6 +125,16 @@ impl EventBridge {
                     settings: FfiCrossfadeSettings::from(*settings),
                 });
             }
+            QueueEvent::PlaybackOrderChanged { order } => {
+                observer.on_event(FfiPlayerEvent::PlaybackOrderChanged {
+                    order: FfiPlaybackOrder::from(*order),
+                });
+            }
+            QueueEvent::ActionAtItemEndChanged { action } => {
+                observer.on_event(FfiPlayerEvent::ActionAtItemEndChanged {
+                    action: FfiActionAtItemEnd::from(*action),
+                });
+            }
             QueueEvent::RepeatModeChanged { mode } => {
                 observer.on_event(FfiPlayerEvent::RepeatModeChanged {
                     mode: FfiRepeatMode::from(*mode),
@@ -136,7 +146,6 @@ impl EventBridge {
                     index: *index as u64,
                 });
             }
-            _ => {}
         }
     }
 
@@ -223,7 +232,19 @@ impl EventBridge {
                 status: TimeControlStatus::WaitingToPlay,
                 ..
             } => *last_current.lock(),
-            _ => return,
+            PlayerEvent::TimeControlStatusChanged {
+                status: TimeControlStatus::Paused | TimeControlStatus::Playing,
+                ..
+            }
+            | PlayerEvent::StatusChanged { .. }
+            | PlayerEvent::RateChanged { .. }
+            | PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::MuteChanged { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return,
         };
         let Some(track_id) = target else { return };
         let Some(item) = items.lock().get(&track_id).cloned() else {
@@ -236,7 +257,15 @@ impl EventBridge {
                 FfiItemEvent::DidFail
             }
             PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
-            _ => return,
+            PlayerEvent::StatusChanged { .. }
+            | PlayerEvent::RateChanged { .. }
+            | PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::MuteChanged { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return,
         };
         item.deliver(ffi_event);
     }

@@ -17,6 +17,9 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
 fs4 = { workspace = true }
 glob = { workspace = true }
 hex = { workspace = true }

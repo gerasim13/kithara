@@ -7,7 +7,13 @@ use crate::{
 };
 
 /// The global bar's own button: a framed panel with one mark centred in it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = Mark,
+    draw = self.paint(list, text, *data, bounds, state),
+    reads_pointer = true
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Settings {
     frame: FrameSkin,
     hovered: Rgba,

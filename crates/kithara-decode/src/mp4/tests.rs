@@ -38,8 +38,10 @@ mod cursors {
     }
 
     impl Seek for CountingCursor {
-        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-            self.inner.seek(pos)
+        delegate::delegate! {
+            to self.inner {
+                fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64>;
+            }
         }
     }
 
@@ -56,8 +58,10 @@ mod cursors {
     }
 
     impl Read for NoEndSeekCursor {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.inner.read(buf)
+        delegate::delegate! {
+            to self.inner {
+                fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
+            }
         }
     }
 

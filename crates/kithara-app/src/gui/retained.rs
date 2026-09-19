@@ -15,12 +15,7 @@ use super::{
     ui::{self, AppUi},
     update,
 };
-use crate::{
-    catalog::Catalog,
-    config::AppConfig,
-    deck::DeckSet,
-    gui::ui::{endpoints, endpoints::Registry},
-};
+use crate::{catalog::Catalog, config::AppConfig, deck::DeckSet, gui::ui::endpoints::Registry};
 
 /// The studio driven by the retained host.
 ///
@@ -120,7 +115,8 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::{App, Config, Rc, Skin, endpoints, ui, ui::package::Package};
+    use super::{App, Config, Rc, Skin, ui, ui::package::Package};
+    use crate::gui::ui::endpoints;
 
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that

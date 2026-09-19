@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, ops::Range, path::Path};
+use std::{ops::Range, path::Path};
 
 use dashmap::DashSet;
 use kithara_platform::{CancelToken, sync::Arc};
@@ -22,11 +22,18 @@ struct CacheHandle<T> {
 }
 
 /// Writer (Pending) wrapper returned by [`super::CachedAssets`].
+#[derive(derive_more::Debug)]
+#[debug(bound(W: std::fmt::Debug))]
+#[debug("{:?}", handle.inner)]
 pub struct CachedWriter<W> {
     handle: CacheHandle<W>,
 }
 
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
+#[derive_where::derive_where(Clone; R: Clone)]
+#[derive(derive_more::Debug)]
+#[debug(bound(R: std::fmt::Debug))]
+#[debug("{:?}", handle.inner)]
 pub struct CachedReader<R> {
     handle: CacheHandle<R>,
 }
@@ -48,26 +55,6 @@ impl<T> CacheHandle<T> {
 
     fn retain(&self) {
         self.pinned.insert(self.key.clone());
-    }
-}
-
-impl<R: Clone> Clone for CachedReader<R> {
-    fn clone(&self) -> Self {
-        Self {
-            handle: self.handle.clone(),
-        }
-    }
-}
-
-impl<W: fmt::Debug> fmt::Debug for CachedWriter<W> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.handle.inner.fmt(f)
-    }
-}
-
-impl<R: fmt::Debug> fmt::Debug for CachedReader<R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.handle.inner.fmt(f)
     }
 }
 

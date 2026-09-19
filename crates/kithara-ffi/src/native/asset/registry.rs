@@ -1,5 +1,3 @@
-use std::fmt;
-
 use kithara::{
     assets::{AssetLayout, AssetLayoutRegistry},
     platform::sync::{Arc, Mutex},
@@ -19,7 +17,9 @@ pub enum FfiAssetLayoutTarget {
 
 /// Rust-owned registry of protocol-specific asset layouts.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[derive(Default, derive_more::Debug)]
 pub struct FfiAssetLayoutRegistry {
+    #[debug(skip)]
     inner: Mutex<AssetLayoutRegistry>,
 }
 
@@ -53,21 +53,6 @@ impl FfiAssetLayoutRegistry {
             }
         };
         drop(replaced);
-    }
-}
-
-impl Default for FfiAssetLayoutRegistry {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(AssetLayoutRegistry::default()),
-        }
-    }
-}
-
-impl fmt::Debug for FfiAssetLayoutRegistry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FfiAssetLayoutRegistry")
-            .finish_non_exhaustive()
     }
 }
 

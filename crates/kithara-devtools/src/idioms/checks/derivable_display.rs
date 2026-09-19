@@ -21,6 +21,7 @@ impl Check for DerivableDisplay {
             ctx,
             Kind::Display,
             ctx.config.thresholds.derivable_display.enabled,
+            ctx.config.thresholds.derivable_display.severity,
         )
     }
 }

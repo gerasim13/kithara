@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_assets::AssetStore;
@@ -28,7 +28,7 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Builder, Patch)]
+#[derive(Builder, derive_more::Debug, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig<S>
@@ -44,14 +44,17 @@ where
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
     #[patch(skip)]
+    #[debug(skip)]
     pub cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
     #[patch(skip)]
+    #[debug(skip)]
     pub store: Option<AssetStore<S>>,
 
     /// Player owned and decorated by this queue.
     #[patch(skip)]
+    #[debug(skip)]
     pub player: PlayerImpl<S>,
 
     /// Lead time in seconds before EOF at which the next queued track
@@ -85,23 +88,6 @@ where
 
     #[builder(default)]
     pub crossfade_settings: CrossfadeSettings,
-}
-
-impl<S> fmt::Debug for QueueConfig<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QueueConfig")
-            .field("max_concurrent_loads", &self.max_concurrent_loads)
-            .field("prefetch_duration", &self.prefetch_duration)
-            .field("should_autoplay", &self.should_autoplay)
-            .field("max_history_size", &self.max_history_size)
-            .field("playback_order", &self.playback_order)
-            .field("action_at_item_end", &self.action_at_item_end)
-            .field("crossfade_settings", &self.crossfade_settings)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(test)]

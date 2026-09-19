@@ -156,6 +156,40 @@ pub(crate) trait Snapshot {
     fn measure(&self, measure: &Binding) -> Option<f32>;
 }
 
+#[cfg(test)]
+pub(crate) struct SnapshotFixture {
+    hidden: bool,
+    measured: Option<f32>,
+}
+
+#[cfg(test)]
+impl SnapshotFixture {
+    pub(crate) const fn all_hidden() -> Self {
+        Self {
+            hidden: true,
+            measured: None,
+        }
+    }
+
+    pub(crate) const fn measured(measured: Option<f32>) -> Self {
+        Self {
+            hidden: false,
+            measured,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Snapshot for SnapshotFixture {
+    fn hidden(&self, _: &BlockSpec) -> bool {
+        self.hidden
+    }
+
+    fn measure(&self, _: &Binding) -> Option<f32> {
+        self.measured
+    }
+}
+
 struct Unanswered;
 
 impl Snapshot for Unanswered {
@@ -1106,18 +1140,6 @@ mod tests {
         assert_eq!(size.w.max(), None);
     }
 
-    struct Measured(f32);
-
-    impl Snapshot for Measured {
-        fn hidden(&self, _: &BlockSpec) -> bool {
-            false
-        }
-
-        fn measure(&self, _: &Binding) -> Option<f32> {
-            Some(self.0)
-        }
-    }
-
     #[kithara::test]
     fn a_self_measured_node_is_opaque_to_its_parent() {
         let mut interner = Interner::new(1024);
@@ -1131,25 +1153,17 @@ mod tests {
 
         assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), &Measured(5000.0)),
+            compute_size(
+                &node,
+                builtin::skin_doc(),
+                &SnapshotFixture::measured(Some(5000.0)),
+            ),
             declared,
         );
         assert!(
             !has_blocks(&node),
             "an opaque node keeps a constant size, so the renderer may memoise it",
         );
-    }
-
-    struct Folded;
-
-    impl Snapshot for Folded {
-        fn hidden(&self, _: &BlockSpec) -> bool {
-            true
-        }
-
-        fn measure(&self, _: &Binding) -> Option<f32> {
-            None
-        }
     }
 
     fn reveal(from: f32, until: Option<f32>, child: ExpandedNode) -> ExpandedNode {
@@ -1195,7 +1209,10 @@ mod tests {
         );
 
         assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
-        assert_eq!(compute_size(&node, builtin::skin_doc(), &Folded), declared);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), &SnapshotFixture::all_hidden()),
+            declared
+        );
         assert!(
             !has_blocks(&node),
             "an opaque container keeps a constant size, so the renderer may memoise it",
@@ -1450,7 +1467,12 @@ mod tests {
         );
 
         assert_eq!(min_size(&node, skin), fixed(180.0, 20.0));
-        assert_eq!(compute_size(&node, skin, &Folded).w.min(), 100.0);
+        assert_eq!(
+            compute_size(&node, skin, &SnapshotFixture::all_hidden())
+                .w
+                .min(),
+            100.0
+        );
     }
 
     #[kithara::test]

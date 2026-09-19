@@ -1,23 +1,17 @@
 use bon::Builder;
 
-use crate::{
-    expand::Binding, ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc,
-};
+use crate::{expand::Binding, ids::InternId, module::Tone};
 
 /// A toned dot beside a word.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.status_dot.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct StatusDot<'a> {
     pub(crate) label: InternId,
     pub(crate) active: Option<&'a Binding>,
     pub(crate) active_tone: Option<Tone>,
     pub(crate) dot_size: Option<f32>,
     pub(crate) tone: Tone,
-}
-
-impl Control for StatusDot<'_> {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.status_dot.size
-    }
 }
 
 #[cfg(feature = "render")]

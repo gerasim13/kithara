@@ -7,30 +7,13 @@ pub(crate) use super::{
 };
 use crate::{
     atoms::{
-        bar::{
-            brand::Brand, context::Context, divider::Divider, preset::Preset, settings::Settings,
-            spacer::Spacer,
-        },
-        button::Button,
-        chip::Chip,
-        chrome::{ChromeChevron, ChromeLabel},
-        deck::{clock::Clock, summary::Summary, tempo::Tempo},
-        design::{
-            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, segmented::Segmented,
-            select::Select, status_dot::StatusDot, swatch::Swatch,
-        },
-        icon::glyph::Glyph,
-        knob::Knob,
+        bar::context::Context,
+        deck::{clock::Clock, summary::Summary},
+        design::segmented::Segmented,
         label::telemetry::Telemetry,
-        meter::StereoMeter,
-        nav_item::NavItem,
         painter::{ControlPainter, Labelled},
-        picture::sprite::Sprite,
         pivot::{map::PortalMap, range::Range},
         readout::Readout,
-        tab::TabLarge,
-        toggle::Binary,
-        vu::VerticalVu,
         wave::face::Wave,
     },
     draw::{DrawList, Rect, Transform},
@@ -357,9 +340,9 @@ mod dragged {
 
     use kithara_test_utils::kithara;
 
-    use super::{HostAction, Knob, MasonryControl, Painted};
+    use super::{HostAction, MasonryControl, Painted};
     use crate::{
-        atoms::painter::Captioned,
+        atoms::{knob::Knob, painter::Captioned},
         builtin,
         draw::{Pt, Rect},
         interact::{Hit, Input, PointerPhase, mouse},
@@ -479,7 +462,7 @@ pub(crate) trait Retained: ControlPainter {
 }
 
 /// Takes a flag off an endpoint.
-fn set_bool(data: &mut bool, value: &ReadValue<'_>) -> bool {
+pub(crate) fn set_bool(data: &mut bool, value: &ReadValue<'_>) -> bool {
     let ReadValue::Bool(active) = value else {
         return false;
     };
@@ -488,7 +471,7 @@ fn set_bool(data: &mut bool, value: &ReadValue<'_>) -> bool {
 
 /// Takes a fraction off an endpoint, clamped to the unit range every painter
 /// draws in.
-fn set_scalar(data: &mut f32, value: &ReadValue<'_>) -> bool {
+pub(crate) fn set_scalar(data: &mut f32, value: &ReadValue<'_>) -> bool {
     let ReadValue::Scalar(value) = value else {
         return false;
     };
@@ -498,7 +481,7 @@ fn set_scalar(data: &mut f32, value: &ReadValue<'_>) -> bool {
 
 /// A meter shows the levels it ctx; the scalar it publishes while dragged is
 /// its volume, which is the one part of those levels a hand can set.
-fn set_levels(data: &mut StereoLevels, value: &ReadValue<'_>) -> bool {
+pub(crate) fn set_levels(data: &mut StereoLevels, value: &ReadValue<'_>) -> bool {
     let levels = match value {
         ReadValue::Stereo(levels) => *levels,
         ReadValue::Scalar(volume) => StereoLevels {
@@ -512,7 +495,7 @@ fn set_levels(data: &mut StereoLevels, value: &ReadValue<'_>) -> bool {
 
 /// A word and a state: the flag decides the picture, and a text endpoint may
 /// supply the word.
-fn set_labelled(data: &mut Labelled, value: &ReadValue<'_>) -> bool {
+pub(crate) fn set_labelled(data: &mut Labelled, value: &ReadValue<'_>) -> bool {
     match value {
         ReadValue::Bool(active) => set_bool(&mut data.active, value) || *active != data.active,
         ReadValue::Text(label) => {
@@ -524,82 +507,6 @@ fn set_labelled(data: &mut Labelled, value: &ReadValue<'_>) -> bool {
         _ => false,
     }
 }
-
-impl Retained for Chip {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_labelled(data, value)
-    }
-}
-
-impl Retained for Glyph {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_bool(&mut data.active, value)
-    }
-}
-
-impl Retained for NavItem {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_bool(&mut data.active, value)
-    }
-}
-
-impl Retained for TabLarge {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_labelled(data, value)
-    }
-}
-
-impl Retained for Knob {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_scalar(&mut data.value, value)
-    }
-}
-
-impl Retained for Fader {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_scalar(&mut data.value, value)
-    }
-}
-
-impl Retained for Crossfader {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_scalar(data, value)
-    }
-}
-
-impl Retained for Meter {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_scalar(data, value)
-    }
-}
-
-/// A module's chrome is settled when the document is folded: the word a chip
-/// or a title carries, and which way the chevron points, arrive by rebuilding
-/// the header rather than through an endpoint.
-impl Retained for ChromeLabel {}
-
-impl Retained for ChromeChevron {}
-
-/// The bar's furniture shows what the skin said; no endpoint moves any of it.
-impl Retained for Brand {}
-
-impl Retained for Divider {}
-
-impl Retained for Preset {}
-
-impl Retained for Spacer {}
-
-/// The gear the settings button shows comes from the built-in art, not from an
-/// endpoint.
-impl Retained for Settings {}
-
-/// A sheet's endpoint hands over seconds, and seconds are not a picture: which
-/// frame they land on needs the sheet and how long a pass through it takes,
-/// which the control knows and the painter does not. The refresh the control
-/// hands over is what steps it.
-impl Retained for crate::atoms::picture::lottie::Lottie {}
-
-impl Retained for Sprite {}
 
 impl Retained for Wave {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
@@ -642,12 +549,6 @@ impl Retained for Range {
         std::mem::replace(data, *next) != *next
     }
 }
-
-/// A status dot and a cell show what the document said; no endpoint moves
-/// either of them.
-impl Retained for StatusDot {}
-
-impl Retained for Cell {}
 
 /// A readout shows what its endpoint last reported; the value is a word by the
 /// time it reaches the painter, so a new one is a new word.
@@ -702,37 +603,5 @@ impl Retained for Summary {
             return false;
         };
         !title.is_empty() && std::mem::replace(&mut data.title, (*title).to_owned()) != data.title
-    }
-}
-
-/// A tempo readout is rebuilt when the track it ctx changes, which is the
-/// only thing that turns one reading into the other.
-impl Retained for Tempo {}
-
-impl Retained for Select {}
-
-impl Retained for Swatch {}
-
-impl Retained for Binary {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_bool(data, value)
-    }
-}
-
-impl Retained for VerticalVu {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_levels(data, value)
-    }
-}
-
-impl Retained for StereoMeter {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_levels(data, value)
-    }
-}
-
-impl Retained for Button {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_bool(&mut data.active, value)
     }
 }

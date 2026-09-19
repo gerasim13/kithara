@@ -20,6 +20,7 @@ pub(crate) const fn detect(_request: DetectRequest, _detector: &Detector) -> Det
 }
 
 #[derive(Clone)]
+#[derive_where::derive_where(Default)]
 pub(crate) struct Config<B>(PhantomData<B>)
 where
     B: ResamplerBackend;
@@ -51,27 +52,10 @@ where
     pub(crate) fn with_default(&mut self, _resampler: BeatAnalysisConfig<B>) {}
 }
 
-impl<B> Default for Config<B>
-where
-    B: ResamplerBackend,
-{
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
+#[derive_where::derive_where(Default)]
 pub(crate) struct Slot<B>(PhantomData<B>)
 where
     B: ResamplerBackend;
-
-impl<B> Default for Slot<B>
-where
-    B: ResamplerBackend,
-{
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
 
 impl<B> Slot<B>
 where

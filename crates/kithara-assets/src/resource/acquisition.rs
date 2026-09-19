@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fmt::Debug, ops::Range, path::Path};
+use std::{fmt::Debug, ops::Range, path::Path};
 
 use kithara_bufpool::ByteBuffer;
 use kithara_platform::{CancelToken, sync::Arc};
@@ -11,7 +11,8 @@ use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 /// (e.g. ciphertext) bytes into the backing storage while the [`WriteSide`]
 /// writer retains sole ownership of [`commit`](WriteSide::commit). Writes land
 /// on the same generation the writer will commit.
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
+#[debug("RawWriteHandle")]
 pub struct RawWriteHandle(RawWriteFn);
 
 /// Shared raw-byte write closure backing a [`RawWriteHandle`].
@@ -32,12 +33,6 @@ impl RawWriteHandle {
     /// Propagates the backing write error.
     pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         (self.0)(offset, data)
-    }
-}
-
-impl Debug for RawWriteHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RawWriteHandle")
     }
 }
 

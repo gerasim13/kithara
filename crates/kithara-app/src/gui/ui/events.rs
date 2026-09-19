@@ -14,7 +14,7 @@ use crate::{
     deck::{DeckId, EqMode},
     gui::{
         app::Kithara,
-        deck::{DeckMsg, TEMPO_STEP},
+        deck::{DeckMsg, TEMPO_STEP, TempoPercent},
         message::Message,
         mix::MixMsg,
     },
@@ -129,13 +129,18 @@ fn deck_control(
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
         }
         ("wave/zoom", ControlAction::SetScalar(zoom)) => {
-            state.ui.cache.deck_mut(index)?.view.zoom = Some(zoom.clamp(0.0, 1.0));
+            let zoom: f32 = zoom.as_();
+            state.ui.cache.deck_mut(index)?.view.zoom =
+                Some(f64::from(f32::from(kithara::ui::render::Zoom::from(zoom))));
             return None;
         }
-        ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(
-            steps.mul_add(TEMPO_STEP, state.decks.get(id)?.view.timestretch.tempo),
-        ),
-        ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(0.0),
+        ("tempo", ControlAction::StepScalar(steps)) => {
+            DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(
+                TEMPO_STEP,
+                f32::from(state.decks.get(id)?.view.timestretch.tempo),
+            )))
+        }
+        ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
@@ -183,13 +188,14 @@ fn zoom_control(
     control: &str,
     action: &ControlAction,
 ) -> Option<()> {
-    let step: fn(f32) -> f32 = match (control, action) {
+    let step: fn(kithara::ui::render::Zoom) -> kithara::ui::render::Zoom = match (control, action) {
         ("zoom-in", ControlAction::Activate) => zoom_in,
         ("zoom-out", ControlAction::Activate) => zoom_out,
         _ => return None,
     };
     let deck = cache.deck_mut(index)?;
-    deck.view.zoom = Some(step(deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
+    let current: f32 = deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_);
+    deck.view.zoom = Some(f64::from(f32::from(step(current.into()))));
     Some(())
 }
 
@@ -471,7 +477,13 @@ mod tests {
         use super::super::translate;
         use crate::{
             deck::{DeckId, EqMode},
-            gui::{app::Kithara, deck::DeckMsg, message::Message, mix::MixMsg, test_fixture},
+            gui::{
+                app::Kithara,
+                deck::{DeckMsg, TempoPercent},
+                message::Message,
+                mix::MixMsg,
+                test_fixture,
+            },
             state::AbrVariant,
         };
 
@@ -495,7 +507,7 @@ mod tests {
                 .unwrap()
                 .view
                 .timestretch
-                .tempo = 3.0;
+                .tempo = TempoPercent::from(3.0);
 
             assert!(matches!(
                 send(&mut state, "deck-a/play", ControlAction::Activate),
@@ -521,7 +533,7 @@ mod tests {
                     ControlAction::StepScalar(2.0)
                 ),
                 Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
-                    if (tempo - 6.0).abs() < f32::EPSILON
+                    if (f32::from(tempo) - 6.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
                 send(&mut state, "bar/broadcast", ControlAction::Activate),

@@ -4,6 +4,7 @@ use kithara_derive::Patch;
 /// Policy for turning the beat model's raw logits into events.
 #[derive(Clone, Copy, Debug, Builder, PartialEq, Patch)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct BeatConfig {
     /// Logit a frame must exceed to be a peak candidate; `0.0` is an even chance.
     #[builder(default = 0.0)]
@@ -15,12 +16,6 @@ pub struct BeatConfig {
     /// The default keeps beats at least 120 ms apart at 50 fps.
     #[builder(default = 3)]
     pub peak_half_width: usize,
-}
-
-impl Default for BeatConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

@@ -19,11 +19,8 @@ ignores:
   - "**/kithara-encode/**"
   - "**/kithara-fuzz/**"
   - "**/kithara-integration-tests/**"
-  # Proc-macro crates: the harness lives in `kithara-test-utils`, which reaches
-  # `kithara-net` and so back to `kithara-derive` itself. A raw `#[test]` here
-  # exercises token expansion, which has no clock and no execution surface for
-  # the harness flags to preserve.
-  - "**/kithara-derive/**"
+  # `kithara-test-macros` and `kithara-test-utils` implement the harness; their
+  # focused unit tests stay raw so the harness is not tested through itself.
   - "**/kithara-test-macros/**"
   - "**/kithara-test-utils/**"
 rule:

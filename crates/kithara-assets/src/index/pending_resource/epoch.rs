@@ -44,16 +44,9 @@ impl<T> From<WriterOutcome<T>> for Option<T> {
 
 /// Cloneable capability used by one writer epoch's callbacks.
 #[doc(hidden)]
+#[derive_where::derive_where(Clone)]
 pub struct WriterEpoch<S> {
     identity: Arc<WriterIdentity<S>>,
-}
-
-impl<S> Clone for WriterEpoch<S> {
-    fn clone(&self) -> Self {
-        Self {
-            identity: Arc::clone(&self.identity),
-        }
-    }
 }
 
 impl<S> WriterEpoch<S>

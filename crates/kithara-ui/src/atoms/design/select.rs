@@ -10,7 +10,12 @@ use crate::{
 const CHEVRON: &str = "\u{2304}";
 
 /// A framed box with a word on one edge and a chevron on the other.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = String,
+    draw = self.paint(list, text, data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Select {
     background: Rgba,
     chevron: Rgba,

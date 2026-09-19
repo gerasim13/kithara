@@ -18,17 +18,15 @@ use crate::pipeline::{
 };
 
 /// Recreating the decoder (format boundary, codec change, seek recovery).
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = RecreateState,
+    track = Track,
+    erase = CurrentFsm::RecreatingDecoder
+)]
 pub(crate) struct RecreatingDecoder;
-
-impl sealed::Sealed for RecreatingDecoder {}
-
-impl TrackPhase for RecreatingDecoder {
-    type Data = RecreateState;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::RecreatingDecoder(track)
-    }
-}
 
 impl Track<RecreatingDecoder> {
     pub(crate) fn step<T: StreamType>(
@@ -56,17 +54,15 @@ impl Track<RecreatingDecoder> {
 }
 
 /// Waiting for an off-core decoder rebuild to complete.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = RebuildState,
+    track = Track,
+    erase = CurrentFsm::RebuildingDecoder
+)]
 pub(crate) struct RebuildingDecoder;
-
-impl sealed::Sealed for RebuildingDecoder {}
-
-impl TrackPhase for RebuildingDecoder {
-    type Data = RebuildState;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::RebuildingDecoder(track)
-    }
-}
 
 impl Track<RebuildingDecoder> {
     pub(crate) fn step<T: StreamType>(

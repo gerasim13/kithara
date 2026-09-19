@@ -271,7 +271,10 @@ fn loader_outcome(status: &TrackStatus) -> Option<Result<(), String>> {
     match status {
         TrackStatus::Loaded | TrackStatus::Consumed => Some(Ok(())),
         TrackStatus::Failed(err) => Some(Err(format!("track entered Failed: {err}"))),
-        _ => None,
+        TrackStatus::Pending
+        | TrackStatus::Loading
+        | TrackStatus::Slow
+        | TrackStatus::Cancelled => None,
     }
 }
 

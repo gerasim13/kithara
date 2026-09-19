@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -104,7 +103,8 @@ pub struct InitArgs {
     pub force: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Error)]
+#[error(ignore)]
 struct InitConflict {
     paths: Vec<PathBuf>,
 }
@@ -123,8 +123,6 @@ impl fmt::Display for InitConflict {
         Ok(())
     }
 }
-
-impl Error for InitConflict {}
 
 struct TargetFiles {
     config: PathBuf,

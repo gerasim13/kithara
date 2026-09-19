@@ -145,7 +145,11 @@ async fn observe_until_loaded(
                                 format_variant_request_ids(&variant_request_ids),
                             ));
                         }
-                        _ => {}
+                        TrackStatus::Pending
+                        | TrackStatus::Loading
+                        | TrackStatus::Slow
+                        | TrackStatus::Consumed
+                        | TrackStatus::Cancelled => {}
                     }
                 }
                 Ok(_) => {}

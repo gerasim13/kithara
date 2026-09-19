@@ -1,4 +1,4 @@
-mod fixtures;
+pub(crate) mod fixtures;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod hold;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]

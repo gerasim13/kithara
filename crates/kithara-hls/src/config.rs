@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
-
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
@@ -69,6 +67,8 @@ pub enum SizeProbeMethod {
 #[derive(Builder, Patch)]
 #[builder(start_fn = for_url)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
+#[derive(derive_more::Debug)]
 pub struct HlsConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -103,6 +103,7 @@ where
     /// [`downloader`]: HlsConfig::downloader
     #[builder(default)]
     #[patch(skip)]
+    #[debug(skip)]
     pub net_options: NetOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     #[patch(skip)]
@@ -123,6 +124,7 @@ where
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     #[patch(skip)]
+    #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
     #[patch(skip)]
@@ -158,73 +160,21 @@ where
     /// 128-entry cache: two concurrent streams each retain 60 media and four
     /// non-media entries.
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
+    #[debug(skip)]
     pub ephemeral_cache_max_media_window: usize,
     /// Minimum media-segment prefetch window for ephemeral HLS stores after
     /// applying [`Self::ephemeral_cache_non_media_reserve`].
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    #[debug(skip)]
     pub ephemeral_cache_min_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
     /// ephemeral media prefetch window from the store cache capacity.
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    #[debug(skip)]
     pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
-}
-
-impl<S> Clone for HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            url: self.url.clone(),
-            initial_abr_mode: self.initial_abr_mode,
-            store: self.store.clone(),
-            pools: self.pools.clone(),
-            keys: self.keys.clone(),
-            net_options: self.net_options.clone(),
-            size_probe_method: self.size_probe_method,
-            download_batch_size: self.download_batch_size,
-            acquire_attempt_budget: self.acquire_attempt_budget,
-            ephemeral_cache_max_media_window: self.ephemeral_cache_max_media_window,
-            ephemeral_cache_min_media_window: self.ephemeral_cache_min_media_window,
-            ephemeral_cache_non_media_reserve: self.ephemeral_cache_non_media_reserve,
-            event_channel_capacity: self.event_channel_capacity,
-            look_ahead_bytes: self.look_ahead_bytes,
-            base_url: self.base_url.clone(),
-            bus: self.bus.clone(),
-            cancel: self.cancel.clone(),
-            discriminator: self.discriminator.clone(),
-            downloader: self.downloader.clone(),
-            headers: self.headers.clone(),
-        }
-    }
-}
-
-impl<S> fmt::Debug for HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HlsConfig")
-            .field("initial_abr_mode", &self.initial_abr_mode)
-            .field("keys", &self.keys)
-            .field("size_probe_method", &self.size_probe_method)
-            .field("download_batch_size", &self.download_batch_size)
-            .field("acquire_attempt_budget", &self.acquire_attempt_budget)
-            .field("event_channel_capacity", &self.event_channel_capacity)
-            .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .field("base_url", &self.base_url)
-            .field("bus", &self.bus)
-            .field("cancel", &self.cancel)
-            .field("headers", &self.headers)
-            .field("discriminator", &self.discriminator)
-            .field("pools", &self.pools)
-            .field("store", &self.store)
-            .field("url", &self.url)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

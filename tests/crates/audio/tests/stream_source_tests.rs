@@ -165,9 +165,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
          lead={admitted_lead:?}"
     );
 
-    audio.set_host_sample_rate(target_rate);
-    let (mut audio, _queued) = wait_for_chunk(audio, Duration::from_secs(2)).await;
     let committed_at_route = audio.position();
+    audio.set_host_sample_rate(target_rate);
+    let (mut audio, candidate) = wait_for_chunk(audio, Duration::from_secs(2)).await;
 
     loop {
         let envelope = events.recv().await.expect("decoder event bus remains open");
@@ -182,14 +182,18 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let rebuilt = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "timed out waiting for rebuilt PCM");
-        let (next_audio, chunk) = wait_for_chunk(audio, remaining).await;
-        audio = next_audio;
-        if chunk.meta.spec.sample_rate == target_rate {
-            break chunk;
+    let rebuilt = if candidate.meta.spec.sample_rate == target_rate {
+        candidate
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for rebuilt PCM");
+            let (next_audio, chunk) = wait_for_chunk(audio, remaining).await;
+            audio = next_audio;
+            if chunk.meta.spec.sample_rate == target_rate {
+                break chunk;
+            }
         }
     };
     assert!(

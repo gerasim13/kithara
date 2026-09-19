@@ -73,10 +73,13 @@ impl RingBackendProbe {
 }
 
 #[non_exhaustive]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(crate) struct RingBackendConfig {
     session_rate: NonZeroU32,
     block_frames: u32,
     layout: RingLayout,
+    #[field(with, vis = "pub(crate)")]
     probe: RingBackendProbe,
     writer: Option<RingWriter>,
 }
@@ -92,12 +95,6 @@ impl RingBackendConfig {
             probe: RingBackendProbe::default(),
             writer: Some(writer),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn with_probe(mut self, probe: RingBackendProbe) -> Self {
-        self.probe = probe;
-        self
     }
 }
 

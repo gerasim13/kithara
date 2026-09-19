@@ -24,7 +24,7 @@ stretch-bungee = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-stretch/
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }

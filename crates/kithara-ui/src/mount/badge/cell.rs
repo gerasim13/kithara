@@ -1,18 +1,14 @@
 use bon::Builder;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::ids::InternId;
 
 /// One box of a grid, optionally captioned and optionally picked out.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.cell.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Cell {
     pub(crate) label: Option<InternId>,
     pub(crate) highlighted: bool,
-}
-
-impl Control for Cell {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.cell.size
-    }
 }
 
 #[cfg(feature = "render")]

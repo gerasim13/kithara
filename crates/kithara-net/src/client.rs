@@ -341,10 +341,15 @@ impl RawHttp {
 /// errors (HTTP 4xx, cancellation) propagate immediately.
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
+#[derive(derive_more::Debug)]
 pub struct HttpClient {
+    #[debug(skip)]
     net: Arc<RetryNet<RawHttp>>,
+    #[debug(skip)]
     cancel: CancelToken,
+    #[debug(skip)]
     inner: Client,
+    #[debug(skip)]
     connection_metrics: ConnectionMetrics,
     #[field(get)]
     options: NetOptions,
@@ -451,14 +456,6 @@ impl HttpClient {
             /// Returns [`NetError`] on HTTP failure or network error.
             pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream>;
         }
-    }
-}
-
-impl std::fmt::Debug for HttpClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpClient")
-            .field("options", &self.options)
-            .finish_non_exhaustive()
     }
 }
 

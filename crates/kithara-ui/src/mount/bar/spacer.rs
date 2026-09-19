@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// Empty room that pushes its neighbours apart.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.global_bar.spacer_size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Spacer;
-
-impl Control for Spacer {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.global_bar.spacer_size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

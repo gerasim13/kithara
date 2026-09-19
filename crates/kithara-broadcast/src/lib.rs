@@ -13,6 +13,7 @@ mod window;
 
 pub use config::{BroadcastConfig, BroadcastConfigPatch};
 pub use error::{BroadcastError, BroadcastResult};
+use humantime_serde as _;
 pub use segment::{Segment, Segmenter};
 #[cfg(not(target_arch = "wasm32"))]
 pub use service::{Broadcast, BroadcastHandle, BroadcastOutput, BroadcastStatus};

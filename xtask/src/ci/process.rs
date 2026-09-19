@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
-    path::{Path, PathBuf},
+    path::{Path as FsPath, PathBuf},
     process::{Child, Command, Output},
     sync::Mutex,
 };
@@ -23,8 +23,10 @@ pub(crate) struct Step {
     pub(crate) relative_dir: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Recording {
+    #[field(get, vis = "pub(crate)")]
     steps: Vec<Step>,
     /// What `capture` answers, by program. A lane that reads a tool's version
     /// and compares it to a pin needs an answer to get past that check.
@@ -36,10 +38,6 @@ impl Recording {
         self.replies.insert(program.to_owned(), reply.to_owned());
         self
     }
-
-    pub(crate) fn steps(&self) -> &[Step] {
-        &self.steps
-    }
 }
 
 enum Mode {
@@ -47,14 +45,20 @@ enum Mode {
     Record(Mutex<Recording>),
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Process {
+    #[field(get(
+        vis = "pub(crate)",
+        doc = "The checkout every command of this process runs against."
+    ))]
     root: PathBuf,
     vars: BTreeMap<OsString, OsString>,
     mode: Mode,
 }
 
 impl Process {
-    pub(crate) fn new(root: &Path, vars: BTreeMap<OsString, OsString>) -> Self {
+    pub(crate) fn new(root: &FsPath, vars: BTreeMap<OsString, OsString>) -> Self {
         Self {
             root: root.to_path_buf(),
             vars,
@@ -65,7 +69,7 @@ impl Process {
     /// A process that captures what a lane asks for instead of running it.
     /// Requirement checks answer yes: the point is the shape of the work, and a
     /// machine that lacks the executor's toolchain still has to record it.
-    pub(crate) fn recording(root: &Path, recording: Recording) -> Self {
+    pub(crate) fn recording(root: &FsPath, recording: Recording) -> Self {
         Self {
             root: root.to_path_buf(),
             vars: BTreeMap::new(),
@@ -104,11 +108,6 @@ impl Process {
 
     pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
         self.command_in(program, "")
-    }
-
-    /// The checkout every command of this process runs against.
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
     }
 
     /// Where the builds this process runs leave their output. A lane that runs
@@ -266,7 +265,7 @@ impl Process {
     }
 
     fn find_executable(&self, program: &str) -> Option<PathBuf> {
-        let path = Path::new(program);
+        let path = FsPath::new(program);
         if path.components().count() > 1 {
             return path.is_file().then(|| path.to_path_buf());
         }
@@ -287,7 +286,7 @@ impl Process {
 }
 
 impl Step {
-    fn of(command: &Command, label: &str, root: &Path) -> Self {
+    fn of(command: &Command, label: &str, root: &FsPath) -> Self {
         Self {
             label: label.to_owned(),
             program: command.get_program().to_string_lossy().into_owned(),
@@ -405,7 +404,7 @@ mod tests {
 
     #[test]
     fn inherited_failure_is_typed() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
         let mut command = if cfg!(windows) {
             let mut command = Command::new("cmd");
             command.args(["/C", "exit", "7"]);
@@ -426,17 +425,17 @@ mod tests {
 
     #[test]
     fn environment_paths_fall_back_to_the_executor_environment() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
 
         assert_eq!(
             process.environment_path("PATH").as_deref(),
-            env::var_os("PATH").as_deref().map(Path::new)
+            env::var_os("PATH").as_deref().map(FsPath::new)
         );
     }
 
     #[test]
     fn ensure_accepts_only_an_explicitly_classified_state() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
         let script = if cfg!(windows) {
             "echo already 1>&2 & exit /B 7"
         } else {
@@ -451,7 +450,7 @@ mod tests {
 
     #[test]
     fn ensure_accepts_success_without_classifying_it() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
         let script = if cfg!(windows) { "exit /B 0" } else { "exit 0" };
 
         fixture_ensure(&process, script, |_| panic!("success needs no classifier")).unwrap();
@@ -459,7 +458,7 @@ mod tests {
 
     #[test]
     fn ensure_rejects_an_unclassified_failure_with_context() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
         let script = if cfg!(windows) {
             "echo unexpected 1>&2 & exit /B 7"
         } else {
@@ -476,7 +475,7 @@ mod tests {
 
     #[test]
     fn ensure_rejects_a_command_that_cannot_start() {
-        let process = Process::new(Path::new("."), BTreeMap::new());
+        let process = Process::new(FsPath::new("."), BTreeMap::new());
 
         let error = process
             .ensure(

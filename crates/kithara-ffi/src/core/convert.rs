@@ -148,7 +148,7 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                 channels: *channels,
                 bypassed: *bypassed,
             }),
-            _ => Err(NotForwarded),
+            DecoderEvent::TransitionHold { .. } => Err(NotForwarded),
         }
     }
 }
@@ -236,7 +236,10 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 source_sample_rate: *source_sample_rate,
                 active: *active,
             }),
-            _ => Err(NotForwarded),
+            AudioEvent::PlaybackProgress { .. }
+            | AudioEvent::OutputAvailable
+            | AudioEvent::SeekLifecycle { .. }
+            | AudioEvent::EndOfStream { .. } => Err(NotForwarded),
         }
     }
 }
@@ -249,7 +252,15 @@ impl TryFrom<&HlsEvent> for FfiItemEvent {
             HlsEvent::CacheComplete { total_bytes } => Ok(Self::HlsCacheComplete {
                 total_bytes: *total_bytes,
             }),
-            _ => Err(NotForwarded),
+            HlsEvent::SegmentReadStart { .. }
+            | HlsEvent::SegmentReadComplete { .. }
+            | HlsEvent::ReadProgress { .. }
+            | HlsEvent::ReaderSeek { .. }
+            | HlsEvent::StaleRequestDropped { .. }
+            | HlsEvent::StaleFetchDropped { .. }
+            | HlsEvent::Seek { .. }
+            | HlsEvent::Error { .. }
+            | HlsEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
@@ -350,7 +361,9 @@ impl TryFrom<&DownloaderEvent> for FfiItemEvent {
                 reason: (*reason).into(),
                 bytes_transferred: *bytes_transferred,
             }),
-            _ => Err(NotForwarded),
+            DownloaderEvent::RequestEnqueued { .. }
+            | DownloaderEvent::RequestFailed { .. }
+            | DownloaderEvent::PriorityChanged { .. } => Err(NotForwarded),
         }
     }
 }
@@ -381,7 +394,10 @@ impl TryFrom<&FileEvent> for FfiItemEvent {
             FileEvent::CacheComplete { total_bytes } => Ok(Self::FileCacheComplete {
                 total_bytes: *total_bytes,
             }),
-            _ => Err(NotForwarded),
+            FileEvent::ReadProgress { .. }
+            | FileEvent::ReaderSeek { .. }
+            | FileEvent::Error { .. }
+            | FileEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
@@ -420,7 +436,6 @@ impl TryFrom<&DrmEvent> for FfiItemEvent {
                 segment_index: *segment_index,
                 detail: detail.clone(),
             }),
-            _ => Err(NotForwarded),
         }
     }
 }
@@ -437,7 +452,10 @@ impl TryFrom<&EngineEvent> for FfiPlayerEvent {
             EngineEvent::MasterVolumeChanged { volume } => {
                 Self::MasterVolumeChanged { volume: *volume }
             }
-            _ => return Err(NotForwarded),
+            EngineEvent::SlotAllocated { .. }
+            | EngineEvent::SlotReleased { .. }
+            | EngineEvent::CrossfadeStarted { .. }
+            | EngineEvent::CrossfadeProgress { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -450,7 +468,10 @@ impl TryFrom<&SessionEvent> for FfiPlayerEvent {
             SessionEvent::RouteChanged { reason, .. } => Self::AudioRouteChanged {
                 reason: FfiRouteChangeReason::from(*reason),
             },
-            _ => return Err(NotForwarded),
+            SessionEvent::Interruption { .. }
+            | SessionEvent::MediaServicesLost
+            | SessionEvent::MediaServicesReset
+            | SessionEvent::SilenceSecondaryAudioHint { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -470,7 +491,10 @@ impl TryFrom<&DjEvent> for FfiPlayerEvent {
             DjEvent::StretchBackendChanged { kind } => Self::DjStretchBackendChanged {
                 kind: FfiStretchBackendKind::from(*kind),
             },
-            _ => return Err(NotForwarded),
+            DjEvent::BeatTick { .. }
+            | DjEvent::BpmSyncEngaged { .. }
+            | DjEvent::BpmSyncDisengaged { .. }
+            | DjEvent::PhaseAligned { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -502,7 +526,6 @@ impl TryFrom<&AssetEvent> for FfiPlayerEvent {
                 asset_root: asset_root.clone(),
                 reason: FfiEvictReason::from(*reason),
             },
-            _ => return Err(NotForwarded),
         })
     }
 }
@@ -527,7 +550,11 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::ItemDidFail { item } => Self::ItemDidFail {
                 item_id: Some(item.id()),
             },
-            _ => return Err(NotForwarded),
+            PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -580,7 +607,6 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 item_id: *id,
                 index: *index as u64,
             },
-            _ => return Err(NotForwarded),
         })
     }
 }

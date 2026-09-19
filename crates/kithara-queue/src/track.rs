@@ -45,6 +45,7 @@ pub struct TrackEntry {
 /// the playlist must work without the caller reconstructing anything.
 #[derive(derive_more::From)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
 pub enum TrackSource<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -56,18 +57,6 @@ where
     /// [`ResourceConfig`] is ~100 bytes larger than the `Uri` variant.
     #[from]
     Config(Box<ResourceConfig<S>>),
-}
-
-impl<S> Clone for TrackSource<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Uri(uri) => Self::Uri(uri.clone()),
-            Self::Config(config) => Self::Config(Box::new((**config).clone())),
-        }
-    }
 }
 
 impl<S> TrackSource<S>

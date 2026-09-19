@@ -23,7 +23,6 @@ use super::{
 use crate::idioms::config::DerivableGetterConfig;
 use crate::{
     common::{
-        exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
         fix::{FixOutcome, SourceRewriter},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
@@ -312,8 +311,6 @@ fn analyze(
     let mut findings = Vec::new();
     let mut insertions = BTreeMap::<usize, Vec<String>>::new();
     let mut edits = Vec::new();
-    let mut cfg_test_ranges = Vec::new();
-    collect_cfg_test_ranges(&file.items, &mut cfg_test_ranges);
     let import_scopes = qualified_deref_import_scopes(file, qualified_deref_remaps);
 
     for scope in collect_scopes(file) {
@@ -325,11 +322,7 @@ fn analyze(
         let mut by_type = BTreeMap::<String, Vec<RawAccessor<'_>>>::new();
         for &impl_block in &scope.impls {
             if impl_block.trait_.is_some()
-                || attrs_have_cfg_test(&impl_block.attrs)
                 || attrs_match_config(&impl_block.attrs, blocking_impl_attrs)
-                || cfg_test_ranges
-                    .iter()
-                    .any(|range| range.contains(&impl_block.span().start().line))
             {
                 continue;
             }
@@ -341,13 +334,6 @@ fn analyze(
                 let ImplItem::Fn(method) = item else {
                     continue;
                 };
-                if attrs_have_cfg_test(&method.attrs)
-                    || cfg_test_ranges
-                        .iter()
-                        .any(|range| range.contains(&method.span().start().line))
-                {
-                    continue;
-                }
                 let Some(detected) = detect(method) else {
                     continue;
                 };
@@ -395,9 +381,6 @@ fn analyze(
                 .iter()
                 .copied()
                 .find(|item| item.ident == type_name);
-            if local.is_some_and(|item| attrs_have_cfg_test(&item.attrs)) {
-                continue;
-            }
             let mut completion = Completion {
                 qualified_deref_remaps,
                 src,
@@ -427,11 +410,17 @@ fn complete_type<'a>(
     let mut claimed = BTreeSet::new();
     let mut converted = Vec::new();
     for accessor in raw {
-        let result = conversion_reason(completion, strukt, &accessor, &claimed);
-        let (plan, skip) = match result {
-            Ok(plan) => qualification_guard_reason(completion, strukt, &accessor, plan)
-                .map_or((Some(plan), None), |reason| (None, Some(reason))),
-            Err(reason) => (None, Some(reason.to_owned())),
+        let (plan, skip) = if accessor.method.sig.constness.is_some() {
+            (
+                None,
+                Some("const accessor requires delegate::delegate! field forwarding".to_owned()),
+            )
+        } else {
+            match conversion_reason(completion, strukt, &accessor, &claimed) {
+                Ok(plan) => qualification_guard_reason(completion, strukt, &accessor, plan)
+                    .map_or((Some(plan), None), |reason| (None, Some(reason))),
+                Err(reason) => (None, Some(reason.to_owned())),
+            }
         };
         completion.findings.push(Finding {
             skip,
@@ -1582,6 +1571,22 @@ mod tests {
     }
 
     #[test]
+    fn const_accessors_are_routed_to_delegate() -> Result<()> {
+        let source = "struct S { value: u8 } impl S { pub const fn value(&self) -> u8 { self.value } pub const fn with_value(mut self, value: u8) -> Self { self.value = value; self } }";
+        let (_, outcome, findings) = fix(source)?;
+
+        assert_eq!(findings.len(), 2);
+        assert!(outcome.changes.is_empty());
+        assert!(
+            outcome
+                .skipped
+                .iter()
+                .all(|reason| reason.contains("delegate::delegate!"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn pathbuf_getter_stays_manual_when_path_is_imported() -> Result<()> {
         let source = "use std::path::Path;\nuse std::path::PathBuf;\n\nstruct S {\n    p: PathBuf,\n}\nimpl S {\n    pub fn p(&self) -> &Path { &self.p }\n}\n";
         let (fixed, outcome, _) = fix(source)?;
@@ -1704,17 +1709,17 @@ mod tests {
     }
 
     #[test]
-    fn const_getter_is_detected_and_fixed() -> Result<()> {
+    fn const_getter_is_detected_and_routed_to_delegate() -> Result<()> {
         let source = "struct Foo {\n    count: u64,\n}\nimpl Foo {\n    pub const fn count(&self) -> u64 { self.count }\n}\n";
 
         assert_eq!(count(source), 1);
         let (fixed, outcome, findings) = fix(source)?;
 
         assert_eq!(findings.len(), 1);
-        assert_eq!(outcome.changes, ["count"]);
-        assert!(outcome.skipped.is_empty());
-        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
-        assert!(!fixed.contains("fn count"));
+        assert!(outcome.changes.is_empty());
+        assert_eq!(outcome.skipped.len(), 1);
+        assert!(outcome.skipped[0].contains("delegate::delegate!"));
+        assert_eq!(fixed, source);
         syn::parse_file(&fixed)?;
         Ok(())
     }
@@ -1914,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn trait_and_cfg_test_getters_are_ignored() {
+    fn trait_getters_are_ignored_but_cfg_test_getters_are_detected() {
         assert_eq!(
             count(
                 "struct User { name: String } impl Named for User { fn name(&self) -> &str { &self.name } }"
@@ -1925,7 +1930,7 @@ mod tests {
             count(
                 "struct User { name: String } #[cfg(test)] impl User { fn name(&self) -> &str { &self.name } }"
             ),
-            0
+            1
         );
     }
 

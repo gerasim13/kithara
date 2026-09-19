@@ -1,5 +1,3 @@
-use std::fmt;
-
 use kithara_bufpool::HasPool;
 use num_traits::ToPrimitive;
 
@@ -10,13 +8,20 @@ use crate::{
 };
 
 /// Exact-span Bungee engine.
+#[derive(derive_more::Debug)]
 pub(crate) struct BungeeElastic {
     capabilities: ElasticCapabilities,
+    #[debug(skip)]
     last_request: Option<ElasticRequest>,
+    #[debug(skip)]
     tail_remaining: Option<usize>,
+    #[debug(skip)]
     core: StreamCore,
+    #[debug(skip)]
     tail_armed: bool,
+    #[debug(skip)]
     pitch: f64,
+    #[debug(skip)]
     rate_age_frames: usize,
 }
 
@@ -112,15 +117,6 @@ impl BungeeElastic {
         self.last_request = None;
         self.rate_age_frames = 0;
         self.tail_remaining = None;
-    }
-}
-
-impl fmt::Debug for BungeeElastic {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BungeeElastic")
-            .field("capabilities", &self.capabilities)
-            .finish_non_exhaustive()
     }
 }
 

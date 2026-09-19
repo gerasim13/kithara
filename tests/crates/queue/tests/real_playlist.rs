@@ -78,7 +78,12 @@ async fn wait_for_status(
                     TrackStatus::Failed(err) => {
                         return Err(format!("track entered Failed: {err}"));
                     }
-                    _ => continue,
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Loaded
+                    | TrackStatus::Consumed
+                    | TrackStatus::Cancelled => continue,
                 }
             }
         }

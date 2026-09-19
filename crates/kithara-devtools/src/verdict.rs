@@ -5,6 +5,8 @@ use anyhow::Error;
 /// A child-command failure that should be reported without a wrapper backtrace.
 #[derive(Debug)]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct ChildFailure {
     exit_code: Option<i32>,
     stderr: Option<String>,
@@ -24,8 +26,6 @@ impl fmt::Display for ChildFailure {
         Ok(())
     }
 }
-
-impl std::error::Error for ChildFailure {}
 
 impl ChildFailure {
     /// Report a child whose standard error was captured by the current process.
@@ -64,7 +64,8 @@ impl ChildFailure {
 /// failure earns a backtrace, a verdict earns a sentence. Twenty-three frames
 /// of runtime internals under "the code has ten style violations" says the
 /// program broke, which is the one thing that did not happen.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Error)]
+#[error(ignore)]
 pub struct NotClean {
     /// The check that reached the verdict, as the user invoked it.
     pub check: &'static str,
@@ -92,8 +93,6 @@ impl fmt::Display for NotClean {
         }
     }
 }
-
-impl std::error::Error for NotClean {}
 
 impl NotClean {
     /// Not `new`: this hands back the `anyhow::Error` a check returns, not the

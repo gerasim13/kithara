@@ -6,7 +6,13 @@ use crate::{
     skin::{NavSkin, TextRoleSkin},
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = NavData,
+    draw = self.paint(list, text, data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_bool, field = active)]
 pub(crate) struct NavItem {
     active: Face,
     idle: Face,

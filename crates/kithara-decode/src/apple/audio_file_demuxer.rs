@@ -621,8 +621,10 @@ mod tests {
     }
 
     impl Seek for TailLoopGuard {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.inner.seek(pos)
+        delegate::delegate! {
+            to self.inner {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 
@@ -659,8 +661,10 @@ mod tests {
     }
 
     impl Seek for NotReadySource {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.inner.seek(pos)
+        delegate::delegate! {
+            to self.inner {
+                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+            }
         }
     }
 

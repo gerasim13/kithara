@@ -1,34 +1,56 @@
-use std::{fmt, fs, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, ValueEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    derive_more::Display,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Profile {
+    #[display("coverage")]
     Coverage,
+    #[display("scheduled")]
     Scheduled,
+    #[display("manual")]
     Manual,
 }
 
-impl fmt::Display for Profile {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Coverage => "coverage",
-            Self::Scheduled => "scheduled",
-            Self::Manual => "manual",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, ValueEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    derive_more::Display,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Tool {
+    #[display("cargo-crap")]
     CargoCrap,
+    #[display("cha")]
     Cha,
+    #[display("rustqual")]
     Rustqual,
+    #[display("cargo-dupes")]
     CargoDupes,
+    #[display("pmat")]
     Pmat,
 }
 
@@ -52,36 +74,17 @@ impl Tool {
     }
 }
 
-impl fmt::Display for Tool {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::CargoCrap => "cargo-crap",
-            Self::Cha => "cha",
-            Self::Rustqual => "rustqual",
-            Self::CargoDupes => "cargo-dupes",
-            Self::Pmat => "pmat",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, derive_more::Display, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Status {
+    #[display("clean")]
     Clean,
+    #[display("findings")]
     Findings,
+    #[display("skipped")]
     Skipped,
+    #[display("tool_error")]
     ToolError,
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Clean => "clean",
-            Self::Findings => "findings",
-            Self::Skipped => "skipped",
-            Self::ToolError => "tool_error",
-        })
-    }
 }
 
 #[derive(Debug, Serialize)]

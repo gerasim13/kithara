@@ -6,7 +6,8 @@ use crate::{
     solve::{Length, Size},
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[retained(setter = set_labelled)]
 pub(crate) struct TabLarge {
     active_color: Rgba,
     idle_color: Rgba,

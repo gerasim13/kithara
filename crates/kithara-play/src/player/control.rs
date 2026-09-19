@@ -16,16 +16,9 @@ use crate::{
 /// The handle deliberately excludes beat-grid identity, synchronization
 /// topology, and engine/session getters. Closing the resident player
 /// invalidates every outstanding clone through the shared runtime gate.
+#[derive_where::derive_where(Clone)]
 pub struct PlayerControl<S> {
     runtime: Arc<PlayerRuntime<S>>,
-}
-
-impl<S> Clone for PlayerControl<S> {
-    fn clone(&self) -> Self {
-        Self {
-            runtime: Arc::clone(&self.runtime),
-        }
-    }
 }
 
 impl<S> PlayerControl<S>
