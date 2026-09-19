@@ -95,11 +95,12 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::parse_quote;
 
     use super::derive;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn expands_track_phase() {
         let input = parse_quote! {
             #[phase(trait = TrackPhase, sealed = sealed::Sealed, data = (), track = Track, erase = CurrentFsm::Decoding)]
@@ -110,7 +111,7 @@ mod tests {
         assert!(output.contains("CurrentFsm :: Decoding (track)"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn rejects_behavioral_shape() {
         let input = parse_quote! {
             #[phase(trait = Phase, sealed = sealed::Sealed, data = (), transition = next)]

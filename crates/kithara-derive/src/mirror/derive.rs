@@ -387,9 +387,11 @@ fn into_enum_arm(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::expand_inner;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn refuses_a_union() {
         let input = syn::parse_quote!(
             #[mirror(from = Source)]
@@ -398,7 +400,7 @@ mod tests {
         assert!(expand_inner(&input).is_err());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn refuses_conflicting_reference_operations() {
         let input = syn::parse_quote!(
             #[mirror(from_ref = Source)]
@@ -410,7 +412,7 @@ mod tests {
         assert!(expand_inner(&input).is_err());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn renames_an_into_variant() {
         let input = syn::parse_quote!(
             #[mirror(into = Target)]

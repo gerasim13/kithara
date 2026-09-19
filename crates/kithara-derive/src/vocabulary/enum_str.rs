@@ -81,9 +81,11 @@ fn expand_inner(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::expand_inner;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn requires_explicit_output_names() {
         let input = syn::parse_quote!(
             enum Value {

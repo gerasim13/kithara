@@ -52,11 +52,12 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::parse_quote;
 
     use super::derive;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn emits_size_and_optional_composition_policy() {
         let input = parse_quote! {
             #[control(size = skin.cell.size, composes_size = false)]
@@ -68,7 +69,7 @@ mod tests {
         assert!(output.contains("false"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn requires_a_size_expression() {
         let input = parse_quote!(
             struct Cell;

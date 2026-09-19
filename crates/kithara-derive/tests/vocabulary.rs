@@ -1,4 +1,5 @@
 use kithara_derive::{EnumStr, Variants};
+use kithara_test_utils::kithara;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Variants)]
 enum Unit {
@@ -14,12 +15,12 @@ enum Value {
     Named { value: u8 },
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn variants_preserves_declaration_order() {
     assert_eq!(Unit::ALL, &[Unit::First, Unit::Second]);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn enum_str_names_every_shape_exhaustively() {
     assert_eq!(Value::KINDS, &["Unit", "Tuple", "Named"]);
     assert_eq!(Value::Unit.kind(), "Unit");

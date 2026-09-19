@@ -22,6 +22,7 @@ pub(crate) fn derive(input: &DeriveInput) -> Result<TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::{DeriveInput, parse_quote};
 
     use super::derive;
@@ -30,7 +31,7 @@ mod tests {
         derive(input).expect("the derive expands").to_string()
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_plain_struct_gets_one_empty_impl() {
         let input: DeriveInput = parse_quote! {
             struct FileEvent {
@@ -44,7 +45,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_enum_gets_one_empty_impl() {
         let input: DeriveInput = parse_quote! {
             enum PlayerEvent {
@@ -59,7 +60,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_generic_type_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct Wrapper<T> {
@@ -72,7 +73,7 @@ mod tests {
         assert!(error.to_string().contains("needs a concrete type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_lifetime_parameter_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct Borrowed<'a> {
@@ -85,7 +86,7 @@ mod tests {
         assert!(error.to_string().contains("needs a concrete type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_const_parameter_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct Fixed<const N: usize> {
@@ -98,7 +99,7 @@ mod tests {
         assert!(error.to_string().contains("needs a concrete type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_union_is_refused() {
         let input: DeriveInput = parse_quote! {
             union Raw {

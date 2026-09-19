@@ -65,11 +65,12 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::parse_quote;
 
     use super::derive;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn emits_data_draw_and_pointer_policy() {
         let input = parse_quote! {
             #[control_painter(
@@ -85,7 +86,7 @@ mod tests {
         assert!(output.contains("READS_POINTER"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn requires_data_and_draw() {
         let input = parse_quote!(
             struct Chip;

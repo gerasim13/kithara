@@ -87,12 +87,13 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use quote::quote;
     use syn::{DeriveInput, parse_quote};
 
     use super::derive;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn walks_fields_in_declaration_order_and_skips_each_domain_explicitly() -> syn::Result<()> {
         let input: DeriveInput = parse_quote! {
             struct Section {
@@ -118,7 +119,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn refuses_non_structs() {
         let input: DeriveInput = parse_quote! { enum Section { A } };
         assert!(derive(&input).is_err());

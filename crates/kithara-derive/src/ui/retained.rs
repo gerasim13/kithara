@@ -54,11 +54,12 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::parse_quote;
 
     use super::derive;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn emits_empty_and_projected_setters() {
         let empty = parse_quote!(
             struct Brand;
