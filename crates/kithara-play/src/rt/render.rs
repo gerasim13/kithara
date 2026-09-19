@@ -427,16 +427,22 @@ fn open_seam(
     active: &[ActiveTrackEntry],
     incoming: TrackSlot,
 ) {
+    let Some(crossfade) = tracks
+        .iter()
+        .find_map(|(slot, track)| (slot == incoming).then(|| track.crossfade_settings()))
+    else {
+        return;
+    };
     for (_, handle, was_leading) in active {
         if *was_leading
             && *handle != incoming
             && let Some(track) = tracks.at_mut(*handle)
         {
-            track.fade_out();
+            track.fade_out(crossfade);
         }
     }
     if let Some(track) = tracks.at_mut(incoming) {
-        track.fade_in();
+        track.fade_in(crossfade);
     }
 }
 

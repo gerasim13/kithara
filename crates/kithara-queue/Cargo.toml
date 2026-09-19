@@ -37,7 +37,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
@@ -47,20 +47,27 @@ kithara-warp = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
 kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
+kithara-signal = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 kithara-warp = { workspace = true }
 

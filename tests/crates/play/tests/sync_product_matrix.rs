@@ -243,12 +243,11 @@ impl SyncCase {
         self.id
     }
 
-    const fn start_bpm(self) -> f64 {
-        self.ride.start_bpm()
-    }
-
-    pub(super) const fn final_bpm(self) -> f64 {
-        self.ride.final_bpm()
+    delegate::delegate! {
+        to self.ride {
+            const fn start_bpm(self) -> f64;
+            pub(super) const fn final_bpm(self) -> f64;
+        }
     }
 
     pub(super) const fn keylock(self) -> bool {
@@ -922,7 +921,7 @@ impl ProductHarness {
             for (index, deck) in self.decks.iter().enumerate() {
                 for id in &self.ids[index] {
                     match deck.track(*id).map(|track| track.status) {
-                        Some(TrackStatus::Loaded) => {}
+                        Some(TrackStatus::Loaded | TrackStatus::Consumed) => {}
                         Some(TrackStatus::Failed(error)) => {
                             panic!("{}: deck {index} failed to load: {error}", case.id)
                         }
@@ -1370,13 +1369,12 @@ impl ProductHarness {
             .await
     }
 
-    /// Host beats recorded inside `frames` of the capture axis.
-    pub(super) fn host_beats_in(&self, frames: std::ops::Range<u64>) -> Vec<u64> {
-        self.tap.host_beats_in(frames)
-    }
-
-    pub(super) fn mark(&mut self, label: &str) {
-        self.tap.mark(label);
+    delegate::delegate! {
+        to self.tap {
+            /// Host beats recorded inside `frames` of the capture axis.
+            pub(super) fn host_beats_in(&self, frames: std::ops::Range<u64>) -> Vec<u64>;
+            pub(super) fn mark(&mut self, label: &str);
+        }
     }
 
     pub(super) async fn run_operations(&mut self, case: SyncCase) {

@@ -114,6 +114,10 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Queue behavior after the current item reaches its end.
     var repeatMode: RepeatMode { get set }
 
+    var playbackOrder: PlaybackOrder { get }
+    var actionAtItemEnd: ActionAtItemEnd { get }
+    var crossfadeSettings: CrossfadeSettings { get }
+
     /// Synchronous current playback time in seconds. Drops to `0`
     /// when the current item is removed. Mirrors iOS sync
     /// `currentTime: Double`.
@@ -149,7 +153,8 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
 
     /// Skip to the next item in the queue. No-op if already on the
     /// last item or the queue is empty.
-    func advanceToNextItem()
+    func next() throws
+    func previous() throws
 
     /// Remove all items from the queue.
     func removeAllItems()
@@ -177,9 +182,7 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// argument to lift that limit.
     func updatePeakBitrate(wifi: Double, cellular: Double)
 
-    /// Configure the auth token sent on every player HTTP request.
+    /// Replace the auth token sent on every player HTTP request. The
+    /// initial value belongs in the player configuration.
     func setupNetwork(authToken: String)
-
-    /// Register a runtime DRM key decryptor on every host (`"*"`).
-    func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?)
 }

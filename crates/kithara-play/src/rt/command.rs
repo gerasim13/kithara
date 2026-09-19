@@ -17,9 +17,6 @@ use crate::bridge::{
 impl PlayerNodeProcessor {
     fn apply_fade_duration(&mut self, duration: f32) {
         self.crossfade.duration = duration;
-        for (_, track) in self.tracks.iter_mut() {
-            track.update_fade_duration(duration, self.sample_rate);
-        }
     }
 
     fn apply_prefetch_duration(&mut self, duration: f32) {
@@ -39,7 +36,10 @@ impl PlayerNodeProcessor {
             // WHY: Slot-wide: the re-base releases the natural-end hold on every loaded track, including the ones this seek does not move.
             track.observe_seek_epoch(seek_epoch);
             match track.state() {
-                TrackState::FadingIn | TrackState::Playing => {
+                TrackState::FadingIn => {
+                    track.seek(seconds);
+                }
+                TrackState::Playing => {
                     track.seek(seconds);
                     track.play();
                 }
@@ -172,7 +172,7 @@ impl PlayerNodeProcessor {
     fn handle_transition(&mut self, transition: TrackTransition) {
         let mut leading_changed = false;
 
-        if let TrackTransition::FadeIn(item_id) = &transition {
+        if let TrackTransition::FadeIn { item_id, settings } = &transition {
             self.tracks_transitions.clear();
 
             let maybe_old = self
@@ -184,8 +184,10 @@ impl PlayerNodeProcessor {
                 && old_id != *item_id
             {
                 leading_changed = true;
-                self.tracks_transitions
-                    .push_back(TrackTransition::FadeOut(old_id));
+                self.tracks_transitions.push_back(TrackTransition::FadeOut {
+                    item_id: old_id,
+                    settings: *settings,
+                });
             }
         }
 
@@ -194,21 +196,22 @@ impl PlayerNodeProcessor {
         let mut changed_src = None;
         self.tracks_transitions.retain(|transition| {
             let item_id = match transition {
-                TrackTransition::FadeIn(item_id) | TrackTransition::FadeOut(item_id) => *item_id,
+                TrackTransition::FadeIn { item_id, .. }
+                | TrackTransition::FadeOut { item_id, .. } => *item_id,
             };
             if let Some(track) = self.tracks.get_mut(item_id) {
                 match transition {
-                    TrackTransition::FadeIn(_) => {
+                    TrackTransition::FadeIn { settings, .. } => {
                         changed_src = Some(Arc::clone(track.src()));
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
-                        track.fade_in();
+                        track.fade_in(*settings);
                         playback.position.store(track.position(), Ordering::Relaxed);
                         playback.duration.store(track.duration(), Ordering::Relaxed);
                     }
-                    TrackTransition::FadeOut(_) => {
-                        track.fade_out();
+                    TrackTransition::FadeOut { settings, .. } => {
+                        track.fade_out(*settings);
                     }
                 }
                 return false;
@@ -235,9 +238,8 @@ impl PlayerNodeProcessor {
         let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .item_id(item_id)
-            .fade_duration(self.crossfade.duration)
+            .crossfade(self.crossfade)
             .prefetch_duration(self.prefetch_duration)
-            .fade_curve(self.crossfade.fade_curve())
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .build(resource);
 
@@ -280,6 +282,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        CrossfadeSettings,
         bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition, SharedEq, slot_channels},
         resource::Resource,
         rt::StreamShape,
@@ -614,7 +617,10 @@ mod tests {
         load(&mut control, item, "current.mp3");
         control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item)))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: item,
+                settings: CrossfadeSettings::default(),
+            }))
             .expect("fixture command queue has capacity");
         control
             .cmd_tx

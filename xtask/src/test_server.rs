@@ -45,10 +45,13 @@ impl Consts {
     const READY: Duration = Duration::from_secs(60);
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TestServer {
     /// Absent when the process only recorded the request to start one.
     child: Option<Child>,
     drain: Option<JoinHandle<()>>,
+    #[field(get(deref = str), vis = "pub(crate)")]
     url: String,
 }
 
@@ -122,10 +125,6 @@ impl TestServer {
         }
 
         Ok(server)
-    }
-
-    pub(crate) fn url(&self) -> &str {
-        &self.url
     }
 
     /// [`Drop`] does the same silently for a caller that leaves early.

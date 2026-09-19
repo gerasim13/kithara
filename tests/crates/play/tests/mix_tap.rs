@@ -40,7 +40,7 @@ async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
         .with_player(move |player| {
             player.insert(make_resource(constant_half), TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;
@@ -122,7 +122,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
         .with_player(move |player| {
             player.insert(make_resource(constant_half), TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

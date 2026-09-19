@@ -98,10 +98,7 @@ final class PlayerViewModelRx: PlayerViewModelBase {
             .observe(on: MainScheduler.instance)
             .subscribe(onNext: { [weak self] _ in
                 guard let self else { return }
-                // Engine does not auto-advance between queue items;
-                // drive the queue forward explicitly. Mirrors
-                // AVQueuePlayer.
-                self.player.advanceToNextItem()
+                // Queue policy owns automatic terminal behavior.
             })
             .disposed(by: itemBag)
 

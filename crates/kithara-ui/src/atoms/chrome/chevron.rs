@@ -1,8 +1,6 @@
 use crate::{
-    atoms::{button::VisualState, painter::ControlPainter},
     draw::{DrawListBuilder, FillRule, Pt, Rect, Rgba, Verb},
     render::Skin,
-    shaping::TextContext,
 };
 
 /// The collapse chevron at the right end of a module header, together with the
@@ -11,7 +9,12 @@ use crate::{
 /// The cell is measured from the right edge of whatever box this is given, so
 /// a host that hands it the whole header and a host that hands it just the
 /// cell draw the same mark in the same place.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = bool,
+    draw = self.paint(list, bounds, *data)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct ChromeChevron {
     color: Rgba,
     line_color: Rgba,
@@ -74,20 +77,6 @@ impl ChromeChevron {
 }
 
 /// The chevron takes the cell the header gives it and marks the middle of it.
-impl ControlPainter for ChromeChevron {
-    type Data = bool;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, bounds, *data);
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -97,6 +86,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
+        shaping::TextContext,
     };
 
     /// A header the whole width of a module, and the cell the chevron sits in

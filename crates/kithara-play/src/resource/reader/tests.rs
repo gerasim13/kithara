@@ -33,6 +33,7 @@ use ringbuf::traits::{Consumer, Producer};
 
 use super::*;
 use crate::{
+    CrossfadeCurve, CrossfadeSettings,
     bridge::{PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels},
     rt::{
         PlayerNodeProcessor, RenderPass, RenderTargets, StreamShape, TrackSlots,
@@ -674,6 +675,90 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
 }
 
 #[kithara::test]
+fn prepared_seam_uses_the_incoming_tracks_complete_crossfade_profile() {
+    let (mut inputs, _control) = slot_channels(SharedEq::new(0));
+    let shape = StreamShape {
+        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        max_block_frames: NonZeroU32::new(10).expect("static block size"),
+    };
+    let mut pass = RenderPass::new(
+        &pools(),
+        shape,
+        inputs.stretch,
+        inputs.rate_smoothing,
+        crate::DEFAULT_GATE_SMOOTHING,
+    );
+    let outgoing_id = TrackId::allocate();
+    let mut outgoing = PlayerTrack::builder()
+        .sample_rate(shape.sample_rate)
+        .item_id(outgoing_id)
+        .build(Box::new(scheduled_revision_resource(0, 0)));
+    outgoing.play();
+
+    let incoming_id = TrackId::allocate();
+    let settings = CrossfadeSettings::new(0.25, CrossfadeCurve::Linear, 0.75, 0.25)
+        .expect("fixture crossfade profile is valid");
+    let mut incoming = PlayerTrack::builder()
+        .sample_rate(shape.sample_rate)
+        .item_id(incoming_id)
+        .build(Box::new(scheduled_revision_resource(105, 5)));
+    incoming.fade_in(settings);
+    incoming.schedule_seek(
+        7,
+        crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
+            crate::bridge::PreparedLaunchIdentity {
+                activation: SessionFrame::new(105),
+                warp_map: WarpMapRevision::first(),
+            },
+        ),
+        true,
+    );
+
+    let mut tracks = TrackSlots::default();
+    assert!(tracks.insert(outgoing).is_none());
+    assert!(tracks.insert(incoming).is_none());
+    let context = RenderContext::new(
+        SessionFrame::new(100)..SessionFrame::new(110),
+        shape.sample_rate,
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut left = [0.0; 10];
+    let mut right = [0.0; 10];
+    let input: [&[f32]; 0] = [];
+    let mut output = [&mut left[..], &mut right[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &input,
+        outputs: &mut output,
+    };
+
+    let (_, prepared_launch_started, _) = pass.render_audio(
+        Some(&context),
+        RenderTargets {
+            notification_tx: &mut inputs.notif_tx,
+            metrics: inputs.playback.metrics(),
+            tracks: &mut tracks,
+            seek_epoch: 7,
+        },
+        &mut buffers,
+        10,
+        true,
+    );
+
+    assert!(prepared_launch_started);
+    assert_eq!(
+        tracks.get(outgoing_id).map(PlayerTrack::crossfade_settings),
+        Some(settings)
+    );
+    assert_eq!(
+        tracks.get(incoming_id).map(PlayerTrack::crossfade_settings),
+        Some(settings)
+    );
+}
+
+#[kithara::test]
 fn unarmed_prepared_launch_remains_silent_at_its_ready_activation() {
     let (mut inputs, _control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
@@ -902,7 +987,10 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .expect("load first track");
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(first_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: first_id,
+            settings: CrossfadeSettings::default(),
+        }))
         .expect("fade in first track");
     control
         .cmd_tx
@@ -950,7 +1038,10 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .expect("load next track");
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(next_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: next_id,
+            settings: CrossfadeSettings::default(),
+        }))
         .expect("fade in next track");
     assert_eq!(controls.speed(), 1.5);
 

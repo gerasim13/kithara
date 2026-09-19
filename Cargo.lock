@@ -2182,6 +2182,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive-where"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e2b94854e8576378ccda7c8de8a66ed8b4e8acbd2c50ec3418ea6c8aaf4b567"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3258,11 +3269,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4483,6 +4496,7 @@ dependencies = [
  "bon",
  "bytes",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "kithara-audio",
@@ -4520,6 +4534,19 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+]
+
+[[package]]
+name = "kithara-android"
+version = "0.0.1-alpha4"
+dependencies = [
+ "derive_more",
+ "fieldwork",
+ "jni 0.22.4",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "ndk-context",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4600,6 +4627,7 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "hex",
@@ -4656,6 +4684,7 @@ dependencies = [
  "cbc",
  "crossbeam-queue",
  "delegate",
+ "derive-where",
  "fieldwork",
  "hotpath",
  "js-sys",
@@ -4699,6 +4728,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "assert_no_alloc",
  "kithara",
+ "kithara-derive",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -4742,6 +4772,7 @@ dependencies = [
  "axum",
  "bon",
  "bytes",
+ "derive-where",
  "hls_m3u8",
  "humantime-serde",
  "kithara-bufpool",
@@ -4783,6 +4814,8 @@ dependencies = [
  "bon",
  "crossbeam-queue",
  "delegate",
+ "derive-where",
+ "derive_more",
  "hotpath",
  "kithara-core-test-fixtures",
  "kithara-derive",
@@ -4824,11 +4857,12 @@ dependencies = [
  "fdk-aac",
  "fieldwork",
  "hotpath",
- "jni 0.22.4",
  "js-sys",
+ "kithara-android",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-derive",
  "kithara-mpa",
  "kithara-platform",
  "kithara-resampler",
@@ -4840,7 +4874,6 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "ndk-context",
  "num-traits",
  "re_mp4",
  "serde",
@@ -4920,6 +4953,7 @@ dependencies = [
  "axum",
  "bon",
  "bytes",
+ "derive_more",
  "futures",
  "humantime-serde",
  "kithara-abr",
@@ -4945,6 +4979,7 @@ dependencies = [
  "aes",
  "bytes",
  "cbc",
+ "derive_more",
  "kithara-drm",
  "kithara-platform",
  "kithara-test-utils",
@@ -4960,6 +4995,7 @@ name = "kithara-encode"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "derive_more",
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-bufpool",
@@ -5020,18 +5056,20 @@ dependencies = [
  "cpal 0.18.1",
  "dashmap",
  "delegate",
+ "derive_more",
  "fieldwork",
  "futures",
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-android",
  "kithara-audio",
+ "kithara-derive",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "ndk-context",
  "num-traits",
  "rand 0.10.2",
  "rustls-platform-verifier",
@@ -5069,6 +5107,7 @@ dependencies = [
 name = "kithara-ffi-web-tests"
 version = "0.0.1-alpha4"
 dependencies = [
+ "fieldwork",
  "gloo-timers",
  "js-sys",
  "kithara",
@@ -5094,6 +5133,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "hotpath",
@@ -5181,6 +5221,7 @@ dependencies = [
  "cbc",
  "dashmap",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "futures",
@@ -5237,6 +5278,7 @@ dependencies = [
  "arc-swap",
  "bon",
  "delegate",
+ "derive-where",
  "fieldwork",
  "firewheel",
  "firewheel-web-audio",
@@ -5273,6 +5315,9 @@ dependencies = [
  "cbc",
  "cochlea-features",
  "criterion",
+ "delegate",
+ "derive_more",
+ "fieldwork",
  "firewheel",
  "futures",
  "gloo-timers",
@@ -5281,6 +5326,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
+ "kithara-derive",
  "kithara-devtools",
  "kithara-encode",
  "kithara-events",
@@ -5402,6 +5448,7 @@ dependencies = [
  "cpu-time",
  "criterion",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "futures",
@@ -5444,6 +5491,7 @@ dependencies = [
  "bon",
  "bytes",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "firewheel",
@@ -5494,6 +5542,8 @@ name = "kithara-play-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "cochlea-features",
+ "delegate",
+ "derive_more",
  "firewheel",
  "futures",
  "hex",
@@ -5520,8 +5570,10 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
+ "getrandom 0.4.2",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5532,11 +5584,14 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
+ "rand 0.10.2",
  "serde",
  "serde_yaml_ng",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -5547,6 +5602,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "bytes",
+ "delegate",
  "kithara",
  "kithara-app",
  "kithara-devtools",
@@ -5588,9 +5644,12 @@ dependencies = [
  "bon",
  "criterion",
  "delegate",
+ "derive-where",
+ "derive_more",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5611,9 +5670,11 @@ dependencies = [
  "fast-interleave",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
+ "kithara-derive",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
 ]
 
 [[package]]
@@ -5624,10 +5685,13 @@ dependencies = [
  "bon",
  "crossbeam-queue",
  "delegate",
+ "derive-where",
+ "derive_more",
  "fieldwork",
  "fs4",
  "hotpath",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -5734,6 +5798,7 @@ dependencies = [
  "cochlea-render",
  "cochlea-score",
  "delegate",
+ "derive_more",
  "fs4",
  "futures-lite",
  "hex",
@@ -5809,6 +5874,7 @@ dependencies = [
  "clap",
  "criterion",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "futures-lite",
@@ -12357,6 +12423,9 @@ dependencies = [
  "base64",
  "cargo_metadata 0.23.1",
  "clap",
+ "delegate",
+ "derive_more",
+ "fieldwork",
  "fs4",
  "glob",
  "hex",

@@ -21,6 +21,8 @@ pub mod mock {
     pub use crate::traits::NetMock;
 }
 
+use humantime_serde as _;
+
 pub use crate::{
     backend::HttpClient,
     error::{NetError, NetResult, Retryability},

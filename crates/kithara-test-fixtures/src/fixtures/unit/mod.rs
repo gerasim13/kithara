@@ -4,6 +4,7 @@ mod beat;
 mod decode;
 mod encode;
 mod eq;
+mod fmp4;
 mod limiter;
 mod resampler;
 mod trim;
@@ -20,10 +21,10 @@ pub use beat::{
     clicks_120_4s, clicks_120_20s, clicks_150_12s, clicks_150_20s, clicks_change_24s,
     clicks_change_40s,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use decode::{aac_init, aac_segment, flac_init};
+#[cfg(feature = "encoded")]
+pub use decode::flac_saw;
 pub use decode::{
-    flac_saw, poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
+    poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
     resampled_wav_seek,
 };
 pub use encode::{
@@ -34,6 +35,8 @@ pub use eq::{
     eq_bypass, eq_finite, eq_half, eq_impulse, eq_oscillation, eq_silence, eq_sine_40,
     eq_sine_1000, eq_sine_10000, eq_sine_15000, eq_transition,
 };
+#[cfg(all(feature = "hls", not(target_arch = "wasm32")))]
+pub use fmp4::{aac_init, aac_segment, flac_init};
 pub use limiter::{
     limiter_attack, limiter_half, limiter_infinity, limiter_intersample, limiter_left,
     limiter_negative, limiter_negative_infinity, limiter_peak, limiter_quiet, limiter_recovery,

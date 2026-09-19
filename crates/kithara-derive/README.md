@@ -14,11 +14,16 @@
 
 # kithara-derive
 
-Proc-macro crate for Kithara's production code. It provides `#[derive(Patch)]`:
-from one configuration struct it generates `<Struct>Patch`, the shape a
-configuration document may say about it, and the `apply` that merges one onto
-the other. A crate keeps a single configuration struct; the patch beside it is
-generated, never written.
+Proc-macro crate for Kithara's production code. It generates configuration,
+bounded-value, event, model-conversion, typestate, vocabulary, and UI trait
+implementations while their product types remain in the owning crates.
+
+The crate has no default features. Enable each derive explicitly with its
+matching feature. The available features are `built-default`, `control`,
+`control-painter`, `enum-str`, `event`, `mirror`, `node-control`, `patch`,
+`phase`, `ranged`, `retained`, `skin-walk`, `variants`, and `view-control`.
+The `event` feature exports both `Event` and `EventSet` because they form one
+event contract.
 
 ## Usage
 
@@ -103,8 +108,19 @@ and lag is returned to the caller.
 
 Derive macros:
 
+- `#[derive(BuiltDefault)]` — implements `Default` through an existing builder
+- `#[derive(Control)]` — implements the document-owned UI size contract
+- `#[derive(ControlPainter)]` — forwards structural draw arguments
+- `#[derive(EnumStr)]` — implements a closed enum string vocabulary
+- `#[derive(Mirror)]` — converts between structurally matching product models
+- `#[derive(NodeControl)]` — implements the retained UI host path
 - `#[derive(Patch)]` — generates `<Struct>Patch` and `<Struct>::apply`
+- `#[derive(Phase)]` — implements a closed typestate phase trait
 - `#[derive(Ranged)]` — generates bounded scalar construction and deserialization
+- `#[derive(Retained)]` — implements retained UI data updates
+- `#[derive(SkinWalk)]` — traverses skin frame and text-role fields
+- `#[derive(Variants)]` — exposes unit enum variants in declaration order
+- `#[derive(ViewControl)]` — implements the immediate UI host path
 - `#[derive(Event)]` — registers a concrete event type
 - `#[derive(EventSet)]` — generates a consumer adapter over event channels
 

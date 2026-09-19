@@ -2,21 +2,6 @@ use kithara_test_macros as kithara;
 
 use crate::{asset::Asset, assets};
 
-/// Prepared bytes of the build-time generated 187-second MPEG tone.
-#[kithara::fixture]
-#[must_use]
-pub fn tone_mp3() -> &'static [u8] {
-    assets::signal_mp3_track_sine440_187s().bytes()
-}
-
-/// Prepared bytes of the build-time generated one-second stereo WAV tone.
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-#[must_use]
-pub fn tone_wav() -> &'static [u8] {
-    assets::signal_wav_sine440_1s().bytes()
-}
-
 /// Prepared small ascending PCM input, generated and embedded at build time.
 #[kithara::fixture]
 #[must_use]
@@ -66,37 +51,6 @@ pub(crate) fn samples(asset: &Asset) -> Vec<f32> {
     chunks
         .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("one f32 sample")))
         .collect()
-}
-
-/// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-#[must_use]
-pub fn short_decoder_wav() -> &'static [u8] {
-    assets::sine_wav_a440_10_frames().bytes()
-}
-
-/// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-#[must_use]
-pub fn decoder_wav() -> &'static [u8] {
-    assets::sine_wav_a440_100_frames().bytes()
-}
-
-/// Prepared full-scale stereo 440 Hz WAV input.
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-#[must_use]
-pub fn seek_decoder_wav() -> &'static [u8] {
-    assets::sine_wav_a440_10000_frames().bytes()
-}
-
-/// Prepared full-scale stereo 440 Hz WAV input.
-#[kithara::fixture]
-#[must_use]
-pub fn stress_wav() -> &'static [u8] {
-    assets::timeline_wav_default().bytes()
 }
 
 /// Six prepared silent PCM samples.

@@ -1,128 +1,209 @@
 use std::collections::VecDeque;
 
-/// Behavior when the queue reaches the last track.
+use kithara_events::TrackId;
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[non_exhaustive]
+pub enum PlaybackOrder {
+    #[default]
+    Sequential,
+    Shuffle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[non_exhaustive]
+pub enum ActionAtItemEnd {
+    #[default]
+    Advance,
+    Pause,
+    None,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RepeatMode {
-    /// Stop after the last track; [`NavigationState::next`] returns `None`.
     #[default]
     Off,
-    /// Repeat the currently selected track.
     One,
-    /// Loop back to the first track.
     All,
 }
 
-/// Pure-logic navigation state: current index, history, shuffle, repeat.
-///
-/// Mirrors `kithara-app::playlist::PlaylistState`. Caller owns locking;
-/// methods take `&mut self` so the surrounding [`Queue`](crate::Queue) can
-/// decide the lock granularity.
 #[derive(Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct NavigationState {
-    #[field(get)]
-    current_index: Option<usize>,
+    #[field(get, copy)]
+    current: Option<TrackId>,
     #[field(get, copy, set = set_repeat)]
     repeat_mode: RepeatMode,
-    history: VecDeque<usize>,
-    #[field(get = is_shuffle_enabled, set = set_shuffle)]
-    shuffle_enabled: bool,
-    /// Entries [`Self::history`] keeps; the oldest is dropped past it.
+    history: VecDeque<TrackId>,
+    bag: Vec<TrackId>,
+    #[field(get, copy)]
+    playback_order: PlaybackOrder,
     #[field(get, copy)]
     history_limit: usize,
+    rng: StdRng,
 }
 
 impl NavigationState {
-    /// New empty state: no current track, history empty, shuffle off,
-    /// [`RepeatMode::Off`]. `history_limit` comes from
-    /// `QueueConfig::max_history_size`.
     #[must_use]
     pub fn new(history_limit: usize) -> Self {
+        Self::with_rng(history_limit, StdRng::from_rng(&mut rand::rng()))
+    }
+
+    fn with_rng(history_limit: usize, rng: StdRng) -> Self {
         Self {
-            history_limit,
-            current_index: None,
+            current: None,
             repeat_mode: RepeatMode::Off,
             history: VecDeque::new(),
-            shuffle_enabled: false,
+            bag: Vec::new(),
+            playback_order: PlaybackOrder::Sequential,
+            history_limit,
+            rng,
         }
     }
 
-    /// Mark the queue exhausted without selecting a successor.
+    pub(crate) fn set_playback_order(&mut self, order: PlaybackOrder, tracks: &[TrackId]) {
+        if self.playback_order == order {
+            return;
+        }
+        self.playback_order = order;
+        self.history.clear();
+        self.fresh_cycle(tracks, self.current);
+    }
+
     pub(crate) fn finish(&mut self) {
-        if let Some(current) = self.current_index {
+        if let Some(current) = self.current.take() {
             self.push_history(current);
         }
-        self.current_index = None;
     }
 
-    /// Current index, or the last selected index after [`Self::finish`].
-    pub(crate) fn last_selected_index(&self) -> Option<usize> {
-        self.current_index.or_else(|| self.history.back().copied())
+    pub(crate) fn last_selected(&self) -> Option<TrackId> {
+        self.current.or_else(|| self.history.back().copied())
     }
 
-    /// Advance to the next track.
-    ///
-    /// Returns `None` when the queue is empty or when the end has been
-    /// reached with [`RepeatMode::Off`]. With [`RepeatMode::All`] wraps to
-    /// index `0`. With [`RepeatMode::One`] returns the current index.
-    pub fn next(&mut self, len: usize) -> Option<usize> {
-        let current = match (len, self.current_index, self.repeat_mode) {
-            (0, _, _) => return None,
-            (_, None, _) => {
-                self.current_index = Some(0);
-                return Some(0);
+    pub(crate) fn select(&mut self, id: TrackId, tracks: &[TrackId]) {
+        if let Some(current) = self.current
+            && current != id
+        {
+            self.push_history(current);
+        }
+        self.current = Some(id);
+        if self.playback_order == PlaybackOrder::Shuffle {
+            if self.bag.is_empty() {
+                self.fresh_cycle(tracks, Some(id));
             }
-            (_, Some(current), RepeatMode::One) => return Some(current),
-            (_, Some(current), _) => current,
-        };
-        self.push_history(current);
-        let next = match self.repeat_mode {
-            _ if current + 1 < len => current + 1,
-            RepeatMode::All => 0,
-            RepeatMode::Off | RepeatMode::One => {
-                self.current_index = None;
-                return None;
-            }
-        };
-        self.current_index = Some(next);
+            self.bag.retain(|candidate| *candidate != id);
+        }
+    }
+
+    pub(crate) fn next(
+        &mut self,
+        tracks: &[TrackId],
+        allow_repeat_one: bool,
+        allow_wrap: bool,
+    ) -> Option<TrackId> {
+        let current = self.current;
+        if allow_repeat_one && self.repeat_mode == RepeatMode::One {
+            return current.filter(|id| tracks.contains(id));
+        }
+        let next = match self.playback_order {
+            PlaybackOrder::Sequential => self.next_sequential(tracks, allow_wrap),
+            PlaybackOrder::Shuffle => self.next_shuffle(tracks, allow_wrap),
+        }?;
+        if let Some(current) = current.filter(|id| *id != next) {
+            self.push_history(current);
+        }
+        self.current = Some(next);
         Some(next)
     }
 
-    /// Go back to the previous track. Returns `None` when at index `0` or
-    /// when no track has been selected yet.
-    pub fn prev(&mut self) -> Option<usize> {
-        let current = self.current_index?;
-        if current == 0 {
-            return None;
+    pub(crate) fn prev(&mut self, tracks: &[TrackId]) -> Option<TrackId> {
+        while let Some(previous) = self.history.pop_back() {
+            if tracks.contains(&previous) {
+                self.current = Some(previous);
+                self.bag.retain(|candidate| *candidate != previous);
+                return Some(previous);
+            }
         }
-        let prev = current - 1;
-        self.current_index = Some(prev);
-        Some(prev)
+        None
     }
 
-    /// Push `track_idx` onto history, deduped against the tail. Past
-    /// [`Self::history_limit`] the oldest entry is dropped.
-    fn push_history(&mut self, track_idx: usize) {
-        if self.history.back() == Some(&track_idx) {
+    pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
+        match self.playback_order {
+            PlaybackOrder::Sequential => {
+                self.next_sequential(tracks, self.repeat_mode == RepeatMode::All)
+            }
+            PlaybackOrder::Shuffle => self
+                .bag
+                .iter()
+                .rev()
+                .find(|id| tracks.contains(id))
+                .copied(),
+        }
+    }
+
+    pub(crate) fn reconcile(&mut self, tracks: &[TrackId]) {
+        self.history.retain(|id| tracks.contains(id));
+        self.bag.retain(|id| tracks.contains(id));
+        if self.current.is_some_and(|id| !tracks.contains(&id)) {
+            self.current = None;
+        }
+    }
+
+    pub(crate) fn insert(&mut self, id: TrackId) {
+        if self.playback_order == PlaybackOrder::Shuffle
+            && self.current != Some(id)
+            && !self.bag.contains(&id)
+        {
+            self.bag.push(id);
+            self.bag.shuffle(&mut self.rng);
+        }
+    }
+
+    fn next_sequential(&self, tracks: &[TrackId], allow_wrap: bool) -> Option<TrackId> {
+        let Some(current) = self.current else {
+            return tracks.first().copied();
+        };
+        let index = tracks.iter().position(|id| *id == current)?;
+        tracks
+            .get(index + 1)
+            .copied()
+            .or_else(|| allow_wrap.then(|| tracks.first().copied()).flatten())
+    }
+
+    fn next_shuffle(&mut self, tracks: &[TrackId], allow_wrap: bool) -> Option<TrackId> {
+        self.bag.retain(|id| tracks.contains(id));
+        if self.bag.is_empty() {
+            if !allow_wrap && self.current.is_some() {
+                return None;
+            }
+            self.fresh_cycle(tracks, self.current);
+        }
+        self.bag.pop()
+    }
+
+    fn fresh_cycle(&mut self, tracks: &[TrackId], avoid_first: Option<TrackId>) {
+        self.bag.clear();
+        self.bag.extend_from_slice(tracks);
+        self.bag.shuffle(&mut self.rng);
+        if self.bag.len() > 1
+            && let Some(avoid) = avoid_first
+            && self.bag.last() == Some(&avoid)
+        {
+            let last = self.bag.len() - 1;
+            self.bag.swap(0, last);
+        }
+    }
+
+    fn push_history(&mut self, id: TrackId) {
+        if self.history.back() == Some(&id) {
             return;
         }
         if self.history.len() >= self.history_limit {
             self.history.pop_front();
         }
-        self.history.push_back(track_idx);
-    }
-
-    /// Record an explicit selection. If the previously-current track is
-    /// different, it is pushed onto history (deduped against the tail).
-    pub fn select(&mut self, idx: usize) {
-        if let Some(current) = self.current_index
-            && current != idx
-            && self.history.back() != Some(&current)
-        {
-            self.push_history(current);
-        }
-        self.current_index = Some(idx);
+        self.history.push_back(id);
     }
 }
 
@@ -132,145 +213,88 @@ mod tests {
 
     use super::*;
 
-    /// History deep enough that no test below trips the cap; the cap has
-    /// its own test.
+    fn ids() -> [TrackId; 4] {
+        [TrackId(1), TrackId(2), TrackId(3), TrackId(4)]
+    }
+
     fn nav() -> NavigationState {
-        NavigationState::new(16)
+        NavigationState::with_rng(16, StdRng::seed_from_u64(7))
     }
 
     #[kithara::test]
-    fn defaults() {
-        let nav = nav();
-        assert_eq!(nav.current_index(), None);
-        assert!(!nav.is_shuffle_enabled());
-        assert_eq!(nav.repeat_mode(), RepeatMode::Off);
-    }
-
-    /// What the cap buys: past it history forgets its oldest entry instead
-    /// of growing for the life of the queue.
-    #[kithara::test]
-    fn a_full_history_drops_its_oldest_entry() {
-        let mut nav = NavigationState::new(2);
-        for idx in 0..4 {
-            nav.select(idx);
-        }
-        assert_eq!(nav.history, VecDeque::from(vec![1, 2]));
-    }
-
-    #[kithara::test]
-    fn select_updates_current_and_pushes_history() {
+    fn sequential_repeat_and_history_are_typed() {
+        let tracks = ids();
         let mut nav = nav();
-        nav.select(2);
-        assert_eq!(nav.current_index(), Some(2));
-        assert_eq!(nav.history.len(), 0);
-        nav.select(5);
-        assert_eq!(nav.current_index(), Some(5));
-        assert_eq!(nav.history.back(), Some(&2));
-    }
-
-    #[kithara::test]
-    fn select_dedupes_adjacent_history() {
-        let mut nav = nav();
-        nav.select(1);
-        nav.select(1);
-        nav.select(1);
-        assert!(nav.history.is_empty());
-    }
-
-    #[kithara::test]
-    fn next_from_empty_queue_is_none() {
-        let mut nav = nav();
-        assert_eq!(nav.next(0), None);
-    }
-
-    #[kithara::test]
-    fn next_from_unselected_starts_at_zero() {
-        let mut nav = nav();
-        assert_eq!(nav.next(3), Some(0));
-    }
-
-    #[kithara::test]
-    fn next_wraps_with_repeat_all() {
-        let mut nav = nav();
-        nav.set_repeat(RepeatMode::All);
-        assert_eq!(nav.next(3), Some(0));
-        assert_eq!(nav.next(3), Some(1));
-        assert_eq!(nav.next(3), Some(2));
-        assert_eq!(nav.next(3), Some(0));
-    }
-
-    #[kithara::test]
-    fn next_stops_at_end_with_repeat_off() {
-        let mut nav = nav();
-        nav.select(2);
-        assert_eq!(nav.next(3), None);
-    }
-
-    #[kithara::test]
-    fn finish_clears_current() {
-        let mut nav = nav();
-        nav.select(2);
-        nav.finish();
-        assert_eq!(nav.current_index(), None);
-    }
-
-    #[kithara::test]
-    fn finish_preserves_last_selected_index() {
-        let mut nav = nav();
-        nav.select(2);
-        nav.finish();
-        assert_eq!(nav.last_selected_index(), Some(2));
-    }
-
-    #[kithara::test]
-    fn next_returns_current_with_repeat_one() {
-        let mut nav = nav();
-        nav.select(1);
+        assert_eq!(nav.next(&tracks, true, false), Some(tracks[0]));
+        assert_eq!(nav.next(&tracks, true, false), Some(tracks[1]));
+        assert_eq!(nav.prev(&tracks), Some(tracks[0]));
         nav.set_repeat(RepeatMode::One);
-        assert_eq!(nav.next(3), Some(1));
-        assert_eq!(nav.next(3), Some(1));
+        assert_eq!(nav.next(&tracks, true, false), Some(tracks[0]));
+        assert_eq!(nav.next(&tracks, false, false), Some(tracks[1]));
     }
 
     #[kithara::test]
-    fn prev_at_zero_is_none() {
+    fn shuffle_has_no_cycle_or_boundary_duplicates() {
+        let tracks = ids();
         let mut nav = nav();
-        nav.select(0);
-        assert_eq!(nav.prev(), None);
+        nav.set_playback_order(PlaybackOrder::Shuffle, &tracks);
+        let first: Vec<_> = (0..tracks.len())
+            .map(|_| nav.next(&tracks, false, true).expect("cycle item"))
+            .collect();
+        let second: Vec<_> = (0..tracks.len())
+            .map(|_| nav.next(&tracks, false, true).expect("cycle item"))
+            .collect();
+        let mut first_unique = first.clone();
+        first_unique.sort_by_key(|id| id.as_u64());
+        first_unique.dedup();
+        assert_eq!(first_unique.len(), tracks.len());
+        assert_ne!(first.last(), second.first());
+        assert_ne!(first, second, "RNG state must advance between cycles");
     }
 
     #[kithara::test]
-    fn prev_at_unselected_is_none() {
+    fn explicit_selection_and_removal_reconcile_shuffle() {
+        let tracks = ids();
         let mut nav = nav();
-        assert_eq!(nav.prev(), None);
+        nav.set_playback_order(PlaybackOrder::Shuffle, &tracks);
+        nav.select(tracks[2], &tracks);
+        assert!(!nav.bag.contains(&tracks[2]));
+        let remaining = [tracks[0], tracks[2], tracks[3]];
+        nav.reconcile(&remaining);
+        assert!(!nav.bag.contains(&tracks[1]));
     }
 
     #[kithara::test]
-    fn prev_decrements() {
+    fn shuffle_handles_empty_and_single_item_cycles() {
         let mut nav = nav();
-        nav.select(2);
-        assert_eq!(nav.prev(), Some(1));
-        assert_eq!(nav.prev(), Some(0));
-        assert_eq!(nav.prev(), None);
+        nav.set_playback_order(PlaybackOrder::Shuffle, &[]);
+        assert_eq!(nav.next(&[], false, true), None);
+
+        let only = [TrackId(9)];
+        assert_eq!(nav.next(&only, false, true), Some(only[0]));
+        assert_eq!(nav.next(&only, false, false), None);
+        assert_eq!(nav.next(&only, false, true), Some(only[0]));
     }
 
     #[kithara::test]
-    fn shuffle_toggle() {
+    fn previous_uses_real_history_and_never_invents_an_item() {
+        let tracks = ids();
         let mut nav = nav();
-        assert!(!nav.is_shuffle_enabled());
-        nav.set_shuffle(true);
-        assert!(nav.is_shuffle_enabled());
-        nav.set_shuffle(false);
-        assert!(!nav.is_shuffle_enabled());
+        nav.set_playback_order(PlaybackOrder::Shuffle, &tracks);
+        let first = nav.next(&tracks, false, true).expect("first item");
+        let second = nav.next(&tracks, false, true).expect("second item");
+        assert_ne!(first, second);
+        assert_eq!(nav.prev(&tracks), Some(first));
+        assert_eq!(nav.prev(&tracks), None);
     }
 
     #[kithara::test]
-    fn repeat_mode_roundtrip() {
+    fn insertion_joins_the_active_shuffle_cycle() {
+        let tracks = ids();
         let mut nav = nav();
-        nav.set_repeat(RepeatMode::All);
-        assert_eq!(nav.repeat_mode(), RepeatMode::All);
-        nav.set_repeat(RepeatMode::One);
-        assert_eq!(nav.repeat_mode(), RepeatMode::One);
-        nav.set_repeat(RepeatMode::Off);
-        assert_eq!(nav.repeat_mode(), RepeatMode::Off);
+        nav.set_playback_order(PlaybackOrder::Shuffle, &tracks[..2]);
+        let _ = nav.next(&tracks[..2], false, true);
+        nav.insert(tracks[2]);
+        assert!(nav.bag.contains(&tracks[2]));
     }
 }

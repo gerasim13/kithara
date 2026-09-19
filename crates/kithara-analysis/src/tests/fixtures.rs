@@ -84,7 +84,7 @@ fn a_detector_survives_a_drop_off_the_thread_that_built_it() {
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
+pub(crate) fn beat_detector() -> Box<dyn BeatDetector> {
     Box::new(OneBeatPerWindow)
 }
 

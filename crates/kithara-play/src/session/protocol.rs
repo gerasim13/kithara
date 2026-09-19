@@ -5,6 +5,7 @@ mod wire {
     use kithara_bufpool::PoolRegion;
     use kithara_events::{EventBus, TrackId};
     use kithara_platform::sync::Arc;
+    use kithara_signal::FaderValue;
     use kithara_warp::{
         BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, StretchControls,
         SyncAdmission, SyncError,
@@ -111,7 +112,7 @@ mod wire {
         SetPlayerSlotVolume {
             player_id: PlayerId,
             slot: SlotId,
-            volume: f32,
+            volume: FaderValue,
         },
         SetPlayerEqGain {
             band: usize,
@@ -294,6 +295,7 @@ mod handle {
     ///
     /// The dispatcher is deliberately inaccessible: decorators may only pass
     /// this capability down to their resident Player.
+    #[derive_where::derive_where(Clone)]
     pub struct SessionBinding<S> {
         dispatcher: Arc<dyn SessionDispatcher<S>>,
         requested_sample_rate: NonZeroU32,
@@ -323,26 +325,12 @@ mod handle {
         }
     }
 
-    impl<S> Clone for SessionBinding<S> {
-        fn clone(&self) -> Self {
-            Self {
-                dispatcher: Arc::clone(&self.dispatcher),
-                requested_sample_rate: self.requested_sample_rate,
-            }
-        }
-    }
-
     struct SessionSlot<S> {
         binding: Mutex<Option<SessionBinding<S>>>,
     }
 
+    #[derive_where::derive_where(Clone)]
     pub struct SessionHandle<S>(Arc<SessionSlot<S>>);
-
-    impl<S> Clone for SessionHandle<S> {
-        fn clone(&self) -> Self {
-            Self(Arc::clone(&self.0))
-        }
-    }
 
     impl<S> SessionHandle<S> {
         #[must_use]
@@ -496,7 +484,7 @@ mod handle {
             &self,
             player_id: PlayerId,
             slot: SlotId,
-            volume: f32,
+            volume: kithara_signal::FaderValue,
         ) -> Result<(), PlayError> {
             self.exec_ok(Cmd::SetPlayerSlotVolume {
                 player_id,

@@ -8,7 +8,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{
-    PlayError, PlayerImpl,
+    CrossfadeSettings, PlayError, PlayerImpl,
     player::{PlayerControl, PlayerControlSource},
 };
 
@@ -19,7 +19,7 @@ use super::{
 use crate::{
     config::{CueIn, QueueConfig},
     loader::Loader,
-    navigation::NavigationState,
+    navigation::{ActionAtItemEnd, NavigationState},
     track::{TrackRecord, Tracks},
 };
 
@@ -61,6 +61,8 @@ where
     pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
+    pub(super) action_at_item_end: Mutex<ActionAtItemEnd>,
+    pub(super) crossfade_settings: Mutex<CrossfadeSettings>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
     /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
@@ -86,24 +88,13 @@ where
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
+#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
 pub struct QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) player: PlayerControl<S>,
     runtime: Arc<QueueRuntime<S>>,
-}
-
-impl<S> Clone for QueueControl<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            player: self.player.clone(),
-            runtime: Arc::clone(&self.runtime),
-        }
-    }
 }
 
 /// AVQueuePlayer-analogue orchestration facade.
@@ -159,6 +150,9 @@ where
             prefetch_duration,
             cue_in,
             should_autoplay,
+            playback_order,
+            action_at_item_end,
+            crossfade_settings,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -169,6 +163,7 @@ where
         });
         player.set_auto_advance_enabled(false);
         player.set_prefetch_duration(prefetch_duration);
+        player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
         let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
@@ -180,6 +175,8 @@ where
             cancel.child(),
         ));
         let player_rx = player.subscribe();
+        let mut navigation = NavigationState::new(max_history_size);
+        navigation.set_playback_order(playback_order, &[]);
         let runtime = Arc::new(QueueRuntime {
             cue_in,
             loader,
@@ -187,7 +184,9 @@ where
             bus,
             admission: Mutex::new(()),
             shutdown: cancel,
-            navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
+            navigation: Arc::new(Mutex::new(navigation)),
+            action_at_item_end: Mutex::new(action_at_item_end),
+            crossfade_settings: Mutex::new(crossfade_settings),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
             player_rx: Mutex::new(player_rx),
@@ -514,7 +513,7 @@ pub(crate) mod tests {
         });
 
         entered_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("mutation must enter the queue admission gate");
         let (close_tx, close_rx) = mpsc::channel();
         let close = thread::spawn(move || {
@@ -523,6 +522,11 @@ pub(crate) mod tests {
                 .expect("test receiver remains alive");
         });
 
+        // Every other wait here is on the event itself: under Miri the threads
+        // run two orders of magnitude slower, and a one-second budget made the
+        // test report a scheduling contract it had merely outrun. This one
+        // stays a timer because it asserts the absence of an event, which no
+        // amount of waiting can observe directly.
         assert!(
             matches!(
                 close_rx.recv_timeout(Duration::from_millis(50)),
@@ -532,11 +536,11 @@ pub(crate) mod tests {
         );
         release_tx.send(()).expect("mutation thread remains alive");
         mutation_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("mutation must complete after release")
             .expect("admitted mutation remains open");
         close_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv()
             .expect("close must complete after the mutation")
             .expect("unstarted fixture must close");
         mutation.join().expect("mutation thread must not panic");

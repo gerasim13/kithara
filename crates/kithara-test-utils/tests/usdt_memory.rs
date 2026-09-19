@@ -8,7 +8,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Barrier,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicIsize, Ordering},
     },
     thread,
 };
@@ -22,10 +22,17 @@ use kithara_test_utils::{
 };
 
 /// Heap bytes live right now, and the highest value since the last reset.
+///
+/// The balance is signed because the counters only see what this binary
+/// allocates: the Android harness links `std` dynamically, so a buffer `std`
+/// itself allocated is freed through here without ever having been added. An
+/// unsigned counter underflowed on that free, and the next allocation panicked
+/// on the overflowing add — a panic inside the global allocator, which the
+/// runtime can only answer by aborting the process.
 struct Counting;
 
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
+static LIVE: AtomicIsize = AtomicIsize::new(0);
+static PEAK: AtomicIsize = AtomicIsize::new(0);
 
 // SAFETY: every call forwards to `System` unchanged; the counters only observe.
 unsafe impl GlobalAlloc for Counting {
@@ -33,14 +40,15 @@ unsafe impl GlobalAlloc for Counting {
         // SAFETY: forwarded verbatim to the system allocator.
         let ptr = unsafe { System.alloc(layout) };
         if !ptr.is_null() {
-            let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+            let size = layout.size() as isize;
+            let live = LIVE.fetch_add(size, Ordering::Relaxed).wrapping_add(size);
             PEAK.fetch_max(live, Ordering::Relaxed);
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        LIVE.fetch_sub(layout.size() as isize, Ordering::Relaxed);
         // SAFETY: forwarded verbatim to the system allocator.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -93,9 +101,15 @@ fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
         PEAK.store(baseline, Ordering::Relaxed);
         go.wait();
     });
-    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(baseline);
+    let peak = grown_over(PEAK.load(Ordering::Relaxed), baseline);
+    let left = grown_over(LIVE.load(Ordering::Relaxed), baseline);
     (peak, left)
+}
+
+/// Bytes `now` holds over `baseline`, and zero once the balance has fallen
+/// back below it.
+fn grown_over(now: isize, baseline: isize) -> usize {
+    now.saturating_sub(baseline).max(0).unsigned_abs()
 }
 
 /// Loads the symbol cache std keeps for the rest of the process the first
@@ -147,7 +161,7 @@ fn continuous_probes_keep_the_heap_bounded() {
     );
     drop(history);
 
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(before);
+    let left = grown_over(LIVE.load(Ordering::Relaxed), before);
     eprintln!("after the scopes: left +{left} B");
     assert!(
         left <= STEADY_BUDGET,

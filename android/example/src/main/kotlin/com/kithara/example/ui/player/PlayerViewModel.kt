@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kithara.AssetStore
+import com.kithara.CrossfadeSettings
 import com.kithara.Kithara
 import com.kithara.KitharaError
 import com.kithara.KitharaItemEvent
@@ -46,7 +47,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             it.copy(
                 volume = player.volume,
                 isMuted = player.isMuted,
-                crossfadeDuration = player.crossfadeDuration,
+                crossfadeDuration = player.crossfadeSettings.duration,
                 eqGains = List(EQ_BAND_COUNT) { band -> player.getEqGain(band) },
             )
         }
@@ -173,7 +174,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     private fun setCrossfadeDuration(duration: Float) {
-        player.crossfadeDuration = duration
+        player.crossfadeSettings = player.crossfadeSettings.copy(duration = duration)
         _uiState.update { it.copy(crossfadeDuration = duration) }
     }
 
@@ -225,17 +226,22 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             .apply { mkdirs() }
             .absolutePath
 
+        // The wildcard HLS-AES key rule, the auth token and the demo
+        // crossfade window are all initial state, so they are declared in
+        // the configuration rather than set after construction.
         return KitharaPlayer(
-            config = KitharaPlayer.Config(store = AssetStore(root = cacheDir)),
-        ).apply {
-            playingRate = _uiState.value.selectedRate
-
-            // The native player initializes to 1.0s; the demo wants 5.0s.
-            crossfadeDuration = DEFAULT_CROSSFADE_SECONDS
-
-            setupHlsAes(ZvukKeyProcessor(readZvukCipherKey(application)))
-            readZvukAuthToken(application)?.let(::setupNetwork)
-        }
+            config = KitharaPlayer.Config(
+                store = AssetStore(root = cacheDir),
+                keyRules = listOf(
+                    KitharaPlayer.KeyRule.wildcard(
+                        ZvukKeyProcessor(readZvukCipherKey(application))
+                    )
+                ),
+                authToken = readZvukAuthToken(application).orEmpty(),
+                crossfadeSettings = CrossfadeSettings(duration = DEFAULT_CROSSFADE_SECONDS),
+                playingRate = _uiState.value.selectedRate,
+            ),
+        )
     }
 
     private fun itemFor(trackId: String): KitharaPlayerItem? =

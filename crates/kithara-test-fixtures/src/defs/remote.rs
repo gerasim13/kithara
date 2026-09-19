@@ -1,3 +1,5 @@
+#![cfg(feature = "remote")]
+
 use bytes::Bytes;
 use kithara_drm::UniqueBinaryCipher;
 use kithara_platform::time::Duration;

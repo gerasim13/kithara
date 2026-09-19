@@ -17,6 +17,7 @@ impl Consts {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(get)]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct AnalysisParams {
     /// Per-band perceptual gain (`[low, mid, high]`) applied to magnitudes
     /// before shared normalization. Music tilts energy toward the low end, so
@@ -37,10 +38,4 @@ pub struct AnalysisParams {
     /// FFT window length (real input); band bins span `0..=fft_size/2`.
     #[builder(default = Consts::FFT_SIZE)]
     fft_size: usize,
-}
-
-impl Default for AnalysisParams {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }

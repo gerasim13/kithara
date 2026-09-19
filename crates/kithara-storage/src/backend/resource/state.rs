@@ -72,16 +72,9 @@ impl<D: DriverIo> Inner<D> {
 /// [`Resource<Active, D>`](crate::Resource), [`Resource<Committed, D>`] and
 /// [`ReadHandle<D>`](crate::ReadHandle); it is crate-internal and never exposed
 /// directly.
+#[derive_where::derive_where(Clone; D: DriverIo)]
 pub(crate) struct ResourceCore<D: DriverIo> {
     pub(super) inner: Arc<Inner<D>>,
-}
-
-impl<D: DriverIo> Clone for ResourceCore<D> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
 }
 
 impl<D: DriverIo + Debug> Debug for ResourceCore<D> {

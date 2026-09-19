@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf};
+use std::path::PathBuf;
 
 use kithara::{
     assets::{AssetLayout, AssetResource, AssetSource},
@@ -9,17 +9,13 @@ use url::Url;
 use crate::layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource};
 
 /// Adapts a foreign layout to the core layout contract.
+#[derive(derive_more::Debug)]
+#[debug("ForeignLayout {{ .. }}")]
 pub(crate) struct ForeignLayout(Arc<dyn FfiAssetLayout>);
 
 impl ForeignLayout {
     pub(crate) fn new(layout: Arc<dyn FfiAssetLayout>) -> Self {
         Self(layout)
-    }
-}
-
-impl fmt::Debug for ForeignLayout {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ForeignLayout").finish_non_exhaustive()
     }
 }
 

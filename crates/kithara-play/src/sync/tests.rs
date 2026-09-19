@@ -57,12 +57,12 @@ fn fixture_group() -> GroupState<PlayerMember> {
 struct TestGrid(BeatGridSnapshot);
 
 impl BeatGrid for TestGrid {
-    fn id(&self) -> BeatGridId {
-        self.0.id()
-    }
-
-    fn snapshot(&self) -> BeatGridSnapshot {
-        self.0.clone()
+    delegate::delegate! {
+        to self.0 {
+            fn id(&self) -> BeatGridId;
+            #[call(clone)]
+            fn snapshot(&self) -> BeatGridSnapshot;
+        }
     }
 }
 

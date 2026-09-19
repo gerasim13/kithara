@@ -1,5 +1,5 @@
 use kithara_platform::time::{Duration, Instant};
-use kithara_test_utils::{kithara, probe::IntoProbeArg};
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
@@ -10,7 +10,8 @@ use crate::{AbrMode, AbrReason, VariantIndex, VariantInfo, controller::AbrSettin
 /// Replaces the historical flat `{ reason, did_change, target_variant_index }`
 /// struct: the variant itself encodes whether and how the index changes, so
 /// an inconsistent `did_change` / target pairing is unrepresentable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, kithara::IntoProbeArg)]
+#[probe_arg(encode_only, by_ref, with = Self::encode_probe_arg)]
 #[non_exhaustive]
 pub enum AbrDecision {
     /// No switch — stay on `current`; `reason` records why.
@@ -42,6 +43,11 @@ impl AbrDecision {
     #[must_use]
     pub const fn changed(&self) -> bool {
         !matches!(self, Self::Stay { .. })
+    }
+
+    fn encode_probe_arg(&self) -> u64 {
+        let target = self.target();
+        target.get().to_u64().unwrap_or(0)
     }
 
     delegate::delegate! {
@@ -77,12 +83,6 @@ impl From<&AbrDecision> for AbrReason {
             | AbrDecision::DownSwitch { reason, .. } => *reason,
             AbrDecision::Manual { .. } => Self::ManualOverride,
         }
-    }
-}
-
-impl IntoProbeArg for &AbrDecision {
-    fn into_probe_arg(self) -> u64 {
-        self.target().get().to_u64().unwrap_or(0)
     }
 }
 
@@ -321,4 +321,40 @@ fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::{kithara, probe::IntoProbeArg};
+
+    use super::AbrDecision;
+    use crate::{AbrReason, VariantIndex};
+
+    #[kithara::test]
+    fn decision_probe_argument_is_each_variants_target() {
+        let decisions = [
+            AbrDecision::Stay {
+                current: VariantIndex::new(1),
+                reason: AbrReason::AlreadyOptimal,
+            },
+            AbrDecision::UpSwitch {
+                from: VariantIndex::new(1),
+                to: VariantIndex::new(2),
+                reason: AbrReason::UpSwitch,
+            },
+            AbrDecision::DownSwitch {
+                from: VariantIndex::new(2),
+                to: VariantIndex::new(3),
+                reason: AbrReason::DownSwitch,
+            },
+            AbrDecision::Manual {
+                from: VariantIndex::new(3),
+                to: VariantIndex::new(4),
+            },
+        ];
+
+        for (decision, target) in decisions.iter().zip(1_u64..=4) {
+            assert_eq!(decision.into_probe_arg(), target);
+        }
+    }
 }

@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// A tempo axis carrying one arc from the master tempo to each portal target.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.portal_map.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct PortalMap;
-
-impl Control for PortalMap {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.portal_map.size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

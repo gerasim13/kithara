@@ -11,10 +11,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::assets;
 
-use crate::{
-    bufpool_ext::TestPools,
-    loader_fixture::{append_loaded, wait_loaded},
-};
+use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -101,12 +98,10 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
         first_onset_frame(&first_pcm, 0.005).is_some(),
         "track A must play through on the first pass"
     );
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
-    wait_loaded(&mut reload_events, id_a).await;
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -154,12 +149,10 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
-    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("switch back to track A");
-    wait_loaded(&mut reload_events, id_a).await;
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
     assert!(

@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
-    fmt,
 };
 
 use hls_m3u8::{MasterPlaylist, MediaPlaylist, tags::VariantStream, types::EncryptionMethod};
@@ -65,7 +64,8 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, derive_more::Display)]
+#[display("{_0}")]
 pub(crate) struct RedactedUrl(String);
 
 impl RedactedUrl {
@@ -75,12 +75,6 @@ impl RedactedUrl {
             url.origin().ascii_serialization(),
             url.path()
         ))
-    }
-}
-
-impl fmt::Display for RedactedUrl {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
     }
 }
 

@@ -8,7 +8,6 @@ use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
 /// Network errors are reported by `DownloaderEvent::RequestFailed`
 /// with a typed `NetError`.
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum FileError {
     /// Local I/O / storage failure (mmap, write, eviction).
     #[display("io: {_0}")]
@@ -27,7 +26,6 @@ pub enum FileError {
 /// lifecycle (enqueue → started → completed/failed/cancelled),
 /// subscribe to `DownloaderEvent` on the same bus scope.
 #[derive(Debug, Clone, PartialEq, Eq, Event)]
-#[non_exhaustive]
 pub enum FileEvent {
     Opened {
         codec: Option<AudioCodec>,
@@ -65,7 +63,6 @@ pub enum FileEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TotalBytesSource {
     CommittedLen,
     ContentLength,

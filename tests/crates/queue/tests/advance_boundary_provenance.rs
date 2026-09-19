@@ -13,10 +13,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
-        Transition,
-    },
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -874,6 +871,27 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
+    let b_onset_frame = frame_for_window(b_onset_window);
+    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+
+    // Where the seek landed, read off the rendered audio rather than off the
+    // event. `SeekComplete` is published from a read, so its frame leads the
+    // audible position by the ring depth, and a length measured from it would
+    // carry that lead as a tolerance instead of stating a property. The landing
+    // is the frame carrying the requested phase: the sawtooth repeats only every
+    // `SAW_PERIOD` frames, which is longer than the stretch searched here, so one
+    // frame in it holds that phase. Reading the landing off a class run instead
+    // would depend on the seam splitting the run, and a seam that falls inside a
+    // window leaves the pre-seek and post-seek stretches joined.
+    let landing_frame = require_phase_landing(
+        &left,
+        seek_issue_frame,
+        b_onset_frame,
+        expected_phase,
+        &search_context,
+    );
+    // The phase check stops at the last Ascending window: the windows between it and B
+    // hold the seam itself, whose mixed frames are not track A's phase.
     let last_ascending_window = require_last_class_window_before(
         &classes,
         FrameClass::Ascending,
@@ -881,20 +899,6 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         &search_context,
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
-
-    // Where the seek landed, read off the rendered audio rather than off the
-    // event. `SeekComplete` is published from a read, so its frame leads the
-    // audible position by the ring depth, and a length measured from it would
-    // carry that lead as a tolerance instead of stating a property. The landing
-    // is the first phase break after the seek was issued; it is found per frame
-    // because a seek applied on a block boundary also sits on a window
-    // boundary, where the window classes cannot see it.
-    let landing_frame = require_first_phase_break(
-        &left,
-        seek_issue_frame,
-        last_ascending_end_frame,
-        &search_context,
-    );
 
     let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
@@ -922,15 +926,6 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
             Some(b_onset_window),
             setup.queue.current_index()
         )
-    );
-
-    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
-    let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
-    assert!(
-        landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
-        "seek must land at the requested position in track A: \
-         landing_frame={landing_frame}; phase_delta={landing_phase_delta} units; {}",
-        context.dump()
     );
 
     assert_close_len(
@@ -1156,7 +1151,13 @@ async fn setup_queue_with_sample_rate(
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1186,7 +1187,13 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1214,7 +1221,13 @@ async fn setup_flac_queue_with_player_config(
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: CROSSFADE_SECS,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
@@ -1240,7 +1253,13 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1508,7 +1527,7 @@ async fn drive_app_layer_crossfade_advance(
     queue: &QueueControl<TestPools>,
     auto_advanced_index: &mut Option<usize>,
 ) {
-    let crossfade_secs = f64::from(queue.crossfade_duration());
+    let crossfade_secs = f64::from(queue.crossfade_settings().duration);
     if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
         && dur > crossfade_secs
         && pos >= dur - crossfade_secs
@@ -1517,9 +1536,7 @@ async fn drive_app_layer_crossfade_advance(
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
             harness
-                .run(queue, move |q| {
-                    q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
-                })
+                .run(queue, move |q| q.next(Transition::Crossfade))
                 .await
                 .expect("advance provenance crossfade");
         }
@@ -1916,22 +1933,24 @@ fn require_last_class_window_before(
         })
 }
 
-/// First frame in `start..end` whose saw phase does not continue its
-/// predecessor's.
-fn require_first_phase_break(
+/// The frame between `from` and `to` whose phase is `expected_phase`. A seek
+/// states where it landed by the phase it resumes at, so the landing is found by
+/// that phase rather than by the class seam around it.
+fn require_phase_landing(
     left: &[f32],
-    start: usize,
-    end: usize,
+    from: usize,
+    to: usize,
+    expected_phase: usize,
     context: &ProvenanceDumpContext<'_>,
 ) -> usize {
-    (start.max(1)..end.min(left.len()))
-        .find(|&frame| {
-            let step = phase::delta(phase::units(left[frame - 1]), phase::units(left[frame]));
-            (i32::from(step) - 1).abs() > PHASE_TOL_UNITS
+    (from..to.min(left.len()))
+        .find(|frame| {
+            phase::distance(phase::units(left[*frame]), expected_phase) <= SEEK_PHASE_TOL_UNITS
         })
         .unwrap_or_else(|| {
             panic!(
-                "the seek must break the saw phase within frames {start}..{end}; {}",
+                "seek must land at the requested position in track A: \
+                 expected_phase={expected_phase}; searched frames {from}..{to}; {}",
                 context.dump()
             )
         })

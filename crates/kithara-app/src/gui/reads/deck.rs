@@ -162,9 +162,9 @@ impl<'a> Node<'a> for TempoNode {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let range = f64::from(TEMPO_RANGE);
         let value = match segment {
-            "rate" => {
-                ReadValue::Scalar((f64::from(self.timestretch.tempo) + range) / (range * 2.0))
-            }
+            "rate" => ReadValue::Scalar(
+                (f64::from(f32::from(self.timestretch.tempo)) + range) / (range * 2.0),
+            ),
             _ => return None,
         };
         Some(Box::new(Value(value)))

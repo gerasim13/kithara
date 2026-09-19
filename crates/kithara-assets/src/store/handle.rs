@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    fmt, future::Future, num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64,
-};
+use std::{future::Future, num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, tokio::sync::mpsc};
@@ -41,10 +39,13 @@ macro_rules! delegate_to_store {
 }
 
 /// Cheap shared handle for one asset-store identity.
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
+#[derive(derive_more::Debug)]
 pub struct AssetStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    #[debug(skip)]
     inner: Arc<AssetStoreInner<S>>,
 }
 
@@ -72,26 +73,6 @@ where
     Memory {
         store: MemStore<S>,
     },
-}
-
-impl<S> Clone for AssetStore<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl<S> fmt::Debug for AssetStore<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AssetStore").finish_non_exhaustive()
-    }
 }
 
 impl<S> AssetStore<S>

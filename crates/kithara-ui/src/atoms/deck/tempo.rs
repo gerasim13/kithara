@@ -10,7 +10,12 @@ use crate::{
 const ELAPSED: &str = "TIME";
 
 /// The deck's tempo, or where it is when no tempo has been measured.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = Reading,
+    draw = self.paint(list, text, data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Tempo {
     metrics: DeckSkin,
     caption: Rgba,

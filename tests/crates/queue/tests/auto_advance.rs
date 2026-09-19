@@ -4,10 +4,7 @@ use kithara::{
     self,
     events::EventReceiver,
     platform::sync::Arc,
-    queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode, TrackStatus,
-        Transition,
-    },
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
@@ -26,6 +23,16 @@ const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
+
+fn queue_config(harness: &OfflinePlayerHarness, duration: f32) -> QueueConfig<TestPools> {
+    QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration,
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .build()
+}
 
 /// Average absolute amplitude over a window of `frames` frames starting at
 /// `frame_offset`. Returns `None` if the window does not fit.
@@ -78,9 +85,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
         .await;
     let initial = assets::constant_wav_three_0_2s();
     let id = append_loaded(&harness, &queue, &initial).await;
@@ -152,9 +157,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
         .await;
     let one = assets::constant_wav_three_1s();
     let id = append_loaded(&harness, &queue, &one).await;
@@ -171,17 +174,12 @@ async fn repeat_one_natural_advance_keeps_current_track() {
             mode: kithara::queue::QueueRepeatMode::One,
         })
     ));
-    assert_eq!(
-        harness
-            .run(&queue, move |q| q.advance_to_next(
-                Transition::Crossfade,
-                AdvanceReason::NaturalEof
-            ))
-            .await
-            .expect("advance repeat-one queue"),
-        Some(id)
-    );
+    let _ = render_loop(&queue, &harness, MAX_BLOCKS).await;
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
+    assert!(
+        queue.is_playing(),
+        "repeat one must restart after natural EOF"
+    );
     drop(queue);
     harness.close().await;
 }
@@ -230,9 +228,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
         .await;
     let first_wav = assets::constant_wav_two_1s();
     let first = append_loaded(&harness, &queue, &first_wav).await;
@@ -251,16 +247,13 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
             mode: kithara::queue::QueueRepeatMode::All,
         })
     ));
-    assert_eq!(
-        harness
-            .run(&queue, move |q| q.advance_to_next(
-                Transition::Crossfade,
-                AdvanceReason::NaturalEof
-            ))
-            .await
-            .expect("advance repeat-all queue"),
-        Some(first)
-    );
+    for _ in 0..MAX_BLOCKS {
+        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
+        if queue.current().is_some_and(|entry| entry.id == first) {
+            break;
+        }
+    }
     assert_eq!(queue.current().map(|entry| entry.id), Some(first));
     drop(queue);
     harness.close().await;
@@ -283,9 +276,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
         .await;
 
     let a = assets::constant_wav_quiet_0_4s();
@@ -357,9 +348,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
         .await;
 
     let a = assets::constant_wav_quiet_1_5s();
@@ -435,9 +424,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
         .await;
     let mut rx = queue.subscribe();
 
@@ -516,9 +503,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
         .await;
 
     let a = assets::constant_wav_quiet_0_4s();
@@ -586,9 +571,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
         .await;
     let mut rx = queue.subscribe();
 
@@ -657,9 +640,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
-        ))
+        .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
         .await;
 
     let a = assets::constant_wav_quiet_1_5s();
@@ -731,6 +712,10 @@ async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPool
             QueueConfig::builder()
                 .player(harness.take_player())
                 .should_autoplay(true)
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
                 .build(),
         ))
         .await

@@ -58,12 +58,13 @@ fn test_layouts() -> AssetLayoutRegistry {
 }
 
 impl TestAssets {
-    pub const fn assets(&self) -> &AssetStore<TestPools> {
-        &self.assets
-    }
-
-    pub const fn pools(&self) -> &Pools {
-        &self.pools
+    delegate::delegate! {
+        to self {
+            #[field(&assets)]
+            pub const fn assets(&self) -> &AssetStore<TestPools>;
+            #[field(&pools)]
+            pub const fn pools(&self) -> &Pools;
+        }
     }
 
     /// Scope bound to this fixture's `asset_root`, mirroring how

@@ -19,14 +19,8 @@ impl<T: Serialize> HangDump for T {
 }
 
 /// Default empty context for a detector that carries no payload.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct NoContext;
-
-impl Serialize for NoContext {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_unit_struct("NoContext")
-    }
-}
 
 /// A test's requested watchdog budget in nanoseconds; `0` means unset.
 static OVERRIDE_NANOS: AtomicU64 = AtomicU64::new(0);

@@ -6,7 +6,10 @@ use crate::{
     Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiRepeatMode},
+    types::{
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiKeyRule,
+        FfiPlaybackOrder, FfiPlayerSnapshot, FfiRepeatMode,
+    },
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
@@ -24,20 +27,14 @@ pub struct AudioPlayer {
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayer {
-    #[must_use]
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
-        Arc::new(Self {
-            inner: Inner::new(config),
-        })
-    }
-
-    /// Advance to the next item in the queue, no-op if already on the
-    /// last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-    /// for an immediate cut.
-    pub fn advance_to_next_item(&self) {
-        self.inner.advance_to_next_item();
+    /// # Errors
+    /// Returns an error when the player configuration cannot be created.
+    pub fn new(config: FfiPlayerConfig) -> Result<Arc<Self>, FfiError> {
+        Ok(Arc::new(Self {
+            inner: Inner::new(config)?,
+        }))
     }
 
     /// Append an item to the tail of the queue. AVQueuePlayer-style
@@ -60,8 +57,14 @@ impl AudioPlayer {
         self.inner.append(&item)
     }
 
-    pub fn crossfade_duration(&self) -> f32 {
-        self.inner.crossfade_duration()
+    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
+        self.inner.crossfade_settings()
+    }
+    pub fn playback_order(&self) -> FfiPlaybackOrder {
+        self.inner.playback_order()
+    }
+    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        self.inner.action_at_item_end()
     }
 
     /// Currently playing item (if any). Resolves the queue's current
@@ -223,10 +226,6 @@ impl AudioPlayer {
         self.inner.set_abr_mode(mode);
     }
 
-    pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.inner.set_crossfade_duration(seconds);
-    }
-
     /// # Errors
     ///
     /// Returns error if the engine is not running.
@@ -355,7 +354,7 @@ mod tests {
 
     #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
-        let player = AudioPlayer::new(FfiPlayerConfig::for_test());
+        let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));
 

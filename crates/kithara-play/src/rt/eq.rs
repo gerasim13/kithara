@@ -33,6 +33,7 @@ pub(crate) struct MasterEqBand {
 }
 
 #[derive(Diff, Debug)]
+#[derive_where::derive_where(Clone)]
 pub struct MasterEqNode<S> {
     pub(crate) bands: Vec<MasterEqBand>,
     pub(crate) enabled: bool,
@@ -90,16 +91,6 @@ impl<S> Patch for MasterEqNode<S> {
                 bool::patch(data, tail)?,
             ))),
             _ => Err(PatchError::InvalidPath),
-        }
-    }
-}
-
-impl<S> Clone for MasterEqNode<S> {
-    fn clone(&self) -> Self {
-        Self {
-            bands: self.bands.clone(),
-            enabled: self.enabled,
-            config: self.config.clone(),
         }
     }
 }

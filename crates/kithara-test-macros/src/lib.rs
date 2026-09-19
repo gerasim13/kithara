@@ -154,7 +154,7 @@ pub fn derive_probe(input: TokenStream) -> TokenStream {
 /// `Self(packed as Inner)` boilerplate across every domain id type that
 /// participates in probes. Multi-field structs are rejected — they
 /// must provide an explicit packed impl with a documented layout.
-#[proc_macro_derive(IntoProbeArg)]
+#[proc_macro_derive(IntoProbeArg, attributes(probe_arg))]
 pub fn derive_into_probe_arg(input: TokenStream) -> TokenStream {
     probe::expand_derive_into_probe_arg_entry(input)
 }

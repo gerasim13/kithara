@@ -1,6 +1,5 @@
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -16,7 +15,7 @@ pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
 /// Installed profile of the Mac mini and the guests it hosts, read through
 /// `KITHARA_CI_HOST_CONFIG`. A Linux machine carries its own; see
-/// [`crate::ci::linux`].
+/// [`crate::ci::host::linux`].
 pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
 
 /// Machine profile of one CI host: volumes, accounts, and installed roots.
@@ -383,22 +382,14 @@ impl CiHost {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[display(
+    "build_cache_size {value:?} must be a positive whole number followed by GB and fit in u64 bytes"
+)]
+#[error(ignore)]
 pub(crate) struct BuildCacheSizeError {
     value: String,
 }
-
-impl fmt::Display for BuildCacheSizeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "build_cache_size {:?} must be a positive whole number followed by GB and fit in u64 bytes",
-            self.value
-        )
-    }
-}
-
-impl Error for BuildCacheSizeError {}
 
 /// Budget a profile inherits when it predates the field, and a floor rather
 /// than a fleet's working set: it is one ceiling for every target directory

@@ -63,7 +63,7 @@ extension IntegrationRegressionsIOS {
                 !load.isPlayable,
                 "precondition: item \(index + 1) became playable before public next"
             )
-            player.advanceToNextItem()
+            try player.next()
             try await waitForPublicNextPlayback(
                 of: target,
                 player: player,
@@ -89,7 +89,7 @@ extension IntegrationRegressionsIOS {
         for (index, delivery) in deliveries.enumerated() {
             let fixture = try await TestServerFixture.registerBehavior(
                 .init(
-                    content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
+                    content: .signal(name: "signal_mp3_track_sine440_187s.mp3", shape: .tagged),
                     delivery: .throttle(
                         chunk: delivery.chunk,
                         delayMilliseconds: delivery.delayMilliseconds

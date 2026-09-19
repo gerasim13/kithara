@@ -24,6 +24,10 @@ const EXPLANATION: &str = "Every event type must be reachable from the FFI surfa
 pub(crate) struct DerivableEvent;
 
 impl Check for DerivableEvent {
+    fn policy(&self) -> super::CheckPolicy {
+        super::CheckPolicy::Default
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

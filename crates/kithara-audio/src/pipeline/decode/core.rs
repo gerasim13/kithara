@@ -782,8 +782,8 @@ mod tests {
     #[kithara::test]
     fn holdback_coverage_is_measured_from_the_exact_promotion_cut() {
         const CUT: u64 = 256;
-        const OUTGOING_FRAMES: u32 = 1_000;
-        const INCOMING_FRAMES: u32 = 1_500;
+        const OUTGOING_FRAMES: u32 = 2_000;
+        const INCOMING_FRAMES: u32 = 2_500;
 
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -854,7 +854,7 @@ mod tests {
     fn incoming_landed_ahead_retargets_to_the_observed_outgoing_frontier() {
         const OLD_CUT: u64 = 256;
         const LANDED: u64 = 512;
-        const FRAMES: u32 = 1_500;
+        const FRAMES: u32 = 2_500;
 
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -981,20 +981,32 @@ mod tests {
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
             .saturating_mul(usize::from(spec.channels));
+        let active_samples = decode_quarter
+            .iter()
+            .copied()
+            .cycle()
+            .take(samples)
+            .collect::<Vec<_>>();
+        let outgoing_samples = decode_negative_quarter
+            .iter()
+            .copied()
+            .cycle()
+            .take(samples)
+            .collect::<Vec<_>>();
         decode.active.stage(AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 frames,
                 ..Default::default()
             },
-            sample_buffer(&pools, &decode_quarter[..samples]),
+            sample_buffer(&pools, &active_samples),
         ));
         decode
             .blender
             .prepare_active(BlenderProfile::new(spec))
             .expect("join scratch fits test pools");
         assert!(decode.blender.prepare_join(|outgoing| {
-            outgoing.copy_from_slice(&decode_negative_quarter[..outgoing.len()]);
+            outgoing.copy_from_slice(&outgoing_samples);
             true
         }));
         decode.blender.commit_join();

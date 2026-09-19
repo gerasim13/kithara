@@ -25,9 +25,9 @@ pub mod error {
     /// The sender half dropped without sending a value.
     #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
     #[display("oneshot channel closed without a value")]
+    #[derive(derive_more::Error)]
+    #[error(ignore)]
     pub struct RecvError;
-
-    impl std::error::Error for RecvError {}
 }
 
 pub use error::RecvError;

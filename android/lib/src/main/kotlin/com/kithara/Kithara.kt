@@ -81,7 +81,7 @@ object Kithara {
         inputPath: String,
         outputPath: String,
         seconds: Int,
-    ): Long
+    )
 
     @JvmStatic
     private external fun nativeProbeAndroidAudio(): Long
@@ -101,21 +101,18 @@ object Kithara {
          * artefacts. A clean WAV implicates the output path; a distorted
          * WAV implicates the decoder / graph compiled for Android.
          *
-         * Requires [initialize] to have been called first. Must run before
-         * any [KitharaPlayer] is constructed in the same process — the
-         * underlying offline backend initialises a process-wide singleton
-         * and panics if a non-offline backend was installed earlier.
+         * Requires [initialize] to have been called first.
          *
-         * @return `0` on success; non-zero error code otherwise.
+         * @throws RuntimeException naming the step that failed.
          */
-        fun runOfflineCapture(inputPath: String, outputPath: String, seconds: Int): Long {
-            return nativeRunOfflineCapture(inputPath, outputPath, seconds)
+        fun runOfflineCapture(inputPath: String, outputPath: String, seconds: Int) {
+            nativeRunOfflineCapture(inputPath, outputPath, seconds)
         }
 
         /**
          * Enumerate cpal default host / output device and log every supported
          * output config. Returns the default sample format code (see
-         * [SampleFormat]) or a negative error code.
+         * [SampleFormat]) and throws when the device cannot be inspected.
          *
          * Used to verify that the format the firewheel graph produces
          * (interleaved f32 stereo) matches what cpal negotiates with the
@@ -125,7 +122,7 @@ object Kithara {
         fun probeAndroidAudio(): Long = nativeProbeAndroidAudio()
 
         /**
-         * Codes mirrored from `FMT_*` constants in `android_test.rs`.
+         * Codes mirrored from the `FMT_*` constants of the native probe.
          * Keep in sync with the Rust side.
          */
         object SampleFormat {
@@ -140,9 +137,6 @@ object Kithara {
             const val U64: Long = 8
             const val F64: Long = 9
             const val OTHER: Long = 10
-            const val ERR_NO_DEVICE: Long = -1
-            const val ERR_DEFAULT_CFG: Long = -2
-            const val ERR_SUPPORTED_CFGS: Long = -3
 
             fun name(code: Long): String = when (code) {
                 F32 -> "F32"
@@ -156,9 +150,6 @@ object Kithara {
                 U64 -> "U64"
                 F64 -> "F64"
                 OTHER -> "OTHER"
-                ERR_NO_DEVICE -> "ERR_NO_DEVICE"
-                ERR_DEFAULT_CFG -> "ERR_DEFAULT_CFG"
-                ERR_SUPPORTED_CFGS -> "ERR_SUPPORTED_CFGS"
                 else -> "UNKNOWN($code)"
             }
         }

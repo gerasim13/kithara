@@ -1,0 +1,26 @@
+[package]
+name = "kithara-android"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Android platform ABI and safe wrappers shared by Kithara crates."
+keywords = ["android", "audio", "mediacodec", "jni"]
+categories = ["multimedia::audio", "os::android-apis"]
+
+[dependencies]
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
+jni = { workspace = true }
+ndk-context = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["hang"] }
+
+[lints]
+workspace = true

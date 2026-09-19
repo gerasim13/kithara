@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -118,7 +118,7 @@ fn load_spec(metadata: &cargo_metadata::Metadata) -> Result<SingleFrameworkSpec>
 }
 
 /// Recursively copy `src` directory to `dst`.
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+fn copy_dir_all(src: &FsPath, dst: &FsPath) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src).with_context(|| format!("read_dir {}", src.display()))? {
         let entry = entry?;
@@ -135,7 +135,10 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct TempWorkDir {
+    #[field(get)]
     path: PathBuf,
 }
 
@@ -151,10 +154,6 @@ impl TempWorkDir {
         ));
         fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
         Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
     }
 }
 
@@ -173,7 +172,7 @@ struct HakariDisableGuard {
 }
 
 impl HakariDisableGuard {
-    fn disable(workspace_root: &Path) -> Result<Self> {
+    fn disable(workspace_root: &FsPath) -> Result<Self> {
         let manifest = workspace_root.join("crates/kithara-workspace-hack/Cargo.toml");
         let lockfile = workspace_root.join("Cargo.lock");
         let original_manifest = fs::read_to_string(&manifest)
@@ -313,7 +312,7 @@ pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
 /// Run `nm` on every slice's static lib and fail if any
 /// software-backend symbol survived linking or the Apple dispatcher
 /// went missing.
-fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig, tools: &ToolsConfig) -> Result<()> {
+fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsConfig) -> Result<()> {
     if !xcframework_dir.is_dir() {
         bail!(
             "xcframework path does not exist or is not a directory: {}",
@@ -401,7 +400,7 @@ fn rust_tool(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn archive_strings(lib: &Path, tools: &ToolsConfig) -> Result<String> {
+fn archive_strings(lib: &FsPath, tools: &ToolsConfig) -> Result<String> {
     let program = tools.program("strings");
     let output = Command::new(program)
         .arg(lib)
@@ -657,9 +656,9 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig, tools: &ToolsConfig
 /// the profile's `lto = "fat"` never touched. A `staticlib`-only unit is the
 /// shape fat LTO accepts; rebuild each slice that way and swap it in.
 fn relink_slices_with_lto(
-    xcframework: &Path,
-    crate_dir: &Path,
-    target_dir: &Path,
+    xcframework: &FsPath,
+    crate_dir: &FsPath,
+    target_dir: &FsPath,
     deployment_target: &str,
     features: &str,
     tools: &ToolsConfig,
@@ -713,8 +712,8 @@ fn relink_slices_with_lto(
 /// return its path. `cargo rustc` overrides the manifest `crate-type`, which
 /// is what lets cargo turn fat LTO on for this unit.
 fn build_slice_staticlib(
-    crate_dir: &Path,
-    target_dir: &Path,
+    crate_dir: &FsPath,
+    target_dir: &FsPath,
     target: &str,
     deployment_target: &str,
     features: &str,
@@ -754,7 +753,7 @@ fn build_slice_staticlib(
     Ok(lib)
 }
 
-fn strip_xcframework(xcframework: &Path, tools: &ToolsConfig) -> Result<()> {
+fn strip_xcframework(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
     require_dir(xcframework)?;
     let program = tools.program("strip");
     for entry in
@@ -781,7 +780,7 @@ fn strip_xcframework(xcframework: &Path, tools: &ToolsConfig) -> Result<()> {
     Ok(())
 }
 
-fn keep_arm64_ios_simulator_only(xcframework: &Path, tools: &ToolsConfig) -> Result<()> {
+fn keep_arm64_ios_simulator_only(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
     let fat = xcframework.join(Consts::IOS_SIMULATOR_FAT_SLICE);
     let thin = xcframework.join(Consts::IOS_SIMULATOR_SLICE);
     if fat.exists() {
@@ -806,7 +805,7 @@ fn keep_arm64_ios_simulator_only(xcframework: &Path, tools: &ToolsConfig) -> Res
     update_ios_simulator_plist(xcframework)
 }
 
-fn update_ios_simulator_plist(xcframework: &Path) -> Result<()> {
+fn update_ios_simulator_plist(xcframework: &FsPath) -> Result<()> {
     let plist = xcframework.join("Info.plist");
     let mut root =
         PlistValue::from_file(&plist).with_context(|| format!("read {}", plist.display()))?;
@@ -846,7 +845,12 @@ fn update_ios_simulator_plist(xcframework: &Path) -> Result<()> {
     plist::to_file_xml(&plist, &root).with_context(|| format!("write {}", plist.display()))
 }
 
-fn zip_dir(parent: &Path, directory_name: &str, output: &Path, tools: &ToolsConfig) -> Result<()> {
+fn zip_dir(
+    parent: &FsPath,
+    directory_name: &str,
+    output: &FsPath,
+    tools: &ToolsConfig,
+) -> Result<()> {
     let source = parent.join(directory_name);
     require_dir(&source)?;
     if output.exists() {
@@ -867,7 +871,7 @@ fn zip_dir(parent: &Path, directory_name: &str, output: &Path, tools: &ToolsConf
     Ok(())
 }
 
-fn swift_checksum(zip: &Path, tools: &ToolsConfig) -> Result<String> {
+fn swift_checksum(zip: &FsPath, tools: &ToolsConfig) -> Result<String> {
     let program = tools.program("swift");
     let output = Command::new(program)
         .args(["package", "compute-checksum"])
@@ -887,12 +891,12 @@ fn swift_checksum(zip: &Path, tools: &ToolsConfig) -> Result<String> {
 struct ArchBuild<'a> {
     module: &'a str,
     triple: &'a str,
-    sdk: &'a Path,
-    module_map: &'a Path,
-    rust_lib: &'a Path,
-    out: &'a Path,
+    sdk: &'a FsPath,
+    module_map: &'a FsPath,
+    rust_lib: &'a FsPath,
+    out: &'a FsPath,
     module_triple: &'a str,
-    rx_out: &'a Path,
+    rx_out: &'a FsPath,
 }
 
 /// Build ONE self-contained `Kithara.xcframework`.
@@ -955,7 +959,7 @@ fn run_single(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
 
 /// Resolve the pinned `RxSwift` checkout via `SwiftPM` (the merged module imports
 /// `RxSwift`, so its module must exist at compile time).
-fn resolve_rxswift(root: &Path, tools: &ToolsConfig) -> Result<PathBuf> {
+fn resolve_rxswift(root: &FsPath, tools: &ToolsConfig) -> Result<PathBuf> {
     println!("==> Resolving RxSwift via SwiftPM");
     let program = tools.program("swift");
     let status = Command::new(program)
@@ -975,7 +979,7 @@ fn resolve_rxswift(root: &Path, tools: &ToolsConfig) -> Result<PathBuf> {
 }
 
 /// Copy + transform the three Swift layers into one single-module directory.
-fn merge_sources(apple_dir: &Path, merged: &Path, autolink: &[String]) -> Result<()> {
+fn merge_sources(apple_dir: &FsPath, merged: &FsPath, autolink: &[String]) -> Result<()> {
     let ffi = apple_dir.join("Sources/KitharaFFI/KitharaFFI.swift");
     let content = fs::read_to_string(&ffi).with_context(|| format!("read {}", ffi.display()))?;
     fs::write(merged.join("KitharaFFI.swift"), transform_ffi(&content)?)?;
@@ -989,7 +993,7 @@ fn merge_sources(apple_dir: &Path, merged: &Path, autolink: &[String]) -> Result
             if name.to_str() == Some("DrmSalt.swift") {
                 continue;
             }
-            fs::write(merged.join(Path::new(name)), transform_layer(&content)?)?;
+            fs::write(merged.join(FsPath::new(name)), transform_layer(&content)?)?;
         }
     }
 
@@ -1074,11 +1078,11 @@ fn transform_layer(src: &str) -> Result<String> {
 /// Compile the merged module per arch, merge the Rust slice in, and assemble
 /// the final `XCFramework`.
 fn build_single_xcframework(
-    merged: &Path,
-    internal: &Path,
-    rx_src: &Path,
-    work: &Path,
-    out: &Path,
+    merged: &FsPath,
+    internal: &FsPath,
+    rx_src: &FsPath,
+    work: &FsPath,
+    out: &FsPath,
     spec: &SingleFrameworkSpec,
     tools: &ToolsConfig,
 ) -> Result<()> {
@@ -1172,9 +1176,9 @@ fn build_arch(
 /// its own `RxSwift`; this only resolves the module at compile time).
 fn build_rxswift(
     triple: &str,
-    sdk: &Path,
+    sdk: &FsPath,
     rx_files: &[PathBuf],
-    rx_out: &Path,
+    rx_out: &FsPath,
     tools: &ToolsConfig,
 ) -> Result<()> {
     let mut cmd = Command::new(tools.program("xcrun"));
@@ -1242,9 +1246,9 @@ fn build_merged(arch: &ArchBuild, msrc: &[PathBuf], tools: &ToolsConfig) -> Resu
 
 /// Merge the Swift static lib and the Rust static lib into one archive.
 fn libtool_merge(
-    swift_lib: &Path,
-    rust_lib: &Path,
-    out_lib: &Path,
+    swift_lib: &FsPath,
+    rust_lib: &FsPath,
+    out_lib: &FsPath,
     tools: &ToolsConfig,
 ) -> Result<()> {
     let program = tools.program("libtool");
@@ -1259,9 +1263,9 @@ fn libtool_merge(
 
 /// Assemble a `.framework` for one platform from one or more arch slices.
 fn assemble_framework(
-    fw_dir: &Path,
+    fw_dir: &FsPath,
     platform: &str,
-    slices: &[&Path],
+    slices: &[&FsPath],
     spec: &SingleFrameworkSpec,
     tools: &ToolsConfig,
 ) -> Result<()> {
@@ -1312,7 +1316,7 @@ fn assemble_framework(
 }
 
 /// Bundle the per-platform `.framework`s into the final `XCFramework`.
-fn create_xcframework(frameworks: &[&Path], out: &Path, tools: &ToolsConfig) -> Result<()> {
+fn create_xcframework(frameworks: &[&FsPath], out: &FsPath, tools: &ToolsConfig) -> Result<()> {
     let mut cmd = Command::new(tools.program("xcodebuild"));
     cmd.arg("-create-xcframework");
     for fw in frameworks {
@@ -1328,7 +1332,7 @@ fn create_xcframework(frameworks: &[&Path], out: &Path, tools: &ToolsConfig) -> 
 /// not appear in any public `.swiftinterface` (proof the C-module scaffolding
 /// was fully demoted), and at least one `open class` must be present (proof
 /// the single-module build kept subclassable types).
-fn verify_single(out: &Path) -> Result<()> {
+fn verify_single(out: &FsPath) -> Result<()> {
     let interfaces = public_swiftinterfaces(out)?;
     if interfaces.is_empty() {
         bail!("no public swiftinterfaces found under {}", out.display());
@@ -1377,28 +1381,28 @@ fn sdk_path(sdk: &str, tools: &ToolsConfig) -> Result<PathBuf> {
 }
 
 /// Extract a single arch from a fat static lib.
-fn lipo_create(thin: &[PathBuf], out: &Path, tools: &ToolsConfig) -> Result<()> {
+fn lipo_create(thin: &[PathBuf], out: &FsPath, tools: &ToolsConfig) -> Result<()> {
     let program = tools.program("lipo");
     let mut cmd = Command::new(program);
     cmd.arg("-create").args(thin).arg("-output").arg(out);
     run_quiet(&mut cmd, &format!("{program} create"))
 }
 
-fn lipo_thin(fat: &Path, arch: &str, out: &Path, tools: &ToolsConfig) -> Result<()> {
+fn lipo_thin(fat: &FsPath, arch: &str, out: &FsPath, tools: &ToolsConfig) -> Result<()> {
     let program = tools.program("lipo");
     let mut cmd = Command::new(program);
     cmd.arg(fat).arg("-thin").arg(arch).arg("-output").arg(out);
     run_quiet(&mut cmd, &format!("{program} thin"))
 }
 
-fn require_dir(path: &Path) -> Result<()> {
+fn require_dir(path: &FsPath) -> Result<()> {
     if !path.is_dir() {
         bail!("required directory is missing: {}", path.display());
     }
     Ok(())
 }
 
-fn require_file(path: &Path) -> Result<()> {
+fn require_file(path: &FsPath) -> Result<()> {
     if !path.is_file() {
         bail!("required file is missing: {}", path.display());
     }
@@ -1406,7 +1410,7 @@ fn require_file(path: &Path) -> Result<()> {
 }
 
 /// Top-level `.swift` files in `dir`, sorted.
-fn swift_files(dir: &Path) -> Result<Vec<PathBuf>> {
+fn swift_files(dir: &FsPath) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let path = entry?.path();
@@ -1419,21 +1423,21 @@ fn swift_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// All `.swift` files under `dir` (recursive), sorted.
-fn swift_files_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+fn swift_files_recursive(dir: &FsPath) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_swift(dir, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn public_swiftinterfaces(dir: &Path) -> Result<Vec<PathBuf>> {
+fn public_swiftinterfaces(dir: &FsPath) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_public_swiftinterfaces(dir, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_swift(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_swift(dir: &FsPath, files: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let path = entry?.path();
         if path.is_dir() {
@@ -1445,7 +1449,7 @@ fn collect_swift(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn collect_public_swiftinterfaces(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_public_swiftinterfaces(dir: &FsPath, files: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let path = entry?.path();
         if path.is_dir() {
@@ -1465,7 +1469,7 @@ fn collect_public_swiftinterfaces(dir: &Path, files: &mut Vec<PathBuf>) -> Resul
 
 /// Write the single-platform `.framework` `Info.plist` via the `plist`
 /// crate (typed struct -> XML), driven entirely by the spec.
-fn write_info_plist(path: &Path, platform: &str, spec: &SingleFrameworkSpec) -> Result<()> {
+fn write_info_plist(path: &FsPath, platform: &str, spec: &SingleFrameworkSpec) -> Result<()> {
     let info = FrameworkInfoPlist {
         executable: spec.framework_name.clone(),
         identifier: spec.bundle_id.clone(),
@@ -1674,7 +1678,7 @@ fn open_simulator_app() {
     let _ = Command::new("open").args(["-a", "Simulator"]).status();
 }
 
-fn locate_built_app(demo_dir: &Path, scheme: &str, configuration: &str) -> Result<PathBuf> {
+fn locate_built_app(demo_dir: &FsPath, scheme: &str, configuration: &str) -> Result<PathBuf> {
     let products_dir = demo_dir
         .join("build/DerivedData/Build/Products")
         .join(format!("{configuration}-iphonesimulator"));
@@ -1702,7 +1706,7 @@ fn locate_built_app(demo_dir: &Path, scheme: &str, configuration: &str) -> Resul
     )
 }
 
-fn first_existing_app(products_dir: &Path, scheme: &str) -> Option<PathBuf> {
+fn first_existing_app(products_dir: &FsPath, scheme: &str) -> Option<PathBuf> {
     // Match the `*_iOS` / `*_macOS` xcodegen split: scheme suffix is
     // dropped to recover the PRODUCT_NAME most projects use.
     let stripped = scheme
@@ -1793,8 +1797,9 @@ public struct FfiConverterTypeTrackId {
     /// the hoist cannot smuggle a literal past the first census.
     #[test]
     fn every_process_this_module_starts_has_a_declared_owner() {
-        let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/apple.rs"))
-            .expect("this source is readable");
+        let source =
+            fs::read_to_string(FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/apple.rs"))
+                .expect("this source is readable");
         let (production, _) = source
             .split_once("\n#[cfg(test)]")
             .expect("this source carries a test module to cut the production half at");

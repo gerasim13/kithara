@@ -180,6 +180,9 @@ impl PeakLimiter {
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
 
         let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        // WHY: The interval behind frame 0 was last judged against a held tail. The samples
+        // that actually followed are in this block, so it is judged again rather than taken
+        // from the cache.
         self.shared_valid = false;
 
         for frame in 0..frames {

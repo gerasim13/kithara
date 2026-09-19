@@ -84,18 +84,34 @@ final class MySeekCallback: SeekCallback, @unchecked Sendable {
 }
 ```
 
-### Network and runtime DRM (HLS-AES)
+### Network and DRM (HLS-AES)
+
+Key rules, the auth token and the crossfade window belong in `Config` so the
+player starts in the state you want. The runtime hooks `setupHlsAes`,
+`setupNetwork` and `crossfadeDuration` still exist and share the same
+implementation; the constructor applies `Config` through them.
 
 ```swift
-player.setupNetwork(authToken: "<token>")
-player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
+final class SaltedCipher: KeyProcessor, @unchecked Sendable {
+    let cipherKey: String
 
-player.setupHlsAes { encryptedKey, salt in
-    // The player generates `salt` and attaches it to every outgoing request
-    // under `X-Encrypted-Key`. Build the cipher from the same salt so it
-    // matches the server's encryption.
-    Cipher(key: cipherKey + salt).decrypt(encryptedKey)
+    init(cipherKey: String) { self.cipherKey = cipherKey }
+
+    // The rule's `salt` is attached to every outgoing request under
+    // `X-Encrypted-Key`. Build the cipher from the same salt so it matches
+    // the server's encryption.
+    func processKey(_ key: Data, salt: String) -> Data {
+        Cipher(key: cipherKey + salt).decrypt(key)
+    }
 }
+
+let player = KitharaPlayer(
+    config: KitharaPlayer.Config(
+        keyRules: [.wildcard(processor: SaltedCipher(cipherKey: cipherKey))],
+        authToken: "<token>"
+    )
+)
+player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
 ```
 
 ### Events

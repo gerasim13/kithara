@@ -1,5 +1,6 @@
+#[cfg(feature = "library")]
+use std::io::Cursor;
 use std::{
-    io::Cursor,
     num::{NonZeroU32, NonZeroUsize},
     sync::{Mutex, OnceLock, PoisonError},
 };
@@ -11,10 +12,14 @@ use kithara_analysis::{
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
 };
-use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
+use kithara_decode::TrackMetadata;
+#[cfg(feature = "library")]
+use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
 use kithara_events::EventBus;
 use kithara_platform::{thread, time::Duration};
-use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
+#[cfg(feature = "library")]
+use kithara_resampler::NoResamplerBackend;
+use kithara_resampler::rubato::RubatoBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 
@@ -39,6 +44,7 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
     analyze(reader).0
 }
 
+#[cfg(feature = "library")]
 pub(in crate::defs) fn beat_encoded(bytes: &[u8], hint: &str) -> (BeatArtifact, u64) {
     let reader =
         PcmReader::decode(bytes, hint).unwrap_or_else(|error| panic!("library {hint}: {error}"));
@@ -145,6 +151,7 @@ impl PcmReader {
         })
     }
 
+    #[cfg(feature = "library")]
     fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
         let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
             .pools(pools())

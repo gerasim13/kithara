@@ -4,6 +4,7 @@
 
 mod chunk;
 mod error;
+mod fader;
 mod interleaved;
 mod planar;
 mod sample;
@@ -18,6 +19,7 @@ pub use chunk::{
     render_warp_map_revision,
 };
 pub use error::SignalError;
+pub use fader::FaderValue;
 pub use interleaved::InterleavedView;
 pub use planar::{PlanarBuffer, PlanarView};
 pub use sample::sanitize_sample;

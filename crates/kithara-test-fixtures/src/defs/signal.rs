@@ -1,3 +1,5 @@
+#![cfg(feature = "signal")]
+
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 

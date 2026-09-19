@@ -13,6 +13,7 @@ use super::{
 use crate::resource::ReadSide;
 
 /// Read view over a resource that exposes bytes only after processing completes.
+#[derive_where::derive_where(Clone; R: Clone)]
 pub struct ProcessedReader<R, S> {
     readiness: Arc<ReadinessGate>,
     gate_poll_interval: Duration,
@@ -20,22 +21,6 @@ pub struct ProcessedReader<R, S> {
     pools: PoolRegion<S>,
     inner: R,
     chunk_size: usize,
-}
-
-impl<R, S> Clone for ProcessedReader<R, S>
-where
-    R: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            readiness: Arc::clone(&self.readiness),
-            pools: self.pools.clone(),
-            chunk_size: self.chunk_size,
-            gate_poll_interval: self.gate_poll_interval,
-            processor: self.processor.clone(),
-            inner: self.inner.clone(),
-        }
-    }
 }
 
 impl<R: fmt::Debug, S> fmt::Debug for ProcessedReader<R, S> {

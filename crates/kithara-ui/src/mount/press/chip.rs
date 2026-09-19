@@ -1,18 +1,14 @@
 use bon::Builder;
 
-use crate::{ids::InternId, module::ChipStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{ids::InternId, module::ChipStyle};
 
 /// A small labelled toggle that reads as a tag.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.chip.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Chip {
     pub(crate) style: ChipStyle,
     pub(crate) label: InternId,
-}
-
-impl Control for Chip {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.chip.size
-    }
 }
 
 #[cfg(feature = "render")]

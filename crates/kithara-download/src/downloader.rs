@@ -27,15 +27,10 @@ use crate::RequestId;
 /// protocol configs. Owns the [`HttpClient`] and the runtime handle.
 /// Protocols obtain a [`PeerHandle`] via [`register`](Self::register) and
 /// issue fetches through [`PeerHandle::execute`].
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
 pub struct Downloader {
+    #[debug(skip)]
     inner: Arc<DownloaderInner>,
-}
-
-impl std::fmt::Debug for Downloader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Downloader").finish_non_exhaustive()
-    }
 }
 
 /// Peer registration entry sent to the download loop.

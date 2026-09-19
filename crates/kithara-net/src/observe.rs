@@ -14,11 +14,6 @@ pub trait NetObserver: Send + Sync {
     fn retrying(&self, _attempt: u32, _max_retries: u32, _error: &NetError, _backoff: Duration) {}
 }
 
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
+#[debug("Observer")]
 pub struct Observer(pub Arc<dyn NetObserver>);
-
-impl std::fmt::Debug for Observer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Observer").finish()
-    }
-}

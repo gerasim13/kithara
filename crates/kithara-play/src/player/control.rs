@@ -9,7 +9,7 @@ use kithara_warp::AssetFrame;
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig, SessionDuckingMode, bridge::RtMetricsSnapshot,
+    ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -17,16 +17,9 @@ use crate::{
 /// The handle deliberately excludes beat-grid identity, synchronization
 /// topology, and engine/session getters. Closing the resident player
 /// invalidates every outstanding clone through the shared runtime gate.
+#[derive_where::derive_where(Clone)]
 pub struct PlayerControl<S> {
     runtime: Arc<PlayerRuntime<S>>,
-}
-
-impl<S> Clone for PlayerControl<S> {
-    fn clone(&self) -> Self {
-        Self {
-            runtime: Arc::clone(&self.runtime),
-        }
-    }
 }
 
 impl<S> PlayerControl<S>
@@ -156,9 +149,9 @@ where
     }
 
     /// Apply a completed selection through the resident player runtime.
-    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+    pub fn select_item(&self, index: usize, playback: SelectionPlayback) -> Result<(), PlayError> {
         self.runtime
-            .with_open_result(|runtime| runtime.select_item(index, autoplay))
+            .with_open_result(|runtime| runtime.select_item(index, playback))
     }
 
     /// Apply a completed selection through the resident player runtime.

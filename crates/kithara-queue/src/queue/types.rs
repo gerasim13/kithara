@@ -4,8 +4,8 @@ use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 #[cfg(test)]
 use kithara_play::PlaybackShared;
-use kithara_play::ResourceSrc;
 pub use kithara_play::player::PlaybackView;
+use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
 
 use crate::track::TrackSource;
 
@@ -28,18 +28,21 @@ pub enum Transition {
     /// Use the player's configured crossfade duration.
     Crossfade,
     /// Use an explicit crossfade duration (seconds).
-    CrossfadeWith { seconds: f32 },
+    CrossfadeWith { settings: CrossfadeSettings },
 }
 
 impl Transition {
     /// Resolve the transition to an actual crossfade duration in
     /// seconds using `default` for [`Transition::Crossfade`].
     #[must_use]
-    pub const fn crossfade_seconds(self, default: f32) -> f32 {
+    pub const fn settings(self, default: CrossfadeSettings) -> CrossfadeSettings {
         match self {
-            Self::None => 0.0,
+            Self::None => CrossfadeSettings {
+                duration: 0.0,
+                ..default
+            },
             Self::Crossfade => default,
-            Self::CrossfadeWith { seconds } => seconds,
+            Self::CrossfadeWith { settings } => settings,
         }
     }
 }
@@ -49,9 +52,9 @@ impl Transition {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PendingSelect {
     pub(super) id: TrackId,
-    pub(super) transition: Transition,
-    pub(super) reason: crate::event::AdvanceReason,
-    pub(super) autoplay: bool,
+    pub(super) settings: CrossfadeSettings,
+    pub(super) playback: SelectionPlayback,
+    pub(super) reason: crate::AdvanceReason,
 }
 
 /// Crossfade-arm coordination state. Replaces the `u64::MAX` sentinel
@@ -124,13 +127,15 @@ impl AtomicTrackId {
     const NONE_BITS: u64 = u64::MAX;
 
     /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`.
-    pub(super) fn arm_if_disarmed(&self, track: TrackId) {
-        let _ = self.0.compare_exchange(
-            Self::NONE_BITS,
-            track.as_u64(),
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+    pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
+        self.0
+            .compare_exchange(
+                Self::NONE_BITS,
+                track.as_u64(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
@@ -398,19 +403,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn select_phase_pending_carries_transition() {
+    fn select_phase_pending_carries_captured_policy() {
         let phase = SelectPhase::Pending(PendingSelect {
             id: TrackId(5),
-            transition: Transition::None,
-            reason: crate::event::AdvanceReason::UserSelect,
-            autoplay: true,
+            settings: CrossfadeSettings {
+                duration: 0.0,
+                ..CrossfadeSettings::default()
+            },
+            playback: SelectionPlayback::Play,
+            reason: crate::AdvanceReason::UserSelect,
         });
         match phase {
             SelectPhase::Pending(p) => {
                 assert_eq!(p.id, TrackId(5));
-                assert_eq!(p.transition, Transition::None);
-                assert_eq!(p.reason, crate::event::AdvanceReason::UserSelect);
-                assert!(p.autoplay);
+                assert_eq!(p.settings.duration, 0.0);
+                assert_eq!(p.playback, SelectionPlayback::Play);
+                assert_eq!(p.reason, crate::AdvanceReason::UserSelect);
             }
             SelectPhase::Idle => panic!("expected Pending"),
         }

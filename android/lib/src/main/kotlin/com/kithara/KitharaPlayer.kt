@@ -2,11 +2,15 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiActionAtItemEnd
+import com.kithara.ffi.FfiCrossfadeCurve
+import com.kithara.ffi.FfiCrossfadeSettings
 import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
 import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
+import com.kithara.ffi.FfiPlaybackOrder
 import com.kithara.ffi.FfiPlayerStatus
 import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
@@ -55,6 +59,11 @@ class KitharaPlayer(config: Config = Config()) {
         val keyRules: List<KeyRule> = emptyList(),
         /** Shared asset store used by every item created by this player. */
         val store: AssetStore = Kithara.defaultStore,
+        val authToken: String = "",
+        val playingRate: Float = 1.0f,
+        val playbackOrder: PlaybackOrder = PlaybackOrder.Sequential,
+        val actionAtItemEnd: ActionAtItemEnd = ActionAtItemEnd.Advance,
+        val crossfadeSettings: CrossfadeSettings = CrossfadeSettings(),
     )
 
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
@@ -99,7 +108,11 @@ class KitharaPlayer(config: Config = Config()) {
      * the iOS `AudioPlayerProtocol.currentAudioItem`.
      */
     val currentAudioItem: KitharaPlayerItem?
-        get() = inner.currentItem()?.let { KitharaPlayerItem(it) }
+        get() {
+            val ffiItem = inner.currentItem() ?: return null
+            val id = ffiItem.audioId().toString()
+            return state.value.items.firstOrNull { it.id == id }
+        }
 
     /** Last loaded ranges reported by the underlying resource. */
     val loadedRanges: List<ItemLoadedRange>
@@ -109,9 +122,9 @@ class KitharaPlayer(config: Config = Config()) {
     val error: KitharaError?
         get() = state.value.error
 
-    /** Current queue in native order. */
+    /** Current queue snapshot. */
     val items: List<KitharaPlayerItem>
-        get() = inner.items().map { KitharaPlayerItem(it) }
+        get() = state.value.items
 
     /**
      * Target playback speed used by [play]. While the player is
@@ -124,12 +137,19 @@ class KitharaPlayer(config: Config = Config()) {
             inner.setPlayingRate(value)
         }
 
-    /** Crossfade duration in seconds applied on item transitions. */
-    var crossfadeDuration: Float
-        get() = inner.crossfadeDuration()
+    var crossfadeSettings: CrossfadeSettings
+        get() = inner.crossfadeSettings().toPublic()
         set(value) {
-            inner.setCrossfadeDuration(value)
+            inner.setCrossfadeSettings(value.toFfi())
         }
+
+    var playbackOrder: PlaybackOrder
+        get() = inner.playbackOrder().toPublic()
+        set(value) { inner.setPlaybackOrder(value.toFfi()) }
+
+    var actionAtItemEnd: ActionAtItemEnd
+        get() = inner.actionAtItemEnd().toPublic()
+        set(value) { inner.setActionAtItemEnd(value.toFfi()) }
 
     /** Volume scalar, usually 0.0 to 1.0. */
     var volume: Float
@@ -161,6 +181,7 @@ class KitharaPlayer(config: Config = Config()) {
      */
     fun stop() {
         inner.stop()
+        updateState { current -> current.copy(items = emptyList()) }
     }
 
     /**
@@ -208,8 +229,18 @@ class KitharaPlayer(config: Config = Config()) {
      * Skip to the next item in the queue. No-op if already on the last
      * item or the queue is empty.
      */
-    fun advanceToNextItem() {
-        inner.advanceToNextItem()
+    @Throws(KitharaError::class)
+    fun next() {
+        try { inner.advanceToNextItem() } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    @Throws(KitharaError::class)
+    fun previous() {
+        try { inner.returnToPreviousItem() } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
     }
 
     /**
@@ -229,11 +260,14 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Register a runtime DRM key processor on every host (default
-     * `"*"` wildcard).
+     * Register a runtime DRM key decryptor on every host (default
+     * `"*"` wildcard). The lambda receives the encrypted key bytes
+     * plus the player-generated salt that was attached to outgoing
+     * requests under `X-Encrypted-Key`. Returning `null` preserves
+     * the input ciphertext unchanged.
      */
-    fun setupHlsAes(processor: KeyProcessor) {
-        inner.setupHlsAes(KeyProcessorBridge(processor))
+    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
+        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
     }
 
     /**
@@ -263,23 +297,15 @@ class KitharaPlayer(config: Config = Config()) {
     }
 
     /**
-     * Inserts an item after [after], or at the head of the queue when
-     * [after] is null. Use [append] to add to the tail.
+     * Inserts an item into the queue.
      */
     @Throws(KitharaError::class)
     fun insert(item: KitharaPlayerItem, after: KitharaPlayerItem? = null) {
         try {
             inner.insert(item.inner, after?.inner)
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
-        }
-    }
-
-    /** Adds an item to the tail of the queue. */
-    @Throws(KitharaError::class)
-    fun append(item: KitharaPlayerItem) {
-        try {
-            inner.append(item.inner)
+            updateState { current ->
+                current.copy(items = current.items.inserted(item, after))
+            }
         } catch (error: FfiException) {
             throw KitharaError.fromFfi(error)
         }
@@ -290,6 +316,9 @@ class KitharaPlayer(config: Config = Config()) {
     fun remove(item: KitharaPlayerItem) {
         try {
             inner.remove(item.inner)
+            updateState { current ->
+                current.copy(items = current.items.filterNot { queued -> queued.id == item.id })
+            }
         } catch (error: FfiException) {
             throw KitharaError.fromFfi(error)
         }
@@ -298,24 +327,29 @@ class KitharaPlayer(config: Config = Config()) {
     /** Clears the queue. */
     fun removeAllItems() {
         inner.removeAllItems()
+        updateState { current -> current.copy(items = emptyList()) }
     }
 
-    /** Select the item at the given position of [items]. */
+    /**
+     * Select an item at the given queue index.
+     */
     @Throws(KitharaError::class)
     fun selectItem(at: Int, transition: Transition = Transition.None) {
-        val item = items.getOrNull(at)
-            ?: throw KitharaError.InvalidArgument("item index $at out of range")
-        selectItem(item, transition)
+        try {
+            inner.selectItem(at.toUInt(), transition.toFfi())
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
     }
 
     /** Select an item by identity (AVQueuePlayer-style). */
     @Throws(KitharaError::class)
     fun selectItem(item: KitharaPlayerItem, transition: Transition = Transition.None) {
-        try {
-            inner.select(item.inner, transition.toFfi())
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
+        val idx = items.indexOfFirst { queued -> queued.id == item.id }
+        if (idx < 0) {
+            throw KitharaError.InvalidArgument("item ${item.id} not in queue")
         }
+        selectItem(at = idx, transition = transition)
     }
 
     private fun updateState(update: (PlayerState) -> PlayerState) {
@@ -362,6 +396,15 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.QueueEnded ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
+            is FfiPlayerEvent.CrossfadeSettingsChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.CrossfadeSettingsChanged(event.settings.toPublic()))
+
+            is FfiPlayerEvent.PlaybackOrderChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.PlaybackOrderChanged(event.order.toPublic()))
+
+            is FfiPlayerEvent.ActionAtItemEndChanged ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.ActionAtItemEndChanged(event.action.toPublic()))
+
             // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
             is FfiPlayerEvent.ItemDidFail,
             is FfiPlayerEvent.TimeControlStatusChanged,
@@ -369,7 +412,6 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.CrossfadeDurationChanged,
             is FfiPlayerEvent.TrackAdded,
             is FfiPlayerEvent.TrackRemoved,
             is FfiPlayerEvent.TrackLoadFailed,
@@ -427,7 +469,39 @@ private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
 private fun Transition.toFfi(): FfiTransition = when (this) {
     is Transition.None -> FfiTransition.None
     is Transition.Crossfade -> FfiTransition.Crossfade
-    is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(seconds)
+    is Transition.CrossfadeWith -> FfiTransition.CrossfadeWith(settings.toFfi())
+}
+
+private fun CrossfadeSettings.toFfi() = FfiCrossfadeSettings(duration, curve.toFfi(), depth, position)
+private fun FfiCrossfadeSettings.toPublic() = CrossfadeSettings(duration, curve.toPublic(), depth, position)
+private fun CrossfadeCurve.toFfi() = when (this) {
+    CrossfadeCurve.Linear -> FfiCrossfadeCurve.LINEAR
+    CrossfadeCurve.EqualPower -> FfiCrossfadeCurve.EQUAL_POWER
+}
+private fun FfiCrossfadeCurve.toPublic() = when (this) {
+    FfiCrossfadeCurve.LINEAR -> CrossfadeCurve.Linear
+    FfiCrossfadeCurve.EQUAL_POWER -> CrossfadeCurve.EqualPower
+    FfiCrossfadeCurve.UNKNOWN -> throw IllegalStateException("unknown crossfade curve")
+}
+private fun PlaybackOrder.toFfi() = when (this) {
+    PlaybackOrder.Sequential -> FfiPlaybackOrder.SEQUENTIAL
+    PlaybackOrder.Shuffle -> FfiPlaybackOrder.SHUFFLE
+}
+private fun FfiPlaybackOrder.toPublic() = when (this) {
+    FfiPlaybackOrder.SEQUENTIAL -> PlaybackOrder.Sequential
+    FfiPlaybackOrder.SHUFFLE -> PlaybackOrder.Shuffle
+    FfiPlaybackOrder.UNKNOWN -> throw IllegalStateException("unknown playback order")
+}
+private fun ActionAtItemEnd.toFfi() = when (this) {
+    ActionAtItemEnd.Advance -> FfiActionAtItemEnd.ADVANCE
+    ActionAtItemEnd.Pause -> FfiActionAtItemEnd.PAUSE
+    ActionAtItemEnd.None -> FfiActionAtItemEnd.NONE
+}
+private fun FfiActionAtItemEnd.toPublic() = when (this) {
+    FfiActionAtItemEnd.ADVANCE -> ActionAtItemEnd.Advance
+    FfiActionAtItemEnd.PAUSE -> ActionAtItemEnd.Pause
+    FfiActionAtItemEnd.NONE -> ActionAtItemEnd.None
+    FfiActionAtItemEnd.UNKNOWN -> throw IllegalStateException("unknown item-end action")
 }
 
 /**
@@ -438,13 +512,20 @@ private fun Transition.toFfi(): FfiTransition = when (this) {
  * cipher can ignore the argument; implementations that derive the
  * cipher per-session should rebuild it from `salt` on every call.
  */
-interface KeyProcessor {
+fun interface KeyProcessor {
     fun processKey(key: ByteArray, salt: String): ByteArray
 }
 
 private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
     override fun processKey(key: ByteArray, salt: String): ByteArray =
         processor.processKey(key, salt)
+}
+
+private class ClosureKeyProcessorBridge(
+    private val decrypt: (ByteArray, String) -> ByteArray?,
+) : FfiKeyProcessor {
+    override fun processKey(key: ByteArray, salt: String): ByteArray =
+        decrypt(key, salt) ?: key
 }
 
 internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
@@ -461,6 +542,28 @@ internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
+        authToken = authToken,
+        playingRate = playingRate,
+        playbackOrder = playbackOrder.toFfi(),
+        actionAtItemEnd = actionAtItemEnd.toFfi(),
+        crossfadeSettings = crossfadeSettings.toFfi(),
     )
 }
 
+private fun List<KitharaPlayerItem>.inserted(
+    item: KitharaPlayerItem,
+    after: KitharaPlayerItem?,
+): List<KitharaPlayerItem> = buildList {
+    addAll(this@inserted)
+    if (after == null) {
+        add(item)
+        return@buildList
+    }
+
+    val index = indexOfFirst { queued -> queued.id == after.id }
+    if (index >= 0) {
+        add(index + 1, item)
+    } else {
+        add(item)
+    }
+}

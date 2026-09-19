@@ -4,10 +4,8 @@ use std::{
     sync::atomic::Ordering,
 };
 
-use bon::Builder;
 use firewheel::{
     StreamInfo,
-    dsp::fade::FadeCurve,
     event::ProcEvents,
     node::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
@@ -26,6 +24,7 @@ use smallvec::SmallVec;
 
 use super::{context::read_render_context, track::PlayerTrack};
 use crate::{
+    CrossfadeSettings,
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
@@ -33,43 +32,11 @@ use crate::{
     session::SessionError,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) enum CrossfadeCurve {
-    #[default]
-    EqualPower,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ContextRequirement {
     #[default]
     Standalone,
     Session,
-}
-
-const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
-    match curve {
-        CrossfadeCurve::EqualPower => FadeCurve::SquareRoot,
-    }
-}
-
-#[derive(Clone, Debug, Builder)]
-pub(crate) struct CrossfadeSettings {
-    #[builder(default)]
-    pub(crate) curve: CrossfadeCurve,
-    #[builder(default = 1.0)]
-    pub(crate) duration: f32,
-}
-
-impl Default for CrossfadeSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-impl CrossfadeSettings {
-    pub(crate) const fn fade_curve(&self) -> FadeCurve {
-        map_curve(self.curve)
-    }
 }
 
 /// The realtime audio processor for the player node.

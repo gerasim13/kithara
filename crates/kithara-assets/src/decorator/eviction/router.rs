@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    fmt,
-};
+use std::collections::{HashMap, hash_map::Entry};
 
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -47,15 +44,10 @@ impl RouterState {
 }
 
 /// Per-`asset_root` eviction fanout.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, derive_more::Debug)]
 pub(crate) struct EvictionRouter {
+    #[debug(skip)]
     state: Arc<Mutex<RouterState>>,
-}
-
-impl fmt::Debug for EvictionRouter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EvictionRouter").finish_non_exhaustive()
-    }
 }
 
 impl EvictionRouter {

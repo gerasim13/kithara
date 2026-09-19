@@ -1,7 +1,5 @@
 #[cfg(target_os = "android")]
 pub(crate) mod android;
-#[cfg(all(target_os = "android", feature = "test"))]
-pub(crate) mod android_test;
 pub mod asset;
 pub(crate) mod bridge;
 pub mod cipher;

@@ -1,3 +1,6 @@
+//! Each family gates itself at the head of its own file: a family that is off
+//! registers nothing, so the build script has nothing to materialize.
+
 mod encoded;
 mod hls;
 mod hls_inputs;

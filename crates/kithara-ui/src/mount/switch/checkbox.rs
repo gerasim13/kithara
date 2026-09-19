@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// A square switch bound to one boolean endpoint.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.checkbox.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Checkbox;
-
-impl Control for Checkbox {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.checkbox.size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

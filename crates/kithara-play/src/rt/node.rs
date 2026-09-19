@@ -19,6 +19,7 @@ use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 /// Commands (load, unload, seek, pause, fade) are sent through channels stored
 /// in the node. Only `active` participates in Firewheel parameter updates.
 #[derive(Diff)]
+#[derive_where::derive_where(Clone)]
 pub struct PlayerNode<S> {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
@@ -58,18 +59,6 @@ impl<S> Patch for PlayerNode<S> {
         match path {
             [0, tail @ ..] => Ok(PlayerNodePatch::Active(bool::patch(data, tail)?)),
             _ => Err(PatchError::InvalidPath),
-        }
-    }
-}
-
-impl<S> Clone for PlayerNode<S> {
-    fn clone(&self) -> Self {
-        Self {
-            active: self.active,
-            inputs: Arc::clone(&self.inputs),
-            gate_smoothing: self.gate_smoothing,
-            pools: self.pools.clone(),
-            context_requirement: self.context_requirement,
         }
     }
 }

@@ -1,48 +1,19 @@
 use crate::{
     atoms::{
-        bar::{
-            brand::Brand,
-            context::{Context, Viewed},
-            divider::Divider,
-            preset::{Preset, PresetData},
-            settings::Settings,
-            spacer::Spacer,
-        },
+        bar::preset::{Preset, PresetData},
         button::{Button, ButtonLabel, VisualState},
-        chip::Chip,
-        deck::{
-            clock::{Clock, Elapsed},
-            summary::{Loaded, Summary},
-            tempo::{Reading as Beat, Tempo},
-        },
+        deck::summary::{Loaded, Summary},
         design::{
-            cell::Cell,
-            crossfader::Crossfader,
             fader::Fader,
-            meter::Meter,
-            segmented::{Segmented, SegmentedData},
-            select::Select,
             status_dot::{StatusDot, StatusDotData},
-            swatch::Swatch,
         },
-        icon::glyph::{Glyph, GlyphData},
-        knob::Knob,
         label::telemetry::Telemetry,
-        meter::StereoMeter,
-        nav_item::NavItem,
-        pivot::{
-            map::{PortalMap, PortalMapData},
-            range::Range,
-        },
-        readout::{Readout, ReadoutData},
         tab::TabLarge,
-        toggle::Binary,
-        vu::VerticalVu,
         wave::face::{Drawn, Wave},
     },
     draw::{DrawListBuilder, Rect},
     interact::Hit,
-    render::{Mark, ScalarRange, StereoLevels},
+    render::Mark,
     shaping::TextContext,
     solve::{Length, Size, length},
 };
@@ -133,21 +104,6 @@ pub(crate) struct Labelled {
     pub(crate) active: bool,
 }
 
-impl ControlPainter for Chip {
-    type Data = Labelled;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, &data.label, data.active, bounds);
-    }
-}
-
 /// What a nav item is handed each frame: its word, its state, and the mark it
 /// shows beside them.
 ///
@@ -159,36 +115,6 @@ pub(crate) struct NavData {
     pub(crate) mark: Mark,
     pub(crate) label: String,
     pub(crate) active: bool,
-}
-
-impl ControlPainter for NavItem {
-    type Data = NavData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Glyph {
-    type Data = GlyphData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
 }
 
 impl ControlPainter for TabLarge {
@@ -225,21 +151,6 @@ pub(crate) struct Captioned {
     pub(crate) value: f32,
 }
 
-impl ControlPainter for Knob {
-    type Data = Captioned;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data.value, data.label.as_deref(), bounds);
-    }
-}
-
 impl ControlPainter for Fader {
     type Data = Captioned;
 
@@ -256,51 +167,6 @@ impl ControlPainter for Fader {
 
     fn grip_bounds(&self, data: &Self::Data, bounds: Rect) -> Rect {
         self.rail(bounds, data.label.is_some())
-    }
-}
-
-impl ControlPainter for Crossfader {
-    type Data = f32;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, *data, bounds);
-    }
-}
-
-impl ControlPainter for VerticalVu {
-    type Data = StereoLevels;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, *data, bounds);
-    }
-}
-
-impl ControlPainter for StereoMeter {
-    type Data = StereoLevels;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, *data, bounds);
     }
 }
 
@@ -333,66 +199,6 @@ impl ControlPainter for Button {
     }
 }
 
-impl ControlPainter for Binary {
-    type Data = bool;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, *data, bounds);
-    }
-}
-
-impl ControlPainter for Meter {
-    type Data = f32;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, *data, bounds);
-    }
-}
-
-impl ControlPainter for PortalMap {
-    type Data = PortalMapData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Range {
-    type Data = ScalarRange;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, *data, bounds);
-    }
-}
-
 impl ControlPainter for StatusDot {
     type Data = StatusDotData;
 
@@ -419,51 +225,6 @@ impl ControlPainter for StatusDot {
 pub(crate) struct CellData {
     pub(crate) label: Option<String>,
     pub(crate) highlighted: bool,
-}
-
-impl ControlPainter for Cell {
-    type Data = CellData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data.label.as_deref(), data.highlighted, bounds);
-    }
-}
-
-impl ControlPainter for Brand {
-    type Data = ();
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        _data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, bounds);
-    }
-}
-
-impl ControlPainter for Divider {
-    type Data = ();
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        _data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, bounds);
-    }
 }
 
 impl ControlPainter for Preset {
@@ -502,21 +263,6 @@ impl ControlPainter for Preset {
     }
 }
 
-impl ControlPainter for Spacer {
-    type Data = ();
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextContext,
-        _data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, bounds);
-    }
-}
-
 /// The naming panel steps aside while the pointer is on the waveform, so the
 /// hand can see the shape it is about to scrub.
 impl ControlPainter for Wave {
@@ -533,68 +279,6 @@ impl ControlPainter for Wave {
         state: VisualState,
     ) {
         self.paint(list, text, data, bounds, matches!(state, VisualState::Idle));
-    }
-}
-
-impl ControlPainter for Context {
-    type Data = Viewed;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Settings {
-    type Data = Mark;
-
-    const READS_POINTER: bool = true;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        state: VisualState,
-    ) {
-        self.paint(list, text, *data, bounds, state);
-    }
-}
-
-impl ControlPainter for Readout {
-    type Data = ReadoutData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Clock {
-    type Data = Elapsed;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
     }
 }
 
@@ -625,21 +309,6 @@ impl ControlPainter for Summary {
     }
 }
 
-impl ControlPainter for Tempo {
-    type Data = Beat;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
 impl ControlPainter for Telemetry {
     type Data = f64;
 
@@ -661,50 +330,5 @@ impl ControlPainter for Telemetry {
     /// Only the width: a reading fills the height of the row it sits in.
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
         Size::new(self.intrinsic_width(text, &self.format(*data)), 0.0)
-    }
-}
-
-impl ControlPainter for Segmented {
-    type Data = SegmentedData;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Select {
-    type Data = String;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
-    }
-}
-
-impl ControlPainter for Swatch {
-    type Data = String;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        _state: VisualState,
-    ) {
-        self.paint(list, text, data, bounds);
     }
 }

@@ -6,7 +6,9 @@
     - !reference [.rules-integration, rules]
   stage: web
   timeout: 60 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
 
 # Built in the Linux container, but what it answers for is the wasm target, so
 # it belongs to the web request and not to the Linux one. It keeps the verify
@@ -20,7 +22,9 @@ web:wasm:
     - !reference [.rules-verify, rules]
   stage: web
   timeout: 60 minutes
-  needs: []
+  needs:
+    - job: linux:image
+      optional: true
   script:
     - just ci run linux-wasm
 

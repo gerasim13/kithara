@@ -8,18 +8,16 @@ use tracing::{debug, warn};
 
 use super::super::{core::PlayerRuntime, state::phase::PlayerPhaseKind};
 use crate::{
-    api::{PlayerStatus, TrackId},
+    api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
 
-/// How a [`PlayerImpl::select_item_with_crossfade`] transition behaves:
-/// whether to `autoplay` the selected item and the `crossfade_seconds`
-/// fade applied for this one transition.
+/// Captured transport intent and complete fade profile for one selection.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectTransition {
-    pub autoplay: bool,
-    pub crossfade_seconds: f32,
+    pub playback: SelectionPlayback,
+    pub crossfade: CrossfadeSettings,
 }
 
 impl<S> PlayerRuntime<S>
@@ -29,8 +27,8 @@ where
     /// Starts or holds the selected item. A start from a stopped player plays at
     /// the default rate; a transition while already playing keeps the live rate,
     /// so a queue seam never resets the deck tempo.
-    fn apply_autoplay(&self, autoplay: bool, continuing: bool) {
-        if autoplay {
+    fn apply_playback(&self, playback: SelectionPlayback, continuing: bool) {
+        if playback == SelectionPlayback::Play {
             if !continuing {
                 self.set_rate(self.default_rate());
             }
@@ -111,8 +109,7 @@ where
 
     /// Start playback from the configured default-rate target.
     pub fn play(&self) {
-        let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.warp.stretch().set_speed(rate);
+        let rate = self.core.warp.stretch().speed();
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -244,12 +241,15 @@ where
 
     /// Select and load a queue item by index, using the configured
     /// crossfade duration for the transition.
-    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+    pub fn select_item(&self, index: usize, playback: SelectionPlayback) -> Result<(), PlayError> {
         self.select_item_with_crossfade(
             index,
             SelectTransition {
-                autoplay,
-                crossfade_seconds: self.crossfade_duration(),
+                playback,
+                crossfade: CrossfadeSettings {
+                    duration: self.crossfade_duration(),
+                    ..CrossfadeSettings::default()
+                },
             },
         )
     }
@@ -277,10 +277,12 @@ where
         initial_source_cue: Option<AssetFrame>,
     ) -> Result<(), PlayError> {
         let SelectTransition {
-            autoplay,
-            crossfade_seconds,
+            playback,
+            crossfade,
         } = transition;
-        let continuing = autoplay && self.phase_kind() == PlayerPhaseKind::Playing;
+        let crossfade = crossfade.validate()?;
+        let continuing =
+            playback == SelectionPlayback::Play && self.phase_kind() == PlayerPhaseKind::Playing;
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::IndexOutOfRange {
@@ -306,25 +308,20 @@ where
             return Err(PlayError::ItemConsumed { index });
         }
 
-        if autoplay && !continuing {
-            self.core.warp.stretch().set_speed(self.default_rate());
-        }
-
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(crossfade_seconds));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
 
         if armed_for_index {
-            self.commit_next(index)?;
+            self.commit_next_with(index, crossfade)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             if let Some(outgoing) = self.core.items.current_item_id() {
                 self.core.items.cancel_outgoing_free_adoption(outgoing);
             }
             self.core.items.set_current(index);
-            self.load_current_item()?;
+            self.load_current_item_with(crossfade)?;
             self.announce_current_item(index);
         }
 
@@ -334,11 +331,35 @@ where
                 .set_initial_source_cue(item, initial_source_cue);
         }
 
-        self.apply_autoplay(autoplay, continuing);
+        self.apply_playback(playback, continuing);
         Ok(())
     }
 
     pub(crate) fn start_playback(&self, item_id: TrackId) {
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
+        self.start_playback_with(
+            item_id,
+            CrossfadeSettings {
+                duration: self.crossfade_duration(),
+                ..CrossfadeSettings::default()
+            },
+        );
+    }
+
+    fn load_current_item_with(&self, crossfade: CrossfadeSettings) -> Result<bool, PlayError> {
+        let index = self.current_index();
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(false);
+        };
+        self.publish_current_track_snapshot(duration_seconds);
+        self.start_playback_with(item_id, crossfade);
+        self.apply_start_position();
+        Ok(true)
+    }
+
+    pub(crate) fn start_playback_with(&self, item_id: TrackId, settings: CrossfadeSettings) {
+        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings,
+        }));
     }
 }

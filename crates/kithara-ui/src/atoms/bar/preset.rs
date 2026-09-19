@@ -25,7 +25,7 @@ pub(crate) struct PresetData {
     pub(crate) active: Option<usize>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
 pub(crate) struct Preset {
     metrics: GlobalBarSkin,
     active: Rgba,

@@ -1,17 +1,13 @@
 use bon::Builder;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::ids::InternId;
 
 /// A rotary control dragged along the vertical axis.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.knob.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Knob {
     pub(crate) label: Option<InternId>,
-}
-
-impl Control for Knob {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.knob.size
-    }
 }
 
 #[cfg(feature = "render")]

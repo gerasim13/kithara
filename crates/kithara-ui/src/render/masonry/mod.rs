@@ -2,7 +2,7 @@
 mod built;
 #[path = "../masonry_tree/chrome.rs"]
 mod chrome;
-mod controls;
+pub(crate) mod controls;
 mod custom;
 mod flex;
 mod host;
@@ -12,7 +12,7 @@ mod leaf;
 mod lit;
 mod menu;
 #[path = "../masonry_tree/mount.rs"]
-mod mount;
+pub(crate) mod mount;
 mod node;
 #[path = "../masonry_control/painted.rs"]
 mod painted;

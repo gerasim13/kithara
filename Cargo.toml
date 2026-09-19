@@ -4,6 +4,7 @@ members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-analysis",
+    "crates/kithara-android",
     "crates/kithara-app",
     "crates/kithara-apple",
     "crates/kithara-assets",
@@ -71,6 +72,7 @@ default-members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-analysis",
+    "crates/kithara-android",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -251,6 +253,7 @@ homepage = "https://github.com/zvuk/kithara"
 kithara = { path = "crates/kithara", version = "0.0.1-alpha4", default-features = false }
 kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha4", default-features = false }
 kithara-analysis = { path = "crates/kithara-analysis", version = "0.0.1-alpha4", default-features = false }
+kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha4" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha4" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha4", default-features = false }
@@ -260,7 +263,7 @@ kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha4
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
-kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4" }
+kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4", default-features = false }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha4", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
@@ -344,7 +347,8 @@ criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"
 delegate = "0.13"
-derive_more = { version = "2.1", features = ["deref", "display", "from", "into"] }
+derive-where = "1.7"
+derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
 
 # fast interleave/deinterleave
 fast-interleave = "0.1"
@@ -360,6 +364,7 @@ futures = "0.3.32"
 
 # proc macros
 futures-lite = "2"
+getrandom = "0.4.2"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 
@@ -371,7 +376,7 @@ humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
-iced = { version = "0.14", default-features = false, features = ["tokio", "svg", "canvas", "image", "advanced", "wgpu", "tiny-skia", "x11", "wayland"] }
+iced = { version = "0.14", default-features = false, features = ["tokio", "svg", "canvas", "image", "advanced", "wgpu", "tiny-skia", "crisp", "web-colors", "x11", "wayland"] }
 iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"

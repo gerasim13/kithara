@@ -242,7 +242,10 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .ok();
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(first_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: first_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }))
         .ok();
     processor.drain_commands();
 
@@ -268,7 +271,10 @@ async fn fade_in_switches_public_snapshot_without_render() {
 
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(second_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id: second_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }))
         .ok();
     processor.drain_commands();
 
@@ -296,7 +302,10 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     processor.drain_commands();
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }))
         .ok();
     processor.drain_commands();
 
@@ -434,7 +443,10 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
 
     control
         .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)))
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+        }))
         .ok();
     processor.drain_commands();
 
@@ -622,7 +634,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     processor
         .track_mut(fading_id)
         .expect("BUG: fading track must remain loaded")
-        .fade_out();
+        .fade_out(kithara::play::CrossfadeSettings::default());
 
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];

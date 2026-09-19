@@ -92,14 +92,9 @@ impl<S> Deck<S> {
     }
 }
 
+#[derive_where::derive_where(Default)]
 pub(super) struct GraphRegistry<S> {
     decks: Vec<Deck<S>>,
-}
-
-impl<S> Default for GraphRegistry<S> {
-    fn default() -> Self {
-        Self { decks: Vec::new() }
-    }
 }
 
 impl<S> GraphRegistry<S> {

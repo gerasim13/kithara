@@ -131,24 +131,13 @@ where
 
 /// What one painted canvas keeps between frames: the shaping context, and the
 /// picture it drew kept beside the key it was drawn from.
+#[derive_where::derive_where(Default)]
 pub(crate) struct PaintState<Key>
 where
     Key: PartialEq,
 {
     marks: Marks<Key>,
     text: RefCell<Option<TextContext>>,
-}
-
-impl<Key> Default for PaintState<Key>
-where
-    Key: PartialEq,
-{
-    fn default() -> Self {
-        Self {
-            marks: Marks::default(),
-            text: RefCell::default(),
-        }
-    }
 }
 
 impl<Key> PaintState<Key>
@@ -566,6 +555,7 @@ struct Dragging {
 
 /// What a gesturing canvas keeps between frames: the gesture, and the shaping
 /// context the painter draws through.
+#[derive_where::derive_where(Default)]
 pub(crate) struct GestureState<Painter>
 where
     Painter: ControlPainter,
@@ -576,22 +566,6 @@ where
     press: Press,
     index: IndexPress,
     span: SpanState,
-}
-
-impl<Painter> Default for GestureState<Painter>
-where
-    Painter: ControlPainter,
-{
-    fn default() -> Self {
-        Self {
-            crossing: Crossing::default(),
-            drag: ScalarState::default(),
-            paint: PaintState::default(),
-            press: Press::default(),
-            index: IndexPress::default(),
-            span: SpanState::default(),
-        }
-    }
 }
 
 impl<'skin, Painter> Gesture<'skin, Painter>

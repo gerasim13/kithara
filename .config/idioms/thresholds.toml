@@ -47,6 +47,19 @@ enabled = true
 
 [derivable_display]
 enabled = true
+severity = "deny"
+
+[derivable_error]
+enabled = true
+severity = "deny"
+
+[derivable_default]
+enabled = true
+severity = "deny"
+
+[derivable_serialize]
+enabled = true
+severity = "deny"
 
 [derivable_getter]
 enabled = true
@@ -76,5 +89,65 @@ exempt_files = [
 ]
 
 [derivable_ranged]
+enabled = true
+severity = "deny"
+
+[derivable_into_probe_arg]
+enabled = true
+severity = "deny"
+
+[derivable_mirror]
+enabled = true
+severity = "deny"
+
+[derivable_enum_str]
+enabled = true
+severity = "deny"
+
+[derivable_variants]
+enabled = true
+severity = "deny"
+
+[derivable_skin_walk]
+enabled = true
+severity = "deny"
+
+[derivable_built_default]
+enabled = true
+severity = "deny"
+
+[derivable_patch]
+enabled = true
+severity = "deny"
+
+[derivable_phase]
+enabled = true
+severity = "deny"
+
+[derivable_view_control]
+enabled = true
+severity = "deny"
+
+[derivable_control]
+enabled = true
+severity = "deny"
+
+[derivable_control_painter]
+enabled = true
+severity = "deny"
+
+[derivable_retained]
+enabled = true
+severity = "deny"
+
+[derivable_node_control]
+enabled = true
+severity = "deny"
+
+[derivable_clone]
+enabled = true
+severity = "deny"
+
+[derivable_debug]
 enabled = true
 severity = "deny"

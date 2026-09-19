@@ -26,7 +26,8 @@ pub(crate) struct ButtonLabel<Words> {
     pub(crate) label: Words,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[retained(setter = set_bool, field = active)]
 pub(crate) struct Button {
     active: Face,
     idle: Face,

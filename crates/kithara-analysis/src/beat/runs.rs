@@ -539,8 +539,11 @@ mod tests {
 
     const SRC: u32 = 44_100;
 
+    #[derive(derive_more::Deref, derive_more::DerefMut)]
     struct TestRuns {
         pools: Pools,
+        #[deref]
+        #[deref_mut]
         inner: Runs<RubatoBackend>,
     }
 
@@ -553,20 +556,6 @@ mod tests {
             self.inner
                 .push(&self.pools, mono, at, opens)
                 .expect("run buffers fit the test region")
-        }
-    }
-
-    impl std::ops::Deref for TestRuns {
-        type Target = Runs<RubatoBackend>;
-
-        fn deref(&self) -> &Self::Target {
-            &self.inner
-        }
-    }
-
-    impl std::ops::DerefMut for TestRuns {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.inner
         }
     }
 

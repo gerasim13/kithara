@@ -328,7 +328,7 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
         .expect("start the fixture engine");
     player.ensure_slot().expect("allocate the fixture slot");
     player
-        .select_item(0, true)
+        .select_item(0, kithara::play::SelectionPlayback::Play)
         .expect("select the inserted item");
 
     let applied = *recorded
@@ -354,7 +354,7 @@ fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u
     let _ = drain_player_events(&player, &mut rx);
 
     player
-        .select_item(0, false)
+        .select_item(0, kithara::play::SelectionPlayback::Pause)
         .expect("re-select current index");
     let after = drain_player_events(&player, &mut rx);
     let announces = after
@@ -554,7 +554,9 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
-    player.select_item(2, true).unwrap();
+    player
+        .select_item(2, kithara::play::SelectionPlayback::Play)
+        .unwrap();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
     assert_eq!(src.as_ref(), "memory://item-2");
@@ -568,14 +570,18 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'
 #[kithara::test]
 fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["item-1", "item-2"]);
-    player.select_item(0, true).unwrap();
+    player
+        .select_item(0, kithara::play::SelectionPlayback::Play)
+        .unwrap();
     let armed_src = player
         .arm_next(1)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
-    player.select_item(1, true).unwrap();
+    player
+        .select_item(1, kithara::play::SelectionPlayback::Play)
+        .unwrap();
     player.process_notifications();
 
     assert_eq!(player.current_index(), 1);

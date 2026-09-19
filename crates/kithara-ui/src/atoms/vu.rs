@@ -7,7 +7,13 @@ use crate::{
     skin::VuVerticalSkin,
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = StereoLevels,
+    draw = self.paint(list, *data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_levels)]
 pub(crate) struct VerticalVu {
     ticks: Option<TickRail>,
     palette: RenderPalette,
