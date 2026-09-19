@@ -64,6 +64,9 @@ pub struct Scope {
     /// Tells `flags_for(Clippy|Fmt)` to fall back to workspace-wide because
     /// those tools don't accept arbitrary path scoping.
     pub(crate) has_noncrate_path: bool,
+    /// Additional roots used by checks whose policy covers workspace source
+    /// outside the historical `crates/` default.
+    pub(crate) extra_roots: Vec<PathBuf>,
 }
 
 impl Scope {
@@ -73,7 +76,18 @@ impl Scope {
             crates,
             paths,
             has_noncrate_path: false,
+            extra_roots: Vec::new(),
         }
+    }
+
+    /// Extend an otherwise empty scope with workspace test and build-tool
+    /// roots. Explicit scopes remain exact and are never widened.
+    #[must_use]
+    pub(crate) fn with_workspace_sources(mut self) -> Self {
+        if self.is_empty() {
+            self.extra_roots = vec![PathBuf::from("tests"), PathBuf::from("xtask")];
+        }
+        self
     }
 
     /// Crate names extracted from `crates/<name>[/...]` paths. Used by
@@ -259,7 +273,16 @@ impl Scope {
     #[must_use]
     pub fn roots(&self, workspace_root: &Path) -> Vec<PathBuf> {
         if self.is_empty() {
-            return vec![workspace_root.join("crates")];
+            let mut out = vec![workspace_root.join("crates")];
+            out.extend(self.extra_roots.iter().map(|root| {
+                let normalized = root.strip_prefix("./").unwrap_or(root);
+                if normalized.is_absolute() {
+                    normalized.to_path_buf()
+                } else {
+                    workspace_root.join(normalized)
+                }
+            }));
+            return out;
         }
         let mut out = Vec::new();
         for c in &self.crates {
@@ -267,6 +290,15 @@ impl Scope {
         }
         for p in &self.paths {
             let normalized = p.strip_prefix("./").unwrap_or(p);
+            let abs = if normalized.is_absolute() {
+                normalized.to_path_buf()
+            } else {
+                workspace_root.join(normalized)
+            };
+            out.push(abs);
+        }
+        for root in &self.extra_roots {
+            let normalized = root.strip_prefix("./").unwrap_or(root);
             let abs = if normalized.is_absolute() {
                 normalized.to_path_buf()
             } else {

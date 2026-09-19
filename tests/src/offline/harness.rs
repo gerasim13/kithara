@@ -115,8 +115,15 @@ impl OfflinePlayerHarness {
         }
     }
 
-    pub const fn player(&self) -> &PlayerControl<TestPools> {
-        &self.player_control
+    delegate::delegate! {
+        to self {
+            #[field(&player_control)]
+            pub const fn player(&self) -> &PlayerControl<TestPools>;
+            #[field(&worker)]
+            pub const fn worker(&self) -> &PlayWorker<TestPools>;
+            #[field(&host)]
+            pub const fn host(&self) -> &OfflineHostHarness<TestPools>;
+        }
     }
 
     pub fn take_player(&self) -> PlayerImpl<TestPools> {
@@ -150,10 +157,6 @@ impl OfflinePlayerHarness {
         self.host.run(move || f(&control)).await
     }
 
-    pub const fn worker(&self) -> &PlayWorker<TestPools> {
-        &self.worker
-    }
-
     pub fn set_host_level(&self, level: f32) {
         self.player
             .lock()
@@ -177,10 +180,6 @@ impl OfflinePlayerHarness {
         P: PlayerControlSource<Schema = TestPools> + Send + 'static,
     {
         self.insert(player).await.control().clone()
-    }
-
-    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
-        &self.host
     }
 
     pub async fn close(self) {

@@ -443,7 +443,10 @@ async fn decode_pcm_seconds(source: ServedSignal, backend: DecoderBackend, secs:
     .expect("decode_pcm_seconds joined")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::Display)]
+#[display(
+    "{label:<28}: amp={mean_amp:.4}±{amp_std:.4} | phase_off={phase_offset_samples:+.3} samp | wobble={phase_wobble_samples:.3} samp σ | SNR={residual_snr_db:>6.1} dB | N={windows}"
+)]
 struct CodecProfile {
     label: String,
     mean_amp: f64,
@@ -452,22 +455,6 @@ struct CodecProfile {
     phase_wobble_samples: f64,
     residual_snr_db: f64,
     windows: usize,
-}
-
-impl std::fmt::Display for CodecProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:<28}: amp={:.4}±{:.4} | phase_off={:+.3} samp | wobble={:.3} samp σ | SNR={:>6.1} dB | N={}",
-            self.label,
-            self.mean_amp,
-            self.amp_std,
-            self.phase_offset_samples,
-            self.phase_wobble_samples,
-            self.residual_snr_db,
-            self.windows,
-        )
-    }
 }
 
 fn profile_codec_window(

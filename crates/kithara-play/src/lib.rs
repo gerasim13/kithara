@@ -41,6 +41,7 @@ pub use bridge::{
 pub use effects::eq::EqBandConfig;
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
+use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;

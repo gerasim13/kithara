@@ -32,6 +32,7 @@ struct WorkerOwner<S> {
 /// Clones share one OS thread and one scheduler loop. Dropping a Player only
 /// releases that clone; the final owner shuts down its dispatcher and releases
 /// its base-worker clone.
+#[derive_where::derive_where(Clone)]
 pub struct PlayWorker<S>(Arc<WorkerOwner<S>>);
 
 impl<S> PlayWorker<S> {
@@ -87,12 +88,6 @@ impl<S> PlayWorker<S> {
 
     pub(crate) fn wake(&self) {
         self.0.dispatcher.wake_handle().wake();
-    }
-}
-
-impl<S> Clone for PlayWorker<S> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
     }
 }
 

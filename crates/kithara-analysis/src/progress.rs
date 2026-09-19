@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt, num::NonZeroU64};
+use std::{collections::BTreeSet, num::NonZeroU64};
 
 use kithara_platform::sync::Arc;
 
@@ -79,9 +79,11 @@ impl From<AnalysisProgress> for TrackAnalysis {
 
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
+#[derive(derive_more::Debug)]
 pub(crate) struct AnalysisResume {
     shape: (bool, bool),
     #[field(get, vis = "pub(crate)")]
+    #[debug("{:?}", self.bytes.len())]
     bytes: Arc<[u8]>,
     chunk_frames: NonZeroU64,
 }
@@ -125,17 +127,6 @@ impl TryFrom<&[u8]> for AnalysisResume {
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         Self::decode_bytes(bytes)
-    }
-}
-
-impl fmt::Debug for AnalysisResume {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AnalysisResume")
-            .field("bytes", &self.bytes.len())
-            .field("chunk_frames", &self.chunk_frames)
-            .field("shape", &self.shape)
-            .finish()
     }
 }
 

@@ -21,7 +21,7 @@ stretch-signalsmith = ["dep:signalsmith-stretch"]
 stretch-bungee = ["dep:bungee-sys"]
 
 [dependencies]
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 

@@ -179,13 +179,14 @@ impl Reverse {
         })
     }
 
-    pub(crate) const fn device_port(&self) -> u16 {
-        self.device_port
-    }
-
-    /// Remove this run's mapping, and only this one.
-    pub(crate) fn remove(mut self) -> Result<()> {
-        self.take_down()
+    delegate::delegate! {
+        to self {
+            #[field(device_port)]
+            pub(crate) const fn device_port(&self) -> u16;
+            /// Remove this run's mapping, and only this one.
+            #[call(take_down)]
+            pub(crate) fn remove(mut self) -> Result<()>;
+        }
     }
 
     fn take_down(&mut self) -> Result<()> {

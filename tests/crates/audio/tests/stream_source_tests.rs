@@ -84,13 +84,14 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
 
 /// A route change resumes from admitted Warp progress, not the consumer head.
 ///
-/// The consumer head is read once, immediately before the route is selected,
-/// because that is the moment the property is about. Read after the switch it
-/// also carries whatever the switch handed the reader, so the head climbs
-/// towards the resume point and the comparison ends up between a number and
-/// itself. The read that follows the switch stays: an off-thread consumer
-/// wakes the worker by reading, so the rebuild needs it to make progress at
-/// all.
+/// The head this is measured against is read immediately before the route is
+/// selected, because that is the moment the property is about. Read after the
+/// switch it also carries whatever the switch handed the reader, so the head
+/// climbs towards the resume point and the comparison ends up between a number
+/// and itself. The read that follows the switch stays and its chunk is now
+/// examined rather than dropped: an off-thread consumer wakes the worker by
+/// reading, so the rebuild needs that read to make progress at all, and it can
+/// be the chunk the rebuild lands in.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
@@ -174,8 +175,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
          lead={admitted_lead:?}"
     );
 
+    let committed_at_route = audio.position();
     audio.set_host_sample_rate(target_rate);
-    let (mut audio, _queued) = wait_for_chunk(audio, Duration::from_secs(2)).await;
+    let (mut audio, candidate) = wait_for_chunk(audio, Duration::from_secs(2)).await;
 
     loop {
         let envelope = events.recv().await.expect("decoder event bus remains open");
@@ -190,20 +192,24 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let rebuilt = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "timed out waiting for rebuilt PCM");
-        let (next_audio, chunk) = wait_for_chunk(audio, remaining).await;
-        audio = next_audio;
-        if chunk.meta.spec.sample_rate == target_rate {
-            break chunk;
+    let rebuilt = if candidate.meta.spec.sample_rate == target_rate {
+        candidate
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for rebuilt PCM");
+            let (next_audio, chunk) = wait_for_chunk(audio, remaining).await;
+            audio = next_audio;
+            if chunk.meta.spec.sample_rate == target_rate {
+                break chunk;
+            }
         }
     };
     assert!(
-        rebuilt.meta.timestamp >= committed.saturating_add(resume_margin),
+        rebuilt.meta.timestamp >= committed_at_route.saturating_add(resume_margin),
         "route recreation must resume from admitted Warp progress, not the \
-         consumer head; rebuilt={:?}, committed={committed:?}, \
+         consumer head; rebuilt={:?}, committed_at_route={committed_at_route:?}, \
          resume_margin={resume_margin:?}",
         rebuilt.meta.timestamp
     );

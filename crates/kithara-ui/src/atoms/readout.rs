@@ -8,7 +8,11 @@ use crate::{
 };
 
 /// A caption stacked over the value it names, framed or bare.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = ReadoutData,
+    draw = self.paint(list, text, data, bounds)
+)]
 pub(crate) struct Readout {
     metrics: ReadoutSkin,
     label_color: Rgba,

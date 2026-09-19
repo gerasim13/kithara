@@ -21,6 +21,7 @@ impl Check for DerivableDeref {
             ctx,
             Kind::Deref,
             ctx.config.thresholds.derivable_deref.enabled,
+            crate::idioms::config::DerivableSeverity::Warn,
         )
     }
 }
@@ -52,6 +53,33 @@ mod tests {
     fn rejects_wrong_shape() {
         let src = "struct Values(Vec<u8>); impl Deref for Values { type Target = [u8]; fn deref(&self) -> &Self::Target { self.0.as_slice() } }";
         assert_eq!(fix_source(src, Kind::Deref).unwrap().1.writes, 0);
+    }
+
+    #[test]
+    fn coalesces_deref_mut_only_in_the_matching_module() {
+        let src = r#"
+struct Values(Vec<u8>);
+impl Deref for Values {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+mod tests {
+    struct Values(Vec<u8>);
+    impl Deref for Values {
+        type Target = Vec<u8>;
+        fn deref(&self) -> &Self::Target { &self.0 }
+    }
+    impl DerefMut for Values {
+        fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    }
+}
+"#;
+        let fixed = fix_source(src, Kind::Deref).unwrap().0;
+
+        assert_eq!(fixed.matches("#[derive(derive_more::Deref)]").count(), 1);
+        assert_eq!(fixed.matches("#[derive(derive_more::DerefMut)]").count(), 1);
+        assert!(fixed.contains("impl Deref for Values {\n    type Target = [u8];"));
+        assert!(!fixed.contains("impl DerefMut for Values"));
     }
 
     #[test]

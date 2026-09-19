@@ -480,10 +480,12 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
                 let content;
                 parenthesized!(content in meta.input);
                 added.push(content.parse()?);
+            } else if meta.path.is_ident("humantime") {
+                added.push(quote! { serde(with = "humantime_serde::option") });
             } else {
                 return Err(meta.error(
-                    "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
-                     `attribute(...)`",
+                    "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>`, \
+                     `humantime` or `attribute(...)`",
                 ));
             }
             Ok(())
@@ -606,6 +608,7 @@ fn is_option(ty: &Type) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::{DeriveInput, parse_quote};
 
     use super::derive;
@@ -614,7 +617,7 @@ mod tests {
         derive(input).expect("the derive expands").to_string()
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_generic_configuration_yields_a_patch_with_no_generics() {
         let input: DeriveInput = parse_quote! {
             pub struct HlsConfig<S> {
@@ -637,7 +640,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_already_optional_field_is_wrapped_once() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -652,7 +655,7 @@ mod tests {
         assert!(expanded.contains("batch : :: core :: option :: Option < usize >"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_nested_field_recurses_into_the_owning_crates_patch() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -667,7 +670,7 @@ mod tests {
         assert!(expanded.contains("self . beat . apply (patch . beat)"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_gated_field_gates_its_merge_too() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -685,7 +688,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_unknown_option_names_what_the_derive_accepts() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -698,14 +701,27 @@ mod tests {
 
         assert!(
             error.to_string().contains(
-                "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
-                 `attribute(...)`"
+                "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>`, \
+                 `humantime` or `attribute(...)`"
             ),
             "{error}"
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
+    fn humantime_is_the_supported_duration_shorthand() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[patch(humantime)]
+                timeout: Duration,
+            }
+        };
+
+        let expanded = expansion(&input);
+        assert!(expanded.contains("serde (with = \"humantime_serde::option\")"));
+    }
+
+    #[kithara::test(native, flash(false))]
     fn a_configuration_that_judges_itself_commits_only_a_judged_whole() {
         let input: DeriveInput = parse_quote! {
             #[patch(validate = Self::validated, error = TempoError)]
@@ -739,7 +755,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_skipped_field_is_carried_into_the_judged_whole_untouched() {
         let input: DeriveInput = parse_quote! {
             #[patch(validate = Self::validated, error = Refusal)]
@@ -762,7 +778,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_fallible_nested_field_carries_its_refusal_under_its_own_key() {
         let input: DeriveInput = parse_quote! {
             #[patch(fallible)]
@@ -796,7 +812,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_gated_fallible_field_gates_its_error_variant_too() {
         let input: DeriveInput = parse_quote! {
             #[patch(fallible)]
@@ -817,7 +833,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_configuration_that_cannot_refuse_keeps_an_infallible_merge() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -837,7 +853,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn fallible_without_nested_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -851,7 +867,7 @@ mod tests {
         assert!(error.to_string().contains("needs `nested`"), "{error}");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_nested_refusal_the_struct_did_not_declare_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -868,7 +884,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_declared_refusal_outlives_the_feature_that_gated_its_only_fallible_key() {
         let input: DeriveInput = parse_quote! {
             #[patch(fallible)]
@@ -889,7 +905,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_check_without_its_error_is_refused() {
         let input: DeriveInput = parse_quote! {
             #[patch(validate = Self::validated)]
@@ -906,7 +922,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_wired_field_types_as_the_wire_and_lands_converted() {
         let input: DeriveInput = parse_quote! {
             struct WorkerConfig {
@@ -927,7 +943,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_wire_without_its_conversion_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct WorkerConfig {
@@ -944,7 +960,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_wire_that_also_asks_to_recurse_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct WorkerConfig {

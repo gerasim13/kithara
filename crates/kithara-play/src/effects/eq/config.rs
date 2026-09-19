@@ -12,6 +12,7 @@ const DEFAULT_EQ_SMOOTHING: SmootherConfig = SmootherConfig {
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
 pub struct EqConfig<S> {
     /// Typed pool facade shared with the owning playback region.
     #[builder(start_fn)]
@@ -21,15 +22,6 @@ pub struct EqConfig<S> {
     #[builder(default = DEFAULT_EQ_SMOOTHING)]
     #[field(get, copy)]
     smoothing: SmootherConfig,
-}
-
-impl<S> Clone for EqConfig<S> {
-    fn clone(&self) -> Self {
-        Self {
-            pools: self.pools.clone(),
-            smoothing: self.smoothing,
-        }
-    }
 }
 
 impl<S> std::fmt::Debug for EqConfig<S> {

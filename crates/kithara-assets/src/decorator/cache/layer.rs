@@ -17,18 +17,13 @@ use crate::{
 
 /// Opaque byte discriminator for cache entries. `Debug` is redacted: the
 /// bytes can be key material (e.g. AES `key||iv`).
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, derive_more::Debug, Eq, PartialEq, Hash)]
+#[debug("CtxIdentity(<{} bytes>)", _0.len())]
 pub(crate) struct CtxIdentity(Box<[u8]>);
 
 impl From<&[u8]> for CtxIdentity {
     fn from(bytes: &[u8]) -> Self {
         Self(bytes.into())
-    }
-}
-
-impl fmt::Debug for CtxIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CtxIdentity(<{} bytes>)", self.0.len())
     }
 }
 

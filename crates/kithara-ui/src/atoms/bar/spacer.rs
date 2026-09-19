@@ -5,7 +5,12 @@ use crate::{
 
 /// Empty room that pushes its neighbours apart. It draws nothing but the
 /// panel behind it, which is what keeps the bar continuous across the gap.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = (),
+    draw = self.paint(list, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Spacer {
     panel: Rgba,
 }

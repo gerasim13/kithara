@@ -1,23 +1,14 @@
 use bon::Builder;
 
-use crate::{
-    ids::InternId,
-    mount::Control,
-    size::SizeSpec,
-    skin::{ColorRole, SkinDoc},
-};
+use crate::{ids::InternId, skin::ColorRole};
 
 /// One palette colour, shown with its name.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.swatch.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Swatch {
     pub(crate) role: ColorRole,
     pub(crate) label: InternId,
-}
-
-impl Control for Swatch {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.swatch.size
-    }
 }
 
 #[cfg(feature = "render")]

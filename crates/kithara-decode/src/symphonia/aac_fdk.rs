@@ -1,5 +1,3 @@
-use std::fmt;
-
 use fdk_aac::dec::{Decoder, DecoderError, Transport};
 use symphonia::core::{
     audio::{
@@ -179,15 +177,21 @@ fn audio_buffer(
 }
 
 /// Symphonia [`AudioDecoder`] wrapping libfdk-aac via [`fdk_aac`].
+#[derive(derive_more::Debug)]
 pub(crate) struct AacDecoder {
     config: AacStreamConfig,
+    #[debug(skip)]
     buf: AudioBuffer<i16>,
+    #[debug(skip)]
     codec_params: AudioCodecParameters,
+    #[debug(skip)]
     decoder: Decoder,
+    #[debug(skip)]
     pcm: [i16; Consts::MAX_SAMPLES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
+    #[debug(skip)]
     reset_error: Option<Error>,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
@@ -197,16 +201,6 @@ pub(crate) struct AacDecoder {
     /// trim (`elst`, iTunSMPB) operates on top of the time-aligned
     /// PCM stream this adapter produces.
     delay_remaining: u32,
-}
-
-impl fmt::Debug for AacDecoder {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AacDecoder")
-            .field("config", &self.config)
-            .field("delay_remaining", &self.delay_remaining)
-            .field("metadata_validated", &self.metadata_validated)
-            .finish_non_exhaustive()
-    }
 }
 
 impl AacDecoder {

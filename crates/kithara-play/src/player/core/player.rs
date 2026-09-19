@@ -3,6 +3,7 @@ use std::ops::Deref;
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_bufpool::HasPool;
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
@@ -47,7 +48,10 @@ impl<S> PlayerImpl<S> {
             SyncMemberKind::Grid,
         );
 
-        let bus = config.bus.clone().unwrap_or_default();
+        let bus = config
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(config.event_bus_capacity.get()));
 
         // Composed/standalone seam: `Some(parent)` → the player's master is a
         // child of it (so a passed cancel reaches the player but the player's

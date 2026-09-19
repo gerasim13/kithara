@@ -164,6 +164,7 @@ pub(crate) fn derive(input: &DeriveInput) -> Result<TokenStream> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::{DeriveInput, parse_quote};
 
     use super::derive;
@@ -181,7 +182,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn each_variant_gets_a_from_impl() {
         let expanded = expansion(&two_member_set());
 
@@ -194,7 +195,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_receiver_tuple_holds_one_receiver_per_variant() {
         let expanded = expansion(&two_member_set());
 
@@ -204,7 +205,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn recv_selects_over_every_open_receiver() {
         let expanded = expansion(&two_member_set());
 
@@ -217,7 +218,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn publish_dispatches_to_the_wrapped_event() {
         let expanded = expansion(&two_member_set());
 
@@ -227,7 +228,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_struct_is_refused() {
         let input: DeriveInput = parse_quote! {
             struct NotASet {
@@ -240,7 +241,7 @@ mod tests {
         assert!(error.to_string().contains("needs an enum"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_generic_enum_is_refused() {
         let input: DeriveInput = parse_quote! {
             enum Generic<T> {
@@ -253,7 +254,7 @@ mod tests {
         assert!(error.to_string().contains("needs a concrete type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_empty_enum_is_refused() {
         let input: DeriveInput = parse_quote! {
             enum Empty {}
@@ -264,7 +265,7 @@ mod tests {
         assert!(error.to_string().contains("at least one variant"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_unit_variant_is_refused() {
         let input: DeriveInput = parse_quote! {
             enum Mixed {
@@ -278,7 +279,7 @@ mod tests {
         assert!(error.to_string().contains("wraps exactly one event type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_named_field_variant_is_refused() {
         let input: DeriveInput = parse_quote! {
             enum Named {
@@ -291,7 +292,7 @@ mod tests {
         assert!(error.to_string().contains("wraps exactly one event type"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_two_field_variant_is_refused() {
         let input: DeriveInput = parse_quote! {
             enum Pair {

@@ -2,7 +2,6 @@ use kithara_events::{Event, TrackId};
 
 /// Why queue navigation advanced away from the previous current track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AdvanceReason {
     NaturalEof,
     CrossfadePreArm,
@@ -17,7 +16,6 @@ pub enum AdvanceReason {
 
 /// Queue repeat mode mirrored into the event surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum QueueRepeatMode {
     Off,
     One,
@@ -26,7 +24,6 @@ pub enum QueueRepeatMode {
 
 /// Loading lifecycle of a track in the queue.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TrackStatus {
     /// Queued but loading has not started.
     Pending,
@@ -51,7 +48,6 @@ pub enum TrackStatus {
 
 /// Queue-level events emitted by `kithara-queue::Queue`.
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum QueueEvent {
     /// A new track was appended / inserted at `index`.
     TrackAdded { id: TrackId, index: usize },
@@ -88,7 +84,6 @@ pub enum QueueEvent {
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum ItemEvent {
     PlaybackLikelyToKeepUp,
     PlaybackStalled,

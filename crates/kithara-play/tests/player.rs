@@ -1,8 +1,8 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::SeekOutcome;
 use kithara_decode::GaplessMode;
-use kithara_events::Envelope;
+use kithara_events::{Envelope, EventBus, TryRecvError};
 use kithara_platform::time::Duration;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
@@ -113,6 +113,46 @@ fn player_events_subscribe() {
     player.set_volume(0.5);
     let event = rx.try_recv();
     assert!(event.is_ok());
+}
+
+#[kithara::test]
+fn player_config_sets_capacity_for_a_new_event_bus() {
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(mock::SAMPLE_RATE)
+            .worker(worker())
+            .session(mock::session())
+            .event_bus_capacity(NonZeroUsize::new(2).expect("two is not zero"))
+            .build(),
+    );
+    let mut rx = player.subscribe::<PlayerEvent>();
+
+    player.set_volume(0.1);
+    player.set_volume(0.2);
+    player.set_volume(0.3);
+
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Lagged(1))));
+}
+
+#[kithara::test]
+fn injected_event_bus_keeps_its_identity_and_capacity() {
+    let bus = EventBus::new(1);
+    let bus_id = bus.id();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(mock::SAMPLE_RATE)
+            .worker(worker())
+            .session(mock::session())
+            .event_bus_capacity(NonZeroUsize::new(8).expect("eight is not zero"))
+            .bus(bus)
+            .build(),
+    );
+    let mut rx = player.subscribe::<PlayerEvent>();
+
+    assert_eq!(player.control().bus().id(), bus_id);
+    player.set_volume(0.1);
+    player.set_volume(0.2);
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Lagged(1))));
 }
 
 #[kithara::test]

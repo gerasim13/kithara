@@ -12,7 +12,7 @@ use crate::{
 /// only puts it on the screen. The picture keeps its proportions and sits in
 /// the middle of what it was given, because a sheet drawn to a box of another
 /// shape would otherwise be squashed differently by every layout that holds it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
 pub(crate) struct Sprite;
 
 impl ControlPainter for Sprite {

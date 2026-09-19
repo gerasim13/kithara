@@ -1,17 +1,13 @@
 use bon::Builder;
 
-use crate::{module::DeckSummaryStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::module::DeckSummaryStyle;
 
 /// The deck's headline: what is loaded and how it is playing.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.deck.summary_size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Summary {
     pub(crate) style: DeckSummaryStyle,
-}
-
-impl Control for Summary {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.deck.summary_size
-    }
 }
 
 #[cfg(feature = "render")]

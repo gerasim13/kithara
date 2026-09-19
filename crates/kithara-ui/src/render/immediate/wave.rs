@@ -42,7 +42,7 @@ impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, 'skin> {
         let drag = Scalar::builder()
             .track(if hero {
                 Track::RelativeHorizontal {
-                    scale: self.data.zoom,
+                    scale: self.data.zoom.into(),
                     value: self.data.progress,
                 }
             } else {
@@ -171,7 +171,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
             && cursor.is_over(bounds)
         {
             let zoom = zoom_for_wheel(self.data.zoom, scroll.y());
-            return Some(scalar_child(&self.path, "zoom", f64::from(zoom)));
+            return Some(scalar_child(&self.path, "zoom", f64::from(f32::from(zoom))));
         }
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);

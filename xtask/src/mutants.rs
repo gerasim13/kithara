@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fmt, fs,
+    fs,
     path::{Component, Path, PathBuf},
     process::Command,
     str::FromStr,
@@ -79,7 +79,8 @@ enum MutantsCommand {
 /// were cut without reporting a verdict. A shard divides the mutants of the
 /// suites a lane already holds, so the lane finishes inside its window without
 /// the window being widened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
+#[display("{index}/{total}")]
 struct Shard {
     index: usize,
     total: usize,
@@ -102,12 +103,6 @@ impl FromStr for Shard {
             bail!("a shard is `k/n` with 0 <= k < n, got `{text}`");
         }
         Ok(Self { index, total })
-    }
-}
-
-impl fmt::Display for Shard {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.index, self.total)
     }
 }
 

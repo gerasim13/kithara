@@ -39,8 +39,11 @@ pub(crate) struct RingWriter {
 }
 
 impl RingWriter {
-    pub(crate) const fn block_frames(&self) -> u32 {
-        self.block_frames
+    delegate::delegate! {
+        to self {
+            #[field(block_frames)]
+            pub(crate) const fn block_frames(&self) -> u32;
+        }
     }
 
     pub(crate) fn reserve(&mut self, block_frames: u32) -> Option<ReservedBlock<'_>> {

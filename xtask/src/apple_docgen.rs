@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::{Path as FsPath, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -92,7 +92,7 @@ fn workspace_root() -> Result<PathBuf> {
     Ok(metadata.workspace_root.into_std_path_buf())
 }
 
-fn build_rustdoc_json(root: &Path, docgen: &DocgenConfig) -> Result<()> {
+fn build_rustdoc_json(root: &FsPath, docgen: &DocgenConfig) -> Result<()> {
     let mut args = vec![
         "rustdoc".to_string(),
         "-p".to_string(),
@@ -213,7 +213,7 @@ fn split_docs(docs: &str) -> (String, String) {
     }
 }
 
-fn write_pages(output_dir: &Path, pages: &[Page]) -> Result<()> {
+fn write_pages(output_dir: &FsPath, pages: &[Page]) -> Result<()> {
     fs::create_dir_all(output_dir).with_context(|| format!("create {}", output_dir.display()))?;
     for page in pages {
         let path = output_dir.join(&page.file_name);
@@ -225,7 +225,7 @@ fn write_pages(output_dir: &Path, pages: &[Page]) -> Result<()> {
 /// Completeness gate: every `public`/`open` declaration in the configured
 /// Swift dirs must carry a `///` (or `/** */`) doc comment, so no public
 /// symbol ships undocumented. Returns the count of public symbols checked.
-fn check_swift_docs(root: &Path, dirs: &[String]) -> Result<usize> {
+fn check_swift_docs(root: &FsPath, dirs: &[String]) -> Result<usize> {
     let decl = Regex::new(
         r"\b(?:public|open)\b[^/\n]*\b(?:func|var|let|struct|enum|class|protocol|typealias|init|subscript|actor|associatedtype)\b",
     )
@@ -269,7 +269,7 @@ fn check_swift_docs(root: &Path, dirs: &[String]) -> Result<usize> {
     Ok(checked)
 }
 
-fn collect_swift(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_swift(dir: &FsPath, out: &mut Vec<PathBuf>) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -316,7 +316,10 @@ fn symbol_label(decl_line: &str) -> String {
         .to_string()
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct TempDir {
+    #[field(get)]
     path: PathBuf,
 }
 
@@ -332,10 +335,6 @@ impl TempDir {
         ));
         fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
         Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
     }
 }
 

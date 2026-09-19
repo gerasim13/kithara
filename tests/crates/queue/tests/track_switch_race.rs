@@ -197,7 +197,7 @@ async fn wait_for_loader_done(
                 return Ok(());
             }
             TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
-            _ => {}
+            TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {}
         }
     }
     let matched = next_queue_event(&mut rx, deadline, |ev| {
@@ -279,7 +279,15 @@ async fn assert_no_barge_in(
     let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,
         QueueEvent::CurrentTrackChanged { id: Some(id) } => *id == slow_id,
-        _ => false,
+        QueueEvent::TrackAdded { .. }
+        | QueueEvent::TrackRemoved { .. }
+        | QueueEvent::TrackStatusChanged { .. }
+        | QueueEvent::CurrentTrackAdvance { .. }
+        | QueueEvent::TrackLoadFailed { .. }
+        | QueueEvent::CrossfadeDurationChanged { .. }
+        | QueueEvent::RepeatModeChanged { .. }
+        | QueueEvent::NextTrackReady { .. }
+        | QueueEvent::CrossfadeStarted { .. } => false,
     })
     .await;
     match terminal {

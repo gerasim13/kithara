@@ -177,7 +177,7 @@ async fn wait_for_loader_done(
                 TrackStatus::Failed(err) => {
                     return Err(format!("track entered Failed: {err}"));
                 }
-                _ => {}
+                TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {}
             }
         }
         if start.elapsed() >= deadline {

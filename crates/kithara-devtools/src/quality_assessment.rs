@@ -1,4 +1,4 @@
-use std::{fmt, io::Write as _, path::PathBuf};
+use std::{io::Write as _, path::PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
@@ -19,38 +19,46 @@ pub(crate) use summary::run as run_summary;
 
 use self::model::AnalysisStatus;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    derive_more::Display,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssessmentProfile {
     #[default]
+    #[display("product")]
     Product,
+    #[display("complete")]
     Complete,
 }
 
-impl fmt::Display for AssessmentProfile {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Product => "product",
-            Self::Complete => "complete",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    derive_more::Display,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssessmentDepth {
     #[default]
+    #[display("standard")]
     Standard,
+    #[display("deep")]
     Deep,
-}
-
-impl fmt::Display for AssessmentDepth {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Standard => "standard",
-            Self::Deep => "deep",
-        })
-    }
 }
 
 #[derive(Debug, Args)]

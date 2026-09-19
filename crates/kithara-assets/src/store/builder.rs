@@ -146,7 +146,7 @@ where
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves

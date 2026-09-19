@@ -2,7 +2,6 @@ use kithara_events::Event;
 
 /// Facts committed by the session transport owner.
 #[derive(Clone, Debug, Event, PartialEq)]
-#[non_exhaustive]
 pub enum TransportEvent {
     TempoCommitted {
         beats_per_minute: f64,

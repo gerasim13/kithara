@@ -1,5 +1,3 @@
-use std::fmt;
-
 use kithara_platform::sync::Arc;
 use parley::{
     FontData,
@@ -52,13 +50,17 @@ impl FaceBlobs {
 
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
+#[derive(derive_more::Debug)]
 pub(crate) struct TextResources {
+    #[debug(skip)]
     collection: Collection,
     fonts: [FontId; 10],
     #[field(get, vis = "pub(super)", copy)]
+    #[debug(skip)]
     faces: FaceBlobs,
     policy: FontPolicy,
     #[cfg(feature = "render")]
+    #[debug(skip)]
     outlines: Vec<OutlineGlyphCollection<'static>>,
 }
 
@@ -97,16 +99,6 @@ impl TextResources {
     #[cfg(feature = "render")]
     pub(crate) fn outlines(&self, font: FontId) -> &OutlineGlyphCollection<'static> {
         &self.outlines[font.index()]
-    }
-}
-
-impl fmt::Debug for TextResources {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TextResources")
-            .field("fonts", &self.fonts)
-            .field("policy", &self.policy)
-            .finish_non_exhaustive()
     }
 }
 

@@ -53,6 +53,7 @@ impl DemandCell {
 /// Wraps Stream in `Arc<Mutex>` to allow:
 /// - Decoder to read via Read + Seek
 /// - `StreamAudioSource` to check `media_info()` for format changes
+#[derive_where::derive_where(Clone; T: StreamType)]
 pub(crate) struct SharedStream<T: StreamType> {
     demand: Arc<DemandCell>,
     inner: Arc<Mutex<Stream<T>>>,
@@ -236,20 +237,6 @@ impl<T: StreamType> SharedStream<T> {
             /// write/settle sites; no-op for non-segmented sources. Set once,
             /// after the worker exists.
             pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>);
-        }
-    }
-}
-
-impl<T: StreamType> Clone for SharedStream<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            probe: Arc::clone(&self.probe),
-            abr: self.abr.clone(),
-            variants: self.variants.clone(),
-            peer_wake: self.peer_wake.clone(),
-            demand: Arc::clone(&self.demand),
-            construction_gate: self.construction_gate.clone(),
         }
     }
 }

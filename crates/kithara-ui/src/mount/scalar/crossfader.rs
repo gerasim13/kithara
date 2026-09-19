@@ -1,17 +1,11 @@
 use bon::Builder;
 
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// A horizontal fader centred on its midpoint.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.crossfader.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Crossfader {
     pub(crate) ticks: bool,
-}
-
-impl Control for Crossfader {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.crossfader.size
-    }
 }
 
 #[cfg(feature = "render")]

@@ -96,14 +96,15 @@ impl TrackSpec {
         }
     }
 
-    pub const fn with_abr_mode(mut self, mode: AbrMode) -> Self {
-        self.abr_mode = mode;
-        self
-    }
-
-    pub const fn with_backend(mut self, backend: DecoderBackend) -> Self {
-        self.backend = backend;
-        self
+    delegate::delegate! {
+        to self {
+            #[field(abr_mode)]
+            #[expr({ $ = mode; self })]
+            pub const fn with_abr_mode(mut self, mode: AbrMode) -> Self;
+            #[field(backend)]
+            #[expr({ $ = backend; self })]
+            pub const fn with_backend(mut self, backend: DecoderBackend) -> Self;
+        }
     }
 }
 
@@ -226,8 +227,21 @@ impl SimHarness {
         self.track_ids[idx]
     }
 
-    pub fn subscribe(&self) -> EventReceiver<TestEvent> {
-        self.queue.subscribe()
+    delegate::delegate! {
+        to self.queue {
+            pub fn subscribe(&self) -> EventReceiver<TestEvent>;
+            fn current_abr_handle(&self) -> Option<AbrHandle>;
+            #[expr($.unwrap_or(0.0))]
+            #[call(position_seconds)]
+            fn position(&self) -> f64;
+            #[expr($.unwrap_or(0.0))]
+            #[call(duration_seconds)]
+            fn duration(&self) -> f64;
+            fn is_playing(&self) -> bool;
+            #[expr($.map(|e| e.id))]
+            #[call(current)]
+            fn current_track_id(&self) -> Option<TrackId>;
+        }
     }
 
     /// Start playback of the queue track at `idx`: select it, wait for
@@ -296,26 +310,6 @@ impl SimHarness {
     fn current_codec(&self) -> Option<String> {
         let variant = self.queue.current_variant()?;
         variant.codecs.or(variant.container)
-    }
-
-    fn current_abr_handle(&self) -> Option<AbrHandle> {
-        self.queue.current_abr_handle()
-    }
-
-    fn position(&self) -> f64 {
-        self.queue.position_seconds().unwrap_or(0.0)
-    }
-
-    fn duration(&self) -> f64 {
-        self.queue.duration_seconds().unwrap_or(0.0)
-    }
-
-    fn is_playing(&self) -> bool {
-        self.queue.is_playing()
-    }
-
-    fn current_track_id(&self) -> Option<TrackId> {
-        self.queue.current().map(|e| e.id)
     }
 
     /// True when the current track has reached natural EOF and the
@@ -814,7 +808,10 @@ where
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
             TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-            _ => {}
+            TrackStatus::Pending
+            | TrackStatus::Loading
+            | TrackStatus::Slow
+            | TrackStatus::Cancelled => {}
         }
     }
     let mut rx = queue.subscribe();
@@ -826,7 +823,10 @@ where
                 match &entry.status {
                     TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
                     TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => {}
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Cancelled => {}
                 }
             }
             let Some(ev) = recv_event(&mut rx).await? else {
@@ -838,7 +838,10 @@ where
                 match status {
                     TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
                     TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => {}
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Cancelled => {}
                 }
             }
         }

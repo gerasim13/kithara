@@ -53,7 +53,7 @@ pub struct FlushPolicy {
     /// long before draining dirty sources, so a burst of mutations
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub debounce: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes

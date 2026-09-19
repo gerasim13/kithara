@@ -21,6 +21,7 @@ required-features = ["all"]
 native-fixtures = [
     "dep:bon",
     "dep:delegate",
+    "dep:derive_more",
     "dep:fs4",
     "dep:inventory",
     "dep:kithara-encode",
@@ -97,6 +98,7 @@ kithara-stream = { workspace = true, default-features = false, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 delegate = { workspace = true, optional = true }
+derive_more = { workspace = true, optional = true }
 fs4 = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
@@ -123,6 +125,7 @@ cbc = { workspace = true, optional = true }
 cochlea-render = { workspace = true, optional = true }
 cochlea-score = { workspace = true, optional = true }
 delegate = { workspace = true, optional = true }
+derive_more = { workspace = true, optional = true }
 fs4 = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
 hex = { workspace = true }

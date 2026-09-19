@@ -31,6 +31,7 @@ pub trait WaitGate {
 
 /// Off-RT condvar gate over guarded state `S`. See the module docs for the
 /// guarded-state vs edge usage.
+#[derive(Default)]
 pub struct CondvarGate<S> {
     cv: Condvar,
     state: Mutex<S>,
@@ -64,15 +65,6 @@ impl<S> CondvarGate<S> {
             #[must_use]
             #[call(wait_timeout)]
             pub fn wait_until<'a>(&self, guard: MutexGuard<'a, S>, deadline: Instant) -> MutexGuard<'a, S>;
-        }
-    }
-}
-
-impl<S: Default> Default for CondvarGate<S> {
-    fn default() -> Self {
-        Self {
-            state: Mutex::new(S::default()),
-            cv: Condvar::default(),
         }
     }
 }

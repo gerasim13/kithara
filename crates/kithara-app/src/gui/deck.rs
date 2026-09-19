@@ -4,6 +4,7 @@ use kithara::{
     play::effects::eq::GainDb,
     queue::{AdvanceReason, TrackId, Transition},
 };
+use kithara_derive::Ranged;
 use tracing::{debug, error};
 
 use crate::{
@@ -41,21 +42,25 @@ pub(crate) struct DeckView {
 
 /// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
 /// `+TEMPO_RANGE`.
-pub(crate) const TEMPO_RANGE: f32 = 50.0;
+pub(crate) const TEMPO_RANGE: f32 = TempoPercent::MAX.0;
 
 /// What one wheel detent over the TEMPO block is worth, in percent.
 pub(crate) const TEMPO_STEP: f32 = 1.5;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TimestretchState {
-    pub(crate) tempo: f32,
+    pub(crate) tempo: TempoPercent,
 }
 
 impl TimestretchState {
     pub(crate) fn speed(self) -> f32 {
-        1.0 + self.tempo / 100.0
+        1.0 + f32::from(self.tempo) / 100.0
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Ranged)]
+#[ranged(min = -50.0, max = 50.0, default = 0.0, clamp)]
+pub(crate) struct TempoPercent(pub(crate) f32);
 
 /// Everything a single deck can be told to do. Carries no deck identity: the
 /// composer that renders a deck maps this into `Message::Deck(id, msg)`.
@@ -68,7 +73,7 @@ pub(crate) enum DeckMsg {
     SeekTo(f64),
     EqBandChanged(usize, GainDb),
     DeleteTrack,
-    SetTempo(f32),
+    SetTempo(TempoPercent),
     SetQuality(Option<usize>),
 }
 
@@ -169,9 +174,9 @@ fn delete_track(deck: &mut DeckUi) {
 }
 
 /// Live tempo: clamp to the travel and mirror the speed to this deck's queue.
-fn set_tempo(deck: &mut DeckUi, tempo: f32) {
+fn set_tempo(deck: &mut DeckUi, tempo: TempoPercent) {
     let timestretch = &mut deck.view.timestretch;
-    timestretch.tempo = tempo.clamp(-TEMPO_RANGE, TEMPO_RANGE);
+    timestretch.tempo = tempo;
     deck.controller.queue().set_rate(timestretch.speed());
 }
 
@@ -179,11 +184,16 @@ fn set_tempo(deck: &mut DeckUi, tempo: f32) {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{TEMPO_RANGE, TEMPO_STEP, TimestretchState};
+    use super::{TEMPO_RANGE, TEMPO_STEP, TempoPercent, TimestretchState};
 
     #[kithara::test]
     fn speed_is_one_percent_per_tempo_point() {
-        let speed = |tempo| TimestretchState { tempo }.speed();
+        let speed = |tempo| {
+            TimestretchState {
+                tempo: TempoPercent::from(tempo),
+            }
+            .speed()
+        };
 
         assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
         assert!((speed(TEMPO_RANGE) - 1.5).abs() < 1e-6);
@@ -199,5 +209,13 @@ mod tests {
             detents <= REACH,
             "one end of the travel takes {detents} detents"
         );
+    }
+
+    #[kithara::test]
+    fn tempo_percent_clamps_controls_and_rejects_non_finite_documents() {
+        assert_eq!(TempoPercent::from(-80.0), TempoPercent::MIN);
+        assert_eq!(TempoPercent::from(80.0), TempoPercent::MAX);
+        assert_eq!(TempoPercent::from(f32::NAN), TempoPercent::DEFAULT);
+        assert!(TempoPercent::checked(f32::INFINITY).is_none());
     }
 }

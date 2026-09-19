@@ -180,12 +180,11 @@ impl SyncCase {
         self.id
     }
 
-    const fn start_bpm(self) -> f64 {
-        self.ride.start_bpm()
-    }
-
-    pub(super) const fn final_bpm(self) -> f64 {
-        self.ride.final_bpm()
+    delegate::delegate! {
+        to self.ride {
+            const fn start_bpm(self) -> f64;
+            pub(super) const fn final_bpm(self) -> f64;
+        }
     }
 }
 

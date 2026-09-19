@@ -7,7 +7,6 @@ use kithara_stream::SeekEpoch;
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum SeekLifecycleStage {
     SeekRequest,
     SeekApplied,
@@ -48,7 +47,6 @@ impl SegmentLocation {
 
 /// Events from the audio pipeline.
 #[derive(Debug, Clone, Event)]
-#[non_exhaustive]
 pub enum AudioEvent {
     /// Audio format detected.
     FormatDetected { spec: AudioSpec },
@@ -123,7 +121,6 @@ pub enum AudioEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum PlaybackResamplerKind {
     Rubato,
     Glide,
@@ -131,7 +128,6 @@ pub enum PlaybackResamplerKind {
 }
 
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub enum TrackFailureKind {
     Decode,
     RecreateFailed { offset: u64 },

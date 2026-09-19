@@ -52,18 +52,12 @@ const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Builder, kithara_derive::BuiltDefault)]
 pub(crate) struct CrossfadeSettings {
     #[builder(default)]
     pub(crate) curve: CrossfadeCurve,
     #[builder(default = 1.0)]
     pub(crate) duration: f32,
-}
-
-impl Default for CrossfadeSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 impl CrossfadeSettings {

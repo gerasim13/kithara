@@ -494,38 +494,6 @@ impl<'a> From<Flex<'a>> for Element<'a, UiEvent> {
     }
 }
 
-impl From<Alignment> for solve::Alignment {
-    fn from(alignment: Alignment) -> Self {
-        match alignment {
-            Alignment::Start => Self::Start,
-            Alignment::Center => Self::Center,
-            Alignment::End => Self::End,
-        }
-    }
-}
-
-impl From<Length> for solve::Length {
-    fn from(length: Length) -> Self {
-        match length {
-            Length::Fill => Self::Fill,
-            Length::FillPortion(factor) => Self::FillPortion(factor),
-            Length::Shrink => Self::Shrink,
-            Length::Fixed(amount) => Self::Fixed(amount),
-        }
-    }
-}
-
-impl From<Padding> for solve::Padding {
-    fn from(padding: Padding) -> Self {
-        Self {
-            top: padding.top,
-            right: padding.right,
-            bottom: padding.bottom,
-            left: padding.left,
-        }
-    }
-}
-
 impl From<solve::Point> for iced::Point {
     fn from(point: solve::Point) -> Self {
         Self::new(point.x, point.y)

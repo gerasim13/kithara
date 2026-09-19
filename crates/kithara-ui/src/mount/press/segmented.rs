@@ -1,17 +1,13 @@
 use bon::Builder;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::ids::InternId;
 
 /// A row of mutually exclusive segments, one of them picked.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.segmented.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Segmented<'a> {
     pub(crate) items: &'a [InternId],
-}
-
-impl Control for Segmented<'_> {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.segmented.size
-    }
 }
 
 #[cfg(feature = "render")]

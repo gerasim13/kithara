@@ -20,6 +20,7 @@ use crate::{HlsError, HlsResult, handle::PlaylistPeer};
 ///
 /// Clone-friendly: all mutable state lives behind `Arc`, so clones see
 /// the same master/media `OnceCell` buckets and configured headers/URLs.
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub struct PlaylistCache<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -42,20 +43,6 @@ struct PlaylistConfig {
     base_url: Option<Url>,
     headers: Option<Headers>,
     master_url: Option<Url>,
-}
-
-impl<S> Clone for PlaylistCache<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            config: Arc::clone(&self.config),
-            master: Arc::clone(&self.master),
-            media: Arc::clone(&self.media),
-            fetch: self.fetch.clone(),
-        }
-    }
 }
 
 impl<S> PlaylistCache<S>

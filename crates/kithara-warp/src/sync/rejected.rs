@@ -3,12 +3,15 @@ use std::fmt;
 use super::{SyncError, SyncGroup, SyncOperation};
 
 /// A rejected transaction together with the operation whose ownership was not accepted.
-#[derive(fieldwork::Fieldwork)]
+#[derive(derive_more::Display, derive_more::Error, fieldwork::Fieldwork)]
+#[display("{error}")]
+#[error(ignore)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncRejected<G: SyncGroup> {
     /// Returns the reason the transaction was rejected.
     #[field(get)]
+    #[error(source)]
     error: SyncError,
     /// Returns the still-owned operation that was not committed.
     #[field(get)]
@@ -36,17 +39,5 @@ impl<G: SyncGroup> fmt::Debug for SyncRejected<G> {
             .field("error", &self.error)
             .field("operation_target", &self.operation.target())
             .finish_non_exhaustive()
-    }
-}
-
-impl<G: SyncGroup> fmt::Display for SyncRejected<G> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.error.fmt(formatter)
-    }
-}
-
-impl<G: SyncGroup> std::error::Error for SyncRejected<G> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
     }
 }

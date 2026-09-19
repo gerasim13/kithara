@@ -21,19 +21,19 @@ pub struct DispatcherConfig {
     pub(crate) observer: Box<dyn Observer>,
     /// Poll interval for deferred wakes while a task's sink is full.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no task expects progress.
     #[builder(default = Duration::from_millis(100))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow tick.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while tasks are waiting.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
     #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]

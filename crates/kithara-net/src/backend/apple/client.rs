@@ -177,10 +177,15 @@ impl RawAppleNet {
 
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
+#[derive(derive_more::Debug)]
 pub struct AppleNet {
+    #[debug(skip)]
     session: AppleSession,
+    #[debug(skip)]
     net: Arc<RetryNet<RawAppleNet>>,
+    #[debug(skip)]
     cancel: CancelToken,
+    #[debug(skip)]
     connection_metrics: ConnectionMetrics,
     #[field(get)]
     options: NetOptions,
@@ -275,14 +280,6 @@ impl AppleNet {
             /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
             pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream>;
         }
-    }
-}
-
-impl std::fmt::Debug for AppleNet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AppleNet")
-            .field("options", &self.options)
-            .finish_non_exhaustive()
     }
 }
 

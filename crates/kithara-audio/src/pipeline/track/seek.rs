@@ -18,17 +18,15 @@ use crate::pipeline::{
 };
 
 /// Consumer requested a seek; not yet applied.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = SeekRequest,
+    track = Track,
+    erase = CurrentFsm::SeekRequested
+)]
 pub(crate) struct SeekRequested;
-
-impl sealed::Sealed for SeekRequested {}
-
-impl TrackPhase for SeekRequested {
-    type Data = SeekRequest;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::SeekRequested(track)
-    }
-}
 
 impl Track<SeekRequested> {
     pub(crate) fn step<T: StreamType>(
@@ -67,17 +65,15 @@ impl Track<SeekRequested> {
 }
 
 /// Actively applying a seek to the decoder.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = ApplySeekState,
+    track = Track,
+    erase = CurrentFsm::ApplyingSeek
+)]
 pub(crate) struct ApplyingSeek;
-
-impl sealed::Sealed for ApplyingSeek {}
-
-impl TrackPhase for ApplyingSeek {
-    type Data = ApplySeekState;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::ApplyingSeek(track)
-    }
-}
 
 impl Track<ApplyingSeek> {
     pub(crate) fn step<T: StreamType>(
@@ -153,17 +149,15 @@ impl Track<ApplyingSeek> {
 }
 
 /// Decoder recreated / seek applied; waiting for first valid chunk.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = ResumeState,
+    track = Track,
+    erase = CurrentFsm::AwaitingResume
+)]
 pub(crate) struct AwaitingResume;
-
-impl sealed::Sealed for AwaitingResume {}
-
-impl TrackPhase for AwaitingResume {
-    type Data = ResumeState;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::AwaitingResume(track)
-    }
-}
 
 impl Track<AwaitingResume> {
     pub(crate) fn step<T: StreamType>(
@@ -234,17 +228,15 @@ pub enum WaitingReason {
 }
 
 /// Waiting for the underlying source to become ready.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = WaitState,
+    track = Track,
+    erase = CurrentFsm::WaitingForSource
+)]
 pub(crate) struct WaitingForSource;
-
-impl sealed::Sealed for WaitingForSource {}
-
-impl TrackPhase for WaitingForSource {
-    type Data = WaitState;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::WaitingForSource(track)
-    }
-}
 
 impl Track<WaitingForSource> {
     pub(crate) fn step<T: StreamType>(

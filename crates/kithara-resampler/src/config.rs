@@ -30,6 +30,7 @@ pub struct RatioGlide {
 #[builder(const, state_mod(vis = "pub"))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct ResamplerOptions {
     #[builder(default = 8.0)]
     pub max_ratio_adjustment: f64,
@@ -39,15 +40,10 @@ pub struct ResamplerOptions {
     pub chunk_size: usize,
 }
 
-impl Default for ResamplerOptions {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
 pub struct ResamplerSettings<S> {
     pub channels: NonZeroUsize,
     pub pools: PoolRegion<S>,
@@ -56,18 +52,6 @@ pub struct ResamplerSettings<S> {
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-}
-
-impl<S> Clone for ResamplerSettings<S> {
-    fn clone(&self) -> Self {
-        Self {
-            channels: self.channels,
-            pools: self.pools.clone(),
-            mode: self.mode,
-            options: self.options,
-            quality: self.quality,
-        }
-    }
 }
 
 impl<S> fmt::Debug for ResamplerSettings<S> {
@@ -101,21 +85,10 @@ impl<S> ResamplerSettings<S> {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone; B: Clone)]
 pub struct ResamplerConfig<B, S> {
     pub backend: B,
     pub settings: ResamplerSettings<S>,
-}
-
-impl<B, S> Clone for ResamplerConfig<B, S>
-where
-    B: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            backend: self.backend.clone(),
-            settings: self.settings.clone(),
-        }
-    }
 }
 
 impl<B, S> fmt::Debug for ResamplerConfig<B, S>

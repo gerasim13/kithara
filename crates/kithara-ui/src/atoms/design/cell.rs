@@ -7,7 +7,12 @@ use crate::{
 };
 
 /// A framed box with a caption under it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = crate::atoms::painter::CellData,
+    draw = self.paint(list, text, data.label.as_deref(), data.highlighted, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Cell {
     metrics: CellSkin,
     highlighted: Face,

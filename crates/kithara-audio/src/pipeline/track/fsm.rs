@@ -43,17 +43,15 @@ pub enum TrackStep<C> {
 }
 
 /// Terminal failure.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = TrackFailure,
+    track = Track,
+    erase = CurrentFsm::Failed
+)]
 pub(crate) struct Failed;
-
-impl sealed::Sealed for Failed {}
-
-impl TrackPhase for Failed {
-    type Data = TrackFailure;
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::Failed(track)
-    }
-}
 
 /// Terminal failure reasons.
 #[derive(Debug)]

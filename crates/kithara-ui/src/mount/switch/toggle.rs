@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// A sliding switch bound to one boolean endpoint.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.toggle.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Toggle;
-
-impl Control for Toggle {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.toggle.size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

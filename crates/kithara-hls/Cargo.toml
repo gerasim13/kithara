@@ -46,7 +46,7 @@ tls-native = [
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch", "phase"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
@@ -62,6 +62,7 @@ bon = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures = { workspace = true }

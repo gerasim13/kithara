@@ -9,6 +9,7 @@ use crate::draw::DrawBuffers;
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct Limits {
     #[builder(default = 256 * 1024)]
     pub max_bytes: usize,
@@ -22,6 +23,7 @@ pub struct Limits {
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct DrawPoolLimits {
     /// Command slots retained by one returned draw-list buffer.
     #[builder(default = 512)]
@@ -40,18 +42,6 @@ pub struct DrawPoolLimits {
     pub text_capacity: usize,
 }
 
-impl Default for DrawPoolLimits {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 /// Compiled screens the retained host keeps while a document turns between
 /// its pages. The immediate host compiles both deck layouts up front and
 /// keeps no screen cache of its own, so it never reads this.
@@ -66,6 +56,7 @@ pub const SCREEN_CACHE: usize = 8;
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct UiConfig {
     /// The extension kinds the application registers with its hosts.
     ///
@@ -116,12 +107,6 @@ pub struct UiConfig {
     #[builder(default)]
     #[patch(skip)]
     pub draw_buffers: DrawBuffers,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

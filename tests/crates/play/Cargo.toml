@@ -31,6 +31,8 @@ kithara-test-fixtures = { workspace = true, default-features = false, features =
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 cochlea-features = { workspace = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
 firewheel = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }

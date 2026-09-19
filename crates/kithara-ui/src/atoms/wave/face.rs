@@ -5,7 +5,7 @@ use super::{
     overlay::{Overlay, OverlayPalette},
     paint::{WavePaint, WavePalette},
     snapshot::{OverlayData, WaveformData},
-    zoom_math::clamp_zoom,
+    zoom_math::Zoom,
 };
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
@@ -38,7 +38,7 @@ pub(crate) struct Drawn {
     /// How far the host says the track is held, as a share of its length.
     pub(crate) cached: f32,
     pub(crate) progress: f32,
-    pub(crate) zoom: f32,
+    pub(crate) zoom: Zoom,
 }
 
 impl Wave {
@@ -102,7 +102,7 @@ impl Wave {
                 r#loop: waveform.loop_region,
                 cues: &waveform.cues,
             }),
-            zoom: data.zoom,
+            zoom: data.zoom.into(),
         }
     }
 
@@ -143,7 +143,7 @@ impl Drawn {
     /// the same scope.
     pub(crate) fn read(
         style: WaveStyle,
-        zoom: f32,
+        zoom: impl Into<Zoom>,
         badge: Option<&str>,
         value: Option<&ReadValue<'_>>,
         reads: &dyn Reads,
@@ -180,7 +180,7 @@ impl Drawn {
             }),
             progress,
             waveform: waveform.map(WaveformData::from),
-            zoom: clamp_zoom(zoom),
+            zoom: zoom.into(),
         }
     }
 
@@ -193,10 +193,10 @@ impl Drawn {
         let zoom = zoom
             .and_then(|endpoint| reads.get(endpoint))
             .and_then(|value| match value {
-                ReadValue::Scalar(value) => Some(value.as_()),
+                ReadValue::Scalar(value) => Some(AsPrimitive::<f32>::as_(value)),
                 _ => None,
             })
-            .map_or(self.zoom, clamp_zoom);
+            .map_or(self.zoom, Zoom::from);
         let cached = cached_extent(reads, scope, progress);
         let mut changed = std::mem::replace(&mut self.progress, progress) != progress;
         changed |= std::mem::replace(&mut self.cached, cached) != cached;
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(overlay.key, "9A");
         assert_eq!(overlay.remain, "-00:15");
         assert_eq!(data.progress, 0.75);
-        assert_eq!(data.zoom, 0.5);
+        assert_eq!(f32::from(data.zoom), 0.5);
     }
 
     /// The continuously repainted wave keeps its owned sample arrays when the

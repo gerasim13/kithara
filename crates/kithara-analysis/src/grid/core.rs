@@ -42,7 +42,7 @@ impl Consts {
     const STABLE_WINDOW_BARS: usize = 16;
 }
 
-#[derive(Builder, Debug, Clone, PartialEq)]
+#[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
 pub(crate) struct GridParams {
     #[builder(default = Consts::MAX_BAR_RATIO)]
     pub(crate) max_bar_ratio: f64,
@@ -66,12 +66,6 @@ pub(crate) struct GridParams {
     pub(crate) outlier_window: usize,
     #[builder(default = Consts::STABLE_WINDOW_BARS)]
     pub(crate) stable_window_bars: usize,
-}
-
-impl Default for GridParams {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 #[cfg(test)]

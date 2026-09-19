@@ -1,13 +1,10 @@
-use std::{
-    fmt,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
-use kithara_events::EventBus;
+use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
@@ -38,6 +35,10 @@ const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448
     None => unreachable!(),
 };
 
+fn default_event_bus_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_EVENT_BUS_CAPACITY).unwrap_or_else(|| unreachable!())
+}
+
 /// Configuration for the player.
 ///
 /// Holds the player's own tunables, the engine values it hands to the
@@ -49,6 +50,8 @@ const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
+#[derive(derive_more::Debug)]
 pub struct PlayerConfig<S> {
     /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
@@ -65,11 +68,13 @@ pub struct PlayerConfig<S> {
     /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
     #[builder(default = generate_log_spaced_bands(10))]
     #[patch(skip)]
+    #[debug(skip)]
     pub eq_layout: Vec<EqBandConfig>,
     /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
     /// player at construction, so it is not a document key.
     #[builder(default = true)]
     #[patch(skip)]
+    #[debug(skip)]
     pub auto_advance_enabled: bool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
@@ -80,6 +85,7 @@ pub struct PlayerConfig<S> {
     /// harness sets this, from Rust.
     #[builder(default)]
     #[patch(skip)]
+    #[debug(skip)]
     pub block_on_underrun: bool,
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
     #[builder(default = DEFAULT_CROSSFADE_DURATION)]
@@ -88,11 +94,16 @@ pub struct PlayerConfig<S> {
     /// [`DEFAULT_PLAYING_RATE`].
     #[builder(default = DEFAULT_PLAYING_RATE)]
     pub default_rate: f32,
+    /// Capacity of each event topic when this player creates its root bus.
+    /// An injected [`EventBus`] keeps its own capacity and identity.
+    #[builder(default = default_event_bus_capacity())]
+    pub event_bus_capacity: NonZeroUsize,
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
     #[builder(default = 3.5)]
     #[patch(skip)]
+    #[debug(skip)]
     pub prefetch_duration: f32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
@@ -101,6 +112,7 @@ pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
     #[builder(default = allocate_grid_id())]
     #[patch(skip)]
+    #[debug(skip)]
     pub(crate) grid_id: BeatGridId,
     /// Maximum accepted control-to-presented-audio response in output frames.
     #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
@@ -108,16 +120,20 @@ pub struct PlayerConfig<S> {
     pub(crate) response_budget_frames: NonZeroUsize,
     /// Shared ABR controller. When `None`, a default one is created.
     #[patch(skip)]
+    #[debug(skip)]
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
     #[patch(skip)]
+    #[debug(skip)]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
     #[patch(skip)]
+    #[debug(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     #[patch(skip)]
+    #[debug(skip)]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
@@ -131,45 +147,6 @@ pub struct PlayerConfig<S> {
     #[builder(default = WarpConfig::builder().build())]
     #[patch(nested)]
     pub(crate) warp: WarpConfig,
-}
-
-impl<S> Clone for PlayerConfig<S> {
-    fn clone(&self) -> Self {
-        Self {
-            grid_id: self.grid_id,
-            warp: self.warp.clone(),
-            response_budget_frames: self.response_budget_frames,
-            worker: self.worker.clone(),
-            gapless_mode: self.gapless_mode,
-            block_on_underrun: self.block_on_underrun,
-            auto_advance_enabled: self.auto_advance_enabled,
-            crossfade_duration: self.crossfade_duration,
-            default_rate: self.default_rate,
-            prefetch_duration: self.prefetch_duration,
-            sample_rate: self.sample_rate,
-            max_slots: self.max_slots,
-            eq_layout: self.eq_layout.clone(),
-            abr: self.abr.clone(),
-            bus: self.bus.clone(),
-            cancel: self.cancel.clone(),
-            session: self.session.clone(),
-        }
-    }
-}
-
-impl<S> fmt::Debug for PlayerConfig<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PlayerConfig")
-            .field("warp", &self.warp)
-            .field("response_budget_frames", &self.response_budget_frames)
-            .field("gapless_mode", &self.gapless_mode)
-            .field("crossfade_duration", &self.crossfade_duration)
-            .field("default_rate", &self.default_rate)
-            .field("sample_rate", &self.sample_rate)
-            .field("max_slots", &self.max_slots)
-            .field("worker", &self.worker)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(test)]
@@ -197,6 +174,7 @@ mod tests {
         assert!(config.auto_advance_enabled);
         assert!((config.crossfade_duration - 1.0).abs() < f32::EPSILON);
         assert!((config.default_rate - 1.0).abs() < f32::EPSILON);
+        assert_eq!(config.event_bus_capacity.get(), 1024);
         assert!((config.prefetch_duration - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
     }
@@ -214,6 +192,14 @@ mod document_tests {
     use kithara_test_utils::kithara;
 
     use super::{GaplessMode, PlayerConfigPatch, tests::config};
+
+    #[kithara::test(native, flash(false))]
+    fn zero_event_bus_capacity_is_rejected() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("event_bus_capacity: 0\n")
+            .expect_err("zero cannot construct NonZeroUsize");
+
+        assert!(error.to_string().contains("event_bus_capacity"), "{error}");
+    }
 
     /// `slot_ceiling` is not a prefix of any real field (unlike `max_slot`,
     /// which would pass this assertion vacuously because the error message

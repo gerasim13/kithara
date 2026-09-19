@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     io::{BufRead, BufReader},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
@@ -14,27 +13,17 @@ use url::Url;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, derive_more::From)]
+#[derive(Debug, derive_more::Display, derive_more::From)]
 pub(super) enum ClientError {
+    #[display("{_0}")]
     Unavailable(String),
-    TimedOut {
-        method: String,
-    },
+    #[display("rust-analyzer timed out during {method}")]
+    TimedOut { method: String },
+    #[display("{_0}")]
     Protocol(String),
     #[from]
+    #[display("rust-analyzer I/O: {_0}")]
     Io(std::io::Error),
-}
-
-impl fmt::Display for ClientError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable(message) | Self::Protocol(message) => formatter.write_str(message),
-            Self::TimedOut { method } => {
-                write!(formatter, "rust-analyzer timed out during {method}")
-            }
-            Self::Io(error) => write!(formatter, "rust-analyzer I/O: {error}"),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

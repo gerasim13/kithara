@@ -2,6 +2,8 @@ use super::Size;
 use crate::size::Dim;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(from = iced::Length))]
 pub(crate) enum Length {
     Fill,
     FillPortion(u16),

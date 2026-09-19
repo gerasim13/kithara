@@ -1,18 +1,14 @@
 use bon::Builder;
 
-use crate::{ids::InternId, module::FaderStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{ids::InternId, module::FaderStyle};
 
 /// A rail and a cap, dragged along the rail.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.fader.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Fader {
     pub(crate) style: FaderStyle,
     pub(crate) label: Option<InternId>,
-}
-
-impl Control for Fader {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.fader.size
-    }
 }
 
 #[cfg(feature = "render")]

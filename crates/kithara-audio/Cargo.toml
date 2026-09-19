@@ -12,7 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = ["symphonia", "resample-rubato", "client-reqwest", "tls-rustls"]
 usdt = ["kithara-test-utils/usdt"]
-mock = ["dep:unimock"]
+mock = ["dep:unimock", "kithara-stream/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-stream/client-reqwest", "kithara-abr/client-reqwest", "kithara-decode/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq", "kithara-abr/client-wreq", "kithara-decode/client-wreq"]
@@ -42,7 +42,7 @@ resample-rubato = ["kithara-resampler/resample-rubato"]
 kithara-abr = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "phase"] }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
@@ -55,6 +55,7 @@ arc-swap = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }
