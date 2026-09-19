@@ -722,14 +722,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     ///   is not yet inserted into the engine.
     public func selectItem(at index: Int, transition: Transition = .none) throws {
         let snapshot = items()
-        let itemId = snapshot.indices.contains(index) ? snapshot[index].audioId : nil
-        do {
-            try _inner.selectItem(index: UInt32(index), transition: transition.ffi)
-        } catch let ffiError as FfiError {
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: itemId)
+        guard snapshot.indices.contains(index) else {
+            let error = KitharaError.invalidArgument("queue index \(index) out of range")
+            publishCommandError(error, itemId: nil)
             throw error
         }
+        try select(snapshot[index], transition: transition)
     }
 
     /// Select an item by identity (AVQueuePlayer-style).
@@ -746,12 +744,22 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
         let snapshot = items()
-        guard let index = snapshot.firstIndex(where: { $0.ffiTrackId == item.ffiTrackId }) else {
+        guard snapshot.contains(where: { $0.ffiTrackId == item.ffiTrackId }) else {
             let error = KitharaError.invalidArgument("item \(item.id) not in queue")
             publishCommandError(error, itemId: item.audioId)
             throw error
         }
-        try selectItem(at: index, transition: transition)
+        try select(item, transition: transition)
+    }
+
+    private func select(_ item: KitharaPlayerItem, transition: Transition) throws {
+        do {
+            try _inner.select(item: item._inner, transition: transition.ffi)
+        } catch let ffiError as FfiError {
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: item.audioId)
+            throw error
+        }
     }
 
     public var crossfadeSettings: CrossfadeSettings {
