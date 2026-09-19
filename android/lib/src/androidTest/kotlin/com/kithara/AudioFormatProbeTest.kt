@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,7 +41,6 @@ class AudioFormatProbeTest {
         val name = Kithara.Test.SampleFormat.name(code)
         Log.i(TAG, "cpal default output sample format: $name ($code)")
 
-        assertTrue("probe must not return a negative error code; got $name", code >= 0)
         assertEquals(
             "cpal default output must be F32 on Android to match the firewheel graph output. " +
                 "A different format ($name) means cpal converts every sample before sending to " +

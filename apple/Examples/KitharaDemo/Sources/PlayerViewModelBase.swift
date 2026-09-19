@@ -47,7 +47,7 @@ class PlayerViewModelBase: ObservableObject {
     @Published var currentTrackId: TrackId?
     @Published var volume: Float = 1.0
     @Published var isMuted = false
-    @Published var selectedRate: Float = 1.0
+    @Published var selectedRate: Float = PlayerViewModelBase.defaultRate
     @Published var eqGains: [Float] = []
     @Published var currentVariantLabel: String?
     @Published var discoveredVariants: [(index: UInt32, label: String)] = []
@@ -59,11 +59,36 @@ class PlayerViewModelBase: ObservableObject {
 
     /// Engine instance. Subclasses install event subscriptions during
     /// `bindEvents()` (invoked from `init`).
-    let player = KitharaPlayer(
-        config: KitharaPlayer.Config(
-            store: AssetStore(root: PlayerViewModelBase.defaultCacheDir)
+    let player = PlayerViewModelBase.makePlayer()
+
+    /// Build the demo player. Every DRM rule, the crossfade window and the
+    /// asset store are initial state, so they are declared here once rather
+    /// than mutated after construction.
+    static func makePlayer() -> KitharaPlayer {
+        let rules = bundledDrmProviders().map { provider -> KitharaPlayer.KeyRule in
+            let salt = provider.salt
+            let cipherKey = provider.cipherKey
+            let processor = ClosureKeyProcessor { encryptedKey, _ in
+                let cipher = Cipher(key: cipherKey + salt)
+                return cipher.decrypt(encryptedKey)
+            }
+            return KitharaPlayer.KeyRule(
+                processor: processor,
+                domains: provider.domains,
+                headers: provider.headers,
+                queryParams: nil,
+                salt: salt
+            )
+        }
+        return KitharaPlayer(
+            config: KitharaPlayer.Config(
+                keyRules: rules,
+                store: AssetStore(root: defaultCacheDir),
+                crossfadeDuration: defaultCrossfadeSeconds,
+                playingRate: defaultRate
+            )
         )
-    )
+    }
 
     /// Self-managed cache directory: `~/Library/Application Support/kithara`.
     ///
@@ -119,27 +144,8 @@ class PlayerViewModelBase: ObservableObject {
     init() {
         volume = player.volume
         isMuted = player.isMuted
-        player.playingRate = selectedRate
         eqGains = Array(repeating: 0, count: player.eqBandCount)
-        player.crossfadeDuration = Self.defaultCrossfadeSeconds
-        crossfadeDuration = Self.defaultCrossfadeSeconds
-
-        for provider in bundledDrmProviders() {
-            let salt = provider.salt
-            let cipherKey = provider.cipherKey
-            let processor = ClosureKeyProcessor { encryptedKey, _ in
-                let cipher = Cipher(key: cipherKey + salt)
-                return cipher.decrypt(encryptedKey)
-            }
-            let rule = KitharaPlayer.KeyRule(
-                processor: processor,
-                domains: provider.domains,
-                headers: provider.headers,
-                queryParams: nil,
-                salt: salt
-            )
-            player.setupHlsAes(rule: rule)
-        }
+        crossfadeDuration = player.crossfadeDuration
 
         bindEvents()
 
@@ -151,7 +157,7 @@ class PlayerViewModelBase: ObservableObject {
     // MARK: - Subclass hooks
 
     /// Attach subscriptions to player-level event streams. Called
-    /// from `init` AFTER DRM setup. Combine subclass attaches a
+    /// from `init`. Combine subclass attaches a
     /// Combine `sink`; Rx subclass attaches RxSwift `subscribe`.
     func bindEvents() {
         fatalError("override in subclass")
@@ -283,6 +289,7 @@ class PlayerViewModelBase: ObservableObject {
     // MARK: - Rate
 
     static let availableRates: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    static let defaultRate: Float = 1.0
 
     func setRate(_ rate: Float) {
         selectedRate = rate

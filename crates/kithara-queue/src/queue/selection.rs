@@ -40,10 +40,19 @@ where
         transition: Transition,
         reason: AdvanceReason,
     ) -> Result<(), QueueError> {
-        // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
-        // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
+        let autoplay = Self::start_intent(reason, self.player.is_playing());
+        self.select_with_start_intent(id, transition, reason, autoplay)
+    }
+
+    pub(in crate::queue) fn select_with_start_intent(
+        &self,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+        autoplay: bool,
+    ) -> Result<(), QueueError> {
         let _apply = self.lock_select_apply();
-        self.select_with_reason_locked(id, transition, reason)
+        self.select_with_reason_locked(id, transition, reason, autoplay)
     }
 
     pub(super) fn select_with_reason_locked(
@@ -51,6 +60,7 @@ where
         id: TrackId,
         transition: Transition,
         reason: AdvanceReason,
+        autoplay: bool,
     ) -> Result<(), QueueError> {
         let (index, status) = {
             let guard = self.lock_tracks();
@@ -70,17 +80,27 @@ where
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                self.select_loaded_item(index, id, transition, reason)?;
+                self.select_loaded_item(index, id, transition, reason, autoplay)?;
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
-                self.override_pending_select(PendingSelect { id, transition });
+                self.override_pending_select(PendingSelect {
+                    id,
+                    transition,
+                    reason,
+                    autoplay,
+                });
                 self.promote_pending_load(id);
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
                 let source = self.tracks.source(id).ok_or(QueueError::NotReady(id))?;
-                self.override_pending_select(PendingSelect { id, transition });
+                self.override_pending_select(PendingSelect {
+                    id,
+                    transition,
+                    reason,
+                    autoplay,
+                });
                 self.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
@@ -94,6 +114,7 @@ where
         id: TrackId,
         transition: Transition,
         reason: AdvanceReason,
+        autoplay: bool,
     ) -> Result<(), QueueError> {
         let was_playing = self.player.is_playing();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
@@ -105,7 +126,7 @@ where
         self.player.select_item_with_crossfade(
             index,
             SelectTransition {
-                autoplay: true,
+                autoplay,
                 crossfade_seconds: crossfade,
             },
         )?;
@@ -116,6 +137,24 @@ where
         });
         self.set_status(id, TrackStatus::Consumed);
         Ok(())
+    }
+
+    /// Whether the selection starts playback: picking a track is itself a
+    /// request to hear it, and an automatic advance through the queue always
+    /// continues the session. A reason that replaces what the listener chose
+    /// keeps the current transport instead.
+    fn start_intent(reason: AdvanceReason, was_playing: bool) -> bool {
+        match reason {
+            AdvanceReason::UserNext
+            | AdvanceReason::UserPrev
+            | AdvanceReason::RemovedCurrent
+            | AdvanceReason::Cancelled => was_playing,
+            AdvanceReason::UserSelect
+            | AdvanceReason::NaturalEof
+            | AdvanceReason::TrackFailed
+            | AdvanceReason::CrossfadePreArm
+            | AdvanceReason::Repeat => true,
+        }
     }
 }
 
@@ -157,6 +196,8 @@ mod tests {
             SelectPhase::Pending(pending) => {
                 assert_eq!(pending.id, id);
                 assert_eq!(pending.transition, Transition::None);
+                assert_eq!(pending.reason, AdvanceReason::UserSelect);
+                assert!(pending.autoplay);
             }
             SelectPhase::Idle => panic!("BUG: select stashes pending entry"),
         }
@@ -217,5 +258,44 @@ mod tests {
             Some(0),
             "navigation must stay on the audible item until pending select commits"
         );
+        let phase = *queue
+            .pending_select
+            .lock()
+            .expect("BUG: pending_select Mutex is not held across await");
+        match phase {
+            SelectPhase::Pending(pending) => {
+                assert_eq!(pending.reason, AdvanceReason::NaturalEof);
+                assert!(pending.autoplay);
+            }
+            SelectPhase::Idle => panic!("BUG: advance stashes pending entry"),
+        }
+    }
+
+    #[kithara::test(tokio)]
+    async fn failed_advance_stashes_start_intent_until_load_completes() {
+        let queue = make_queue();
+        let first = append(&queue, "https://example.com/a.mp3");
+        let second = append(&queue, "https://example.com/b.mp3");
+        queue.lock_navigation_mut().select(0);
+        queue.set_status(first, TrackStatus::Consumed);
+        queue.set_status(second, TrackStatus::Pending);
+
+        assert_eq!(
+            queue
+                .advance_to_next(Transition::None, AdvanceReason::TrackFailed)
+                .expect("BUG: open queue advance must be admitted"),
+            Some(second)
+        );
+        let phase = *queue
+            .pending_select
+            .lock()
+            .expect("BUG: pending_select Mutex is not held across await");
+        match phase {
+            SelectPhase::Pending(pending) => {
+                assert_eq!(pending.reason, AdvanceReason::TrackFailed);
+                assert!(pending.autoplay);
+            }
+            SelectPhase::Idle => panic!("BUG: failed advance stashes pending entry"),
+        }
     }
 }

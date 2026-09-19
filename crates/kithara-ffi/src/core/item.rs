@@ -14,21 +14,25 @@ use crate::native::item_bridge::ItemEventBridge;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::FfiAbrMode;
 use crate::{
+    core::observer_set::ObserverSet,
     observer::{ItemLoadCallback, ItemObserver},
-    types::{FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
+    types::{
+        FfiItemConfig, FfiItemEvent, FfiItemLoadResult, FfiItemState, FfiItemStatus, FfiTimeRange,
+        FfiTrackStatus,
+    },
 };
 
 /// Loading lifecycle of an item. A sum type so the contradictory
 /// boolean combinations the old packed struct allowed
-/// (`ready && failed`, `ready && duration == 0`, `failed && duration`)
-/// are unrepresentable: a duration only exists inside `Ready`, and
-/// `Ready` / `Failed` are mutually exclusive.
+/// (`ready && failed`, `failed && duration`) are unrepresentable: a
+/// duration only exists inside `Ready`, and `Ready` / `Failed` are
+/// mutually exclusive.
 #[derive(Debug, Clone, Copy)]
 enum LoadingState {
-    /// Inserted but no duration resolved yet (and not failed).
+    /// Inserted but not playable yet (and not failed).
     Pending,
-    /// Metadata resolved; `duration_sec` is the playable duration.
-    Ready { duration_sec: f64 },
+    /// Playable; `duration_sec` is known once the metadata layer answers.
+    Ready { duration_sec: Option<f64> },
     /// Terminal failure — sticky, carries no duration.
     Failed,
 }
@@ -37,9 +41,11 @@ enum LoadingState {
 /// (`duration_sec`, `is_live_stream`, …) and the `load()` resolver.
 /// Updated by [`ItemEventBridge`] through the typed transition methods
 /// as the underlying resource emits metadata events.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct ItemView {
     loading: LoadingState,
+    error: Option<String>,
+    loaded_ranges: Vec<FfiTimeRange>,
     has_protected_content: bool,
     is_live_stream: bool,
 }
@@ -50,16 +56,33 @@ impl ItemView {
             is_live_stream,
             loading: LoadingState::Pending,
             has_protected_content: false,
+            error: None,
+            loaded_ranges: Vec::new(),
         }
     }
 
-    /// Resolved duration in seconds, or `0.0` when not yet `Ready`
-    /// (pending or failed).
-    const fn duration_sec(&self) -> f64 {
+    /// Folds the state an event carries into the view before observers
+    /// see the event.
+    pub(crate) fn absorb(&mut self, event: &FfiItemEvent) {
+        match event {
+            FfiItemEvent::DurationChanged { seconds } => self.resolve_duration(*seconds),
+            FfiItemEvent::LoadedRangesChanged { ranges } => self.loaded_ranges.clone_from(ranges),
+            _ => {}
+        }
+    }
+
+    /// Resolved duration in seconds; `None` while pending, failed, or
+    /// playable without metadata.
+    const fn duration(&self) -> Option<f64> {
         match self.loading {
             LoadingState::Ready { duration_sec } => duration_sec,
-            LoadingState::Pending | LoadingState::Failed => 0.0,
+            LoadingState::Pending | LoadingState::Failed => None,
         }
+    }
+
+    /// [`Self::duration`] for the synchronous getter, `0.0` when unknown.
+    fn duration_sec(&self) -> f64 {
+        self.duration().unwrap_or(0.0)
     }
 
     /// Whether the item resolved metadata and is playable. False while
@@ -72,22 +95,65 @@ impl ItemView {
     /// Terminal failure transition from any state. Reports whether this call
     /// performed it, so the second source of a terminal event sees `false` and
     /// stays silent instead of repeating the status/error pair.
-    pub(crate) const fn mark_failed(&mut self) -> bool {
+    #[must_use]
+    pub(crate) fn mark_failed(&mut self, reason: &str) -> bool {
         if matches!(self.loading, LoadingState::Failed) {
             return false;
         }
         self.loading = LoadingState::Failed;
+        self.error = Some(reason.to_owned());
         true
+    }
+
+    /// Playable without a resolved duration yet: the queue reports a track
+    /// loaded before the metadata layer answers. Reports whether this call
+    /// changed the state, so a repeated or post-failure `Loaded` stays
+    /// silent.
+    #[must_use]
+    pub(crate) const fn mark_ready(&mut self) -> bool {
+        if matches!(self.loading, LoadingState::Pending) {
+            self.loading = LoadingState::Ready { duration_sec: None };
+            return true;
+        }
+        false
     }
 
     /// Metadata resolved with `duration_sec`. A no-op once `Failed`
     /// (failure is sticky), mirroring the old `is_failed` flag never
     /// being cleared.
-    pub(crate) const fn resolve_duration(&mut self, duration_sec: f64) {
+    const fn resolve_duration(&mut self, duration_sec: f64) {
         if !matches!(self.loading, LoadingState::Failed) {
-            self.loading = LoadingState::Ready { duration_sec };
+            self.loading = LoadingState::Ready {
+                duration_sec: Some(duration_sec),
+            };
         }
     }
+
+    pub(crate) const fn status(&self) -> FfiItemStatus {
+        match self.loading {
+            LoadingState::Pending => FfiItemStatus::Unknown,
+            LoadingState::Ready { .. } => FfiItemStatus::ReadyToPlay,
+            LoadingState::Failed => FfiItemStatus::Failed,
+        }
+    }
+}
+
+/// Terminal failure delivered once: whichever source settles the item
+/// first emits the status/error pair, and any later source finds it
+/// already failed and stays silent. A protocol failure reaches the item
+/// through the per-item bridge carrying the exact reason and usually
+/// arrives first; a queue failure with no protocol event behind it (a
+/// decode, DRM, or storage refusal) still lands here.
+pub(crate) fn settle_failed(state: &Mutex<ItemView>, observer: &dyn ItemObserver, reason: &str) {
+    if !state.lock().mark_failed(reason) {
+        return;
+    }
+    observer.on_event(FfiItemEvent::StatusChanged {
+        status: FfiItemStatus::Failed,
+    });
+    observer.on_event(FfiItemEvent::Error {
+        error: reason.to_owned(),
+    });
 }
 
 /// FFI-facing audio player item.
@@ -106,7 +172,7 @@ pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemView>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
-    /// captured even when [`set_observer`] is called later. Native-only:
+    /// captured even when [`Self::add_observer`] is called later. Native-only:
     /// the wasm worker owns the queue and its event bus.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) bus: Mutex<Option<EventBus>>,
@@ -120,7 +186,7 @@ pub struct AudioPlayerItem {
     /// item events through the main-thread event router instead (Wave 5).
     #[cfg(not(target_arch = "wasm32"))]
     event_bridge: Mutex<Option<ItemEventBridge>>,
-    observer: Mutex<Option<Arc<dyn ItemObserver>>>,
+    observers: Arc<ObserverSet>,
     /// Process-wide monotonic id allocated at construction and consumed
     /// by the core queue. Not exposed by the high-level Swift API: it is
     /// only the routing key that lets repeated business tracks coexist.
@@ -162,7 +228,7 @@ impl AudioPlayerItem {
             uuid_i64,
             #[cfg(not(target_arch = "wasm32"))]
             event_bridge: Mutex::default(),
-            observer: Mutex::default(),
+            observers: Arc::default(),
             #[cfg(not(target_arch = "wasm32"))]
             bus: Mutex::default(),
             inserted: Mutex::default(),
@@ -180,6 +246,18 @@ impl AudioPlayerItem {
     /// underlying resource emits a duration update.
     pub fn duration_sec(&self) -> f64 {
         self.state.lock().duration_sec()
+    }
+
+    /// Consistent snapshot of status, duration, failure reason and
+    /// buffered ranges.
+    pub fn state(&self) -> FfiItemState {
+        let view = self.state.lock();
+        FfiItemState {
+            status: view.status(),
+            duration_seconds: view.duration(),
+            error: view.error.clone(),
+            loaded_ranges: view.loaded_ranges.clone(),
+        }
     }
 
     /// Whether this item represents a live HLS feed. The flag is set
@@ -227,11 +305,11 @@ impl AudioPlayerItem {
     )]
     pub fn load(&self, callback: Arc<dyn ItemLoadCallback>) {
         let inserted = *self.inserted.lock();
-        let snapshot = *self.state.lock();
         let result = if inserted {
+            let view = self.state.lock();
             FfiItemLoadResult {
-                has_protected_content: snapshot.has_protected_content,
-                is_playable: snapshot.is_ready(),
+                has_protected_content: view.has_protected_content,
+                is_playable: view.is_ready(),
             }
         } else {
             FfiItemLoadResult {
@@ -257,9 +335,18 @@ impl AudioPlayerItem {
         self.queue_id
     }
 
-    pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
-        *self.observer.lock() = Some(observer);
-        self.restart_bridge();
+    /// Subscribes `observer` to this item's events and returns the handle
+    /// that [`Self::remove_observer`] unsubscribes it with. Every registered
+    /// observer receives every event.
+    pub fn add_observer(&self, observer: Arc<dyn ItemObserver>) -> u64 {
+        #[cfg(target_arch = "wasm32")]
+        self.prime(&observer);
+        self.observers.add(observer)
+    }
+
+    /// Unsubscribes the observer registered under `id`.
+    pub fn remove_observer(&self, id: u64) {
+        self.observers.remove(id);
     }
 
     /// Audio source string — either a network URL or an absolute local
@@ -284,31 +371,64 @@ impl AudioPlayerItem {
         self.config.abr_mode
     }
 
+    /// The one place a queue-level track status reaches item state and
+    /// item observers, on every platform.
+    pub(crate) fn apply_track_status(&self, status: &FfiTrackStatus) {
+        match status {
+            FfiTrackStatus::Loaded => {
+                if self.state.lock().mark_ready() {
+                    self.observers.on_event(FfiItemEvent::StatusChanged {
+                        status: FfiItemStatus::ReadyToPlay,
+                    });
+                }
+            }
+            FfiTrackStatus::Failed { reason } => self.settle_failed(reason),
+            _ => {}
+        }
+    }
+
+    /// The one entry for item events on every platform: folds `event`
+    /// into item state, then delivers it to every registered observer.
+    pub(crate) fn deliver(&self, event: FfiItemEvent) {
+        self.state.lock().absorb(&event);
+        self.observers.on_event(event);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
         self.config.headers.clone()
     }
 
-    pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
-        self.observer.lock().clone()
+    /// The observer set as one trait object, for bridges that own their
+    /// sink.
+    fn observer(&self) -> Arc<dyn ItemObserver> {
+        Arc::clone(&self.observers) as Arc<dyn ItemObserver>
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn prime(&self, observer: &Arc<dyn ItemObserver>) {
+        let snapshot = self.state();
+        if snapshot.status != FfiItemStatus::Unknown {
+            observer.on_event(FfiItemEvent::StatusChanged {
+                status: snapshot.status,
+            });
+        }
+        if let Some(seconds) = snapshot.duration_seconds {
+            observer.on_event(FfiItemEvent::DurationChanged { seconds });
+        }
     }
 
     /// (Re)subscribe the bridge to the currently-attached scoped bus.
-    /// Called from `set_observer` and from `AudioPlayer::insert` right
-    /// after the bus is attached.
+    /// Called from `AudioPlayer::insert` right after the bus is attached.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn restart_bridge(&self) {
-        let Some(observer) = self.observer() else {
-            *self.event_bridge.lock() = None;
-            return;
-        };
         let Some(bus) = self.bus.lock().clone() else {
             *self.event_bridge.lock() = None;
             return;
         };
         let bridge = ItemEventBridge::spawn(
             bus.subscribe(),
-            observer,
+            self.observer(),
             None,
             Arc::clone(&self.state),
             CancelToken::never(),
@@ -319,34 +439,17 @@ impl AudioPlayerItem {
     /// Wasm has no long-lived per-item bus bridge — the worker owns the
     /// queue and routes events through the main-thread router
     /// ([`crate::web::observer::router`]). What restart still needs to do
-    /// is prime a freshly-attached observer with the item's cached
-    /// [`ItemState`] so the caller sees the same initial event
-    /// (`StatusChanged`) the native path emits when its bridge spawns.
-    /// Without this priming, observers attached *after* the worker has
-    /// already announced "loaded" would never see the readiness event.
+    /// is replay the item's cached [`ItemView`] to its observers, so they
+    /// see the same initial event (`StatusChanged`) the native path emits
+    /// when its bridge spawns.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn restart_bridge(&self) {
-        let Some(observer) = self.observer() else {
-            return;
-        };
-        let snapshot = *self.state.lock();
-        match snapshot.loading {
-            LoadingState::Failed => {
-                observer.on_event(crate::types::FfiItemEvent::StatusChanged {
-                    status: crate::types::FfiItemStatus::Failed,
-                });
-            }
-            LoadingState::Ready { .. } => {
-                observer.on_event(crate::types::FfiItemEvent::StatusChanged {
-                    status: crate::types::FfiItemStatus::ReadyToPlay,
-                });
-            }
-            LoadingState::Pending => {}
-        }
-        let duration = snapshot.duration_sec();
-        if duration > 0.0 {
-            observer.on_event(crate::types::FfiItemEvent::DurationChanged { seconds: duration });
-        }
+        self.prime(&self.observer());
+    }
+
+    /// [`settle_failed`] for this item's own state and observers.
+    pub(crate) fn settle_failed(&self, reason: &str) {
+        settle_failed(&self.state, self.observers.as_ref(), reason);
     }
 }
 
@@ -362,21 +465,116 @@ fn derived_uuid_i64(url: &str, queue_id: TrackId) -> i64 {
 mod tests {
     use super::*;
 
-    fn config_with_url(url: String) -> FfiItemConfig {
-        FfiItemConfig {
-            url,
-            headers: None,
-            audio_id: None,
-            uuid_i64: None,
-            preferred_peak_bitrate: 0.0,
-            preferred_peak_bitrate_expensive: 0.0,
-            abr_mode: None,
-            is_live_stream: false,
+    fn item_for(url: &str) -> Arc<AudioPlayerItem> {
+        AudioPlayerItem::new(FfiItemConfig::for_test(url))
+    }
+
+    #[derive(Default)]
+    struct CountingObserver {
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl CountingObserver {
+        fn seen(&self) -> Vec<String> {
+            self.seen.lock().clone()
         }
     }
 
-    fn item_for(url: &str) -> Arc<AudioPlayerItem> {
-        AudioPlayerItem::new(config_with_url(url.to_string()))
+    impl ItemObserver for CountingObserver {
+        fn on_event(&self, event: FfiItemEvent) {
+            self.seen.lock().push(format!("{event:?}"));
+        }
+    }
+
+    #[kithara::test]
+    fn every_registered_observer_sees_the_event_until_it_unsubscribes() {
+        let item = item_for("https://example.com/a.mp3");
+        let first = Arc::new(CountingObserver::default());
+        let second = Arc::new(CountingObserver::default());
+        let first_id = item.add_observer(Arc::clone(&first) as Arc<dyn ItemObserver>);
+        item.add_observer(Arc::clone(&second) as Arc<dyn ItemObserver>);
+
+        item.deliver(FfiItemEvent::DurationChanged { seconds: 1.0 });
+        assert_eq!(first.seen().len(), 1);
+        assert_eq!(second.seen().len(), 1);
+
+        item.remove_observer(first_id);
+        item.deliver(FfiItemEvent::DurationChanged { seconds: 2.0 });
+        assert_eq!(first.seen().len(), 1);
+        assert_eq!(second.seen().len(), 2);
+    }
+
+    #[kithara::test]
+    fn loaded_track_status_marks_the_item_ready_and_tells_observers() {
+        let item = item_for("https://example.com/a.mp3");
+        let observer = Arc::new(CountingObserver::default());
+        item.add_observer(Arc::clone(&observer) as Arc<dyn ItemObserver>);
+
+        item.apply_track_status(&FfiTrackStatus::Loaded);
+
+        assert_eq!(item.state().status, FfiItemStatus::ReadyToPlay);
+        assert_eq!(
+            observer.seen(),
+            vec![format!(
+                "{:?}",
+                FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::ReadyToPlay
+                }
+            )]
+        );
+    }
+
+    #[kithara::test]
+    fn loaded_after_failure_leaves_the_item_failed_and_silent() {
+        let item = item_for("https://example.com/a.mp3");
+        let observer = Arc::new(CountingObserver::default());
+        item.add_observer(Arc::clone(&observer) as Arc<dyn ItemObserver>);
+        item.apply_track_status(&FfiTrackStatus::Failed {
+            reason: "decoder refused".to_owned(),
+        });
+        let after_failure = observer.seen().len();
+
+        item.apply_track_status(&FfiTrackStatus::Loaded);
+        item.apply_track_status(&FfiTrackStatus::Loaded);
+
+        assert_eq!(item.state().status, FfiItemStatus::Failed);
+        assert_eq!(observer.seen().len(), after_failure);
+    }
+
+    #[kithara::test]
+    fn repeated_failed_track_status_emits_the_pair_once() {
+        let item = item_for("https://example.com/a.mp3");
+        let observer = Arc::new(CountingObserver::default());
+        item.add_observer(Arc::clone(&observer) as Arc<dyn ItemObserver>);
+        let failed = FfiTrackStatus::Failed {
+            reason: "storage refused".to_owned(),
+        };
+
+        item.apply_track_status(&failed);
+        item.apply_track_status(&failed);
+
+        let state = item.state();
+        assert_eq!(state.status, FfiItemStatus::Failed);
+        assert_eq!(state.error.as_deref(), Some("storage refused"));
+        assert_eq!(observer.seen().len(), 2);
+    }
+
+    #[kithara::test]
+    fn delivered_events_settle_into_state_before_observers_see_them() {
+        let item = item_for("https://example.com/a.mp3");
+        let ranges = vec![FfiTimeRange {
+            start_seconds: 0.0,
+            duration_seconds: 3.0,
+        }];
+
+        item.deliver(FfiItemEvent::DurationChanged { seconds: 42.0 });
+        item.deliver(FfiItemEvent::LoadedRangesChanged {
+            ranges: ranges.clone(),
+        });
+
+        let state = item.state();
+        assert_eq!(state.duration_seconds, Some(42.0));
+        assert_eq!(state.loaded_ranges, ranges);
     }
 
     #[kithara::test]
@@ -415,7 +613,7 @@ mod tests {
     fn caller_audio_id_is_exposed_without_becoming_queue_id() {
         let config = FfiItemConfig {
             audio_id: Some(TrackId(42)),
-            ..config_with_url("https://example.com/song.mp3".to_string())
+            ..FfiItemConfig::for_test("https://example.com/song.mp3")
         };
         let item = AudioPlayerItem::new(config);
         assert_eq!(item.audio_id(), TrackId(42));
@@ -426,7 +624,7 @@ mod tests {
     fn caller_uuid_i64_is_exposed() {
         let config = FfiItemConfig {
             uuid_i64: Some(123_456),
-            ..config_with_url("https://example.com/song.mp3".to_string())
+            ..FfiItemConfig::for_test("https://example.com/song.mp3")
         };
         let item = AudioPlayerItem::new(config);
         assert_eq!(item.uuid_i64(), 123_456);
@@ -451,7 +649,7 @@ mod tests {
     fn preferred_peak_bitrate_from_config() {
         let config = FfiItemConfig {
             preferred_peak_bitrate: 256_000.0,
-            ..config_with_url("https://example.com/a.mp3".to_string())
+            ..FfiItemConfig::for_test("https://example.com/a.mp3")
         };
         let item = AudioPlayerItem::new(config);
         assert_eq!(item.preferred_peak_bitrate(), 256_000.0);
@@ -469,7 +667,7 @@ mod tests {
         headers.insert("Authorization".into(), "Bearer token".into());
         let config = FfiItemConfig {
             headers: Some(headers),
-            ..config_with_url("https://example.com/a.mp3".to_string())
+            ..FfiItemConfig::for_test("https://example.com/a.mp3")
         };
         let item = AudioPlayerItem::new(config);
         let returned = item
@@ -496,7 +694,7 @@ mod tests {
     fn is_live_stream_from_config() {
         let config = FfiItemConfig {
             is_live_stream: true,
-            ..config_with_url("https://example.com/live.m3u8".to_string())
+            ..FfiItemConfig::for_test("https://example.com/live.m3u8")
         };
         let item = AudioPlayerItem::new(config);
         assert!(item.is_live_stream());
@@ -506,7 +704,7 @@ mod tests {
     fn is_playable_live_stream_always_true() {
         let config = FfiItemConfig {
             is_live_stream: true,
-            ..config_with_url("https://example.com/live.m3u8".to_string())
+            ..FfiItemConfig::for_test("https://example.com/live.m3u8")
         };
         let item = AudioPlayerItem::new(config);
         assert!(item.is_playable(0.0, vec![]));
@@ -532,7 +730,7 @@ mod tests {
     fn item_view_mark_failed_is_not_ready_and_zero_duration() {
         let mut view = ItemView::new(false);
         view.resolve_duration(42.0);
-        view.mark_failed();
+        assert!(view.mark_failed("test failure"));
         assert!(!view.is_ready());
         assert_eq!(view.duration_sec(), 0.0);
     }
@@ -543,14 +741,14 @@ mod tests {
     #[kithara::test]
     fn item_view_mark_failed_reports_only_the_first_transition() {
         let mut view = ItemView::new(false);
-        assert!(view.mark_failed());
-        assert!(!view.mark_failed());
+        assert!(view.mark_failed("test failure"));
+        assert!(!view.mark_failed("test failure"));
     }
 
     #[kithara::test]
     fn item_view_failure_is_sticky_over_resolve_duration() {
         let mut view = ItemView::new(false);
-        view.mark_failed();
+        assert!(view.mark_failed("test failure"));
         view.resolve_duration(42.0);
         assert!(
             !view.is_ready(),
@@ -565,7 +763,7 @@ mod tests {
         assert!(view.is_live_stream);
         view.resolve_duration(10.0);
         assert!(view.is_live_stream);
-        view.mark_failed();
+        assert!(view.mark_failed("test failure"));
         assert!(view.is_live_stream);
     }
 

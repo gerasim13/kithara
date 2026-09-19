@@ -1,3 +1,5 @@
+use std::sync::PoisonError;
+
 use kithara_bufpool::HasPool;
 use kithara_play::{PlayError, SeekOutcome, SessionDuckingMode};
 
@@ -97,28 +99,53 @@ where
         self.player.play();
 
         let _apply = self.lock_select_apply();
-        let index = self.player.current_index();
-        if self.player.item_has_resource(index) {
-            return;
-        }
-        let current = {
-            let guard = self.lock_tracks();
-            guard
-                .get(index)
-                .map(|entry| (entry.id, entry.status.clone()))
+        let pending = match *self
+            .pending_select
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            SelectPhase::Idle => None,
+            SelectPhase::Pending(pending) => Some(pending),
         };
-        let Some((id, status)) = current else {
+        let (id, status) = if let Some(pending) = pending {
+            let status = self
+                .tracks
+                .lock()
+                .iter()
+                .find(|entry| entry.id == pending.id)
+                .map(|entry| entry.status.clone());
+            (pending.id, status)
+        } else {
+            let index = self.player.current_index();
+            if self.player.item_has_resource(index) {
+                return;
+            }
+            let current = {
+                let guard = self.lock_tracks();
+                guard
+                    .get(index)
+                    .map(|entry| (entry.id, entry.status.clone()))
+            };
+            let Some((id, status)) = current else {
+                return;
+            };
+            (id, Some(status))
+        };
+        let Some(status) = status else {
             return;
         };
         match status {
             TrackStatus::Loaded => self.set_status(id, TrackStatus::Consumed),
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
-                if matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_)) {
-                    return;
-                }
-                self.override_pending_select(PendingSelect {
+                let pending = pending.unwrap_or(PendingSelect {
                     id,
                     transition: Transition::None,
+                    reason: crate::event::AdvanceReason::UserSelect,
+                    autoplay: true,
+                });
+                self.override_pending_select(PendingSelect {
+                    autoplay: true,
+                    ..pending
                 });
                 self.promote_pending_load(id);
             }

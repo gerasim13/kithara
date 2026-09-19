@@ -94,8 +94,7 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { workspace = true }
-ndk-context = { workspace = true }
+kithara-android = { workspace = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
@@ -107,7 +106,7 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "signal"] }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

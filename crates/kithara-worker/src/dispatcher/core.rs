@@ -34,29 +34,43 @@ pub(super) fn run_loop(
         ) {
             return;
         }
-        cancel_cancelled(&mut slots);
-        needs_reorder |= remove_terminal(&mut slots);
-        refresh_priorities(&mut slots, &mut needs_reorder);
-        if needs_reorder {
-            reorder_slots(&mut slots);
-            needs_reorder = false;
-        }
-        recycle_all(&mut slots);
-
-        let report = produce_pass(&mut slots, budgets, observer.as_mut());
-        kithara::probe_event!(
-            scheduler_pass,
-            active = report.active_tasks,
-            progress = report.progress_tasks,
-            waiting = report.waiting_tasks,
-            backpressured = report.backpressured_tasks,
-            done = report.done_tasks
-        );
-        needs_reorder |= remove_terminal(&mut slots);
-        report_outcome(observer.as_mut(), report);
+        let report = run_pass(&mut slots, &mut needs_reorder, budgets, observer.as_mut());
         observer.on_event(Event::PassEnd);
         park_after_outcome(wake, budgets, report, &mut progress_streak);
     }
+}
+
+/// One scheduling pass: settle the roster the commands left behind, produce
+/// work from it, and report what the pass achieved.
+pub(super) fn run_pass(
+    slots: &mut Vec<Slot>,
+    needs_reorder: &mut bool,
+    budgets: SchedulerBudgets,
+    observer: &mut dyn Observer,
+) -> PassReport {
+    cancel_cancelled(slots);
+    *needs_reorder |= remove_terminal(slots);
+    refresh_priorities(slots, needs_reorder);
+    if *needs_reorder {
+        reorder_slots(slots);
+        *needs_reorder = false;
+    }
+    recycle_all(slots);
+
+    let report = produce_pass(slots, budgets, observer);
+    kithara::probe_event!(
+        scheduler_pass,
+        active = report.active_tasks,
+        progress = report.progress_tasks,
+        waiting = report.waiting_tasks,
+        backpressured = report.backpressured_tasks,
+        done = report.done_tasks
+    );
+    // A pass leaves no terminal slot behind for the next one to park on. The
+    // order of what remains is the order it already had.
+    remove_terminal(slots);
+    report_outcome(observer, report);
+    report
 }
 
 fn cancel_and_drain(
@@ -159,17 +173,12 @@ pub(super) fn refresh_priorities(slots: &mut [Slot], needs_reorder: &mut bool) {
 }
 
 pub(super) fn reorder_slots(slots: &mut [Slot]) {
-    for index in 1..slots.len() {
-        let mut position = index;
-        while position > 0 && slot_precedes(&slots[position], &slots[position - 1]) {
-            slots.swap(position - 1, position);
-            position -= 1;
-        }
-    }
-}
-
-fn slot_precedes(left: &Slot, right: &Slot) -> bool {
-    left.priority > right.priority || (left.priority == right.priority && left.id < right.id)
+    slots.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then(left.id.cmp(&right.id))
+    });
 }
 
 pub(super) fn produce_pass(
@@ -204,7 +213,7 @@ pub(super) fn produce_pass(
                 TickResult::Done
             };
             let elapsed = start.elapsed();
-            if elapsed > budgets.slow_tick_threshold {
+            if is_slow_tick(elapsed, budgets.slow_tick_threshold) {
                 observer.on_event(Event::SlowTick {
                     elapsed,
                     task: slot.id,
@@ -241,6 +250,12 @@ pub(super) fn produce_pass(
         TickResult::Done => PassOutcome::Idle,
     };
     report
+}
+
+/// A tick is slow once it costs more than the budget it was given; one that
+/// lands exactly on the budget spent no more than it was allowed to.
+pub(super) const fn is_slow_tick(elapsed: Duration, threshold: Duration) -> bool {
+    elapsed.as_nanos() > threshold.as_nanos()
 }
 
 fn best_result(current: TickResult, next: TickResult) -> TickResult {

@@ -72,12 +72,6 @@ where
             .or_else(|| self.layout.find_at_offset(byte_offset, &self.segments))
     }
 
-    /// Coherent "is this variant historical?" check — `served_from` and
-    /// `served_until` read under a single Layout lock.
-    pub(crate) fn is_shrunk(&self) -> bool {
-        self.layout.is_shrunk(self.num_segments())
-    }
-
     /// True when a layout reset would change nothing worth a re-mint:
     /// canonical full-range geometry with every served size exact, and
     /// nothing parked behind a seek tail. A live tail alone does not force

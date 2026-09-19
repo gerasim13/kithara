@@ -8,9 +8,9 @@ import KitharaFFI
 /// and registered through ``KitharaPlayer/init(config:)``.
 ///
 /// The cipher closes over the secret supplied at construction time —
-/// the per-call `salt` argument is ignored here. Use
-/// ``KitharaPlayer/setupHlsAes(keyDecryptor:)`` with an inline closure
-/// when the cipher needs to be derived from the salt on every decrypt.
+/// the per-call `salt` argument is ignored here. Supply your own
+/// ``KeyProcessor`` when the cipher must be derived from the salt on
+/// every decrypt.
 public final class Cipher: KeyProcessor, @unchecked Sendable {
     private let _inner: FfiCipher
 

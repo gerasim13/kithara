@@ -1,3 +1,5 @@
+#![cfg(feature = "packaged")]
+
 use std::sync::OnceLock;
 
 use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};

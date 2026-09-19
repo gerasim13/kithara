@@ -6,7 +6,7 @@ use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use super::mp3::read_xing_duration;
+use super::mp3::{read_cbr_duration, read_xing_duration};
 use super::{
     GaplessInfo,
     mp3::{read_lame_trim, skip_id3v2},
@@ -52,6 +52,7 @@ where
 pub(crate) fn scoped_startup_probe<S>(
     source: &mut dyn DecoderInput,
     codec: AudioCodec,
+    total_bytes: Option<u64>,
     pools: &PoolRegion<S>,
 ) -> crate::error::DecodeResult<StartupProbe>
 where
@@ -62,14 +63,18 @@ where
     }
 
     source.seek(SeekFrom::Start(0))?;
-    let buffer = read_mp3_probe_prefix(source, pools)?;
+    let (buffer, base) = read_mp3_probe_prefix(source, pools)?;
     source.seek(SeekFrom::Start(0))?;
 
     let gapless = read_lame_trim(&buffer).map(|trim| GaplessInfo {
         leading_frames: u64::from(trim.enc_delay),
         trailing_frames: u64::from(trim.enc_padding),
     });
-    let duration = read_xing_duration(&buffer);
+    // A Xing/Info frame count is authoritative. Without one, a CBR stream still
+    // defines its duration through its byte length; a VBR stream does not, and
+    // `read_cbr_duration` refuses those. See `CONTEXT.md`, "MP3 duration".
+    let duration = read_xing_duration(&buffer)
+        .or_else(|| total_bytes.and_then(|total| read_cbr_duration(&buffer, base, total)));
     Ok(StartupProbe { duration, gapless })
 }
 
@@ -94,7 +99,7 @@ where
             }
         }
         AudioCodec::Mp3 => {
-            let buffer = read_mp3_probe_prefix(source, pools)?;
+            let (buffer, _base) = read_mp3_probe_prefix(source, pools)?;
             Ok(read_lame_trim(&buffer).map(|trim| GaplessInfo {
                 leading_frames: u64::from(trim.enc_delay),
                 trailing_frames: u64::from(trim.enc_padding),
@@ -111,7 +116,7 @@ where
 fn read_mp3_probe_prefix<S>(
     source: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
-) -> crate::error::DecodeResult<ByteBuffer>
+) -> crate::error::DecodeResult<(ByteBuffer, u64)>
 where
     S: HasPool<u8>,
 {
@@ -120,17 +125,18 @@ where
     // WHY: A short window means the source ran out of ready bytes, not that the tag is long, and seeking past the download frontier
     // reads back as EOF.
     if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
-        return Ok(buffer);
+        return Ok((buffer, 0));
     }
 
     let repositioned = u64::try_from(audio_start)
         .ok()
-        .is_some_and(|offset| source.seek(SeekFrom::Start(offset)).is_ok());
-    if repositioned {
-        drop(buffer);
-        read_probe_window(source, pools)
-    } else {
-        Ok(buffer)
+        .filter(|offset| source.seek(SeekFrom::Start(*offset)).is_ok());
+    match repositioned {
+        Some(offset) => {
+            drop(buffer);
+            Ok((read_probe_window(source, pools)?, offset))
+        }
+        None => Ok((buffer, 0)),
     }
 }
 
@@ -195,7 +201,8 @@ mod tests {
     fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
         let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
 
-        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let (buffer, _base) =
+            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(0xFF));
         assert_eq!(buffer.get(1).copied(), Some(0xFB));
@@ -207,7 +214,8 @@ mod tests {
         data.truncate(4 * 1024);
         let mut source = Cursor::new(data);
 
-        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let (buffer, _base) =
+            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.len(), 4 * 1024);
@@ -218,7 +226,8 @@ mod tests {
         let tag_bytes = 10 + 1024;
         let mut source = Cursor::new(mp3_behind_id3(1024));
 
-        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let (buffer, _base) =
+            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.get(tag_bytes).copied(), Some(0xFF));

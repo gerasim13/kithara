@@ -1,22 +1,21 @@
-#![allow(unsafe_code)]
-
-use std::{ffi::c_void, ptr::NonNull};
-
+use kithara_android::{
+    AndroidBackendError,
+    media::{
+        AndroidPcmEncoding, DequeueOutput, InputBuffer, OutputFormat, OwnedCodec, OwnedFormat,
+        QueueInput,
+        sys::{
+            KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE,
+            MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM, MIME_AAC, MIME_ALAC, MIME_FLAC, MIME_MP3,
+            MIME_RAW, PCM_ENCODING_16BIT,
+        },
+    },
+};
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
-use super::{
-    aformat::OwnedFormat,
-    ensure_current_thread_attached,
-    error::AndroidBackendError,
-    ffi::{
-        self, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MIME_AAC,
-        MIME_ALAC, MIME_FLAC, MIME_MP3, MIME_RAW, PCM_ENCODING_16BIT,
-    },
-    media_codec::{AndroidPcmEncoding, DequeueOutput, OutputFormat, OwnedCodec, QueueInput},
-};
+use super::output_spec;
 use crate::{
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
@@ -28,8 +27,11 @@ struct Consts;
 
 impl Consts {
     const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    /// Wait for a free input buffer before the codec counts as stuck.
+    const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
     const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
     const DRAIN_DEQUEUE_TIMEOUT_US: i64 = 1_000_000;
+    const NO_WAIT_US: i64 = 0;
     const PCM16_SCALE: f32 = 32_768.0;
 }
 
@@ -71,7 +73,6 @@ impl AndroidCodec {
     }
 
     pub(crate) fn open_with_format(track: &TrackInfo, format: &OwnedFormat) -> DecodeResult<Self> {
-        ensure_current_thread_attached().map_err(DecodeError::from)?;
         let input_mime = format.get_str(KEY_MIME).ok_or(DecodeError::InvalidData {
             detail: "track format has no input MIME",
         })?;
@@ -83,7 +84,9 @@ impl AndroidCodec {
             });
         }
         let codec = OwnedCodec::create_with_format(format)?;
-        let OutputFormat { spec, pcm_encoding } = OutputFormat::read(&codec.output_format()?)?;
+        let output = OutputFormat::read(&codec.output_format()?)?;
+        let spec = output_spec(&output)?;
+        let pcm_encoding = output.pcm_encoding;
 
         Ok(Self {
             codec,
@@ -115,26 +118,12 @@ impl FrameCodec for AndroidCodec {
         _packet_desc: &[u8],
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
+        out.clear();
         if matches!(self.drain, DrainState::Finished) {
-            out.clear();
             return Ok(0);
         }
         if matches!(self.drain, DrainState::Feeding) {
-            // Every input slot can be holding a packet the codec has not turned
-            // into output yet; taking that output is what frees one. The packet
-            // is queued before this returns, so it is never dropped.
-            let mut produced = 0;
-            let mut buf = loop {
-                if let Some(buf) = self
-                    .codec
-                    .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)?
-                {
-                    break buf;
-                }
-                if produced == 0 {
-                    produced = self.read_output(out)?;
-                }
-            };
+            let mut buf = self.await_input_buffer(out)?;
             let dst = buf.data_mut();
             if frame_data.len() > dst.len() {
                 return Err(DecodeError::InvalidData {
@@ -148,7 +137,7 @@ impl FrameCodec for AndroidCodec {
                 size: frame_data.len(),
                 presentation_time_us: i64::try_from(pts.as_micros()).unwrap_or(i64::MAX),
                 flags: if end_of_stream {
-                    ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM
+                    MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM
                 } else {
                     0
                 },
@@ -156,11 +145,13 @@ impl FrameCodec for AndroidCodec {
             if end_of_stream {
                 self.drain = DrainState::Draining;
             }
-            if produced != 0 {
-                return Ok(produced);
-            }
         }
-        self.read_output(out)
+        let timeout = if matches!(self.drain, DrainState::Draining) {
+            Consts::DRAIN_DEQUEUE_TIMEOUT_US
+        } else {
+            Consts::OUTPUT_DEQUEUE_TIMEOUT_US
+        };
+        self.read_output(out, timeout)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
@@ -199,19 +190,41 @@ impl FrameCodec for AndroidCodec {
 }
 
 impl AndroidCodec {
-    fn read_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
+    /// The codec frees input only as its output pool drains, so each miss
+    /// takes the finished output before polling again.
+    fn await_input_buffer(&mut self, out: &mut SampleBuffer) -> DecodeResult<InputBuffer> {
+        let mut waited_us = 0;
+        loop {
+            if let Some(buf) = self
+                .codec
+                .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)?
+            {
+                return Ok(buf);
+            }
+            waited_us += Consts::INPUT_DEQUEUE_TIMEOUT_US;
+            if waited_us >= Consts::INPUT_WAIT_BUDGET_US {
+                return Err(AndroidBackendError::operation(
+                    "codec-input-backpressure",
+                    "input packet was not consumed",
+                )
+                .into());
+            }
+            self.read_output(out, Consts::NO_WAIT_US)?;
+        }
+    }
+
+    /// Appends every finished output buffer to `out`; only the first
+    /// dequeue waits. Returns the frames `out` holds.
+    fn read_output(&mut self, out: &mut SampleBuffer, timeout_us: i64) -> DecodeResult<u32> {
         let draining = matches!(self.drain, DrainState::Draining);
-        let timeout = if draining {
-            Consts::DRAIN_DEQUEUE_TIMEOUT_US
-        } else {
-            Consts::OUTPUT_DEQUEUE_TIMEOUT_US
-        };
+        let mut timeout = timeout_us;
         loop {
             match self.codec.dequeue_output_buffer(timeout)? {
                 DequeueOutput::Output(buffer) => {
+                    let start = out.len();
                     let result = match self.pcm_encoding {
-                        AndroidPcmEncoding::Pcm16 => decode_pcm16_into(buffer.data(), out),
-                        AndroidPcmEncoding::Float => decode_pcm_float_into(buffer.data(), out),
+                        AndroidPcmEncoding::Pcm16 => append_pcm16(buffer.data(), out),
+                        AndroidPcmEncoding::Float => append_pcm_float(buffer.data(), out),
                     };
                     let presentation_time_us = buffer.presentation_time_us;
                     if buffer.end_of_stream {
@@ -219,43 +232,42 @@ impl AndroidCodec {
                     }
                     self.codec.release_output_buffer(buffer.index)?;
                     result?;
-                    let frames = u32::try_from(out.len() / usize::from(self.spec.channels))
-                        .map_err(DecodeError::backend)?;
-                    if frames != 0 {
-                        let timestamp = Duration::from_micros(
-                            u64::try_from(presentation_time_us).map_err(DecodeError::backend)?,
-                        );
-                        let frame = self
-                            .spec
-                            .frame_at(timestamp)
-                            .map_err(DecodeError::backend)?;
-                        self.decoded_pts = self
-                            .spec
-                            .duration_for(frame)
-                            .map_err(DecodeError::backend)?;
-                        return Ok(frames);
+                    if start == 0 && !out.is_empty() {
+                        self.decoded_pts = self.quantized_pts(presentation_time_us)?;
                     }
                     if matches!(self.drain, DrainState::Finished) {
-                        return Ok(0);
+                        break;
                     }
+                    timeout = Consts::NO_WAIT_US;
                 }
                 DequeueOutput::OutputFormatChanged(format) => {
-                    self.spec = format.spec;
+                    self.spec = output_spec(&format)?;
                     self.pcm_encoding = format.pcm_encoding;
                 }
                 DequeueOutput::TryAgainLater => {
-                    out.clear();
-                    if draining {
+                    if draining && timeout != Consts::NO_WAIT_US && out.is_empty() {
                         return Err(AndroidBackendError::operation(
                             "codec-drain",
                             "timed out before end of output",
                         )
                         .into());
                     }
-                    return Ok(0);
+                    break;
                 }
             }
         }
+        u32::try_from(out.len() / usize::from(self.spec.channels)).map_err(DecodeError::backend)
+    }
+
+    fn quantized_pts(&self, presentation_time_us: i64) -> DecodeResult<Duration> {
+        let timestamp = Duration::from_micros(
+            u64::try_from(presentation_time_us).map_err(DecodeError::backend)?,
+        );
+        let frame = self
+            .spec
+            .frame_at(timestamp)
+            .map_err(DecodeError::backend)?;
+        self.spec.duration_for(frame).map_err(DecodeError::backend)
     }
 }
 
@@ -274,15 +286,8 @@ fn build_format(
     mime: &std::ffi::CStr,
     track: &TrackInfo,
 ) -> Result<OwnedFormat, AndroidBackendError> {
-    // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
-    let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
-        .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
-    let mut format = OwnedFormat::from(raw);
-
-    // SAFETY: format is live; key/value are static null-terminated CStrs.
-    unsafe {
-        ffi::AMediaFormat_setString(format.raw(), KEY_MIME.as_ptr(), mime.as_ptr());
-    }
+    let mut format = OwnedFormat::new()?;
+    format.set_str(KEY_MIME, mime);
 
     let sample_rate = i32::try_from(track.sample_rate).map_err(|_| {
         AndroidBackendError::operation(
@@ -306,39 +311,34 @@ fn build_format(
         } else {
             track.extra_data.as_slice()
         };
-        // SAFETY: format is live; setBuffer copies the readable configuration bytes.
-        unsafe {
-            ffi::AMediaFormat_setBuffer(
-                format.raw(),
-                KEY_CSD_0.as_ptr(),
-                config.as_ptr() as *const c_void,
-                config.len(),
-            );
-        }
+        format.set_buffer(KEY_CSD_0, config);
     }
 
     Ok(format)
 }
 
-fn decode_pcm16_into(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
-    let count = bytes.len() / 2;
-    out.ensure_len(count)?;
-    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+fn append_pcm16(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
+    let start = out.len();
+    let end = start + bytes.len() / 2;
+    out.ensure_len(end)?;
+    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.chunks_exact(2)) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
         *dst = f32::from(s) / Consts::PCM16_SCALE;
     }
-    out.truncate(count);
+    out.truncate(end);
     Ok(())
 }
 
-fn decode_pcm_float_into(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
-    let count = bytes.len() / 4;
-    out.ensure_len(count)?;
-    out.iter_mut()
+fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
+    let start = out.len();
+    let end = start + bytes.len() / 4;
+    out.ensure_len(end)?;
+    out[start..end]
+        .iter_mut()
         .zip(bytes.chunks_exact(4))
         .for_each(|(dst, chunk)| {
             *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         });
-    out.truncate(count);
+    out.truncate(end);
     Ok(())
 }

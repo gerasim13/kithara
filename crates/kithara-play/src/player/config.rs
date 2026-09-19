@@ -21,6 +21,15 @@ fn allocate_grid_id() -> BeatGridId {
     id
 }
 
+/// Crossfade window, in seconds, a player starts with. The single owner of
+/// the engine-side default: every façade that exposes crossfade as initial
+/// state reads it from here instead of restating a number.
+pub const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
+
+/// Playback-rate target a player starts with (1.0 = normal speed). Owned
+/// here for the same reason as [`DEFAULT_CROSSFADE_DURATION`].
+pub const DEFAULT_PLAYING_RATE: f32 = 1.0;
+
 const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448) {
     Some(frames) => frames,
     None => unreachable!(),
@@ -78,11 +87,12 @@ pub struct PlayerConfig<S> {
     #[patch(skip)]
     #[debug(skip)]
     pub block_on_underrun: bool,
-    /// Crossfade duration in seconds. Default: 1.0.
-    #[builder(default = 1.0)]
+    /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
+    #[builder(default = DEFAULT_CROSSFADE_DURATION)]
     pub crossfade_duration: f32,
-    /// Default playback-rate target (1.0 = normal). Default: 1.0.
-    #[builder(default = 1.0)]
+    /// Default playback-rate target (1.0 = normal). Default:
+    /// [`DEFAULT_PLAYING_RATE`].
+    #[builder(default = DEFAULT_PLAYING_RATE)]
     pub default_rate: f32,
     /// Capacity of each event topic when this player creates its root bus.
     /// An injected [`EventBus`] keeps its own capacity and identity.

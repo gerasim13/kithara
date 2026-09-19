@@ -14,3 +14,16 @@ pub fn bridge_duration_secs() -> f64 {
 pub fn bridge_is_playing() -> bool {
     session::bridge_is_playing()
 }
+
+/// Audio-thread process calls served so far (read from shared atomics).
+/// Monotonic; sample twice and read the delta.
+#[must_use]
+pub fn bridge_process_calls() -> u64 {
+    session::bridge_process_calls()
+}
+
+/// Underruns the audio thread has recorded (read from shared atomics).
+#[must_use]
+pub fn bridge_underruns() -> u64 {
+    session::bridge_underruns()
+}

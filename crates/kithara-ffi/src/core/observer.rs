@@ -40,12 +40,13 @@ pub trait FfiKeyProcessor: Send + Sync {
     fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
 }
 
-/// HTTP header name carrying the player-generated DRM salt. Mirrors the
-/// value [`crate::player::AudioPlayer::setup_hls_aes`] writes into the
-/// player-wide header map and forwards into [`FfiKeyProcessor::process_key`].
+/// HTTP header name carrying the DRM salt. Mirrors the salt a configured
+/// key rule writes into the player-wide header map and forwards into
+/// [`FfiKeyProcessor::process_key`].
 pub const SALT_HEADER: &str = "X-Encrypted-Key";
 
-/// HTTP header name carrying the auth token configured via
+/// HTTP header name carrying the auth token — set from the player
+/// configuration's `auth_token` and replaceable through
 /// [`crate::player::AudioPlayer::setup_network`].
 pub const AUTH_TOKEN_HEADER: &str = "X-Auth-Token";
 
