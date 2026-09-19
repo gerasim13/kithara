@@ -139,7 +139,7 @@ impl Consts {
 #[case::warp_sine(warp_tone(352_800))]
 #[case::warp_pair(vec![0.25, -0.5])]
 #[case::warp_constant(vec![0.25; 10240])]
-#[case::warp_nominal_clicks({ let mut src = warp_silence(Consts::WARP_NOMINAL_FRAMES); for k in 0..Consts::WARP_BEATS { warp_click(&mut src, k * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET); } src })]
+#[case::warp_nominal_clicks(warp_nominal_clicks())]
 #[case::warp_clicks({     let mut src = warp_silence(352_800);
     for k in 0..8 {
         warp_click(&mut src, k * 19_845 + 8192);
@@ -308,6 +308,18 @@ fn warp_click(buf: &mut [f32], frame: usize) {
         buf[idx] = s;
         buf[idx + 1] = s;
     }
+}
+
+/// Eight clicks one nominal period apart: the grid the warp core declares.
+fn warp_nominal_clicks() -> Vec<f32> {
+    let mut out = warp_silence(Consts::WARP_NOMINAL_FRAMES);
+    for beat in 0..Consts::WARP_BEATS {
+        warp_click(
+            &mut out,
+            beat * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET,
+        );
+    }
+    out
 }
 
 fn unit_f32(value: f64) -> f32 {
