@@ -5,6 +5,7 @@ use std::{panic::AssertUnwindSafe, path::Path};
 use futures::FutureExt;
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{TestServerHelper, kithara};
+use kithara_test_fixtures::assets::MANIFEST;
 
 use super::sync_product_matrix::{Provider, sources};
 
@@ -32,10 +33,25 @@ async fn provider_sources() -> Census {
     (server, entries)
 }
 
+/// Whether the build itself reported one of this provider's fixtures as absent.
+///
+/// A provider may only fail to produce sources for this reason. Every other
+/// blockage is a defect the census has to report.
+fn build_reported_absent(provider: &Provider) -> bool {
+    let Provider::Library(names) = provider else {
+        return false;
+    };
+    names.iter().any(|name| {
+        MANIFEST
+            .iter()
+            .find(|entry| entry.name == *name)
+            .is_some_and(|entry| entry.unavailable.is_some())
+    })
+}
+
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources: Census) {
     let (_server, entries) = provider_sources;
-    let mut blocked = Vec::new();
     for (provider, paths) in entries {
         let paths = match paths {
             Ok(paths) => paths,
@@ -44,7 +60,10 @@ async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources
                     message.starts_with("BLOCKED_FIXTURE"),
                     "{provider:?}: {message}"
                 );
-                blocked.push(format!("{provider:?}: {message}"));
+                assert!(
+                    build_reported_absent(&provider),
+                    "{provider:?} is blocked while its fixtures are present: {message}"
+                );
                 continue;
             }
         };
@@ -57,11 +76,4 @@ async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources
             );
         }
     }
-    if std::env::var_os("KITHARA_REMOTE_FIXTURES").is_some_and(|value| !value.is_empty()) {
-        assert!(
-            blocked.is_empty(),
-            "requested remote fixtures are unavailable: {blocked:?}"
-        );
-    }
-    eprintln!("blocked providers: {blocked:?}");
 }

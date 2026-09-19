@@ -206,6 +206,30 @@ impl AudioPlayer {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Audio-thread process calls served so far.
+    ///
+    /// The render callback runs inside an `AudioWorkletProcessor`, which the
+    /// page cannot observe: a browser that stops calling it leaves the
+    /// session reporting itself as playing while the position stands still.
+    /// The counter is monotonic, so a caller reads it twice and compares:
+    /// no growth means the callback is no longer running. Saturates at
+    /// `u32::MAX`, which a browser session reaches after months of playback.
+    #[wasm_bindgen(js_name = rtProcessCalls)]
+    #[must_use]
+    pub fn rt_process_calls_js(&self) -> u32 {
+        u32::try_from(self.inner.rt_process_calls()).unwrap_or(u32::MAX)
+    }
+
+    /// Underruns the audio thread has recorded so far. Read next to
+    /// [`Self::rt_process_calls_js`]: a callback that runs while this climbs
+    /// is starving rather than stopped. Saturates like
+    /// [`Self::rt_process_calls_js`].
+    #[wasm_bindgen(js_name = rtUnderruns)]
+    #[must_use]
+    pub fn rt_underruns_js(&self) -> u32 {
+        u32::try_from(self.inner.rt_underruns()).unwrap_or(u32::MAX)
+    }
+
     #[wasm_bindgen(js_name = seek)]
     pub fn seek_js(&self, position_ms: f64) {
         self.inner.seek_ms(position_ms);

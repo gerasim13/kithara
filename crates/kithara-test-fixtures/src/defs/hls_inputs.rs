@@ -1,3 +1,5 @@
+#![cfg(feature = "hls-inputs")]
+
 use kithara_test_macros as kithara;
 
 use crate::signal::{self, Pcm, Wave};

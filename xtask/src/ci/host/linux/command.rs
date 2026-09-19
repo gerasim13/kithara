@@ -5,14 +5,17 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use tracing::info;
 
 use super::{
     cleanup, compose, firewall,
-    profile::{LINUX_CONFIG_PATH, LinuxHost},
+    profile::{LINUX_CONFIG_PATH, LinuxHost, RunnerFlavor},
     registration, services, system, windows,
 };
 use crate::ci::{
     config::{CiPins, PINS_PATH},
+    host::provision::Provision,
+    image::{self, ImageCommand},
     process::Process,
 };
 
@@ -72,6 +75,57 @@ enum LinuxCommand {
     Health,
 }
 
+/// Bring this machine up to what the current commit describes.
+///
+/// The images come first because the services refuse to install without them,
+/// and both steps are idempotent: a rebuild whose inputs have not changed is
+/// answered out of the layer cache, and the services are rewritten from the
+/// same profile every time.
+pub(in crate::ci::host) fn provision(
+    process: &Process,
+    config: Option<&Path>,
+    pins: &Path,
+) -> Result<()> {
+    let config = config.map_or_else(|| PathBuf::from(LINUX_CONFIG_PATH), Path::to_path_buf);
+    let host = LinuxHost::load(&config)?;
+    let provision = Provision {
+        process,
+        config: &config,
+        pins,
+    };
+    let pins = CiPins::load(pins)?;
+    process.require_tools(&["docker"])?;
+    for image in required_builds(&host) {
+        image::build_pinned(process, image, &pins)?;
+    }
+    provision.as_root("linux", "install-services")?;
+    info!(platform = "linux", "host provisioned from this commit");
+    Ok(())
+}
+
+/// Every image this profile's runners are built from, base before layer. An
+/// Android machine still builds the plain toolchain: the emulator image is
+/// layered on it.
+fn required_builds(host: &LinuxHost) -> Vec<ImageCommand> {
+    let mut builds = vec![ImageCommand::Toolchain];
+    if host
+        .runners
+        .iter()
+        .any(|runner| matches!(runner.flavor, RunnerFlavor::Plain))
+    {
+        builds.push(ImageCommand::Runner);
+    }
+    if host
+        .runners
+        .iter()
+        .any(|runner| matches!(runner.flavor, RunnerFlavor::Android))
+    {
+        builds.push(ImageCommand::Android);
+        builds.push(ImageCommand::AndroidRunner);
+    }
+    builds
+}
+
 pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
     let root = std::env::current_dir()?;
     let process = Process::new(&root, BTreeMap::new());
@@ -118,18 +172,40 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
 mod tests {
     use clap::Parser;
 
+    use super::*;
     use crate::Cli;
 
     fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec![
             "xtask",
             "ci",
+            "host",
             "linux",
             "--config",
             "/etc/kithara-ci/linux-host.toml",
         ];
         argv.extend_from_slice(command);
         Cli::try_parse_from(argv)
+    }
+
+    /// The emulator image is layered on the plain toolchain, so a machine
+    /// serving the Android lane builds that first. Missing it is a machine
+    /// that builds the emulator against whatever toolchain it happens to
+    /// still hold.
+    #[test]
+    fn an_android_machine_builds_the_toolchain_its_emulator_stands_on() {
+        let host = super::super::profile::tests::host_fixture();
+        let builds = required_builds(&host);
+        assert!(
+            matches!(builds.first(), Some(ImageCommand::Toolchain)),
+            "{builds:?}"
+        );
+        assert!(
+            builds
+                .iter()
+                .any(|image| matches!(image, ImageCommand::AndroidRunner)),
+            "{builds:?}"
+        );
     }
 
     #[test]

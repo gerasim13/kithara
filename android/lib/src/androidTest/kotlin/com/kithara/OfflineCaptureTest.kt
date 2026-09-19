@@ -26,6 +26,7 @@ class OfflineCaptureTest {
         private const val TAG = "OfflineCaptureTest"
         private const val INPUT_ASSET = "test.mp3"
         private const val OUTPUT_NAME = "offline-capture.wav"
+        private const val MISSING_INPUT = "offline-capture-missing.mp3"
         private const val CAPTURE_SECONDS = 10
 
         private const val HEADER_BYTES = 44
@@ -62,18 +63,38 @@ class OfflineCaptureTest {
 
         Log.i(TAG, "input=${input.absolutePath} output=${output.absolutePath}")
 
-        val rc = Kithara.Test.runOfflineCapture(
+        Kithara.Test.runOfflineCapture(
             inputPath = input.absolutePath,
             outputPath = output.absolutePath,
             seconds = CAPTURE_SECONDS,
         )
 
-        assertEquals("native rc must be 0 (see RC_* constants in android_test.rs)", 0L, rc)
         assertTrue("output WAV must exist", output.exists())
 
         val bytes = output.readBytes()
         val frames = assertHeader(bytes, output.length())
         assertWave(readPcm(bytes, frames))
+    }
+
+    @Test
+    fun unreadableInputThrowsNamingTheInput() {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        val missing = File(appContext.filesDir, MISSING_INPUT).apply { if (exists()) delete() }
+        val output = emptyOutputFile()
+
+        val error = assertThrows(RuntimeException::class.java) {
+            Kithara.Test.runOfflineCapture(
+                inputPath = missing.absolutePath,
+                outputPath = output.absolutePath,
+                seconds = 1,
+            )
+        }
+
+        Log.i(TAG, "unreadable input reported: ${error.message}")
+        assertTrue(
+            "the exception must name the input it could not read; got ${error.message}",
+            error.message?.contains(missing.absolutePath) == true,
+        )
     }
 
     private fun copyFixtureIntoAppFiles(): File {

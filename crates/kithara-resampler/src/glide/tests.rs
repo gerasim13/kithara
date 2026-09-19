@@ -73,7 +73,7 @@ fn unity_fast_path_copies_input(glide_unity: Vec<f32>) {
 
     assert_eq!(process.input_frames, input.len());
     assert_eq!(process.output_frames, output.len());
-    assert_eq!(output, input);
+    assert_eq!(output.as_slice(), input);
 }
 
 #[kithara::test(native, flash(false))]

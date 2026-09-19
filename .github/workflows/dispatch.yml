@@ -74,6 +74,18 @@ jobs:
       kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
 
+  mutants:
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    concurrency:
+      group: heavy-linux-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/run.yml
+    with:
+      role: mutants
+      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      only: ${{ inputs.only || '' }}
+
   quality:
     if: vars.KITHARA_RUNNER_LABELS != ''
     concurrency:

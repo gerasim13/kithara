@@ -16,7 +16,7 @@ pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
 /// Installed profile of the Mac mini and the guests it hosts, read through
 /// `KITHARA_CI_HOST_CONFIG`. A Linux machine carries its own; see
-/// [`crate::ci::linux`].
+/// [`crate::ci::host::linux`].
 pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
 
 /// Machine profile of one CI host: volumes, accounts, and installed roots.

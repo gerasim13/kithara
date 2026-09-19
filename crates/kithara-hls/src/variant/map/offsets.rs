@@ -289,14 +289,6 @@ impl Layout {
             && frame.offsets.len() == segments.len()
     }
 
-    /// Coherent "is this variant historical?" check: `served_from` and
-    /// `served_until` are read from one published frame, closing the
-    /// coord-level torn read between two separate accessor calls.
-    pub(super) fn is_shrunk(&self, num_segments: u32) -> bool {
-        let frame = self.frame.load();
-        frame.served_from > 0 || frame.served_until < num_segments
-    }
-
     /// Serialized load-clone-mutate-store for off-RT writers. Takes
     /// `write_lock`, runs the caller-owned `store` (size stores + the
     /// post-store `init_size`) under it, clones the live frame, applies `f`

@@ -544,7 +544,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
         &temp_dir,
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
     )
     .await;
 
@@ -587,7 +586,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         &temp_dir,
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
     )
     .await;
 
@@ -783,17 +781,15 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
     #[case] flavor: CrossfadeFlavor,
 ) {
     let (_server, sources) = crossfade_tracks;
-    let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
+    let (sample_rate, collapse_runs) = if resampled {
         (
             RESAMPLED_RENDER_RATE,
             collapse_resampled_noise_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
-            true,
         )
     } else {
         (
             SAMPLE_RATE,
             collapse_short_unknown_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
-            false,
         )
     };
     run_crossfade_flac_case(
@@ -802,7 +798,6 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
         sample_rate,
         collapse_runs,
         label,
-        provenance_headroom,
         || flavor.player_config(),
     )
     .await;
@@ -820,13 +815,13 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(
         &temp_dir,
         SAMPLE_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        false,
     )
     .await;
 
     let (rendered, expected_a_end_frame) =
         render_app_layer_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE)
             .await;
+    assert_provenance_headroom(&rendered, "app-layer crossfade FLAC");
     let analysis = assert_crossfade_contract(
         &rendered,
         &setup.queue,
@@ -877,6 +872,27 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
+    let b_onset_frame = frame_for_window(b_onset_window);
+    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+
+    // Where the seek landed, read off the rendered audio rather than off the
+    // event. `SeekComplete` is published from a read, so its frame leads the
+    // audible position by the ring depth, and a length measured from it would
+    // carry that lead as a tolerance instead of stating a property. The landing
+    // is the frame carrying the requested phase: the sawtooth repeats only every
+    // `SAW_PERIOD` frames, which is longer than the stretch searched here, so one
+    // frame in it holds that phase. Reading the landing off a class run instead
+    // would depend on the seam splitting the run, and a seam that falls inside a
+    // window leaves the pre-seek and post-seek stretches joined.
+    let landing_frame = require_phase_landing(
+        &left,
+        seek_issue_frame,
+        b_onset_frame,
+        expected_phase,
+        &search_context,
+    );
+    // The phase check stops at the last Ascending window: the windows between it and B
+    // hold the seam itself, whose mixed frames are not track A's phase.
     let last_ascending_window = require_last_class_window_before(
         &classes,
         FrameClass::Ascending,
@@ -884,20 +900,6 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         &search_context,
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
-
-    // Where the seek landed, read off the rendered audio rather than off the
-    // event. `SeekComplete` is published from a read, so its frame leads the
-    // audible position by the ring depth, and a length measured from it would
-    // carry that lead as a tolerance instead of stating a property. The last
-    // Ascending run before B is the post-seek tail itself: its first window is
-    // the landing, its length is what the seek left of track A.
-    let (_, landing_window, landing_windows) = require_run_containing(
-        &runs,
-        FrameClass::Ascending,
-        last_ascending_window,
-        &search_context,
-    );
-    let landing_frame = frame_for_window(landing_window);
 
     let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
@@ -927,17 +929,8 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         )
     );
 
-    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
-    let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
-    assert!(
-        landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
-        "seek must land at the requested position in track A: \
-         landing_frame={landing_frame}; phase_delta={landing_phase_delta} units; {}",
-        context.dump()
-    );
-
     assert_close_len(
-        landing_windows * WINDOW_FRAMES,
+        last_ascending_end_frame - landing_frame,
         EXPECTED_POST_SEEK_FRAMES,
         TRACK_FRAME_TOLERANCE,
         "post-seek ascending length must be approximately 0.5s before B starts",
@@ -1099,7 +1092,6 @@ async fn run_crossfade_flac_case(
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
     label: &str,
-    provenance_headroom: bool,
     build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
@@ -1107,16 +1099,13 @@ async fn run_crossfade_flac_case(
         temp_dir,
         render_sample_rate,
         build_player_config(),
-        provenance_headroom,
     )
     .await;
 
     let (rendered, expected_a_end_frame) =
         render_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, render_sample_rate)
             .await;
-    if provenance_headroom {
-        assert_provenance_headroom(&rendered, label);
-    }
+    assert_provenance_headroom(&rendered, label);
 
     assert_crossfade_contract(
         &rendered,
@@ -1212,14 +1201,10 @@ async fn setup_flac_queue_with_player_config(
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     player_config: OfflinePlayerOptions,
-    provenance_headroom: bool,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
-    let harness = if provenance_headroom {
-        with_provenance_headroom(harness)
-    } else {
-        harness
-    };
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await,
+    );
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
@@ -1923,23 +1908,24 @@ fn require_last_class_window_before(
         })
 }
 
-/// The run of `target` that covers `window`. A window says which class a moment
-/// belongs to; the run says where that stretch began and how long it lasted,
-/// which is what a length property is stated about.
-fn require_run_containing(
-    runs: &[ClassRun],
-    target: FrameClass,
-    window: usize,
+/// The frame between `from` and `to` whose phase is `expected_phase`. A seek
+/// states where it landed by the phase it resumes at, so the landing is found by
+/// that phase rather than by the class seam around it.
+fn require_phase_landing(
+    left: &[f32],
+    from: usize,
+    to: usize,
+    expected_phase: usize,
     context: &ProvenanceDumpContext<'_>,
-) -> ClassRun {
-    runs.iter()
-        .copied()
-        .find(|(class, start, len)| {
-            *class == target && *start <= window && window < start.saturating_add(*len)
+) -> usize {
+    (from..to.min(left.len()))
+        .find(|frame| {
+            phase::distance(phase::units(left[*frame]), expected_phase) <= SEEK_PHASE_TOL_UNITS
         })
         .unwrap_or_else(|| {
             panic!(
-                "window {window} must belong to a {target:?} run; {}",
+                "seek must land at the requested position in track A: \
+                 expected_phase={expected_phase}; searched frames {from}..{to}; {}",
                 context.dump()
             )
         })

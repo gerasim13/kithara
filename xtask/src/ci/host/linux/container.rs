@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
-use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins};
+use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins, image::floating_tag};
 
 /// Where a job builds and what it reuses, before the linker entries are added.
 const CACHE_ENVIRONMENT: [&str; 7] = [
@@ -45,7 +47,10 @@ const CACHE_ENVIRONMENT: [&str; 7] = [
 /// wrong cores, the wrong image, or no device.
 pub(super) struct Container<'a> {
     pub(super) name: String,
-    pub(super) image: &'a str,
+    /// The floating tag, not the pin: the pin says what to build, and a
+    /// container that named it would die the moment the pin moved ahead of
+    /// what this machine has built.
+    pub(super) image: String,
     pub(super) network: &'a str,
     /// Which cores its jobs may use, as a set rather than a share. See
     /// [`super::services::cpuset`].
@@ -172,13 +177,13 @@ pub(super) fn container<'a>(
     runner: &'a LinuxRunner,
     cpuset: String,
     pins: &'a CiPins,
-) -> Container<'a> {
-    Container {
+) -> Result<Container<'a>> {
+    Ok(Container {
         name: format!("kithara-ci-{}", runner.name),
-        image: match runner.flavor {
+        image: floating_tag(match runner.flavor {
             RunnerFlavor::Plain => &pins.linux_runner_image,
             RunnerFlavor::Android => &pins.linux_android_runner_image,
-        },
+        })?,
         network: &host.network,
         cpuset,
         memory: &runner.memory,
@@ -186,7 +191,7 @@ pub(super) fn container<'a>(
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
         mounts: Container::mounts(host, runner),
-    }
+    })
 }
 
 #[cfg(test)]

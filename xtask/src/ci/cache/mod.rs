@@ -10,7 +10,7 @@ use clap::{Args, Subcommand};
 
 use self::snapshot::SnapshotArgs;
 use super::config::{CiPins, PINS_PATH};
-use crate::ci::host::read_secret;
+use crate::ci::host::mac::read_secret;
 
 mod provision;
 pub(crate) mod snapshot;

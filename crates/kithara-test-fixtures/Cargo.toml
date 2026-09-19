@@ -12,39 +12,65 @@ publish = false
 name = "kithara-fixture-export"
 path = "src/bin/export.rs"
 test = false
-required-features = ["native-fixtures"]
+required-features = ["all"]
 
 [features]
+# The store, the build script and the generated accessors. A consumer names the
+# fixture families it reads; each family turns this on. Enabling it alone
+# registers no asset beyond the synthetic PCM every family builds on.
 native-fixtures = [
-    "dep:aes",
     "dep:bon",
-    "dep:bytes",
-    "dep:cbc",
-    "dep:cochlea-render",
-    "dep:cochlea-score",
     "dep:delegate",
     "dep:fs4",
-    "dep:futures-lite",
-    "dep:hls_m3u8",
     "dep:inventory",
-    "dep:kithara-analysis",
-    "dep:kithara-audio",
-    "dep:kithara-bufpool",
-    "dep:kithara-decode",
-    "dep:kithara-drm",
     "dep:kithara-encode",
-    "dep:kithara-events",
     "dep:kithara-platform",
-    "dep:kithara-resampler",
-    "dep:kithara-signal",
     "dep:kithara-stream",
     "dep:kithara-test-macros",
     "dep:kithara-test-utils",
+    "dep:serde_json",
+]
+
+# `rhythm_pcm` and its controls are declared with the WAV family.
+encoded = ["wav"]
+# Packages its own segments from synthetic PCM; it fetches nothing.
+hls = ["dep:aes", "dep:cbc", "dep:rayon", "packaged"]
+# The segment inputs and the variant catalog reach consumers through one module;
+# the catalog packages its variants from the `packaged` pools.
+hls-inputs = ["hls"]
+# The verified download and the playlist hydrator are one transport module, so
+# the two fetching families ship together. `library_analysis` then runs the beat
+# analysis over each downloaded track.
+library = ["remote", "rhythm"]
+packaged = ["dep:kithara-bufpool", "wav"]
+# Everything that reaches the network at build time: the HTTP client, the
+# playlist hydrator, and the one build outcome only a fetch can produce.
+remote = [
+    "dep:bytes",
+    "dep:hls_m3u8",
+    "dep:kithara-drm",
     "dep:rayon",
     "dep:reqwest",
-    "dep:serde_json",
     "dep:url",
+    "hls",
+    "native-fixtures",
 ]
+rhythm = [
+    "dep:cochlea-render",
+    "dep:cochlea-score",
+    "dep:futures-lite",
+    "dep:kithara-analysis",
+    "dep:kithara-audio",
+    "dep:kithara-decode",
+    "dep:kithara-events",
+    "dep:kithara-resampler",
+    "dep:kithara-signal",
+    "native-fixtures",
+]
+signal = ["native-fixtures"]
+wav = ["native-fixtures"]
+
+all = ["encoded", "hls", "hls-inputs", "library", "packaged", "remote", "rhythm", "signal", "wav"]
 
 [dependencies]
 kithara-platform = { workspace = true, optional = true }
@@ -138,12 +164,12 @@ workspace = true
 
 [[test]]
 name = "rhythm_contract"
-required-features = ["native-fixtures"]
+required-features = ["rhythm"]
 
 [[test]]
 name = "store_contract"
-required-features = ["native-fixtures"]
+required-features = ["all"]
 
 [[test]]
 name = "hls_contract"
-required-features = ["native-fixtures"]
+required-features = ["hls"]

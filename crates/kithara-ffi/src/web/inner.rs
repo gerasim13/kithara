@@ -467,6 +467,12 @@ impl WasmInner {
         to self.bridge {
             #[call(position_secs)]
             pub(crate) fn current_time(&self) -> f64;
+            /// Audio-thread process calls served so far.
+            #[call(process_calls)]
+            pub(crate) fn rt_process_calls(&self) -> u64;
+            /// Underruns the audio thread has recorded so far.
+            #[call(underruns)]
+            pub(crate) fn rt_underruns(&self) -> u64;
             /// Forward a command to the worker, mapping a channel failure to a
             /// typed [`FfiError`]. Used by the fallible facade methods that should
             /// surface a real error when the worker link is down.

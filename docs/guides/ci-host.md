@@ -22,7 +22,7 @@ token is present and reports to the wrong repository. Write each token with
 `install -m 600 -o root -g root /dev/stdin`: `sudo` overrides an inherited
 umask, so `tee` leaves it world-readable.
 
-`xtask ci host` owns the procedure. From a reviewed GitLab commit, with
+`xtask ci host mac` owns the procedure. From a reviewed GitLab commit, with
 `KITHARA_CI_HOST_CONFIG` exported and `sudo -E` where root is needed, run
 `bootstrap`, `install-host-tools`, `finish`; `finish` installs binary, profile
 and pins under `/Volumes/KitharaCI/services` and publishes the profile where the
@@ -31,10 +31,38 @@ those installed copies.
 
 The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base, every tool version arrives as a build
-argument. A new tag is not deployed until this host rebuilds the image and
-reruns `configure-runners` and `activate` from a checkout of the commit carrying
-the pin. The runner never pulls this local-only tag and declares the tag it
-provisioned, which `xtask ci run` checks against the pin.
+argument. The runners name the floating tag — `kithara-ci:linux-latest` and
+its siblings — never the pin, so a pin bump cannot strand a lane on an image
+nobody built: the pin says what to build, the floating tag says what to run,
+and whatever builds an image moves the tag onto it.
+
+## Provisioning
+
+`ci host provision` is the roll-out, run on the machine it provisions and
+reading everything from the commit it runs on. The macOS host reinstalls its
+services, rewrites its runner configuration, makes sure the pinned Linux image
+is present and reloads its agents; a Linux host builds the images its profile
+asks for and installs its units. Every step is idempotent — an image that is
+already there is only retagged — so a run costs seconds when nothing moved.
+
+Neither pipeline runs it on a push. On GitLab it is `host:provision`, which
+takes `KITHARA_PROVISION=1` on a `main`, `nightly` or `release` run; on GitHub
+it is the `Host` workflow, started by hand. Provisioning writes to the machine
+every lane depends on, and a merge-request or quarantine ref carries code no
+one has reviewed yet.
+
+Three things are granted once, by hand, and nothing in a pipeline can grant
+them:
+
+- A non-ephemeral runner on the Linux host itself, labelled by
+  `KITHARA_HOST_RUNNER_LABEL`, with the Docker daemon and `systemctl` in
+  reach. The fleet's own runners are throwaway containers that have neither.
+- The steps that own root-owned files re-run this executable under `sudo -n`,
+  which never prompts. A line in `/etc/sudoers.d/kithara-ci` granting the
+  runner user that one command — and nothing else — is what lets them run;
+  the step's own failure message spells it out.
+- A Rust toolchain on the provisioning host, because the pass is this
+  executable built from the checkout.
 
 ## GitLab runners
 
@@ -100,29 +128,31 @@ same-ref push cancellation.
 
 ## Windows
 
-`xtask ci host` provisions the UTM guest under `<host_root>/vm/windows` from the
-profile, which owns its disk sizes; media and license are deliberately not
-automated. Install the official GitLab Runner in the Windows 11 ARM guest by
-hand: one shell executor, tag `kithara-windows`, `concurrent = 1`, builds and
-cache under `C:\KitharaCI`. Its job runs `xtask ci run windows`; no PowerShell
-script. Windows runs last in the nightly chain.
+`xtask ci host mac` provisions the UTM guest under `<host_root>/vm/windows`
+from the profile, which owns its disk sizes; media and license are deliberately
+not automated. Install the official GitLab Runner in the Windows 11 ARM guest
+by hand: one shell executor, tag `kithara-windows`, `concurrent = 1`, builds
+and cache under `C:\KitharaCI`. Its job runs `xtask ci run windows`; no
+PowerShell script. Windows runs last in the nightly chain.
 
 ## Repository bridge
 
 Copy `.config/bridge/config.example.toml` to
 `/Volumes/KitharaCI/services/bridge/config.toml`; it and the two tokens belong
 to UID 504 (`kithara-sync`), mode `0600`. The GitHub token needs
-`Contents: write`, `Pull requests: read` and `Commit statuses: write`. Validate
-with `ci bridge validate` (no network mutation), then `ci host activate-bridge`.
+`Contents: write`, `Pull requests: read` and `Commit statuses: write`.
+Validate with `ci bridge validate` (no network mutation), then
+`ci host mac activate-bridge`.
 `github_branch` and `gitlab_branch` are separate keys because the sides
 disagree — GitLab `develop`, GitHub `main` — and a swap is silent: GitHub
 answers an unknown base with an empty pull list.
 
 The daemon keeps running the executable that was installed, not the one on
-`develop`: a fix changes nothing until `ci host install-services` reinstalls it
-from a reviewed GitLab commit, then `activate-bridge` and `activate`. launchd
-keeps the definition it loaded, so skipping `activate` silently leaves the
-maintenance agents on the old cadence; `launchctl print` reports what is loaded.
+`develop`: a fix changes nothing until `ci host mac install-services`
+reinstalls it from a reviewed GitLab commit, then `activate-bridge` and
+`activate`. launchd keeps the definition it loaded, so skipping `activate`
+silently leaves the maintenance agents on the old cadence; `launchctl print`
+reports what is loaded.
 
 The bridge moves either default branch only by fast-forward, in whichever
 direction is behind, and never synthesizes a replacement commit or force-pushes
@@ -221,11 +251,11 @@ evicting past the cap. What its sweeps cannot show:
   and are pruned on age alone, an `lsof` walk per candidate costing hours over
   that backlog.
 
-Health and cleanup run through launchd, and directly as `ci host health` /
-`ci host cleanup`. A `KeepAlive` agent that dies on startup stays loaded and is
-restarted forever, so health checks each `always_on_agents` process, not the
-loaded service: a missing one looks like nothing from outside, its jobs sitting
-`pending` while the pipeline reads as hung.
+Health and cleanup run through launchd, and directly as `ci host mac health` /
+`ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded
+and is restarted forever, so health checks each `always_on_agents` process, not
+the loaded service: a missing one looks like nothing from outside, its jobs
+sitting `pending` while the pipeline reads as hung.
 
 launchd starts no second instance while the first is alive, so a wedged pass
 silences `StartInterval` outright: one hung for over a day inside `opendir` on a
@@ -253,5 +283,5 @@ follows the name is outside it, and the order matters:
    branches only, so release jobs fail on a missing secret instead.
 3. Repoint the schedules; a schedule keeps the branch it was created with.
 4. Retarget open merge requests, which GitLab closes with their target branch.
-5. Set `gitlab_branch` on the host, then `ci host activate-bridge`.
+5. Set `gitlab_branch` on the host, then `ci host mac activate-bridge`.
 6. Delete the old branch last.

@@ -173,7 +173,8 @@ pub(crate) const PIPELINE_KINDS: [&str; 8] = [
     "release",
 ];
 
-pub(crate) const LANE_ROLES: [&str; 5] = ["gate", "platforms", "deep", "quality", "release"];
+pub(crate) const LANE_ROLES: [&str; 6] =
+    ["gate", "platforms", "deep", "mutants", "quality", "release"];
 
 /// The lane's own executable. A Windows job runs the binary it started as
 /// rather than `cargo xtask`, which would rebuild it - and Windows refuses to

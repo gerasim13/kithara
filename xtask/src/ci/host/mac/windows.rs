@@ -197,7 +197,7 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs};
 
     use super::*;
-    use crate::ci::{config::fixture, host::testing::install_double};
+    use crate::ci::{config::fixture, host::mac::testing::install_double};
 
     /// The tracked fixture describes a mac without a Windows guest, because
     /// the guest is the one part of a machine profile most hosts do not have.

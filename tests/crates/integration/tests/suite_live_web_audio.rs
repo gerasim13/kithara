@@ -353,17 +353,18 @@ const url = URL.createObjectURL(new Blob(
   { type: "text/javascript" },
 ));
 const context = new AudioContext();
+// Every way this probe can end is a state the worklet reaches: the module
+// fails to load, the processor reports an error, or it posts what it saw.
+// A timer racing those would report a slow browser as a silent one, and the
+// run already has a deadline of its own.
 const reported = context.audioWorklet.addModule(url).then(() => new Promise((resolve) => {
   const node = new AudioWorkletNode(context, "kithara-diagnostic-probe", {
     processorOptions: [wasmModule, wasmMemory, probeName],
   });
+  node.onprocessorerror = () => resolve("the worklet errored before it reported");
   node.port.onmessage = (event) => resolve(event.data);
 }));
-const deadline = new Promise((resolve) => setTimeout(
-  () => resolve("the worklet never reached the diagnostic"),
-  2000,
-));
-return Promise.race([reported, deadline]).finally(() => {
+return reported.finally(() => {
   URL.revokeObjectURL(url);
   context.close();
 });

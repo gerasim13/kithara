@@ -1,0 +1,37 @@
+name: Host
+
+# Rolling a merged change onto the machines that serve the pipeline, without an
+# ssh session. The pins, the images, the units and the agents all come from the
+# commit this runs on, so the fleet is provisioned by the same review that
+# changed it.
+#
+# Opt-in on purpose: nothing here belongs on a push. It writes to the machine,
+# a rebuilt toolchain image costs half an hour, and most merges change nothing
+# the host holds. Start it by hand after a change to `.config/ci-pins.toml`,
+# to a `docker/*.Dockerfile`, or to the host commands themselves.
+on:
+  workflow_dispatch:
+
+# The host serves one provisioning pass at a time. A second would rebuild the
+# images the first is installing services against.
+concurrency:
+  group: host-provision-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: provision
+    # The machine itself, not one of the throwaway runner containers: a
+    # container has neither the Docker daemon that holds the images nor the
+    # systemd that owns the units. One non-ephemeral runner lives on the host
+    # and serves only this.
+    if: vars.KITHARA_HOST_RUNNER_LABEL != ''
+    runs-on: ${{ vars.KITHARA_HOST_RUNNER_LABEL }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Provision this machine
+        run: cargo run --locked -p xtask -- ci host provision

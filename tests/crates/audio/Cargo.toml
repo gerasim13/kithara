@@ -23,7 +23,7 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 kithara = { workspace = true, default-features = false, features = ["usdt", "assets", "audio", "bufpool", "decode", "file", "platform", "play", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "warp"] }
 kithara-integration-tests = { workspace = true, default-features = false, features = ["audio"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 assert_no_alloc = { workspace = true }
