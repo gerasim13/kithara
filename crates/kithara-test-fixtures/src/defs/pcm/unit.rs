@@ -93,13 +93,13 @@ impl Consts {
 #[case::limiter_infinity(vec![f32::INFINITY])]
 #[case::blend_identity(vec![-1.0, -0.25, 0.0, 0.25, 0.5, 1.0])]
 #[case::blend_multichannel(vec![0.25; 12])]
-#[case::blend_outgoing((0..1764usize.saturating_mul(2))
+#[case::blend_outgoing((0..882usize.saturating_mul(2))
         .map(|sample| deterministic_sample(sample, 37, 257))
         .collect::<Vec<_>>())]
-#[case::blend_incoming((0..(1764usize + 1024usize).saturating_mul(2))
+#[case::blend_incoming((0..(882usize + 1024usize).saturating_mul(2))
         .map(|sample| deterministic_sample(sample + 19, 53, 251))
         .collect::<Vec<_>>())]
-#[case::blend_outgoing_constant(vec![-0.75; 3528])]
+#[case::blend_outgoing_constant(vec![-0.75; 1764])]
 #[case::blend_join_frame(vec![0.25; 2])]
 #[case::blend_signed_frame(vec![0.25, -0.25])]
 #[case::apple_planar_44100(planar_signal(2, 1024, 44_100))]
@@ -128,8 +128,8 @@ impl Consts {
 #[case::eq_transition((0u16..4096).map(|i| (2.0 * std::f32::consts::PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin()).collect())]
 #[case::eq_impulse({ let mut pcm = vec![0.0; 192_001]; pcm[0] = 1.0; pcm })]
 #[case::cursor_half(vec![0.5; 296])]
-#[case::decode_quarter(vec![0.25; 3528])]
-#[case::decode_negative_quarter(vec![-0.25; 3528])]
+#[case::decode_quarter(vec![0.25; 1764])]
+#[case::decode_negative_quarter(vec![-0.25; 1764])]
 #[case::route_44100((0u32..44100 * 60).flat_map(|frame| { let t = f64::from(frame) / 44100.0; let sample = ((t * 440.0 * std::f64::consts::TAU).sin() * 0.25).to_f32().expect("sine amplitude bounded by 0.25 fits f32"); [sample, sample] }).collect())]
 #[case::route_48000((0u32..48000 * 60).flat_map(|frame| { let t = f64::from(frame) / 48000.0; let sample = ((t * 440.0 * std::f64::consts::TAU).sin() * 0.25).to_f32().expect("sine amplitude bounded by 0.25 fits f32"); [sample, sample] }).collect())]
 #[case::encode_saw((0i16..4096).flat_map(|frame| { let value = f32::from(i16::MIN + frame) / 32768.0; [value, value] }).collect())]

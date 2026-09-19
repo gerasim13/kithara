@@ -981,20 +981,32 @@ mod tests {
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
             .saturating_mul(usize::from(spec.channels));
+        let active_samples = decode_quarter
+            .iter()
+            .copied()
+            .cycle()
+            .take(samples)
+            .collect::<Vec<_>>();
+        let outgoing_samples = decode_negative_quarter
+            .iter()
+            .copied()
+            .cycle()
+            .take(samples)
+            .collect::<Vec<_>>();
         decode.active.stage(AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 frames,
                 ..Default::default()
             },
-            sample_buffer(&pools, &decode_quarter[..samples]),
+            sample_buffer(&pools, &active_samples),
         ));
         decode
             .blender
             .prepare_active(BlenderProfile::new(spec))
             .expect("join scratch fits test pools");
         assert!(decode.blender.prepare_join(|outgoing| {
-            outgoing.copy_from_slice(&decode_negative_quarter[..outgoing.len()]);
+            outgoing.copy_from_slice(&outgoing_samples);
             true
         }));
         decode.blender.commit_join();

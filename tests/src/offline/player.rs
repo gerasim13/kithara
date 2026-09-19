@@ -85,6 +85,11 @@ impl OfflinePlayer {
         self.control().set_crossfade_duration(seconds);
     }
 
+    /// Set the player volume used by subsequent offline renders.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.control().set_volume(volume);
+    }
+
     /// Snapshot the real-time counters owned by this player slot.
     #[must_use]
     pub fn metrics(&self) -> RtMetricsSnapshot {
