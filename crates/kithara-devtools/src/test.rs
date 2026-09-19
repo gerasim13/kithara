@@ -1477,6 +1477,7 @@ mod tests {
                 default_backend: None,
                 default_flash: Some(false),
                 default_no_block: Some(false),
+                undeclared_toggles: Vec::new(),
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
