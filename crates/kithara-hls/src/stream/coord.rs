@@ -2123,14 +2123,33 @@ pub(super) mod tests {
         assert!(coord.abr.is_locked());
     }
 
+    /// The seek lock is taken through the coord, so it is released through
+    /// the coord: the setup mirrors the production sequence rather than
+    /// reaching past it into the shared counter.
     #[kithara::test]
     fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.sync_abr_lock();
+        coord.seek_control().clear_pending(epoch);
+
+        coord.sync_abr_lock();
+
+        assert!(!coord.abr.is_locked());
+    }
+
+    /// `AbrState::unlock` decrements a shared counter under a
+    /// `debug_assert!(prev > 0)`, and `AbrHandle::lock` is public: releasing a
+    /// level this coord did not take unlocks ABR for whoever is still holding
+    /// it, and a second such release trips the assert.
+    #[kithara::test]
+    fn sync_abr_lock_leaves_a_level_it_did_not_take_alone() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         coord.abr.lock();
 
         coord.sync_abr_lock();
 
-        assert!(!coord.abr.is_locked());
+        assert!(coord.abr.is_locked());
     }
 
     #[kithara::test]
