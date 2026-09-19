@@ -66,9 +66,35 @@ pub(crate) struct Context<'a> {
     pub(crate) scope: &'a Scope,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CheckPolicy {
+    Default,
+    WorkspaceSources,
+}
+
+impl CheckPolicy {
+    pub(crate) fn scope(self, scope: &Scope) -> Scope {
+        match self {
+            Self::Default => scope.clone(),
+            Self::WorkspaceSources => scope.clone().with_workspace_sources(),
+        }
+    }
+
+    pub(crate) const fn keeps_source_findings(self) -> bool {
+        matches!(self, Self::WorkspaceSources)
+    }
+}
+
 pub(crate) trait Check {
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
+    }
+    fn policy(&self) -> CheckPolicy {
+        if self.id().starts_with("derivable_") {
+            CheckPolicy::WorkspaceSources
+        } else {
+            CheckPolicy::Default
+        }
     }
     fn id(&self) -> &'static str;
 

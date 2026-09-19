@@ -47,14 +47,25 @@ impl OfflinePlayer {
         }
     }
 
-    fn control(&self) -> PlayerControl<TestPools> {
-        self.player.control()
-    }
-
-    /// Offline Host owning this player, for probes the Host installs.
-    #[must_use]
-    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
-        self.player.host()
+    delegate::delegate! {
+        to self.player {
+            fn control(&self) -> PlayerControl<TestPools>;
+            /// Offline Host owning this player, for probes the Host installs.
+            #[must_use]
+            pub const fn host(&self) -> &OfflineHostHarness<TestPools>;
+        }
+        to self {
+            /// Snapshot the real-time counters owned by this player slot.
+            #[must_use]
+            #[expr($.rt_metrics().unwrap_or_default())]
+            #[call(control)]
+            pub fn metrics(&self) -> RtMetricsSnapshot;
+            /// Current playback position in seconds.
+            #[must_use]
+            #[expr($.position_seconds().unwrap_or_default())]
+            #[call(control)]
+            pub fn position(&self) -> f64;
+        }
     }
 
     /// Decode worker this player pulls from, for opening resources beside it.
@@ -83,18 +94,6 @@ impl OfflinePlayer {
     /// Set the transition duration used by the next load.
     pub fn set_fade_duration(&mut self, seconds: f32) {
         self.control().set_crossfade_duration(seconds);
-    }
-
-    /// Snapshot the real-time counters owned by this player slot.
-    #[must_use]
-    pub fn metrics(&self) -> RtMetricsSnapshot {
-        self.control().rt_metrics().unwrap_or_default()
-    }
-
-    /// Current playback position in seconds.
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        self.control().position_seconds().unwrap_or_default()
     }
 
     /// Render `frames` of interleaved stereo audio through the product Host.

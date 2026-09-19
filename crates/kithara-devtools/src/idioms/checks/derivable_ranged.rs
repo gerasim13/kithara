@@ -10,7 +10,6 @@ use syn::{
 use super::{Check, Context};
 use crate::{
     common::{
-        exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
@@ -54,8 +53,6 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
     let Ok(file) = syn::parse_file(source) else {
         return Vec::new();
     };
-    let mut excluded = Vec::new();
-    collect_cfg_test_ranges(&file.items, &mut excluded);
     let mut out = Vec::new();
     for scope in collect_scopes(&file) {
         for item in scope.structs {
@@ -63,10 +60,7 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
             let Fields::Unnamed(fields) = &item.fields else {
                 continue;
             };
-            if fields.unnamed.len() != 1
-                || excluded.iter().any(|range| range.contains(&line))
-                || attrs_have_cfg_test(&item.attrs)
-            {
+            if fields.unnamed.len() != 1 {
                 continue;
             }
             let Some(field) = fields.unnamed.first() else {
@@ -93,7 +87,6 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
             let name = item.ident.to_string();
             if scope.impls.iter().any(|implementation| {
                 implementation.trait_.is_none()
-                    && !attrs_have_cfg_test(&implementation.attrs)
                     && self_ty_name(&implementation.self_ty).as_deref() == Some(name.as_str())
                     && bounded_impl(implementation, &number, &name)
             }) {
@@ -141,7 +134,6 @@ fn bounded_impl(implementation: &ItemImpl, number: &str, name: &str) -> bool {
             };
             let name = constant.ident.to_string();
             ((ty.path.is_ident(number) || ty.path.is_ident("Self"))
-                && !attrs_have_cfg_test(&constant.attrs)
                 && (name.starts_with("MIN") || name.starts_with("MAX")))
             .then_some(name)
         })
@@ -156,9 +148,8 @@ fn bounded_impl(implementation: &ItemImpl, number: &str, name: &str) -> bool {
             return false;
         };
         let method = function.sig.ident.to_string();
-        if attrs_have_cfg_test(&function.attrs)
-            || !(matches!(method.as_str(), "new" | "checked" | "try_from")
-                || method.starts_with("from_"))
+        if !(matches!(method.as_str(), "new" | "checked" | "try_from")
+            || method.starts_with("from_"))
         {
             return false;
         }
@@ -373,7 +364,7 @@ mod tests {
             ),
             (
                 "#[cfg(test)] impl Value { const MIN: f32 = 0.0; const MAX: f32 = 2.0; }",
-                0,
+                1,
             ),
         ] {
             let source = format!("struct Value(f32); {body}");

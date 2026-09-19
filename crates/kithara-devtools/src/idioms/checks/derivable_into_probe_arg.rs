@@ -6,7 +6,7 @@ use syn::{Expr, ImplItem, ItemImpl, Stmt, Type};
 use super::{Check, Context};
 use crate::{
     common::{
-        parse::self_ty_name,
+        parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
     },
@@ -49,12 +49,9 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
     let Ok(file) = syn::parse_file(source) else {
         return Vec::new();
     };
-    file.items
-        .iter()
-        .filter_map(|item| match item {
-            syn::Item::Impl(implementation) => candidate(implementation),
-            _ => None,
-        })
+    collect_scopes(&file)
+        .into_iter()
+        .flat_map(|scope| scope.impls.into_iter().filter_map(candidate))
         .collect()
 }
 
@@ -163,5 +160,11 @@ mod tests {
         "#;
 
         assert!(check_source(source).is_empty());
+    }
+
+    #[test]
+    fn finds_an_adapter_in_a_test_module() {
+        let source = "#[cfg(test)] mod tests { impl IntoProbeArg for RequestId { fn into_probe_arg(self) -> u64 { self.0.get() } } }";
+        assert_eq!(check_source(source)[0].0, "RequestId");
     }
 }

@@ -19,7 +19,6 @@ use syn::{
 use super::Context;
 use crate::{
     common::{
-        exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
         fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
@@ -101,6 +100,7 @@ struct Candidate {
     additions: Vec<Insertion>,
     impl_ranges: Vec<Range<usize>>,
     replacements: Vec<Replacement>,
+    scope_path: Vec<String>,
     line: usize,
 }
 
@@ -269,17 +269,8 @@ pub(super) fn fix_source(source: &str, kind: Kind) -> Result<(String, FixOutcome
 
 fn candidates(src: &str, file: &syn::File, kind: Kind) -> Vec<Candidate> {
     let mut out = Vec::new();
-    let mut cfg_test_ranges = Vec::new();
-    collect_cfg_test_ranges(&file.items, &mut cfg_test_ranges);
     for scope in collect_scopes(file) {
         for &impl_block in &scope.impls {
-            if attrs_have_cfg_test(&impl_block.attrs)
-                || cfg_test_ranges
-                    .iter()
-                    .any(|range| range.contains(&impl_block.span().start().line))
-            {
-                continue;
-            }
             let Some(mut candidate) = (match kind {
                 Kind::From => from_candidate(src, impl_block),
                 Kind::Deref => deref_candidate(src, impl_block, &scope.impls),
@@ -287,14 +278,13 @@ fn candidates(src: &str, file: &syn::File, kind: Kind) -> Vec<Candidate> {
             }) else {
                 continue;
             };
-            let Some(item) = find_type(&file.items, &candidate.type_name) else {
+            candidate.scope_path.clone_from(&scope.path);
+            let Some(item) = find_type_in_scope(&file.items, &scope.path, &candidate.type_name)
+            else {
                 candidate.skip = Some("type declared in another file");
                 out.push(candidate);
                 continue;
             };
-            if attrs_have_cfg_test(item_attrs(item)) {
-                continue;
-            }
             if has_nontrivial_generics(item) || impl_block.generics.where_clause.is_some() {
                 candidate.skip = Some("generics with non-trivial bounds or where-clause");
             } else if cfg_tokens(item_attrs(item)) != cfg_tokens(&impl_block.attrs) {
@@ -308,22 +298,20 @@ fn candidates(src: &str, file: &syn::File, kind: Kind) -> Vec<Candidate> {
     coalesce_deref_mut(src, file, out, kind)
 }
 
-fn find_type<'a>(items: &'a [Item], name: &str) -> Option<&'a Item> {
-    for item in items {
-        match item {
-            Item::Struct(value) if value.ident == name => return Some(item),
-            Item::Enum(value) if value.ident == name => return Some(item),
-            Item::Mod(module) => {
-                if let Some((_, nested)) = &module.content
-                    && let Some(found) = find_type(nested, name)
-                {
-                    return Some(found);
-                }
+fn find_type_in_scope<'a>(mut items: &'a [Item], scope: &[String], name: &str) -> Option<&'a Item> {
+    for component in scope {
+        items = items.iter().find_map(|item| match item {
+            Item::Mod(module) if module.ident == component => {
+                module.content.as_ref().map(|(_, nested)| nested.as_slice())
             }
-            _ => {}
-        }
+            _ => None,
+        })?;
     }
-    None
+    items.iter().find(|item| match item {
+        Item::Struct(value) => value.ident == name,
+        Item::Enum(value) => value.ident == name,
+        _ => false,
+    })
 }
 
 fn item_attrs(item: &Item) -> &[Attribute] {
@@ -430,6 +418,7 @@ fn from_candidate(src: &str, impl_block: &ItemImpl) -> Option<Candidate> {
         line: impl_block.impl_token.span.start().line,
         additions: Vec::new(),
         replacements: Vec::new(),
+        scope_path: Vec::new(),
         skip: impl_block
             .generics
             .where_clause
@@ -504,6 +493,7 @@ fn deref_candidate(src: &str, impl_block: &ItemImpl, _impls: &[&ItemImpl]) -> Op
             ),
         }],
         replacements: Vec::new(),
+        scope_path: Vec::new(),
         skip: None,
     })
 }
@@ -543,6 +533,7 @@ fn display_candidate(src: &str, impl_block: &ItemImpl) -> Option<Candidate> {
         line: impl_block.impl_token.span.start().line,
         additions: vec![Insertion { at: 0, text: attr }],
         replacements: Vec::new(),
+        scope_path: Vec::new(),
         skip: None,
     })
 }
@@ -990,17 +981,8 @@ fn coalesce_deref_mut(
     if kind != Kind::Deref {
         return candidates;
     }
-    let mut cfg_test_ranges = Vec::new();
-    collect_cfg_test_ranges(&file.items, &mut cfg_test_ranges);
     for scope in collect_scopes(file) {
         for mutable in scope.impls {
-            if attrs_have_cfg_test(&mutable.attrs)
-                || cfg_test_ranges
-                    .iter()
-                    .any(|range| range.contains(&mutable.span().start().line))
-            {
-                continue;
-            }
             let Some(path) = impl_trait(mutable) else {
                 continue;
             };
@@ -1010,7 +992,9 @@ fn coalesce_deref_mut(
             let Some(type_name) = self_ty_name(&mutable.self_ty) else {
                 continue;
             };
-            let Some(candidate) = candidates.iter_mut().find(|c| c.type_name == type_name) else {
+            let Some(candidate) = candidates.iter_mut().find(|candidate| {
+                candidate.type_name == type_name && candidate.scope_path == scope.path
+            }) else {
                 continue;
             };
             let ImplItem::Fn(method) = &mutable.items[0] else {
@@ -1029,7 +1013,7 @@ fn coalesce_deref_mut(
                 continue;
             }
             candidate.impl_ranges.push(impl_range(src, mutable));
-            if let Some(item) = find_type(&file.items, &type_name) {
+            if let Some(item) = find_type_in_scope(&file.items, &scope.path, &type_name) {
                 let item_start = item_declaration_start(src, item);
                 add_derive(src, item, "derive_more::DerefMut", item_start, candidate);
                 if let Item::Struct(value) = item

@@ -90,6 +90,7 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
         run_fix(&registry, &filter, &ctx, args.allow_dirty)?;
     }
 
+    let project = ProjectConfig::load(&workspace_root)?;
     let mut report = Report::default();
     let mut ran: Vec<&'static str> = Vec::new();
     for check in &registry {
@@ -99,14 +100,22 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
             continue;
         }
         ran.push(check.id());
-        let violations = check.run(&ctx)?;
-        report.extend(violations);
+        let effective_scope = check.policy().scope(&scope);
+        let check_ctx = Context {
+            scope: &effective_scope,
+            ..ctx
+        };
+        let mut check_report = Report::default();
+        check_report.extend(check.run(&check_ctx)?);
+        apply_common_exclusions(
+            &mut check_report,
+            check.policy(),
+            &project.lint_exclude.runtime_paths(),
+            &project.lint_exclude.modules,
+            &workspace_root,
+        );
+        report.extend(check_report.violations);
     }
-
-    let project = ProjectConfig::load(&workspace_root)?;
-    apply_path_excludes(&mut report, &project.lint_exclude.runtime_paths());
-    apply_cfg_test_exclusion(&mut report, &workspace_root);
-    apply_module_excludes(&mut report, &project.lint_exclude.modules, &workspace_root);
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
@@ -153,6 +162,21 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     Ok(())
 }
 
+fn apply_common_exclusions(
+    report: &mut Report,
+    policy: checks::CheckPolicy,
+    path_patterns: &[String],
+    module_patterns: &[String],
+    workspace_root: &std::path::Path,
+) {
+    if policy.keeps_source_findings() {
+        return;
+    }
+    apply_path_excludes(report, path_patterns);
+    apply_cfg_test_exclusion(report, workspace_root);
+    apply_module_excludes(report, module_patterns, workspace_root);
+}
+
 fn run_fix(
     registry: &[Box<dyn Check>],
     filter: &Option<HashSet<&str>>,
@@ -169,7 +193,12 @@ fn run_fix(
         {
             continue;
         }
-        let outcome = check.fix(ctx)?;
+        let effective_scope = check.policy().scope(ctx.scope);
+        let check_ctx = Context {
+            scope: &effective_scope,
+            ..*ctx
+        };
+        let outcome = check.fix(&check_ctx)?;
         writes += outcome.writes;
         changes.extend(
             outcome
@@ -217,6 +246,66 @@ fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
         new = diff.new_violations.len(),
         n = ran.len(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::{scope::Scope, violation::Violation};
+
+    #[test]
+    fn derivable_policy_adds_tests_and_xtask_only_to_empty_scope() {
+        let root = std::path::Path::new("/workspace");
+        assert_eq!(Scope::default().roots(root), vec![root.join("crates")]);
+        assert_eq!(
+            Scope::default().with_workspace_sources().roots(root),
+            vec![root.join("crates"), root.join("tests"), root.join("xtask")]
+        );
+        let explicit = Scope::new(vec!["kithara-queue".into()], vec![]);
+        assert_eq!(
+            explicit.clone().with_workspace_sources().roots(root),
+            explicit.roots(root)
+        );
+    }
+
+    #[test]
+    fn ordinary_checks_drop_cfg_test_findings_but_derivable_checks_keep_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "#[cfg(test)] mod tests { fn only_test() {} }";
+        fs::write(dir.path().join("fixture.rs"), source).unwrap();
+        let mut ordinary = Report::default();
+        ordinary.extend([Violation::deny("ordinary", "fixture.rs:1:0", "test")]);
+        apply_common_exclusions(
+            &mut ordinary,
+            checks::CheckPolicy::Default,
+            &[],
+            &[],
+            dir.path(),
+        );
+        assert!(ordinary.violations.is_empty());
+
+        let mut derivable = Report::default();
+        derivable.extend([Violation::deny(
+            "derivable_display",
+            "fixture.rs:1:0",
+            "test",
+        )]);
+        apply_common_exclusions(
+            &mut derivable,
+            checks::CheckPolicy::WorkspaceSources,
+            &[],
+            &[],
+            dir.path(),
+        );
+        assert_eq!(derivable.violations.len(), 1);
+    }
+
+    #[test]
+    fn event_policy_stays_production_only() {
+        use checks::{Check, derivable_event::DerivableEvent};
+        let event = DerivableEvent;
+        assert_eq!(event.policy(), checks::CheckPolicy::Default);
+    }
 }
 
 fn validate(args: &IdiomsArgs) -> Result<()> {

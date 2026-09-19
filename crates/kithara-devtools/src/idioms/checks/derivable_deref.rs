@@ -56,6 +56,33 @@ mod tests {
     }
 
     #[test]
+    fn coalesces_deref_mut_only_in_the_matching_module() {
+        let src = r#"
+struct Values(Vec<u8>);
+impl Deref for Values {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+mod tests {
+    struct Values(Vec<u8>);
+    impl Deref for Values {
+        type Target = Vec<u8>;
+        fn deref(&self) -> &Self::Target { &self.0 }
+    }
+    impl DerefMut for Values {
+        fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    }
+}
+"#;
+        let fixed = fix_source(src, Kind::Deref).unwrap().0;
+
+        assert_eq!(fixed.matches("#[derive(derive_more::Deref)]").count(), 1);
+        assert_eq!(fixed.matches("#[derive(derive_more::DerefMut)]").count(), 1);
+        assert!(fixed.contains("impl Deref for Values {\n    type Target = [u8];"));
+        assert!(!fixed.contains("impl DerefMut for Values"));
+    }
+
+    #[test]
     fn skips_target_mismatch_cross_file_and_bounds() {
         let mismatch = "struct Values(Vec<u8>); impl Deref for Values { type Target = [u8]; fn deref(&self) -> &Self::Target { &self.0 } }";
         assert!(

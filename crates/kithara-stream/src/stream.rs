@@ -798,11 +798,14 @@ mod tests {
         }
     }
 
+    #[derive(fieldwork::Fieldwork)]
+    #[fieldwork(opt_in, with)]
     struct ScriptSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
         seek: Arc<SeekState>,
         anchor: Option<SourceSeekAnchor>,
+        #[field(with, option_set_some, vis = "")]
         peer_wake: Option<Arc<DeferredWake>>,
         ready_end: Option<u64>,
         data: Vec<u8>,
@@ -830,11 +833,6 @@ mod tests {
                 waits: waits.into_iter().collect(),
                 peer_wake: None,
             }
-        }
-
-        fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
-            self.peer_wake = Some(wake);
-            self
         }
 
         fn with_segments(

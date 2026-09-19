@@ -47,16 +47,31 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
     let Ok(file) = syn::parse_file(source) else {
         return Vec::new();
     };
-    file.items
-        .into_iter()
-        .filter_map(|item| {
-            let Item::Macro(item) = item else { return None };
-            let name = item.ident?.to_string();
-            let tokens = item.mac.tokens.to_string();
-            (tokens.contains("enum") && tokens.contains("const ALL"))
-                .then(|| (name, item.mac.path.span().start().line))
-        })
-        .collect()
+    let mut out = Vec::new();
+    collect_macros(&file.items, &mut out);
+    out
+}
+
+fn collect_macros(items: &[Item], out: &mut Vec<(String, usize)>) {
+    for item in items {
+        match item {
+            Item::Macro(item) => {
+                let Some(name) = item.ident.as_ref().map(ToString::to_string) else {
+                    continue;
+                };
+                let tokens = item.mac.tokens.to_string();
+                if tokens.contains("enum") && tokens.contains("const ALL") {
+                    out.push((name, item.mac.path.span().start().line));
+                }
+            }
+            Item::Mod(module) => {
+                if let Some((_, nested)) = &module.content {
+                    collect_macros(nested, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -76,5 +91,10 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn reports_a_macro_in_a_test_module() {
+        assert_eq!(check_source("#[cfg(test)] mod tests { macro_rules! values { ($($v:ident),*) => { enum Value { $($v),* } impl Value { const ALL: &'static [Self] = &[$(Self::$v),*]; } } } }").len(), 1);
     }
 }

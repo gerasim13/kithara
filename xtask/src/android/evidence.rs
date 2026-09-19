@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Path as FsPath, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -14,16 +14,16 @@ use sha2::{Digest, Sha256};
 use super::device::{self, Selected};
 use crate::{BuildProfile, child};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct Dir {
+    #[field(get = path, vis = "pub(super)")]
     root: PathBuf,
 }
 
 impl Dir {
-    pub(super) fn path(&self) -> &Path {
-        &self.root
-    }
     /// Allocate a new directory without replacing any previous run.
-    pub(super) fn create(workspace_root: &Path) -> Result<Self> {
+    pub(super) fn create(workspace_root: &FsPath) -> Result<Self> {
         let root = workspace_root.join("target/android-test").join(format!(
             "run-{}-{}",
             SystemTime::now()
@@ -83,7 +83,7 @@ impl Manifest {
 
     /// Written before the run takes anything, so a run that fails while
     /// preparing still leaves a record behind.
-    pub(super) fn open(dir: &Dir, workspace_root: &Path, profile: BuildProfile) -> Result<Self> {
+    pub(super) fn open(dir: &Dir, workspace_root: &FsPath, profile: BuildProfile) -> Result<Self> {
         let manifest = Self {
             path: dir.manifest(),
             value: json!({
@@ -115,7 +115,7 @@ impl Manifest {
 
     pub(super) fn device(
         &mut self,
-        workspace_root: &Path,
+        workspace_root: &FsPath,
         device: &Selected,
         cancel: &child::Cancel,
     ) {
@@ -196,7 +196,7 @@ fn now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<String> {
+fn git(root: &FsPath, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(root)
@@ -223,7 +223,7 @@ fn getprop(device: &Selected, name: &str, cancel: &child::Cancel) -> Option<Stri
 }
 
 /// Hash the JNI libraries used by the run.
-fn jni_libraries(workspace_root: &Path) -> Value {
+fn jni_libraries(workspace_root: &FsPath) -> Value {
     let root = workspace_root.join("android/lib/build/generated/jniLibs");
     let Ok(abis) = fs::read_dir(&root) else {
         return Value::Null;

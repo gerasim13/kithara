@@ -411,8 +411,21 @@ impl<'a> ServiceInstaller<'a> {
         self.config.host.host_root.join("services")
     }
 
-    fn installed_binary(&self) -> PathBuf {
-        self.service_root().join("bin").join(Self::BINARY_NAME)
+    delegate::delegate! {
+        to self {
+            #[expr($.join("bin").join(Self::BINARY_NAME))]
+            #[call(service_root)]
+            fn installed_binary(&self) -> PathBuf;
+            #[expr($.join(Self::HOST_CONFIG_NAME))]
+            #[call(service_root)]
+            fn installed_config(&self) -> PathBuf;
+            #[expr($.join(Self::PINS_NAME))]
+            #[call(service_root)]
+            fn installed_pins(&self) -> PathBuf;
+            #[expr($.join("Library/LaunchAgents"))]
+            #[call(ci_home)]
+            fn agent_root(&self) -> PathBuf;
+        }
     }
 
     /// The copy the CI user can replace, which is what the periodic agents run.
@@ -430,14 +443,6 @@ impl<'a> ServiceInstaller<'a> {
             .join(Self::BINARY_NAME)
     }
 
-    fn installed_config(&self) -> PathBuf {
-        self.service_root().join(Self::HOST_CONFIG_NAME)
-    }
-
-    fn installed_pins(&self) -> PathBuf {
-        self.service_root().join(Self::PINS_NAME)
-    }
-
     fn ci_home(&self) -> PathBuf {
         self.config
             .host
@@ -452,10 +457,6 @@ impl<'a> ServiceInstaller<'a> {
             .host_root
             .join("home")
             .join(&self.config.host.sync_user)
-    }
-
-    fn agent_root(&self) -> PathBuf {
-        self.ci_home().join("Library/LaunchAgents")
     }
 }
 
