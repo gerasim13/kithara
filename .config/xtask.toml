@@ -1762,8 +1762,8 @@ steps = [
     "--group",
     "ui",
     "--shard",
-    "0/4",
-  ], label = "ui mutation suites, shard 0 of 4" },
+    "0/6",
+  ], label = "ui mutation suites, shard 0 of 6" },
 ]
 role = "mutants"
 kinds = []
@@ -1788,8 +1788,8 @@ steps = [
     "--group",
     "ui",
     "--shard",
-    "1/4",
-  ], label = "ui mutation suites, shard 1 of 4" },
+    "1/6",
+  ], label = "ui mutation suites, shard 1 of 6" },
 ]
 role = "mutants"
 kinds = []
@@ -1814,8 +1814,8 @@ steps = [
     "--group",
     "ui",
     "--shard",
-    "2/4",
-  ], label = "ui mutation suites, shard 2 of 4" },
+    "2/6",
+  ], label = "ui mutation suites, shard 2 of 6" },
 ]
 role = "mutants"
 kinds = []
@@ -1840,14 +1840,66 @@ steps = [
     "--group",
     "ui",
     "--shard",
-    "3/4",
-  ], label = "ui mutation suites, shard 3 of 4" },
+    "3/6",
+  ], label = "ui mutation suites, shard 3 of 6" },
 ]
 role = "mutants"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 artifact = { name = "mutants-ui-3", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-4]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "4/6",
+  ], label = "ui mutation suites, shard 4 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-4", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-5]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "5/6",
+  ], label = "ui mutation suites, shard 5 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-5", path = "target/mutants-ci" }
 timeout_minutes = 60
 
 # The scan reports where it found something, not merely how many: without the
