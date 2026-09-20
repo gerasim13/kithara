@@ -4,4 +4,4 @@ pub mod ns;
 pub mod objc;
 pub mod urlsession;
 
-pub use filesystem::prepare_playback_cache_directory;
+pub use filesystem::prepare_documents_directory;
