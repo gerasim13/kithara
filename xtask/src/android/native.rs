@@ -510,9 +510,10 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
 
         assert!(names.contains("kithara-stream"));
         assert!(names.contains("kithara-stream-tests"));
+        assert!(names.contains("kithara-beat"));
         assert!(!names.contains("kithara-app"));
         assert!(!names.contains("kithara-app-tests"));
-        assert!(!names.contains("kithara-beat"));
+        assert!(!names.contains("kithara-analysis"));
         assert!(!names.contains("kithara-encode-tests"));
     }
 
