@@ -33,7 +33,9 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSDate",
     "NSDictionary",
     "NSError",
+    "NSFileManager",
     "NSOperation",
+    "NSPathUtilities",
     "NSObject",
     "NSString",
     "NSArray",
@@ -44,6 +46,7 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSURLRequest",
     "NSURLResponse",
     "NSURLSession",
+    "NSValue",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
