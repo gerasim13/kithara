@@ -5,7 +5,12 @@ use crate::{
 
 /// A hairline separating two runs of a bar: one filled rectangle, the whole of
 /// the box it was given.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = (),
+    draw = self.paint(list, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Divider {
     color: Rgba,
 }

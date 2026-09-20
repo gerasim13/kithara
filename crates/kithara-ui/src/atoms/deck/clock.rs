@@ -9,7 +9,11 @@ use crate::{
 };
 
 /// A pair of clock readings, centred on the deep panel behind them.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = Elapsed,
+    draw = self.paint(list, text, data, bounds)
+)]
 pub(crate) struct Clock {
     deep: Rgba,
     reading: Rgba,

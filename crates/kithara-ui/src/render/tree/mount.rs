@@ -22,13 +22,13 @@ use crate::{
 /// Every control answers for itself, so the host walks the document and hands
 /// each one the same surroundings instead of keeping a table of what each
 /// control is made of.
-pub(super) trait ViewControl {
+pub(crate) trait ViewControl {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a>;
 }
 
 /// What a control is handed when it mounts: the document it was read from, the
 /// value behind it, and who owns the pointer over it.
-pub(super) struct Cx<'a, 'ctx, 'value> {
+pub(crate) struct Cx<'a, 'ctx, 'value> {
     pub(super) skin: &'a Skin,
     pub(super) path: &'a str,
     pub(super) scope: &'a str,
@@ -38,42 +38,6 @@ pub(super) struct Cx<'a, 'ctx, 'value> {
     /// Every enclosing object's pose, folded into the box this control paints
     /// into. Identity for a control no object wraps.
     pub(super) transform: Transform,
-}
-
-impl ViewControl for mount::Summary {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Brand {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Spacer {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Divider {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Preset {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Settings {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
 }
 
 impl ViewControl for mount::Drag {
@@ -111,60 +75,6 @@ impl ViewControl for mount::Text<'_> {
                 .view(),
             horizontal(self.align),
         )
-    }
-}
-
-impl ViewControl for mount::Glyph<'_> {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::NavItem {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Tab {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Button {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Bpm {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Time {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Telemetry {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Crossfader {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Fader {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
     }
 }
 
@@ -210,30 +120,6 @@ impl ViewControl for mount::Custom {
     }
 }
 
-impl ViewControl for mount::Lottie<'_> {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Sprite {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::PortalMap {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Range {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
 impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(table(cx, (self.columns, self.columns_state)))
@@ -262,86 +148,8 @@ impl ViewControl for mount::ContextBar<'_> {
     }
 }
 
-impl ViewControl for mount::Toggle {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Checkbox {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Segmented<'_> {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Select {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::StatusDot<'_> {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Swatch {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Cell {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Readout {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Chip {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Knob {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::Meter {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::VuStereo {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
-impl ViewControl for mount::VuVertical {
-    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        painted(self, cx)
-    }
-}
-
 /// Mounts a control that draws itself, adding nothing to the picture.
-fn painted<'a, Control>(control: &Control, cx: &Cx<'a, '_, '_>) -> Rendered<'a>
+pub(crate) fn painted<'a, Control>(control: &Control, cx: &Cx<'a, '_, '_>) -> Rendered<'a>
 where
     Control: Draws,
     Control::Painter: 'static,

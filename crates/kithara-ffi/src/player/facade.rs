@@ -6,7 +6,10 @@ use crate::{
     Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiRepeatMode},
+    types::{
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiKeyRule,
+        FfiPlaybackOrder, FfiPlayerSnapshot, FfiRepeatMode,
+    },
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
@@ -24,20 +27,14 @@ pub struct AudioPlayer {
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayer {
-    #[must_use]
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
-        Arc::new(Self {
-            inner: Inner::new(config),
-        })
-    }
-
-    /// Advance to the next item in the queue, no-op if already on the
-    /// last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-    /// for an immediate cut.
-    pub fn advance_to_next_item(&self) {
-        self.inner.advance_to_next_item();
+    /// # Errors
+    /// Returns an error when the player configuration cannot be created.
+    pub fn new(config: FfiPlayerConfig) -> Result<Arc<Self>, FfiError> {
+        Ok(Arc::new(Self {
+            inner: Inner::new(config)?,
+        }))
     }
 
     /// Append an item to the tail of the queue. AVQueuePlayer-style
@@ -60,8 +57,14 @@ impl AudioPlayer {
         self.inner.append(&item)
     }
 
-    pub fn crossfade_duration(&self) -> f32 {
-        self.inner.crossfade_duration()
+    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
+        self.inner.crossfade_settings()
+    }
+    pub fn playback_order(&self) -> FfiPlaybackOrder {
+        self.inner.playback_order()
+    }
+    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        self.inner.action_at_item_end()
     }
 
     /// Currently playing item (if any). Resolves the queue's current
@@ -223,12 +226,6 @@ impl AudioPlayer {
         self.inner.set_abr_mode(mode);
     }
 
-    /// Change the crossfade window at runtime. The initial value belongs in
-    /// [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
-    pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.inner.set_crossfade_duration(seconds);
-    }
-
     /// # Errors
     ///
     /// Returns error if the engine is not running.
@@ -244,9 +241,6 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
-    /// Replace the playback-rate target at runtime. The initial value
-    /// belongs in
-    /// [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
     pub fn set_playing_rate(&self, rate: f32) {
         self.inner.set_playing_rate(rate);
     }
@@ -265,27 +259,34 @@ impl AudioPlayer {
         self.inner.set_volume(volume);
     }
 
-    /// Replace the player-wide auth header at runtime. Stores `auth_token`
-    /// under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
-    /// every subsequent [`Self::insert`]. Pass an empty string to clear.
-    /// The initial value belongs in
-    /// [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
-    pub fn setup_network(&self, auth_token: String) {
-        self.inner.setup_network(auth_token);
-    }
-
-    /// Register a wildcard DRM key processor at runtime with a fresh salt.
-    /// Items already in the queue keep their registry; initial rules belong
-    /// in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
-    /// which is applied through the same path.
+    /// Register a runtime DRM key processor for every host (`"*"`).
+    ///
+    /// Generates a fresh 16-character alphanumeric `salt`, mirrors it
+    /// into the player-wide `SALT_HEADER` (so it accompanies every
+    /// outgoing manifest/segment/key request), and forwards it to
+    /// `processor.process_key(key, salt)` on each decrypt.
+    ///
+    /// Items already in the queue keep their original key registry —
+    /// re-call this method *before* [`Self::insert`] for the new processor
+    /// to apply.
     pub fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         self.inner.setup_hls_aes(processor);
     }
 
-    /// Append a domain-scoped DRM key rule at runtime; see
-    /// [`Self::setup_hls_aes`].
+    /// Register a runtime DRM key processor with explicit rule control
+    /// (custom domains, headers, salt). The rule's salt — if any — is
+    /// mirrored into the player-wide header map under `SALT_HEADER`.
+    ///
+    /// Items already in the queue keep their original key registry.
     pub fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
         self.inner.setup_hls_aes_with_rule(rule);
+    }
+
+    /// Player-wide auth header. Stores `auth_token` under
+    /// `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+    /// every subsequent [`Self::insert`]. Pass an empty string to clear.
+    pub fn setup_network(&self, auth_token: String) {
+        self.inner.setup_network(auth_token);
     }
 
     /// Return a snapshot of the player's current state.
@@ -353,7 +354,7 @@ mod tests {
 
     #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
-        let player = AudioPlayer::new(FfiPlayerConfig::for_test());
+        let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));
 

@@ -4,20 +4,12 @@
 /// is prepared for a hit, so it holds no builder and offers no way to hand it
 /// one. A caller asks whether the key still holds, and only then builds.
 #[derive(fieldwork::Fieldwork)]
+#[derive_where::derive_where(Default)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct CachedValue<K: PartialEq + Default, V> {
     #[field(get, vis = "pub(crate)")]
     key: K,
     value: Option<V>,
-}
-
-impl<K: PartialEq + Default, V> Default for CachedValue<K, V> {
-    fn default() -> Self {
-        Self {
-            key: K::default(),
-            value: None,
-        }
-    }
 }
 
 impl<K: PartialEq + Default, V> CachedValue<K, V> {

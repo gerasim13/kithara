@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    error::Error as StdError,
     future::Future,
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
@@ -33,12 +32,13 @@ use crate::{
 /// retry) are **not** errors and are carried in
 /// [`StreamReadOutcome::Pending`] with a typed [`PendingReason`]. Only
 /// genuine source failures end up here.
-#[derive(Debug, derive_more::Display)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[error(ignore)]
 #[non_exhaustive]
 pub enum StreamReadError {
     /// Anything surfaced by the underlying [`Source`] as a real error.
     #[display("source error: {_0}")]
-    Source(IoError),
+    Source(#[error(source)] IoError),
 }
 
 /// Outcome of a [`Stream::try_read`] call.
@@ -76,6 +76,8 @@ pub enum StreamReadOutcome {
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display("seek past EOF: new_pos={new_pos} len={len} current_pos={current_pos}")]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct StreamSeekPastEof {
     pub(crate) current_pos: u64,
     pub(crate) len: u64,
@@ -91,16 +93,6 @@ impl StreamSeekPastEof {
             current_pos,
             len,
             new_pos,
-        }
-    }
-}
-
-impl StdError for StreamSeekPastEof {}
-
-impl StdError for StreamReadError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Source(e) => Some(e),
         }
     }
 }
@@ -123,6 +115,8 @@ impl StdError for StreamReadError {
     "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
 )]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct StreamPending {
     pub(crate) len: Option<u64>,
     pub(crate) reason: PendingReason,
@@ -163,8 +157,6 @@ impl StreamPending {
     }
 }
 
-impl StdError for StreamPending {}
-
 /// Non-retriable cross-variant boundary signal — the typed payload of
 /// the `io::Error` produced by `impl Read for Stream` when the
 /// underlying source fenced on a variant change. Decoders that go
@@ -172,9 +164,9 @@ impl StdError for StreamPending {}
 /// type to recover the precise classification without string-matching.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display("variant change: decoder recreation required")]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct VariantChangeError;
-
-impl StdError for VariantChangeError {}
 
 /// Defines a stream type and how to create it.
 ///
@@ -806,11 +798,14 @@ mod tests {
         }
     }
 
+    #[derive(fieldwork::Fieldwork)]
+    #[fieldwork(opt_in, with)]
     struct ScriptSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
         seek: Arc<SeekState>,
         anchor: Option<SourceSeekAnchor>,
+        #[field(with, option_set_some, vis = "")]
         peer_wake: Option<Arc<DeferredWake>>,
         ready_end: Option<u64>,
         data: Vec<u8>,
@@ -838,11 +833,6 @@ mod tests {
                 waits: waits.into_iter().collect(),
                 peer_wake: None,
             }
-        }
-
-        fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
-            self.peer_wake = Some(wake);
-            self
         }
 
         fn with_segments(

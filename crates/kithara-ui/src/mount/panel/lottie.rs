@@ -1,6 +1,6 @@
 use bon::Builder;
 
-use crate::{expand::Binding, ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{expand::Binding, ids::InternId};
 
 /// One frame of a named artwork, played by whatever answers its endpoint.
 ///
@@ -8,7 +8,9 @@ use crate::{expand::Binding, ids::InternId, mount::Control, size::SizeSpec, skin
 /// own clock gets an animation without the application owning a timer; one that
 /// binds it to something else scrubs the artwork by hand from the same field.
 /// This is the sheet contract with a drawing in place of a picture.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.vis.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Lottie<'a> {
     pub(crate) artwork: InternId,
     /// The flag that says which of the two artworks stands. It is an endpoint
@@ -18,12 +20,6 @@ pub(crate) struct Lottie<'a> {
     pub(crate) active_artwork: Option<InternId>,
     /// How long one pass through the whole artwork takes.
     pub(crate) seconds: f32,
-}
-
-impl Control for Lottie<'_> {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.vis.size
-    }
 }
 
 #[cfg(feature = "render")]

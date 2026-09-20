@@ -3,8 +3,9 @@ use wasm_bindgen::JsValue;
 
 use super::marshal::{KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_str};
 use crate::types::{
-    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+    FfiActionAtItemEnd, FfiAdvanceReason, FfiCrossfadeCurve, FfiEvictReason, FfiPlaybackOrder,
+    FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind,
+    FfiTimeControlStatus, FfiTrackStatus,
 };
 
 pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
@@ -65,13 +66,60 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
             encode_track_status(&obj, status);
         }
         FfiPlayerEvent::QueueEnded => set_str(&obj, KIND, "QueueEnded"),
-        FfiPlayerEvent::CrossfadeStarted { duration_seconds } => {
+        FfiPlayerEvent::CrossfadeStarted { settings } => {
             set_str(&obj, KIND, "CrossfadeStarted");
-            set_f64(&obj, "seconds", f64::from(*duration_seconds));
+            set_f64(&obj, "duration", f64::from(settings.duration));
+            set_str(
+                &obj,
+                "curve",
+                match settings.curve {
+                    FfiCrossfadeCurve::Linear => "Linear",
+                    FfiCrossfadeCurve::EqualPower => "EqualPower",
+                    FfiCrossfadeCurve::Unknown => "Unknown",
+                },
+            );
+            set_f64(&obj, "depth", f64::from(settings.depth));
+            set_f64(&obj, "position", f64::from(settings.position));
         }
-        FfiPlayerEvent::CrossfadeDurationChanged { seconds } => {
-            set_str(&obj, KIND, "CrossfadeDurationChanged");
-            set_f64(&obj, "seconds", f64::from(*seconds));
+        FfiPlayerEvent::CrossfadeSettingsChanged { settings } => {
+            set_str(&obj, KIND, "CrossfadeSettingsChanged");
+            set_f64(&obj, "duration", f64::from(settings.duration));
+            set_str(
+                &obj,
+                "curve",
+                match settings.curve {
+                    FfiCrossfadeCurve::Linear => "Linear",
+                    FfiCrossfadeCurve::EqualPower => "EqualPower",
+                    FfiCrossfadeCurve::Unknown => "Unknown",
+                },
+            );
+            set_f64(&obj, "depth", f64::from(settings.depth));
+            set_f64(&obj, "position", f64::from(settings.position));
+        }
+        FfiPlayerEvent::PlaybackOrderChanged { order } => {
+            set_str(&obj, KIND, "PlaybackOrderChanged");
+            set_str(
+                &obj,
+                "order",
+                match order {
+                    FfiPlaybackOrder::Sequential => "Sequential",
+                    FfiPlaybackOrder::Shuffle => "Shuffle",
+                    FfiPlaybackOrder::Unknown => "Unknown",
+                },
+            );
+        }
+        FfiPlayerEvent::ActionAtItemEndChanged { action } => {
+            set_str(&obj, KIND, "ActionAtItemEndChanged");
+            set_str(
+                &obj,
+                "action",
+                match action {
+                    FfiActionAtItemEnd::Advance => "Advance",
+                    FfiActionAtItemEnd::Pause => "Pause",
+                    FfiActionAtItemEnd::None => "None",
+                    FfiActionAtItemEnd::Unknown => "Unknown",
+                },
+            );
         }
         FfiPlayerEvent::TrackAdded { item_id, index } => {
             set_str(&obj, KIND, "TrackAdded");
@@ -224,6 +272,7 @@ fn time_control_code(status: FfiTimeControlStatus) -> f64 {
 
 fn advance_reason_str(reason: FfiAdvanceReason) -> &'static str {
     match reason {
+        FfiAdvanceReason::InitialLoad => "InitialLoad",
         FfiAdvanceReason::NaturalEof => "NaturalEof",
         FfiAdvanceReason::CrossfadePreArm => "CrossfadePreArm",
         FfiAdvanceReason::UserSelect => "UserSelect",

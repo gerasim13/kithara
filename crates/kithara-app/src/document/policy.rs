@@ -16,6 +16,8 @@ const GENERATED_HEADER: &str = "X-Encrypted-Key";
 /// A provider a document declared in a way no policy can honour.
 #[derive(Debug)]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub enum PolicyError {
     /// The document set the header the request factory generates.
     ReservedHeader { provider: String },
@@ -43,8 +45,6 @@ impl fmt::Display for PolicyError {
         }
     }
 }
-
-impl std::error::Error for PolicyError {}
 
 /// Build the ordered domain policy the DRM registry resolves through.
 ///

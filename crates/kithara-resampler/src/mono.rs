@@ -1,7 +1,4 @@
-use std::{
-    fmt,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
@@ -12,34 +9,21 @@ use crate::{
     ResamplerMode, ResamplerOptions, ResamplerQuality, ResamplerSettings, create_resampler,
 };
 
-#[derive(Clone, Builder)]
+#[derive(Clone, Builder, derive_more::Debug)]
+#[debug(bound(B: ResamplerBackend))]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MonoStreamConfig<B, S> {
+    #[debug("{:?}", self.backend.name())]
     pub backend: B,
-    pub source_sample_rate: NonZeroU32,
-    pub target_sample_rate: NonZeroU32,
-    pub pools: PoolRegion<S>,
     #[builder(default)]
     pub options: ResamplerOptions,
+    #[debug("<injected>")]
+    pub pools: PoolRegion<S>,
     #[builder(default)]
     pub quality: ResamplerQuality,
-}
-
-impl<B, S> fmt::Debug for MonoStreamConfig<B, S>
-where
-    B: ResamplerBackend,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MonoStreamConfig")
-            .field("backend", &self.backend.name())
-            .field("options", &self.options)
-            .field("pools", &"<injected>")
-            .field("quality", &self.quality)
-            .field("source_sample_rate", &self.source_sample_rate)
-            .field("target_sample_rate", &self.target_sample_rate)
-            .finish()
-    }
+    pub source_sample_rate: NonZeroU32,
+    pub target_sample_rate: NonZeroU32,
 }
 
 pub struct MonoStream<B>

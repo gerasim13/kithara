@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// A single icon, drawn as a text glyph.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
 pub(crate) struct Glyph<'a> {
     pub(crate) style: GlyphStyle,
     pub(crate) icon: IconName,

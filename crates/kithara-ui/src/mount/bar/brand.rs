@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// The wordmark at the head of the global bar.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.global_bar.brand_size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Brand;
-
-impl Control for Brand {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.global_bar.brand_size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

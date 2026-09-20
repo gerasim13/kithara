@@ -32,6 +32,7 @@ impl Consts {
     const IV_SEQUENCE_OFFSET: usize = 8;
 }
 
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub struct KeyStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -45,23 +46,6 @@ where
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
     pools: PoolRegion<S>,
-}
-
-impl<S> Clone for KeyStore<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            keys: Arc::clone(&self.keys),
-            scope: self.scope.clone(),
-            pools: self.pools.clone(),
-            bus: self.bus.clone(),
-            key_peer: self.key_peer.clone(),
-            base_headers: self.base_headers.clone(),
-            key_registry: self.key_registry.clone(),
-        }
-    }
 }
 
 impl<S> KeyStore<S>

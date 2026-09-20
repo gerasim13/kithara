@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// A pressable button, worded and optionally iconed by the document.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
 pub(crate) struct Button {
     pub(crate) style: ButtonStyle,
     pub(crate) label: InternId,

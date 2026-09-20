@@ -278,7 +278,7 @@ impl ViewCache {
 impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
-        self.tempo = format!("{:+.1}%", ts.tempo);
+        self.tempo = format!("{:+.1}%", f32::from(ts.tempo));
         self.bpm = format_bpm(analysis_bpm(&deck.ui), ts.speed());
         self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);
@@ -341,9 +341,12 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
         .collect()
 }
 
+/// The tempo the deck shows, read from the published grid: the same value the
+/// DJ surface announces, and absent rather than zero when the pass proved no
+/// tempo at all.
 pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.artifact().bpm();
-    bpm.is_finite().then(|| bpm.as_())
+    let bpm: f32 = ui.analysis.as_ref()?.grid()?.as_raw().bpm.as_();
+    Some(bpm)
 }
 
 fn format_quality(ui: &UiState) -> String {

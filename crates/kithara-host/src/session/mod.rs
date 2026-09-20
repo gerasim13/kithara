@@ -23,6 +23,6 @@ pub(crate) use state::RootView;
 pub use transport::TransportEvent;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::{
-    bridge_duration_secs, bridge_is_playing, bridge_position_secs, remote, tick_and_poll_remote,
-    warm_up_audio, worker_channel,
+    bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_calls,
+    bridge_underruns, remote, tick_and_poll_remote, warm_up_audio, worker_channel,
 };

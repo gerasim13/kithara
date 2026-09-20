@@ -152,9 +152,9 @@ impl PlayerResource {
                     kithara::probe_event!(
                         pcm_consumed,
                         render_revision = source.render_revision(),
-                        output_start = i64::from(context.output_frames().start)
+                        output_start = i64::from(context.output().output_frames().start)
                             .saturating_add(i64::try_from(output_start).unwrap_or(i64::MAX)),
-                        output_end = i64::from(context.output_frames().start)
+                        output_end = i64::from(context.output().output_frames().start)
                             .saturating_add(i64::try_from(output_end).unwrap_or(i64::MAX)),
                         source_start = source.start(),
                         source_end = source.end()

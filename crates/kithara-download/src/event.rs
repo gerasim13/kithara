@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 use kithara_events::Event;
 use kithara_net::NetError;
 use kithara_platform::time::Duration;
-use kithara_test_utils::probe::IntoProbeArg;
+use kithara_test_utils::kithara;
 use url::Url;
 
 /// Stable id for a single Downloader request.
@@ -13,7 +13,8 @@ use url::Url;
 /// Allocated internally by the Downloader's `Registry` when wrapping a
 /// `FetchCmd` into an `InternalCmd`. Echoed in every
 /// [`DownloaderEvent`] for the same logical fetch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, kithara::IntoProbeArg)]
+#[probe_arg(encode_only)]
 pub struct RequestId(NonZeroU64);
 
 impl RequestId {
@@ -28,12 +29,6 @@ impl RequestId {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
-    }
-}
-
-impl IntoProbeArg for RequestId {
-    fn into_probe_arg(self) -> u64 {
-        self.get()
     }
 }
 
@@ -54,7 +49,10 @@ pub enum RequestMethod {
 ///
 /// Used in the Downloader's 2×2 slot map (peer priority × cmd
 /// priority): `High` commands and peers are processed before `Low`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, kithara::IntoProbeArg,
+)]
+#[probe_arg(encode_only)]
 pub enum RequestPriority {
     /// Latency-sensitive: demand segments, `execute`/`batch` calls,
     /// seek.
@@ -64,19 +62,14 @@ pub enum RequestPriority {
     Low = 1,
 }
 
-impl IntoProbeArg for RequestPriority {
-    fn into_probe_arg(self) -> u64 {
-        self as u64
-    }
-}
-
 /// Why a fetch was cancelled.
 ///
 /// Distinguishes the cancel paths so subscribers can tell e.g. a
 /// seek-driven epoch flush from a peer drop or a downloader-wide
 /// shutdown.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, kithara::IntoProbeArg)]
+#[probe_arg(encode_only)]
 pub enum CancelReason {
     /// The protocol's epoch cancel token fired (e.g. HLS bumped
     /// `seek_epoch`, invalidating in-flight fetches of the prior
@@ -92,12 +85,6 @@ pub enum CancelReason {
     BeforeStart,
 }
 
-impl IntoProbeArg for CancelReason {
-    fn into_probe_arg(self) -> u64 {
-        self as u64
-    }
-}
-
 /// Events emitted by the unified downloader layer.
 ///
 /// Published on the **peer's bus scope**, set via
@@ -106,7 +93,6 @@ impl IntoProbeArg for CancelReason {
 ///
 /// Every variant for a single fetch carries the same [`RequestId`].
 #[derive(Debug, Clone, Event)]
-#[non_exhaustive]
 pub enum DownloaderEvent {
     /// Request was accepted by the Downloader and placed into a
     /// priority slot. Published exactly once when `Registry::poll_peers`
@@ -197,4 +183,29 @@ pub enum DownloaderEvent {
         from: RequestPriority,
         to: RequestPriority,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use kithara_test_utils::{kithara, probe::IntoProbeArg};
+
+    use super::{CancelReason, RequestId, RequestPriority};
+
+    #[kithara::test]
+    fn probe_arguments_preserve_download_wire_values() {
+        assert_eq!(RequestId::new(NonZeroU64::MIN).into_probe_arg(), 1);
+        assert_eq!(
+            RequestId::new(NonZeroU64::new(u64::MAX).expect("u64::MAX is non-zero"))
+                .into_probe_arg(),
+            u64::MAX
+        );
+        assert_eq!(RequestPriority::High.into_probe_arg(), 0);
+        assert_eq!(RequestPriority::Low.into_probe_arg(), 1);
+        assert_eq!(CancelReason::EpochCancel.into_probe_arg(), 0);
+        assert_eq!(CancelReason::PeerCancel.into_probe_arg(), 1);
+        assert_eq!(CancelReason::DownloaderShutdown.into_probe_arg(), 2);
+        assert_eq!(CancelReason::BeforeStart.into_probe_arg(), 3);
+    }
 }

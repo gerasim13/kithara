@@ -1,8 +1,4 @@
-use std::{
-    error::Error,
-    fmt,
-    num::{NonZeroU64, NonZeroUsize},
-};
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use kithara::{
     analysis::{
@@ -470,64 +466,34 @@ fn abort_join<T>(handle: &JoinHandle<T>) {
 fn abort_join<T>(_handle: &JoinHandle<T>) {}
 
 /// Analysis persistence startup, queue, storage, or archive failure.
-#[derive(Debug, derive_more::From)]
+#[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
+#[error(ignore)]
 pub(crate) enum AnalysisPersistenceError {
+    #[display("persistence worker has no runtime")]
     RuntimeUnavailable,
+    #[display("persistence queue is closed")]
     QueueClosed,
+    #[display("persistence acknowledgement closed")]
     AcknowledgementClosed,
+    #[display("persistence task was cancelled")]
     Cancelled,
+    #[display("analysis chunk duration does not map to whole source frames")]
     InvalidChunkDuration,
+    #[display("asset store returned an unsupported resource state")]
     InvalidResourceState,
+    #[display("analysis file write plan is invalid")]
     InvalidWritePlan,
     #[from]
-    Task(TaskError),
+    #[display("persistence task failed: {_0}")]
+    Task(#[error(source)] TaskError),
     #[from]
-    Analysis(AnalysisFileError),
+    #[display("analysis file failed: {_0}")]
+    Analysis(#[error(source)] AnalysisFileError),
     #[from]
-    Assets(AssetsError),
-    Join(JoinError),
-}
-
-impl fmt::Display for AnalysisPersistenceError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RuntimeUnavailable => formatter.write_str("persistence worker has no runtime"),
-            Self::QueueClosed => formatter.write_str("persistence queue is closed"),
-            Self::AcknowledgementClosed => {
-                formatter.write_str("persistence acknowledgement closed")
-            }
-            Self::Cancelled => formatter.write_str("persistence task was cancelled"),
-            Self::InvalidChunkDuration => {
-                formatter.write_str("analysis chunk duration does not map to whole source frames")
-            }
-            Self::InvalidResourceState => {
-                formatter.write_str("asset store returned an unsupported resource state")
-            }
-            Self::InvalidWritePlan => formatter.write_str("analysis file write plan is invalid"),
-            Self::Task(error) => write!(formatter, "persistence task failed: {error}"),
-            Self::Analysis(error) => write!(formatter, "analysis file failed: {error}"),
-            Self::Assets(error) => write!(formatter, "analysis asset failed: {error}"),
-            Self::Join(error) => write!(formatter, "persistence job failed: {error}"),
-        }
-    }
-}
-
-impl Error for AnalysisPersistenceError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Task(error) => Some(error),
-            Self::Analysis(error) => Some(error),
-            Self::Assets(error) => Some(error),
-            Self::Join(error) => Some(error),
-            Self::RuntimeUnavailable
-            | Self::QueueClosed
-            | Self::AcknowledgementClosed
-            | Self::Cancelled
-            | Self::InvalidChunkDuration
-            | Self::InvalidResourceState
-            | Self::InvalidWritePlan => None,
-        }
-    }
+    #[display("analysis asset failed: {_0}")]
+    Assets(#[error(source)] AssetsError),
+    #[display("persistence job failed: {_0}")]
+    Join(#[error(source)] JoinError),
 }
 
 #[cfg(test)]

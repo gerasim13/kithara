@@ -12,7 +12,12 @@ use crate::{
 /// between them is what makes it a wordmark instead of a caption.
 const LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = (),
+    draw = self.paint(list, text, bounds)
+)]
+#[derive(kithara_derive::Retained)]
 pub(crate) struct Brand {
     metrics: GlobalBarSkin,
     panel: Rgba,

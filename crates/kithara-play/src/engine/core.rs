@@ -11,6 +11,7 @@ use kithara_platform::{
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
@@ -324,7 +325,7 @@ impl<S> EngineImpl<S> {
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session
-            .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
+            .set_player_slot_volume(player_id, slot, FaderValue::from(volume))
     }
 
     pub fn start(&self) -> Result<(), PlayError> {

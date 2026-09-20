@@ -101,6 +101,7 @@ signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
+sync = ["warp", "dep:kithara-sync"]
 ui = ["dep:kithara-ui"]
 warp = ["dep:kithara-warp"]
 worker = ["dep:kithara-worker"]
@@ -285,6 +286,7 @@ usdt = [
     "kithara-play?/usdt",
     "kithara-queue?/usdt",
     "kithara-stream?/usdt",
+    "kithara-sync?/usdt",
     "kithara-test-utils/usdt",
     "kithara-worker?/usdt",
 ]
@@ -304,6 +306,7 @@ perf = [
     "kithara-play?/perf",
     "kithara-storage?/perf",
     "kithara-stream?/perf",
+    "kithara-sync?/perf",
     "kithara-bufpool?/perf",
     "kithara-file?/perf",
     "kithara-hls?/perf",
@@ -360,6 +363,7 @@ full = [
     "resampler",
     "signal",
     "stream",
+    "sync",
     "warp",
     "workspace-hack",
 ]
@@ -390,6 +394,7 @@ kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
+kithara-sync = { workspace = true, optional = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true, default-features = false }

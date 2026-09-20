@@ -1,8 +1,10 @@
 #[cfg(feature = "render")]
 use crate::{atoms::bar::preset::PresetItem, builtin};
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The global bar's preset picker.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.global_bar.preset_size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Preset;
 
 #[cfg(feature = "render")]
@@ -16,12 +18,6 @@ const ITEMS: [PresetItem; 2] = [
         name: builtin::PLAYER_PRESET,
     },
 ];
-
-impl Control for Preset {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.global_bar.preset_size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

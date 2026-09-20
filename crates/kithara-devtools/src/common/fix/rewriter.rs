@@ -1,35 +1,15 @@
-use std::{fmt, ops::Range};
+use std::ops::Range;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, derive_more::Display, Eq, PartialEq, derive_more::Error)]
+#[error(ignore)]
 pub enum RewriteError {
+    #[display("edits overlap: {}..{} and {}..{}", a.start, a.end, b.start, b.end)]
     Overlap { a: Range<usize>, b: Range<usize> },
+    #[display("edit range {}..{} exceeds source length {src_len}", range.start, range.end)]
     OutOfRange { range: Range<usize>, src_len: usize },
+    #[display("edit range {}..{} is inverted (start > end)", range.start, range.end)]
     InvertedRange { range: Range<usize> },
 }
-
-impl fmt::Display for RewriteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Overlap { a, b } => write!(
-                f,
-                "edits overlap: {}..{} and {}..{}",
-                a.start, a.end, b.start, b.end
-            ),
-            Self::OutOfRange { range, src_len } => write!(
-                f,
-                "edit range {}..{} exceeds source length {src_len}",
-                range.start, range.end
-            ),
-            Self::InvertedRange { range } => write!(
-                f,
-                "edit range {}..{} is inverted (start > end)",
-                range.start, range.end
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RewriteError {}
 
 /// Stages a sequence of replacements over `src` and produces the rewritten
 /// string in `finish()`. No write is performed until `finish()` is called.

@@ -107,27 +107,16 @@ pub enum DecoderBackend {
 /// playback graph's effects chain. Backend choice is encoded by `B`.
 #[derive(Clone, Builder)]
 #[non_exhaustive]
+#[derive(derive_more::Debug)]
+#[debug(bound(B: ResamplerBackend))]
 pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
+    #[debug("{:?}", self.backend.name())]
     pub backend: B,
     pub target_sample_rate: NonZeroU32,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-}
-
-impl<B> std::fmt::Debug for DecoderResamplerConfig<B>
-where
-    B: ResamplerBackend,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecoderResamplerConfig")
-            .field("backend", &self.backend.name())
-            .field("options", &self.options)
-            .field("quality", &self.quality)
-            .field("target_sample_rate", &self.target_sample_rate)
-            .finish()
-    }
 }
 
 /// Configuration for `DecoderFactory`.

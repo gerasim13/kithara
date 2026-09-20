@@ -13,10 +13,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
-        Transition,
-    },
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -1150,7 +1147,13 @@ async fn setup_queue_with_sample_rate(
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1179,7 +1182,13 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1207,7 +1216,13 @@ async fn setup_flac_queue_with_player_config(
     );
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: CROSSFADE_SECS,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
@@ -1232,7 +1247,13 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
         ))
         .await;
 
@@ -1500,7 +1521,7 @@ async fn drive_app_layer_crossfade_advance(
     queue: &QueueControl<TestPools>,
     auto_advanced_index: &mut Option<usize>,
 ) {
-    let crossfade_secs = f64::from(queue.crossfade_duration());
+    let crossfade_secs = f64::from(queue.crossfade_settings().duration);
     if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
         && dur > crossfade_secs
         && pos >= dur - crossfade_secs
@@ -1509,9 +1530,7 @@ async fn drive_app_layer_crossfade_advance(
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
             harness
-                .run(queue, move |q| {
-                    q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
-                })
+                .run(queue, move |q| q.next(Transition::Crossfade))
                 .await
                 .expect("advance provenance crossfade");
         }

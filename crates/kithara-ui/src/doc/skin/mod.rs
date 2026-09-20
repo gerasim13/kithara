@@ -1,12 +1,15 @@
 pub(crate) mod blanket;
 mod controls;
+mod controls_secondary;
+#[cfg(test)]
+mod controls_tests;
 mod custom;
 mod document;
 mod palette;
 mod panels;
+mod patch;
 mod pictures;
 mod primitives;
-mod section;
 
 pub use self::{
     blanket::{FramePatch, TextRolePatch},

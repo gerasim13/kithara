@@ -13,7 +13,8 @@ use kithara::{
         effects::eq::{FilterKind, GainDb},
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    warp::{SyncGroup, WarpConfig},
+    sync::SyncGroup,
+    warp::WarpConfig,
 };
 use kithara_integration_tests::{
     TestServerHelper, kithara,

@@ -12,7 +12,8 @@ use crate::{
 
 /// The horizontal fader in both of its looks: a captioned rail with a handle,
 /// or a speaker icon beside a segmented volume strip.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[retained(setter = set_scalar, field = value)]
 pub(crate) struct Fader {
     metrics: FaderSkin,
     style: FaderStyle,

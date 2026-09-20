@@ -14,24 +14,38 @@
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicIsize, Ordering},
 };
 
 /// Live heap bytes, maintained by [`Counting`].
-static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+///
+/// Signed, because the counter only sees what this binary allocates: a target
+/// that links `std` dynamically frees buffers through here that `std` itself
+/// allocated before this allocator was installed, and were the balance
+/// unsigned that free would underflow it and the next allocation would panic
+/// on the overflowing add — a panic inside the global allocator, which the
+/// runtime can only answer by aborting the process.
+static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
 /// Highest [`LIVE_BYTES`] since the last [`reset_peak`].
-static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
+static PEAK_BYTES: AtomicIsize = AtomicIsize::new(0);
 
-/// Live heap bytes this process currently holds.
+/// Live heap bytes this process currently holds, and zero while the balance
+/// stands below where it started.
 #[must_use]
 pub fn live_bytes() -> usize {
-    LIVE_BYTES.load(Ordering::Relaxed)
+    above_zero(LIVE_BYTES.load(Ordering::Relaxed))
 }
 
 /// Highest live heap since the last [`reset_peak`].
 #[must_use]
 pub fn peak_bytes() -> usize {
-    PEAK_BYTES.load(Ordering::Relaxed)
+    above_zero(PEAK_BYTES.load(Ordering::Relaxed))
+}
+
+/// A balance as a count of bytes: what it holds, or nothing once it has fallen
+/// past where the counter started.
+fn above_zero(balance: isize) -> usize {
+    balance.max(0).unsigned_abs()
 }
 
 /// Drop the recorded peak to what is live now.
@@ -97,7 +111,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        release(layout.size());
         // SAFETY: forwarded verbatim to the system allocator.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -109,7 +123,7 @@ unsafe impl GlobalAlloc for Counting {
             if let Some(grown) = new_size.checked_sub(layout.size()) {
                 charge(grown);
             } else {
-                LIVE_BYTES.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+                release(layout.size() - new_size);
             }
         }
         moved
@@ -118,6 +132,14 @@ unsafe impl GlobalAlloc for Counting {
 
 /// Add `bytes` to the live total and raise the peak when that is a new high.
 fn charge(bytes: usize) {
-    let live = LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+    let bytes = bytes as isize;
+    let live = LIVE_BYTES
+        .fetch_add(bytes, Ordering::Relaxed)
+        .wrapping_add(bytes);
     PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+}
+
+/// Take `bytes` off the live total.
+fn release(bytes: usize) {
+    LIVE_BYTES.fetch_sub(bytes as isize, Ordering::Relaxed);
 }

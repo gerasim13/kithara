@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::{
     document::{FontFamily, FontWeight},
     palette::ColorRole,
-    section::skin_section,
 };
 use crate::module::{Tone, WindowControlsStyle};
 
@@ -112,77 +111,233 @@ pub struct TickSkin {
     pub count: usize,
 }
 
-skin_section! {
-    pub struct LayoutSkin => LayoutPatch {
-        /// What a host clears the target to wherever no document reaches.
-        pub page_background: ColorRole,
-        pub grid_gap: f32,
-        pub grid_pad: f32,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct LayoutSkin {
+    /// What a host clears the target to wherever no document reaches.
+    pub page_background: ColorRole,
+    pub grid_gap: f32,
+    pub grid_pad: f32,
+}
+
+/// What a skin may restate of [`LayoutSkin`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct LayoutPatch {
+    pub page_background: Option<ColorRole>,
+    pub grid_gap: Option<f32>,
+    pub grid_pad: Option<f32>,
+}
+
+impl LayoutSkin {
+    /// Takes every field the patch restates, keeping the rest.
+    pub(crate) fn patch(&mut self, patch: LayoutPatch) {
+        super::patch::patch_field(&mut self.page_background, patch.page_background);
+        super::patch::patch_field(&mut self.grid_gap, patch.grid_gap);
+        super::patch::patch_field(&mut self.grid_pad, patch.grid_pad);
     }
 }
 
-skin_section! {
-    /// The indicator a viewport draws over its own right edge. `min_length` keeps
-    /// a window over very long content from showing a thumb too short to see.
-    pub struct ScrollSkin => ScrollPatch {
-        pub thumb: ColorRole,
-        pub track: ColorRole,
-        pub inset: f32,
-        pub min_length: f32,
-        pub width: f32,
+/// The indicator a viewport draws over its own right edge. `min_length` keeps
+/// a window over very long content from showing a thumb too short to see.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ScrollSkin {
+    pub thumb: ColorRole,
+    pub track: ColorRole,
+    pub inset: f32,
+    pub min_length: f32,
+    pub width: f32,
+}
+
+/// What a skin may restate of [`ScrollSkin`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ScrollPatch {
+    pub thumb: Option<ColorRole>,
+    pub track: Option<ColorRole>,
+    pub inset: Option<f32>,
+    pub min_length: Option<f32>,
+    pub width: Option<f32>,
+}
+
+impl ScrollSkin {
+    /// Takes every field the patch restates, keeping the rest.
+    pub(crate) fn patch(&mut self, patch: ScrollPatch) {
+        super::patch::patch_field(&mut self.thumb, patch.thumb);
+        super::patch::patch_field(&mut self.track, patch.track);
+        super::patch::patch_field(&mut self.inset, patch.inset);
+        super::patch::patch_field(&mut self.min_length, patch.min_length);
+        super::patch::patch_field(&mut self.width, patch.width);
     }
 }
 
-skin_section! {
-    pub struct ChromeSkin => ChromePatch {
-        pub chevron_color: ColorRole,
-        pub chip_background: ColorRole,
-        pub corner_color: ColorRole,
-        pub drop_zone_color: ColorRole,
-        pub footer_background: ColorRole,
-        pub header_background: ColorRole,
-        pub inner_line: ColorRole,
-        pub panel_background: ColorRole,
-        pub title_background: ColorRole,
-        pub chip_text: TextRoleSkin,
-        pub footer_text: TextRoleSkin,
-        pub title_text: TextRoleSkin,
-        pub chevron_frame: FrameSkin,
-        pub chip_frame: FrameSkin,
-        pub footer_frame: FrameSkin,
-        pub frame: FrameSkin,
-        pub header_frame: FrameSkin,
-        pub secondary_frame: FrameSkin,
-        pub title_frame: FrameSkin,
-        pub chevron_icon_size: f32,
-        pub chevron_size: f32,
-        pub chevron_stroke_width: f32,
-        pub chip_pad: f32,
-        pub corner_offset: f32,
-        pub corner_size: f32,
-        pub corner_width: f32,
-        pub footer_height: f32,
-        pub footer_pad: f32,
-        pub header_height: f32,
-        pub inner_line_width: f32,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ChromeSkin {
+    pub chevron_color: ColorRole,
+    pub chip_background: ColorRole,
+    pub corner_color: ColorRole,
+    pub drop_zone_color: ColorRole,
+    pub footer_background: ColorRole,
+    pub header_background: ColorRole,
+    pub inner_line: ColorRole,
+    pub panel_background: ColorRole,
+    pub title_background: ColorRole,
+    pub chip_text: TextRoleSkin,
+    pub footer_text: TextRoleSkin,
+    pub title_text: TextRoleSkin,
+    pub chevron_frame: FrameSkin,
+    pub chip_frame: FrameSkin,
+    pub footer_frame: FrameSkin,
+    pub frame: FrameSkin,
+    pub header_frame: FrameSkin,
+    pub secondary_frame: FrameSkin,
+    pub title_frame: FrameSkin,
+    pub chevron_icon_size: f32,
+    pub chevron_size: f32,
+    pub chevron_stroke_width: f32,
+    pub chip_pad: f32,
+    pub corner_offset: f32,
+    pub corner_size: f32,
+    pub corner_width: f32,
+    pub footer_height: f32,
+    pub footer_pad: f32,
+    pub header_height: f32,
+    pub inner_line_width: f32,
+}
+
+/// What a skin may restate of [`ChromeSkin`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ChromePatch {
+    pub chevron_color: Option<ColorRole>,
+    pub chip_background: Option<ColorRole>,
+    pub corner_color: Option<ColorRole>,
+    pub drop_zone_color: Option<ColorRole>,
+    pub footer_background: Option<ColorRole>,
+    pub header_background: Option<ColorRole>,
+    pub inner_line: Option<ColorRole>,
+    pub panel_background: Option<ColorRole>,
+    pub title_background: Option<ColorRole>,
+    pub chip_text: Option<TextRoleSkin>,
+    pub footer_text: Option<TextRoleSkin>,
+    pub title_text: Option<TextRoleSkin>,
+    pub chevron_frame: Option<FrameSkin>,
+    pub chip_frame: Option<FrameSkin>,
+    pub footer_frame: Option<FrameSkin>,
+    pub frame: Option<FrameSkin>,
+    pub header_frame: Option<FrameSkin>,
+    pub secondary_frame: Option<FrameSkin>,
+    pub title_frame: Option<FrameSkin>,
+    pub chevron_icon_size: Option<f32>,
+    pub chevron_size: Option<f32>,
+    pub chevron_stroke_width: Option<f32>,
+    pub chip_pad: Option<f32>,
+    pub corner_offset: Option<f32>,
+    pub corner_size: Option<f32>,
+    pub corner_width: Option<f32>,
+    pub footer_height: Option<f32>,
+    pub footer_pad: Option<f32>,
+    pub header_height: Option<f32>,
+    pub inner_line_width: Option<f32>,
+}
+
+impl ChromeSkin {
+    /// Takes every field the patch restates, keeping the rest.
+    pub(crate) fn patch(&mut self, patch: ChromePatch) {
+        super::patch::patch_field(&mut self.chevron_color, patch.chevron_color);
+        super::patch::patch_field(&mut self.chip_background, patch.chip_background);
+        super::patch::patch_field(&mut self.corner_color, patch.corner_color);
+        super::patch::patch_field(&mut self.drop_zone_color, patch.drop_zone_color);
+        super::patch::patch_field(&mut self.footer_background, patch.footer_background);
+        super::patch::patch_field(&mut self.header_background, patch.header_background);
+        super::patch::patch_field(&mut self.inner_line, patch.inner_line);
+        super::patch::patch_field(&mut self.panel_background, patch.panel_background);
+        super::patch::patch_field(&mut self.title_background, patch.title_background);
+        super::patch::patch_field(&mut self.chip_text, patch.chip_text);
+        super::patch::patch_field(&mut self.footer_text, patch.footer_text);
+        super::patch::patch_field(&mut self.title_text, patch.title_text);
+        super::patch::patch_field(&mut self.chevron_frame, patch.chevron_frame);
+        super::patch::patch_field(&mut self.chip_frame, patch.chip_frame);
+        super::patch::patch_field(&mut self.footer_frame, patch.footer_frame);
+        super::patch::patch_field(&mut self.frame, patch.frame);
+        super::patch::patch_field(&mut self.header_frame, patch.header_frame);
+        super::patch::patch_field(&mut self.secondary_frame, patch.secondary_frame);
+        super::patch::patch_field(&mut self.title_frame, patch.title_frame);
+        super::patch::patch_field(&mut self.chevron_icon_size, patch.chevron_icon_size);
+        super::patch::patch_field(&mut self.chevron_size, patch.chevron_size);
+        super::patch::patch_field(&mut self.chevron_stroke_width, patch.chevron_stroke_width);
+        super::patch::patch_field(&mut self.chip_pad, patch.chip_pad);
+        super::patch::patch_field(&mut self.corner_offset, patch.corner_offset);
+        super::patch::patch_field(&mut self.corner_size, patch.corner_size);
+        super::patch::patch_field(&mut self.corner_width, patch.corner_width);
+        super::patch::patch_field(&mut self.footer_height, patch.footer_height);
+        super::patch::patch_field(&mut self.footer_pad, patch.footer_pad);
+        super::patch::patch_field(&mut self.header_height, patch.header_height);
+        super::patch::patch_field(&mut self.inner_line_width, patch.inner_line_width);
     }
 }
 
-skin_section! {
-    pub struct WindowSkin => WindowPatch {
-        pub icon_color: ColorRole,
-        pub icon_hover_color: ColorRole,
-        pub titlebar_text: TextRoleSkin,
-        pub standard: WindowControlSkin,
-        pub compact: WindowControlSkin,
-        pub close_wide: WindowControlSkin,
-        pub close_micro: WindowControlSkin,
-        pub close_framed: WindowControlSkin,
-        pub icon_stroke_width: f32,
-        /// Thickness of the drag zones framing a window that draws its own chrome.
-        pub resize_edge: f32,
-        pub titlebar_height: f32,
-        pub titlebar_padding_x: f32,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct WindowSkin {
+    pub icon_color: ColorRole,
+    pub icon_hover_color: ColorRole,
+    pub titlebar_text: TextRoleSkin,
+    pub standard: WindowControlSkin,
+    pub compact: WindowControlSkin,
+    pub close_wide: WindowControlSkin,
+    pub close_micro: WindowControlSkin,
+    pub close_framed: WindowControlSkin,
+    pub icon_stroke_width: f32,
+    /// Thickness of the drag zones framing a window that draws its own chrome.
+    pub resize_edge: f32,
+    pub titlebar_height: f32,
+    pub titlebar_padding_x: f32,
+}
+
+/// What a skin may restate of [`WindowSkin`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct WindowPatch {
+    pub icon_color: Option<ColorRole>,
+    pub icon_hover_color: Option<ColorRole>,
+    pub titlebar_text: Option<TextRoleSkin>,
+    pub standard: Option<WindowControlSkin>,
+    pub compact: Option<WindowControlSkin>,
+    pub close_wide: Option<WindowControlSkin>,
+    pub close_micro: Option<WindowControlSkin>,
+    pub close_framed: Option<WindowControlSkin>,
+    pub icon_stroke_width: Option<f32>,
+    pub resize_edge: Option<f32>,
+    pub titlebar_height: Option<f32>,
+    pub titlebar_padding_x: Option<f32>,
+}
+
+impl WindowSkin {
+    /// Takes every field the patch restates, keeping the rest.
+    pub(crate) fn patch(&mut self, patch: WindowPatch) {
+        super::patch::patch_field(&mut self.icon_color, patch.icon_color);
+        super::patch::patch_field(&mut self.icon_hover_color, patch.icon_hover_color);
+        super::patch::patch_field(&mut self.titlebar_text, patch.titlebar_text);
+        super::patch::patch_field(&mut self.standard, patch.standard);
+        super::patch::patch_field(&mut self.compact, patch.compact);
+        super::patch::patch_field(&mut self.close_wide, patch.close_wide);
+        super::patch::patch_field(&mut self.close_micro, patch.close_micro);
+        super::patch::patch_field(&mut self.close_framed, patch.close_framed);
+        super::patch::patch_field(&mut self.icon_stroke_width, patch.icon_stroke_width);
+        super::patch::patch_field(&mut self.resize_edge, patch.resize_edge);
+        super::patch::patch_field(&mut self.titlebar_height, patch.titlebar_height);
+        super::patch::patch_field(&mut self.titlebar_padding_x, patch.titlebar_padding_x);
     }
 }
 

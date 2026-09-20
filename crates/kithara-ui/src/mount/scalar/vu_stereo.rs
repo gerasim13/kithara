@@ -1,13 +1,8 @@
-use crate::{mount::Control, size::SizeSpec, skin::SkinDoc};
-
 /// A horizontal pair of level bars with a volume cap.
+#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.vu_stereo.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct VuStereo;
-
-impl Control for VuStereo {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.vu_stereo.size
-    }
-}
 
 #[cfg(feature = "render")]
 mod host {

@@ -18,6 +18,7 @@ use crate::{BroadcastError, BroadcastResult};
 /// [`BroadcastConfigPatch`] is what a configuration document may say about it.
 #[derive(Builder, Patch)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
     #[builder(start_fn)]
@@ -40,23 +41,23 @@ pub struct BroadcastConfig<S> {
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
     #[builder(default = Duration::from_millis(100))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
     #[builder(default = Duration::from_secs(4))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
     #[builder(default = Duration::from_secs(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
     #[builder(default = Duration::from_millis(2))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
     #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
@@ -130,37 +131,6 @@ impl Defaults {
         Some(value) => value,
         None => unreachable!(),
     };
-}
-
-impl<S> Clone for BroadcastConfig<S> {
-    fn clone(&self) -> Self {
-        Self {
-            worker: self.worker.clone(),
-            pools: self.pools.clone(),
-            cancel: self.cancel.clone(),
-            segment_target: self.segment_target,
-            bind: self.bind,
-            channels: self.channels,
-            sample_rate: self.sample_rate,
-            bit_rate: self.bit_rate,
-            codec: self.codec,
-            container: self.container,
-            grace: self.grace,
-            window: self.window,
-            buffer_frames: self.buffer_frames,
-            tick_frames: self.tick_frames,
-            generation_capacity: self.generation_capacity,
-            dispatcher_capacity: self.dispatcher_capacity,
-            fairness_yield_interval: self.fairness_yield_interval,
-            idle_timeout: self.idle_timeout,
-            slow_tick_threshold: self.slow_tick_threshold,
-            task_burst: self.task_burst,
-            wait_timeout: self.wait_timeout,
-            priority: self.priority,
-            max_compute_tasks: self.max_compute_tasks,
-            stop_timeout: self.stop_timeout,
-        }
-    }
 }
 
 impl<S> fmt::Debug for BroadcastConfig<S> {

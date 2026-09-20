@@ -2,8 +2,8 @@ use kithara_events::{Event, TrackId};
 
 /// Why queue navigation advanced away from the previous current track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AdvanceReason {
+    InitialLoad,
     NaturalEof,
     CrossfadePreArm,
     UserSelect,
@@ -17,7 +17,6 @@ pub enum AdvanceReason {
 
 /// Queue repeat mode mirrored into the event surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum QueueRepeatMode {
     Off,
     One,
@@ -26,7 +25,6 @@ pub enum QueueRepeatMode {
 
 /// Loading lifecycle of a track in the queue.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TrackStatus {
     /// Queued but loading has not started.
     Pending,
@@ -51,16 +49,25 @@ pub enum TrackStatus {
 
 /// Queue-level events emitted by `kithara-queue::Queue`.
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum QueueEvent {
     /// A new track was appended / inserted at `index`.
-    TrackAdded { id: TrackId, index: usize },
+    TrackAdded {
+        id: TrackId,
+        index: usize,
+    },
     /// A track was removed from the queue.
-    TrackRemoved { id: TrackId },
+    TrackRemoved {
+        id: TrackId,
+    },
     /// A track's loading status changed.
-    TrackStatusChanged { id: TrackId, status: TrackStatus },
+    TrackStatusChanged {
+        id: TrackId,
+        status: TrackStatus,
+    },
     /// The currently playing track changed.
-    CurrentTrackChanged { id: Option<TrackId> },
+    CurrentTrackChanged {
+        id: Option<TrackId>,
+    },
     /// Why the current track advanced.
     CurrentTrackAdvance {
         id: Option<TrackId>,
@@ -74,21 +81,34 @@ pub enum QueueEvent {
         reason: String,
         auto_skipped: bool,
     },
-    /// The crossfade duration was updated at runtime.
-    CrossfadeDurationChanged { seconds: f32 },
+    CrossfadeSettingsChanged {
+        settings: crate::CrossfadeSettings,
+    },
+    PlaybackOrderChanged {
+        order: crate::PlaybackOrder,
+    },
+    ActionAtItemEndChanged {
+        action: crate::ActionAtItemEnd,
+    },
     /// Repeat mode changed.
-    RepeatModeChanged { mode: QueueRepeatMode },
+    RepeatModeChanged {
+        mode: QueueRepeatMode,
+    },
     /// A successor finished loading and is ready for navigation / handover.
-    NextTrackReady { id: TrackId, index: usize },
+    NextTrackReady {
+        id: TrackId,
+        index: usize,
+    },
     /// A crossfade between tracks just started. Emitted when
     /// [`Queue::select`](https://docs.rs/kithara-queue) triggers the engine
     /// to fade from a currently-playing track to the newly selected one.
-    /// UIs can use `duration_seconds` to drive a progress indicator.
-    CrossfadeStarted { duration_seconds: f32 },
+    /// UIs can inspect the exact profile captured for this transition.
+    CrossfadeStarted {
+        settings: crate::CrossfadeSettings,
+    },
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum ItemEvent {
     PlaybackLikelyToKeepUp,
     PlaybackStalled,

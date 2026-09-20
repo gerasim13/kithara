@@ -16,7 +16,6 @@ pub mod policy;
 pub mod resource;
 pub mod rt;
 pub mod session;
-pub mod sync;
 pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
@@ -26,11 +25,12 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
-    PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
-    RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
-    SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
-    TrackBinding, TrackRef, TransportRevision, WaitingReason,
+    BpmInfo, CrossfadeCurve, CrossfadeSettings, DjEvent, EngineEvent, Equalizer, InterruptionKind,
+    ItemRole, ItemStatus, MediaTime, PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription,
+    PortType, RouteChangeReason, RouteDescription, SelectionPlayback, SessionBeat,
+    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, StretchBackendKind,
+    SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange, TrackBinding, TrackRef,
+    TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
@@ -41,20 +41,17 @@ pub use bridge::{
 pub use effects::eq::EqBandConfig;
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
+use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;
-pub use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
-};
+pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls};
 pub use player::{
     DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch, PlayerImpl,
     SelectTransition,
 };
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::{PlayerNode, StreamShape};
-pub use sync::GroupState;
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
     RegisteredAudio, ServiceClass, TrackConfig,

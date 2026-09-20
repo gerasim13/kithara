@@ -882,8 +882,10 @@ prefix_args = [
 ]
 # Neither crate declares a `flash` feature — the virtual clock is a property of
 # the player, not of the tools that build it — so leaving flash on would fail the
-# lane on `none of the selected packages contains these features`.
-default_flash = false
+# lane on `none of the selected packages contains these features`. The
+# poll-blocking detector is the same kind of property, and the gate asks every
+# touched lane for it, so the lane names both as toggles it cannot carry.
+undeclared_toggles = ["flash", "no-block"]
 
 # The harness itself: the test attribute crate, the shared test helpers, and the
 # two `kithara-platform` targets that pin what `#[kithara::flash]` does to a
@@ -974,7 +976,10 @@ default_features = [
   "kithara-ui/masonry",
   "kithara-app/masonry",
 ]
-default_flash = false
+# The UI crates carry neither the virtual clock nor the poll-blocking detector:
+# both are properties of the player, and an unqualified feature no selected
+# package declares fails the whole run.
+undeclared_toggles = ["flash", "no-block"]
 prefix_args = [
   "nextest",
   "run",
@@ -1655,14 +1660,21 @@ timeout_minutes = 90
 # nothing - integration suites cover behaviour, not lines, so a mutant either
 # survives every one of them or is caught by fifty at once.
 #
-# The four original suites are 88 mutants and took eight minutes. Six more,
-# added over the decision-dense files that carry their own unit tests, are 535:
-# `stream::coord` 132, `waveform::analyzer` 125, `size` 122, `worker::scheduler`
-# 76, `track` 42, `media` 38. Seven times the work, and six package baselines
-# instead of three, so this is an hour rather than a coffee. The timeout is
-# still headroom for a hung mutant, but it is now roughly double the expected
-# run rather than fifteen times it.
-[ext.ci.lanes.deep-mutants]
+# Mutation testing is scoped by `.config/mutation-suites.toml`: ten suites,
+# each naming one package, the production files it may mutate, and the nextest
+# filters that must kill the mutants. A workspace-wide run was measured at
+# three days and killed nothing - integration suites cover behaviour, not
+# lines, so a mutant either survives every one of them or is caught by fifty
+# at once.
+#
+# One lane for all ten was too long to finish: on 2026-09-18 it reached the
+# ninth suite at 100 minutes and was cut at its timeout with `ui-size` eight
+# mutants in and `queue-track` unread. The suites now run as one lane per
+# group, so a lane builds only the packages its own suites name and a group
+# that came back clean is not re-run because another one is still red. The
+# timeouts are unchanged and stay headroom for a hung mutant.
+
+[ext.ci.lanes.deep-mutants-stream]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1675,14 +1687,220 @@ steps = [
     "run-all",
     "--jobs",
     "4",
-  ], label = "unit mutation suites" },
+    "--group",
+    "stream",
+  ], label = "stream mutation suites" },
 ]
-role = "deep"
+role = "mutants"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-artifact = { name = "mutants", path = "target/mutants-ci" }
-timeout_minutes = 120
+artifact = { name = "mutants-stream", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-playback]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "playback",
+  ], label = "playback mutation suites" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-playback", path = "target/mutants-ci" }
+timeout_minutes = 90
+
+[ext.ci.lanes.deep-mutants-analysis]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "analysis",
+  ], label = "analysis mutation suites" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-analysis", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-0]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "0/6",
+  ], label = "ui mutation suites, shard 0 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-0", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-1]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "1/6",
+  ], label = "ui mutation suites, shard 1 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-1", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-2]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "2/6",
+  ], label = "ui mutation suites, shard 2 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-2", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-3]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "3/6",
+  ], label = "ui mutation suites, shard 3 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-3", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-4]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "4/6",
+  ], label = "ui mutation suites, shard 4 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-4", path = "target/mutants-ci" }
+timeout_minutes = 60
+
+[ext.ci.lanes.deep-mutants-ui-5]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+    "--group",
+    "ui",
+    "--shard",
+    "5/6",
+  ], label = "ui mutation suites, shard 5 of 6" },
+]
+role = "mutants"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants-ui-5", path = "target/mutants-ci" }
+timeout_minutes = 60
 
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
@@ -2741,7 +2959,7 @@ unimock_traits_dir = "crates/kithara-play/src/api"
 
 [[quality.assessment.not_applicable_tools]]
 tool = "cargo-mutants"
-reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the `deep-mutants` lane runs the curated unit suites in `.config/mutation-suites.toml` instead."
+reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the per-group `deep-mutants-*` lanes run the curated unit suites in `.config/mutation-suites.toml` instead."
 
 [[quality.assessment.deep_stages]]
 name = "extended-clippy"

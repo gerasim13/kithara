@@ -1,24 +1,17 @@
-use std::{fmt, path::PathBuf};
+use std::path::PathBuf;
 
 use kithara_decode::DecodeError;
 use url::Url;
 
 /// Source of an audio resource: either a URL or a local file path.
-#[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
+#[derive(Clone, Debug, derive_more::Display, derive_more::From, PartialEq, Eq)]
 pub enum ResourceSrc {
     /// Remote resource accessed via URL (HTTP/HTTPS, or other schemes).
+    #[display("{_0}")]
     Url(Url),
     /// Local file accessed directly from disk.
+    #[display("{}", _0.display())]
     Path(PathBuf),
-}
-
-impl fmt::Display for ResourceSrc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Url(url) => write!(f, "{url}"),
-            Self::Path(path) => write!(f, "{}", path.display()),
-        }
-    }
 }
 
 impl ResourceSrc {

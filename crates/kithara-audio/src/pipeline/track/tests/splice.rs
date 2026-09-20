@@ -19,7 +19,7 @@ use kithara_stream::{
     PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
     StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
-    VariantReaderTake, VariantTransition, WorkerWake,
+    VariantReaderTake, VariantTransition, mock::NoopWorkerWake,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -374,14 +374,6 @@ impl StreamType for SpliceStream {
     }
 }
 
-struct TestWake;
-
-impl WorkerWake for TestWake {
-    fn defer(&self) {}
-
-    fn wake(&self) {}
-}
-
 fn asset_bytes(name: &str) -> Vec<u8> {
     let route = format!("/hls/{name}");
     let resource = kithara_test_fixtures::hls::long_plain()
@@ -546,7 +538,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         Arc::new(AtomicU64::new(0)),
         RebuildRuntime {
             handle: RuntimeHandle::try_current().expect("test requires tokio runtime"),
-            wake: Arc::new(TestWake),
+            wake: Arc::new(NoopWorkerWake),
         },
         Some(state.clone() as Arc<dyn VariantControl>),
     );

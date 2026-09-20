@@ -4,7 +4,6 @@ use kithara_events::Event;
 
 /// Reason an asset was evicted from the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum EvictReason {
     QuotaBytes,
     QuotaAssets,
@@ -13,7 +12,6 @@ pub enum EvictReason {
 
 /// Events emitted by the asset cache lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq, Event)]
-#[non_exhaustive]
 pub enum AssetEvent {
     Committed {
         asset_root: String,

@@ -74,16 +74,15 @@ final class PlayerViewModelCombine: PlayerViewModelBase {
         case .queueEnded:
             isPlaying = false
             errorMessage = "Playlist ended"
-        case .crossfadeStarted, .crossfadeDurationChanged:
+        case .crossfadeStarted, .crossfadeSettingsChanged, .playbackOrderChanged,
+             .actionAtItemEndChanged:
             // Queue drives auto-advance + crossfade timing; UI
             // updates on the subsequent `.currentItemChanged`.
             break
         case .timeControlStatusChanged:
             break
         case .itemDidPlayToEnd:
-            // Engine does not auto-advance between queue items; drive
-            // the queue forward explicitly. Mirrors AVQueuePlayer.
-            player.advanceToNextItem()
+            break
         case let .itemDidFail(itemId):
             let label = itemId.map(trackLabel) ?? "(unknown)"
             print("[KitharaDemo] item failed mid-stream: \(label)")

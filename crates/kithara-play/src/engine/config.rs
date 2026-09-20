@@ -1,7 +1,4 @@
-use std::{
-    fmt,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use firewheel::{
@@ -25,8 +22,11 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone)]
+#[derive(derive_more::Debug)]
 pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
+    #[debug(skip)]
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
     pub(crate) sample_rate: NonZeroU32,
@@ -35,11 +35,13 @@ pub struct EngineConfig<S> {
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
+    #[debug(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Optional pre-bound session for isolated harnesses. Production engines
     /// receive theirs when the owning Player enters a Host.
+    #[debug(skip)]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
@@ -49,6 +51,7 @@ pub struct EngineConfig<S> {
     /// is installed at runtime through `PlayerImpl::set_eq_layout` rather
     /// than through config.
     #[builder(default = generate_log_spaced_bands(10))]
+    #[debug(skip)]
     pub(crate) eq_layout: Vec<EqBandConfig>,
     /// Render-pass slot gate smoothing. Default: 5 ms.
     #[builder(default = DEFAULT_GATE_SMOOTHING)]
@@ -61,38 +64,6 @@ pub struct EngineConfig<S> {
     /// Maximum number of concurrent player slots. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,
-}
-
-impl<S> Clone for EngineConfig<S> {
-    fn clone(&self) -> Self {
-        Self {
-            response_budget_frames: self.response_budget_frames,
-            render_quantum_frames: self.render_quantum_frames,
-            grid_id: self.grid_id,
-            cancel: self.cancel.clone(),
-            session: self.session.clone(),
-            pools: self.pools.clone(),
-            eq_layout: self.eq_layout.clone(),
-            gate_smoothing: self.gate_smoothing,
-            channels: self.channels,
-            sample_rate: self.sample_rate,
-            max_slots: self.max_slots,
-        }
-    }
-}
-
-impl<S> fmt::Debug for EngineConfig<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EngineConfig")
-            .field("sample_rate", &self.sample_rate)
-            .field("max_slots", &self.max_slots)
-            .field("channels", &self.channels)
-            .field("response_budget_frames", &self.response_budget_frames)
-            .field("render_quantum_frames", &self.render_quantum_frames)
-            .field("gate_smoothing", &self.gate_smoothing)
-            .field("pools", &self.pools)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use kithara::{
         CancelScope,
         tokio::runtime::{Builder, Runtime},
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceSrc},
+    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceSrc, SelectionPlayback},
     signal::AudioSpec,
 };
 use thiserror::Error;
@@ -129,7 +129,7 @@ fn render(
     })?;
     control.insert(resource, TrackId::allocate(), None);
     control
-        .select_item(0, true)
+        .select_item(0, SelectionPlayback::Play)
         .map_err(|err| CaptureError::step("player-select", err))?;
 
     let mut file = File::create(output)

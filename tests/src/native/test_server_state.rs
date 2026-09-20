@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    ops::Deref,
     sync::{
         RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -135,7 +134,9 @@ where
 ///
 /// Lives in `TestServerState` (mutable, per-token) — never in the immutable
 /// Arc-cached `GeneratedHls`.
+#[derive(derive_more::Deref)]
 pub(crate) struct SegmentGate {
+    #[deref]
     body: Gate<SilentRequest>,
     head_withheld: AtomicBool,
     head_requested: AtomicU64,
@@ -175,14 +176,6 @@ impl SegmentGate {
     /// In-process count of HEAD (size) requests that reached this gate.
     pub(crate) fn head_requested(&self) -> u64 {
         self.head_requested.load(Ordering::Relaxed)
-    }
-}
-
-impl Deref for SegmentGate {
-    type Target = Gate<SilentRequest>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.body
     }
 }
 

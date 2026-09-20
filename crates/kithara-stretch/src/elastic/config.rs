@@ -53,16 +53,11 @@ impl SignalsmithConfig {
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
     #[builder(default)]
     log2_synthesis_hop_adjust: i32,
-}
-
-impl Default for BungeeConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 /// Per-backend preparation parameters carried by the common elastic facade.

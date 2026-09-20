@@ -18,6 +18,7 @@ kithara-platform = { workspace = true }
 aes = { workspace = true }
 bytes = { workspace = true }
 cbc = { workspace = true }
+derive_more = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

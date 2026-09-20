@@ -9,7 +9,11 @@ use crate::{
 };
 
 /// A row of equal cells, one of them picked out.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = SegmentedData,
+    draw = self.paint(list, text, data, bounds)
+)]
 pub(crate) struct Segmented {
     active_background: Rgba,
     active_text: Rgba,

@@ -19,17 +19,15 @@ use crate::pipeline::{
 };
 
 /// Normal decoding — produce PCM chunks.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = (),
+    track = Track,
+    erase = CurrentFsm::Decoding
+)]
 pub(crate) struct Decoding;
-
-impl sealed::Sealed for Decoding {}
-
-impl TrackPhase for Decoding {
-    type Data = ();
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::Decoding(track)
-    }
-}
 
 impl Track<Decoding> {
     pub(crate) fn step<T: StreamType>(
@@ -155,14 +153,12 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
 }
 
 /// End of stream reached.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = TrackPhase,
+    sealed = sealed::Sealed,
+    data = (),
+    track = Track,
+    erase = CurrentFsm::AtEof
+)]
 pub(crate) struct AtEof;
-
-impl sealed::Sealed for AtEof {}
-
-impl TrackPhase for AtEof {
-    type Data = ();
-
-    fn erase(track: Track<Self>) -> CurrentFsm {
-        CurrentFsm::AtEof(track)
-    }
-}

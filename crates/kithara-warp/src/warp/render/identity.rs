@@ -100,9 +100,10 @@ where
             {
                 kithara::probe_event!(
                     render_committed,
-                    session_epoch = u64::from(committed.context().session_epoch()),
+                    session_epoch = u64::from(committed.context().output().session_epoch()),
                     transport_revision = committed
                         .context()
+                        .output()
                         .transport_revision()
                         .map_or(0, u64::from),
                     output_start,

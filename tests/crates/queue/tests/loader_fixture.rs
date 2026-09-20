@@ -48,7 +48,7 @@ pub(crate) async fn wait_loaded(events: &mut EventReceiver<TestEvent>, id: Track
                 envelope.event,
                 TestEvent::Queue(QueueEvent::TrackStatusChanged {
                     id: seen,
-                    status: TrackStatus::Loaded,
+                    status: TrackStatus::Loaded | TrackStatus::Consumed,
                 }) if seen == id
             ) {
                 return true;

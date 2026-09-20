@@ -19,12 +19,14 @@ pub mod assets;
 pub mod fixtures;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod hls;
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "library", not(target_arch = "wasm32")))]
 use hls::hydrate as hls_hydrate;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub(crate) use hls::manifest as hls_manifest;
-/// Shared build support is declared here for its unit tests.
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+/// Shared build support is declared here for its unit tests. The hydrator,
+/// the verified download and the build context are one chain, and `library` is
+/// the family that carries all of it.
+#[cfg(all(test, feature = "library", not(target_arch = "wasm32")))]
 mod context;
 /// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
 /// gated inside the module with the encoder types it consumes.
@@ -34,7 +36,7 @@ mod graph;
 /// The two shapes an MP3 fixture takes: as encoded, and with its Xing/Info
 /// frame dropped so the byte length is the only record of duration.
 pub mod mp3;
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "library", not(target_arch = "wasm32")))]
 mod remote_file;
 pub mod signal;
 pub mod signal_asset;
@@ -44,10 +46,10 @@ pub mod store;
 pub use mp3::{Mp3Shape, without_xing_frame};
 pub use signal_asset::SignalAsset;
 
-#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "hls-inputs", not(target_arch = "wasm32")))]
 pub mod variant_input;
 
-#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "hls-inputs", not(target_arch = "wasm32")))]
 pub use fixtures::hls as hls_fixtures;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub use fixtures::{

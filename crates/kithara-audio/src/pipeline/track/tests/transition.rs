@@ -393,8 +393,8 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: 
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -429,8 +429,8 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -447,7 +447,7 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
         .saturating_add(u64::from(chunk.meta.frames));
     let join_frames = u64::try_from(
         Consts::spec(Consts::SAMPLE_RATE)
-            .frames_for(Duration::from_millis(20))
+            .frames_for(Duration::from_millis(40))
             .expect("join fixture duration fits frame count")
             .get(),
     )
@@ -480,8 +480,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -563,7 +563,7 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(rout
 
 #[kithara::test(tokio)]
 async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pcm: RoutePcm) {
-    const INCOMING_CHUNKS: usize = 5;
+    const INCOMING_CHUNKS: usize = 8;
 
     let mut fixture =
         route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
@@ -600,9 +600,9 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
         .source
         .decode
         .incoming_staged_span()
-        .expect("four incoming chunks must cover the join at the exact cut");
+        .expect("seven incoming chunks must cover the join at the exact cut");
     assert_eq!(staged.0, cut);
-    assert_eq!(staged.1, incoming_first.saturating_add(1_024));
+    assert_eq!(staged.1, incoming_first.saturating_add(1_792));
     assert!(fixture.source.decode.incoming_is_priming(transition));
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
@@ -615,7 +615,7 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    for _ in 0..3 {
+    for _ in 0..6 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -632,7 +632,7 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
             .active()
             .staged_span()
             .map(|span| (span.0, span.1)),
-        Some((256, 1_280))
+        Some((256, 2_048))
     );
     assert_eq!(
         fixture.source.resume.decode_head(0),
@@ -656,7 +656,7 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
 
 #[kithara::test(tokio)]
 async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
-    const INCOMING_CHUNKS: usize = 5;
+    const INCOMING_CHUNKS: usize = 8;
 
     let mut fixture =
         route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
@@ -674,7 +674,7 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     fixture.source.flush_deferred();
-    for _ in 0..3 {
+    for _ in 0..6 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -759,8 +759,8 @@ async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -836,8 +836,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -925,8 +925,8 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -1034,8 +1034,8 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, first_transition).await;
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
@@ -1173,8 +1173,8 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    // Retain the 882-frame join after the first 256-frame output packet.
-    for _ in 0..4 {
+    // Retain the 1,764-frame join after the first 256-frame output packet.
+    for _ in 0..7 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged

@@ -6,7 +6,13 @@ use crate::{
     skin::VuStereoSkin,
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = StereoLevels,
+    draw = self.paint(list, *data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_levels)]
 pub(crate) struct StereoMeter {
     palette: RenderPalette,
     metrics: VuStereoSkin,

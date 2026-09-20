@@ -1,14 +1,16 @@
 use std::num::NonZero;
 
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::{
+    AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, SessionEpoch, SessionFrame,
+};
 use kithara_test_fixtures::unit_fixtures::warp_pair;
 use kithara_test_utils::kithara;
 use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    PresentationFrontier, RenderContext, SessionEpoch, SessionFrame, Warp, WarpConfig,
+    PresentationFrontier, RenderContext, Warp, WarpConfig,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -106,14 +108,14 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("test Warp owns its publisher");
     let mut renderer = warp.renderer(spec(), pools.clone());
-    let context = RenderContext::new(
+    let output = OutputContext::new(
         SessionFrame::new(1_000)..SessionFrame::new(1_001),
         spec().sample_rate,
-        None,
         SessionEpoch::new(1),
         None,
     )
-    .expect("fixture context is valid");
+    .expect("fixture output range is ordered");
+    let context = RenderContext::new(output, None).expect("fixture context is valid");
     publisher.publish(
         &context,
         PresentationFrontier::builder()

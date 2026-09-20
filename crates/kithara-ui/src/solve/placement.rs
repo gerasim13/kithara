@@ -1,6 +1,8 @@
 use super::Size;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(from = iced::Alignment))]
 pub(crate) enum Alignment {
     Start,
     Center,
@@ -8,6 +10,8 @@ pub(crate) enum Alignment {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(from = iced::Padding))]
 pub(crate) struct Padding {
     pub(crate) bottom: f32,
     pub(crate) left: f32,

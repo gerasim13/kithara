@@ -7,7 +7,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
-    hls::KeyOptions,
+    hls::{KeyOptions, KeyProcessorRegistry},
     host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
@@ -23,6 +23,7 @@ use kithara::{
     warp::{StretchControls, WarpConfig},
 };
 
+use super::salt;
 fn player_timestretch() -> Arc<StretchControls> {
     let controls = StretchControls::new(1.0);
     #[cfg(all(
@@ -42,10 +43,9 @@ use crate::{
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
-    salt,
     types::{
-        FfiAbrMode, FfiDuckingMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus,
-        FfiRepeatMode,
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
+        FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
 };
 
@@ -80,6 +80,34 @@ fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
         .maybe_headers(rule.headers)
         .maybe_query_params(rule.query_params)
         .build()
+}
+
+/// Convert the FFI-level [`crate::types::FfiKeyOptions`] into the
+/// initial registry + the player-wide header snapshot to expose to
+/// outgoing HTTP requests.
+fn build_initial_key_state(
+    ffi: crate::types::FfiKeyOptions,
+) -> (KeyOptions, HashMap<String, String>) {
+    if ffi.rules.is_empty() {
+        return (KeyOptions::default(), HashMap::new());
+    }
+    let mut registry = KeyProcessorRegistry::new();
+    let mut player_headers: HashMap<String, String> = HashMap::new();
+    let mut rules: Vec<DomainKeyRule> = Vec::with_capacity(ffi.rules.len());
+    for r in ffi.rules {
+        if let Some(headers) = r.headers.as_ref() {
+            for (k, v) in headers {
+                player_headers.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(salt) = r.salt.as_ref() {
+            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
+        }
+        rules.push(build_processor_rule(r));
+    }
+    registry.register(Arc::new(DomainKeyPolicy::new(rules)));
+    let key_options = KeyOptions::builder().key_registry(registry).build();
+    (key_options, player_headers)
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -154,10 +182,9 @@ pub(crate) struct NativeInner {
     queue: FfiQueueControl,
     queue_owner: HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
-    /// Key registry seeded from [`FfiPlayerConfig::key_options`] and
-    /// extended at runtime by `setup_hls_aes`; both paths go through
-    /// [`Self::setup_hls_aes_with_rule`]. Cloned per-item on insert
-    /// (snapshot semantics: items already in the queue keep their
+    /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
+    /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
+    /// insert (snapshot semantics: items already in the queue keep their
     /// original key registry).
     key_options: Mutex<KeyOptions>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
@@ -168,14 +195,16 @@ pub(crate) struct NativeInner {
 }
 
 impl NativeInner {
-    pub(crate) fn new(config: FfiPlayerConfig) -> Self {
+    pub(crate) fn new(config: FfiPlayerConfig) -> Result<Self, FfiError> {
         let FfiPlayerConfig {
             key_options,
             store,
             eq_band_count,
             auth_token,
-            crossfade_duration,
             playing_rate,
+            playback_order,
+            action_at_item_end,
+            crossfade_settings,
         } = config;
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
@@ -197,6 +226,9 @@ impl NativeInner {
         let queue_config = QueueConfig::builder()
             .player(player)
             .store(queue_store)
+            .playback_order(playback_order.try_into()?)
+            .action_at_item_end(action_at_item_end.try_into()?)
+            .crossfade_settings(crossfade_settings.try_into()?)
             .build();
         let queue_owner = super::session::insert(FfiQueue::new(queue_config))
             .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
@@ -207,39 +239,44 @@ impl NativeInner {
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
+        let (key_options, player_headers) = build_initial_key_state(key_options);
+        let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         let inner = Self {
             downloader,
             store,
             queue_owner,
             queue,
             shutdown: cancel,
-            key_options: Mutex::default(),
-            player_headers: DashMap::new(),
+            key_options: Mutex::new(key_options),
+            player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
         };
-        for rule in key_options.rules {
-            inner.setup_hls_aes_with_rule(rule);
-        }
         inner.setup_network(auth_token);
-        inner.set_crossfade_duration(crossfade_duration);
         inner.set_playing_rate(playing_rate);
-        inner
+        Ok(inner)
     }
 
-    pub(crate) fn advance_to_next_item(&self) {
+    pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
-        let tracks = self.queue.tracks();
-        let Some(current_idx) = self.queue.current_index() else {
-            return;
-        };
-        let next_idx = current_idx + 1;
-        let Some(next) = tracks.get(next_idx) else {
-            return;
-        };
-        let _ = self.queue.select(next.id, Transition::None);
+        self.queue
+            .next(Transition::None)
+            .map(|_| ())
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
+    }
+
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
+        self.queue
+            .previous(Transition::None)
+            .map(|_| ())
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
@@ -406,7 +443,7 @@ impl NativeInner {
     ) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
         self.queue
-            .select(item.track_id(), transition.into())
+            .select(item.track_id(), transition.try_into()?)
             .map_err(|e| match e {
                 QueueError::NotReady(_) => FfiError::NotReady,
                 other => FfiError::Internal {
@@ -472,13 +509,35 @@ impl NativeInner {
         Ok(())
     }
 
-    /// Register a wildcard (`"*"`) DRM key processor with a freshly
-    /// generated salt; see [`Self::setup_hls_aes_with_rule`].
+    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        self.queue.set_playback_order(order.try_into()?);
+        Ok(())
+    }
+
+    pub(crate) fn set_action_at_item_end(
+        &self,
+        action: FfiActionAtItemEnd,
+    ) -> Result<(), FfiError> {
+        self.queue.set_action_at_item_end(action.try_into()?);
+        Ok(())
+    }
+
+    pub(crate) fn set_crossfade_settings(
+        &self,
+        settings: FfiCrossfadeSettings,
+    ) -> Result<(), FfiError> {
+        self.queue
+            .set_crossfade_settings(settings.try_into()?)
+            .map_err(FfiError::from)
+    }
+
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         let salt = salt::drm_lowercase_hex_salt();
+        let mut rule_headers = HashMap::new();
+        rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
         let rule = FfiKeyRule {
             processor,
-            headers: None,
+            headers: Some(rule_headers),
             query_params: None,
             domains: vec!["*".to_string()],
             salt: Some(salt),
@@ -486,10 +545,6 @@ impl NativeInner {
         self.setup_hls_aes_with_rule(rule);
     }
 
-    /// Append a DRM key rule to the registry. The rule's headers and salt
-    /// are mirrored into the player-wide header map, later rules winning
-    /// on key collision; items already in the queue keep the registry
-    /// they were inserted with.
     pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
         if let Some(headers) = rule.headers.as_ref() {
             for (k, v) in headers {
@@ -548,7 +603,12 @@ impl NativeInner {
 
     delegate::delegate! {
         to self.queue {
-            pub(crate) fn crossfade_duration(&self) -> f32;
+            #[expr($.into())]
+            pub(crate) fn crossfade_settings(&self) -> FfiCrossfadeSettings;
+            #[expr($.into())]
+            pub(crate) fn playback_order(&self) -> FfiPlaybackOrder;
+            #[expr($.into())]
+            pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd;
             #[expr($.unwrap_or(0.0))]
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
@@ -562,7 +622,6 @@ impl NativeInner {
             pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
             pub(crate) fn set_muted(&self, muted: bool);
             #[call(set_default_rate)]
             pub(crate) fn set_playing_rate(&self, rate: f32);
@@ -676,8 +735,8 @@ mod tests {
             store,
             ..FfiPlayerConfig::for_test()
         };
-        let first = NativeInner::new(config(Arc::clone(&store)));
-        let second = NativeInner::new(config(Arc::clone(&store)));
+        let first = NativeInner::new(config(Arc::clone(&store))).expect("create first player");
+        let second = NativeInner::new(config(Arc::clone(&store))).expect("create second player");
 
         assert!(Arc::ptr_eq(&first.store, &second.store));
         assert!(first.store.handle().is_same(second.store.handle()));
@@ -691,17 +750,27 @@ mod tests {
     }
 
     #[kithara::test]
-    fn runtime_key_rules_append_in_registration_order() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
-        inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
-        inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
+    fn initial_key_rules_keep_policy_order_and_global_header_semantics() {
+        let ffi = crate::types::FfiKeyOptions {
+            rules: vec![
+                tagged_rule(1, "first-salt", &["keys.example.com"]),
+                tagged_rule(2, "second-salt", &["*"]),
+            ],
+        };
 
-        let registry = inner
-            .key_options
-            .lock()
-            .key_registry
-            .clone()
-            .expect("registry populated");
+        let (options, player_headers) = build_initial_key_state(ffi);
+
+        assert_eq!(
+            player_headers.get(SALT_HEADER).map(String::as_str),
+            Some("second-salt"),
+            "player-wide headers retain their existing last-rule-wins merge"
+        );
+        assert_eq!(
+            player_headers.get("X-Provider").map(String::as_str),
+            Some("2")
+        );
+
+        let registry = options.key_registry.expect("registry populated");
         let url = url::Url::parse("https://keys.example.com/key").expect("valid key URL");
         let request = registry.prepare(&url).expect("matching key request");
 
@@ -718,60 +787,13 @@ mod tests {
             (request.processor)(Bytes::from_static(b"encrypted")).expect("processor succeeds"),
             Bytes::from_static(&[1])
         );
-        assert_eq!(
-            inner
-                .player_headers
-                .get(SALT_HEADER)
-                .map(|header| header.value().clone())
-                .as_deref(),
-            Some("second-salt"),
-            "player-wide headers keep their last-rule-wins merge"
-        );
-        assert_eq!(
-            inner
-                .player_headers
-                .get("X-Provider")
-                .map(|header| header.value().clone())
-                .as_deref(),
-            Some("2")
-        );
     }
 
     #[kithara::test]
-    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
-        // Registration must not run the processor: an unstubbed `Unimock`
-        // panics if `setup_hls_aes` calls it.
-        inner.setup_hls_aes(Arc::new(Unimock::new(())));
-
-        let salt = inner
-            .player_headers
-            .get(SALT_HEADER)
-            .map(|r| r.value().clone())
-            .expect("salt header populated");
-        assert_eq!(salt.len(), 8, "prod auto-salt length");
-        assert!(
-            salt.chars()
-                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-            "prod auto-salt must be lowercase hex, got {salt:?}"
-        );
-        assert!(
-            inner.key_options.lock().key_registry.is_some(),
-            "registry must hold the wildcard rule"
-        );
-    }
-
-    #[kithara::test]
-    fn configured_key_rules_apply_in_declaration_order() {
-        let inner = NativeInner::new(FfiPlayerConfig {
-            key_options: crate::types::FfiKeyOptions {
-                rules: vec![
-                    tagged_rule(1, "first-salt", &["keys.example.com"]),
-                    tagged_rule(2, "second-salt", &["*"]),
-                ],
-            },
-            ..FfiPlayerConfig::for_test()
-        });
+    fn runtime_key_rules_append_in_registration_order() {
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
+        inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
+        inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
 
         let registry = inner
             .key_options
@@ -802,7 +824,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         let token = inner
             .player_headers
@@ -813,27 +835,18 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_clears_auth_token_when_empty() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         inner.setup_network(String::new());
         assert!(!inner.player_headers.contains_key(AUTH_TOKEN_HEADER));
     }
 
     #[kithara::test]
-    fn configured_wildcard_rule_publishes_its_prod_salt_header() {
-        // Construction must not run the processor: an unstubbed `Unimock`
-        // panics if the player calls it.
-        let rule = FfiKeyRule {
-            processor: Arc::new(Unimock::new(())),
-            headers: None,
-            query_params: None,
-            domains: vec!["*".to_string()],
-            salt: Some(salt::drm_lowercase_hex_salt()),
-        };
-        let inner = NativeInner::new(FfiPlayerConfig {
-            key_options: crate::types::FfiKeyOptions { rules: vec![rule] },
-            ..FfiPlayerConfig::for_test()
-        });
+    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
+        // Registration must not run the processor: an unstubbed `Unimock`
+        // panics if `setup_hls_aes` calls it.
+        inner.setup_hls_aes(Arc::new(Unimock::new(())));
 
         let salt = inner
             .player_headers
@@ -847,60 +860,16 @@ mod tests {
             "prod auto-salt must be lowercase hex, got {salt:?}"
         );
 
+        let key_options = inner.key_options.lock().clone();
         assert!(
-            inner.key_options.lock().key_registry.is_some(),
+            key_options.key_registry.is_some(),
             "registry must hold the wildcard rule"
         );
     }
 
     #[kithara::test]
-    fn configured_auth_token_lands_in_player_headers_at_construction() {
-        let inner = NativeInner::new(FfiPlayerConfig {
-            auth_token: "token-from-config".to_string(),
-            ..FfiPlayerConfig::for_test()
-        });
-
-        assert_eq!(
-            inner
-                .player_headers
-                .get(AUTH_TOKEN_HEADER)
-                .map(|header| header.value().clone())
-                .as_deref(),
-            Some("token-from-config")
-        );
-    }
-
-    #[kithara::test]
-    fn configured_playing_rate_applies_at_construction() {
-        let inner = NativeInner::new(FfiPlayerConfig {
-            playing_rate: 1.5,
-            ..FfiPlayerConfig::for_test()
-        });
-
-        assert!(
-            (inner.playing_rate() - 1.5).abs() < f32::EPSILON,
-            "configured playing rate must reach the engine, got {}",
-            inner.playing_rate()
-        );
-    }
-
-    #[kithara::test]
-    fn configured_crossfade_duration_applies_at_construction() {
-        let inner = NativeInner::new(FfiPlayerConfig {
-            crossfade_duration: 3.5,
-            ..FfiPlayerConfig::for_test()
-        });
-
-        assert!(
-            (inner.crossfade_duration() - 3.5).abs() < f32::EPSILON,
-            "configured crossfade must reach the engine, got {}",
-            inner.crossfade_duration()
-        );
-    }
-
-    #[kithara::test]
     fn update_peak_bitrate_remembers_both_limits() {
-        let inner = NativeInner::new(FfiPlayerConfig::for_test());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
         let snapshot = *inner.peak_bitrate.lock();
         assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);

@@ -8,6 +8,9 @@ use kithara_test_dylib as _;
 
 mod support;
 
+#[path = "support/xor.rs"]
+mod xor;
+
 use aes::Aes128;
 use cbc::{
     Encryptor,
@@ -23,6 +26,7 @@ use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
 use tempfile::tempdir;
+use xor::xor_processor;
 
 const ROOT: &str = "processed-asset";
 const DRM_ROOT: &str = "processed-drm-asset";
@@ -34,47 +38,6 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     };
     w.write_at(0, data).expect("write_at");
     drop(w.commit(Some(data.len() as u64)).expect("commit"));
-}
-
-/// Fixed-key XOR processor counting its `process` calls.
-#[derive(Debug)]
-struct XorProcessor {
-    call_count: Arc<AtomicUsize>,
-}
-
-struct XorSink {
-    call_count: Arc<AtomicUsize>,
-}
-
-impl ChunkSink for XorSink {
-    fn process(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-        _is_last: bool,
-    ) -> Result<usize, String> {
-        self.call_count.fetch_add(1, Ordering::SeqCst);
-        for (idx, byte) in input.iter().copied().enumerate() {
-            output[idx] = byte ^ 0x5A;
-        }
-        Ok(input.len())
-    }
-}
-
-impl ResourceProcessor for XorProcessor {
-    fn begin(&self) -> Box<dyn ChunkSink> {
-        Box::new(XorSink {
-            call_count: Arc::clone(&self.call_count),
-        })
-    }
-
-    fn identity(&self) -> &[u8] {
-        &[0x5A]
-    }
-}
-
-fn xor_processor(call_count: Arc<AtomicUsize>) -> ProcessCtx {
-    Arc::new(XorProcessor { call_count })
 }
 
 /// Test-local AES-128-CBC processor mirroring the production HLS adapter:
@@ -142,7 +105,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(Arc::clone(&call_count));
+    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
@@ -203,7 +166,7 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(Arc::clone(&call_count));
+    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
@@ -250,7 +213,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(Arc::clone(&call_count));
+    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();

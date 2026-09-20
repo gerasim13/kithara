@@ -9,9 +9,6 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
-[package.metadata.cargo-machete]
-ignored = ["unimock"]
-
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -68,13 +65,14 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
-usdt = ["kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
-mock = ["dep:unimock"]
+usdt = ["kithara-test-utils/usdt", "kithara-sync/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
+mock = ["dep:unimock", "kithara-stream/mock"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-sync/perf",
     "kithara-warp/perf",
     "kithara-worker/perf",
 ]
@@ -86,7 +84,7 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
@@ -97,6 +95,7 @@ kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-sync = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
@@ -107,6 +106,7 @@ arc-swap = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 
@@ -147,7 +147,7 @@ bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

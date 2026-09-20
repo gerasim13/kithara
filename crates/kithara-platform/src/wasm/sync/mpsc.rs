@@ -9,6 +9,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     (Sender(tx), Receiver(rx))
 }
 
+#[derive_where::derive_where(Clone)]
 pub struct Sender<T>(wasm_safe_thread::mpsc::Sender<T>);
 
 impl<T> Sender<T> {
@@ -19,12 +20,6 @@ impl<T> Sender<T> {
     /// Returns [`SendError`] if the receiver has been dropped.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         self.0.send_sync(value)
-    }
-}
-
-impl<T> Clone for Sender<T> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
     }
 }
 

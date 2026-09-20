@@ -41,7 +41,7 @@ impl PartialEq for Standing {
 /// authored in and sits in the middle of what it was given, because a drawing
 /// fitted to a box of another shape would otherwise be squashed differently by
 /// every layout that holds it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::Retained)]
 pub(crate) struct Lottie;
 
 impl ControlPainter for Lottie {

@@ -3,10 +3,11 @@ use std::fmt;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
-use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+use kithara_sync::{
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};

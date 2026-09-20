@@ -85,7 +85,7 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
         .with_player(move |player| {
             player.insert(resource, TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;
@@ -130,7 +130,7 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
         .with_player(move |player| {
             player.insert(resource, TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

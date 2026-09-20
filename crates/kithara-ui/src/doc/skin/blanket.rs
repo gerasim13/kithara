@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::{
     document::{FontFamily, FontWeight},
     palette::ColorRole,
-    panels::WaveOverlaySkin,
     primitives::{
         FaceSkin, FrameSkin, ShadowSkin, StateColors, TextRoleSkin, TickSkin, ToneColors,
         WindowControlSkin,
@@ -119,25 +118,6 @@ impl Frames for WindowControlSkin {
             Self::Buttons { .. } => {}
             Self::Close { frame, .. } => frame.each_frame(visit),
         }
-    }
-}
-
-impl Frames for WaveOverlaySkin {
-    fn each_frame(&mut self, visit: &mut dyn FnMut(&mut FrameSkin)) {
-        self.art_frame.each_frame(visit);
-        self.badge_frame.each_frame(visit);
-        self.readout_frame.each_frame(visit);
-    }
-}
-
-impl Roles for WaveOverlaySkin {
-    fn each_role(&mut self, visit: &mut dyn FnMut(&mut TextRoleSkin)) {
-        self.art_label.each_role(visit);
-        self.artist.each_role(visit);
-        self.badge_text.each_role(visit);
-        self.readout_label.each_role(visit);
-        self.readout_value.each_role(visit);
-        self.title.each_role(visit);
     }
 }
 

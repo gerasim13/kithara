@@ -1,11 +1,13 @@
-use std::{fmt, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_derive::Patch;
 use kithara_platform::CancelToken;
-use kithara_play::PlayerImpl;
+use kithara_play::{CrossfadeSettings, PlayerImpl};
+
+use crate::{ActionAtItemEnd, PlaybackOrder};
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -26,7 +28,7 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Builder, Patch)]
+#[derive(Builder, derive_more::Debug, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig<S>
@@ -42,14 +44,17 @@ where
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
     #[patch(skip)]
+    #[debug(skip)]
     pub cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
     #[patch(skip)]
+    #[debug(skip)]
     pub store: Option<AssetStore<S>>,
 
     /// Player owned and decorated by this queue.
     #[patch(skip)]
+    #[debug(skip)]
     pub player: PlayerImpl<S>,
 
     /// Lead time in seconds before EOF at which the next queued track
@@ -74,20 +79,15 @@ where
     /// worth of back-steps; the queue's own track list is unbounded.
     #[builder(default = 100)]
     pub max_history_size: usize,
-}
 
-impl<S> fmt::Debug for QueueConfig<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QueueConfig")
-            .field("max_concurrent_loads", &self.max_concurrent_loads)
-            .field("prefetch_duration", &self.prefetch_duration)
-            .field("should_autoplay", &self.should_autoplay)
-            .field("max_history_size", &self.max_history_size)
-            .finish_non_exhaustive()
-    }
+    #[builder(default)]
+    pub playback_order: PlaybackOrder,
+
+    #[builder(default)]
+    pub action_at_item_end: ActionAtItemEnd,
+
+    #[builder(default)]
+    pub crossfade_settings: CrossfadeSettings,
 }
 
 #[cfg(test)]

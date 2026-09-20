@@ -2,7 +2,7 @@ use bon::Builder;
 #[cfg(feature = "render")]
 use num_traits::cast::AsPrimitive;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::ids::InternId;
 
 /// One frame of a picture the skin carries, played by whatever answers its
 /// endpoint.
@@ -10,17 +10,13 @@ use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 /// The endpoint hands over seconds, so a document that binds it to the host's
 /// own clock gets an animation without the application owning a timer; one that
 /// binds it to something else scrubs the sheet by hand from the same field.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.vis.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Sprite {
     pub(crate) sheet: InternId,
     /// How long one pass through every frame of the sheet takes.
     pub(crate) seconds: f32,
-}
-
-impl Control for Sprite {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.vis.size
-    }
 }
 
 /// Which frame a sheet of `frames` shows `seconds` into a pass of `pass`.

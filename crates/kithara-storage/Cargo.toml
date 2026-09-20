@@ -28,6 +28,7 @@ tls-native = ["kithara-test-utils/tls-native"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-derive = { workspace = true, features = ["phase"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -38,6 +39,8 @@ arc-swap = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
+derive_more = { workspace = true }
 fieldwork = { workspace = true }
 
 rangemap = { workspace = true }

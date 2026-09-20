@@ -142,6 +142,68 @@ public enum RepeatMode: Sendable, Equatable {
     case unknown
 }
 
+public enum PlaybackOrder: Sendable, Equatable {
+    case sequential
+    case shuffle
+}
+
+public enum ActionAtItemEnd: Sendable, Equatable {
+    case advance
+    case pause
+    case none
+}
+
+public enum CrossfadeCurve: Sendable, Equatable {
+    case linear
+    case equalPower
+}
+
+public struct CrossfadeSettings: Sendable, Equatable {
+    public static let `default` = CrossfadeSettings(
+        validatedDuration: 1,
+        curve: .equalPower,
+        depth: 1,
+        position: 0.5
+    )
+    public let duration: Float
+    public let curve: CrossfadeCurve
+    public let depth: Float
+    public let position: Float
+
+    public init(
+        duration: Float = 1,
+        curve: CrossfadeCurve = .equalPower,
+        depth: Float = 1,
+        position: Float = 0.5
+    ) throws {
+        guard duration.isFinite, duration >= 0 else {
+            throw KitharaError.invalidArgument("crossfade duration must be finite and non-negative")
+        }
+        guard depth.isFinite, (0...1).contains(depth) else {
+            throw KitharaError.invalidArgument("crossfade depth must be finite and in 0...1")
+        }
+        guard position.isFinite, position > 0, position < 1 else {
+            throw KitharaError.invalidArgument("crossfade position must be finite and inside 0...1")
+        }
+        self.duration = duration
+        self.curve = curve
+        self.depth = depth
+        self.position = position
+    }
+
+    private init(
+        validatedDuration duration: Float,
+        curve: CrossfadeCurve,
+        depth: Float,
+        position: Float
+    ) {
+        self.duration = duration
+        self.curve = curve
+        self.depth = depth
+        self.position = position
+    }
+}
+
 /// How far the whole session output drops under a competing sound.
 public enum DuckingMode: Sendable, Equatable {
     /// Full level.
@@ -186,8 +248,10 @@ public enum PlayerEvent: Sendable, Equatable {
     case itemDidFail(itemId: TrackId?)
     case trackStatusChanged(itemId: TrackId, status: TrackStatus)
     case queueEnded
-    case crossfadeStarted(durationSeconds: Float)
-    case crossfadeDurationChanged(seconds: Float)
+    case crossfadeStarted(settings: CrossfadeSettings)
+    case crossfadeSettingsChanged(settings: CrossfadeSettings)
+    case playbackOrderChanged(order: PlaybackOrder)
+    case actionAtItemEndChanged(action: ActionAtItemEnd)
     case repeatModeChanged(mode: RepeatMode)
 }
 
@@ -200,7 +264,7 @@ public enum PlayerEvent: Sendable, Equatable {
 ///   selection idiom (tap an item in a list).
 /// - ``crossfade`` — use the player's configured crossfade duration.
 ///   Typical for Next/Prev buttons and auto-advance at track end.
-/// - ``crossfade(duration:)`` — explicit override.
+/// - ``crossfade(settings:)`` — explicit profile override.
 public struct Transition: Sendable, Equatable {
     /// Immediate cut.
     public static let none = Transition(ffi: .none)
@@ -208,9 +272,9 @@ public struct Transition: Sendable, Equatable {
     /// Use the player's configured crossfade duration.
     public static let crossfade = Transition(ffi: .crossfade)
 
-    /// Use an explicit crossfade duration in seconds.
-    public static func crossfade(duration: TimeInterval) -> Transition {
-        Transition(ffi: .crossfadeWith(seconds: Float(duration)))
+    /// Use an explicit crossfade profile.
+    public static func crossfade(settings: CrossfadeSettings) -> Transition {
+        Transition(ffi: .crossfadeWith(settings: settings.ffi))
     }
 
     let ffi: FfiTransition
@@ -312,6 +376,54 @@ extension RepeatMode {
         case .unknown:
             .unknown
         }
+    }
+}
+
+extension PlaybackOrder {
+    init(ffi: FfiPlaybackOrder) {
+        switch ffi {
+        case .sequential: self = .sequential
+        case .shuffle: self = .shuffle
+        case .unknown: preconditionFailure("unknown playback order")
+        }
+    }
+    var ffi: FfiPlaybackOrder { self == .sequential ? .sequential : .shuffle }
+}
+
+extension ActionAtItemEnd {
+    init(ffi: FfiActionAtItemEnd) {
+        switch ffi {
+        case .advance: self = .advance
+        case .pause: self = .pause
+        case .none: self = .none
+        case .unknown: preconditionFailure("unknown item-end action")
+        }
+    }
+    var ffi: FfiActionAtItemEnd {
+        switch self { case .advance: .advance; case .pause: .pause; case .none: .none }
+    }
+}
+
+extension CrossfadeCurve {
+    init(ffi: FfiCrossfadeCurve) {
+        switch ffi {
+        case .linear: self = .linear
+        case .equalPower: self = .equalPower
+        case .unknown: preconditionFailure("unknown crossfade curve")
+        }
+    }
+    var ffi: FfiCrossfadeCurve { self == .linear ? .linear : .equalPower }
+}
+
+extension CrossfadeSettings {
+    init(ffi: FfiCrossfadeSettings) {
+        self.duration = ffi.duration
+        self.curve = CrossfadeCurve(ffi: ffi.curve)
+        self.depth = ffi.depth
+        self.position = ffi.position
+    }
+    var ffi: FfiCrossfadeSettings {
+        FfiCrossfadeSettings(duration: duration, curve: curve.ffi, depth: depth, position: position)
     }
 }
 

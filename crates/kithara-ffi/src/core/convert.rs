@@ -10,8 +10,9 @@ use kithara_hls::{DrmEvent, HlsEvent};
 
 use super::event_set::{ItemBusEvent, QueueBusEvent};
 use crate::types::{
-    FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTrackStatus, duration_to_seconds,
+    FfiActionAtItemEnd, FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlaybackOrder,
+    FfiPlayerEvent, FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTrackStatus,
+    duration_to_seconds,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +148,7 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                 channels: *channels,
                 bypassed: *bypassed,
             }),
-            _ => Err(NotForwarded),
+            DecoderEvent::TransitionHold { .. } => Err(NotForwarded),
         }
     }
 }
@@ -235,7 +236,10 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 source_sample_rate: *source_sample_rate,
                 active: *active,
             }),
-            _ => Err(NotForwarded),
+            AudioEvent::PlaybackProgress { .. }
+            | AudioEvent::OutputAvailable
+            | AudioEvent::SeekLifecycle { .. }
+            | AudioEvent::EndOfStream { .. } => Err(NotForwarded),
         }
     }
 }
@@ -248,7 +252,15 @@ impl TryFrom<&HlsEvent> for FfiItemEvent {
             HlsEvent::CacheComplete { total_bytes } => Ok(Self::HlsCacheComplete {
                 total_bytes: *total_bytes,
             }),
-            _ => Err(NotForwarded),
+            HlsEvent::SegmentReadStart { .. }
+            | HlsEvent::SegmentReadComplete { .. }
+            | HlsEvent::ReadProgress { .. }
+            | HlsEvent::ReaderSeek { .. }
+            | HlsEvent::StaleRequestDropped { .. }
+            | HlsEvent::StaleFetchDropped { .. }
+            | HlsEvent::Seek { .. }
+            | HlsEvent::Error { .. }
+            | HlsEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
@@ -349,7 +361,9 @@ impl TryFrom<&DownloaderEvent> for FfiItemEvent {
                 reason: (*reason).into(),
                 bytes_transferred: *bytes_transferred,
             }),
-            _ => Err(NotForwarded),
+            DownloaderEvent::RequestEnqueued { .. }
+            | DownloaderEvent::RequestFailed { .. }
+            | DownloaderEvent::PriorityChanged { .. } => Err(NotForwarded),
         }
     }
 }
@@ -380,7 +394,10 @@ impl TryFrom<&FileEvent> for FfiItemEvent {
             FileEvent::CacheComplete { total_bytes } => Ok(Self::FileCacheComplete {
                 total_bytes: *total_bytes,
             }),
-            _ => Err(NotForwarded),
+            FileEvent::ReadProgress { .. }
+            | FileEvent::ReaderSeek { .. }
+            | FileEvent::Error { .. }
+            | FileEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
@@ -419,7 +436,6 @@ impl TryFrom<&DrmEvent> for FfiItemEvent {
                 segment_index: *segment_index,
                 detail: detail.clone(),
             }),
-            _ => Err(NotForwarded),
         }
     }
 }
@@ -436,7 +452,10 @@ impl TryFrom<&EngineEvent> for FfiPlayerEvent {
             EngineEvent::MasterVolumeChanged { volume } => {
                 Self::MasterVolumeChanged { volume: *volume }
             }
-            _ => return Err(NotForwarded),
+            EngineEvent::SlotAllocated { .. }
+            | EngineEvent::SlotReleased { .. }
+            | EngineEvent::CrossfadeStarted { .. }
+            | EngineEvent::CrossfadeProgress { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -449,7 +468,10 @@ impl TryFrom<&SessionEvent> for FfiPlayerEvent {
             SessionEvent::RouteChanged { reason, .. } => Self::AudioRouteChanged {
                 reason: FfiRouteChangeReason::from(*reason),
             },
-            _ => return Err(NotForwarded),
+            SessionEvent::Interruption { .. }
+            | SessionEvent::MediaServicesLost
+            | SessionEvent::MediaServicesReset
+            | SessionEvent::SilenceSecondaryAudioHint { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -469,7 +491,10 @@ impl TryFrom<&DjEvent> for FfiPlayerEvent {
             DjEvent::StretchBackendChanged { kind } => Self::DjStretchBackendChanged {
                 kind: FfiStretchBackendKind::from(*kind),
             },
-            _ => return Err(NotForwarded),
+            DjEvent::BeatTick { .. }
+            | DjEvent::BpmSyncEngaged { .. }
+            | DjEvent::BpmSyncDisengaged { .. }
+            | DjEvent::PhaseAligned { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -501,7 +526,6 @@ impl TryFrom<&AssetEvent> for FfiPlayerEvent {
                 asset_root: asset_root.clone(),
                 reason: FfiEvictReason::from(*reason),
             },
-            _ => return Err(NotForwarded),
         })
     }
 }
@@ -526,7 +550,11 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::ItemDidFail { item } => Self::ItemDidFail {
                 item_id: Some(item.id()),
             },
-            _ => return Err(NotForwarded),
+            PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -560,12 +588,18 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 reason: reason.clone(),
                 auto_skipped: *auto_skipped,
             },
-            QueueEvent::CrossfadeStarted { duration_seconds } => Self::CrossfadeStarted {
-                duration_seconds: *duration_seconds,
+            QueueEvent::CrossfadeStarted { settings } => Self::CrossfadeStarted {
+                settings: (*settings).into(),
             },
-            QueueEvent::CrossfadeDurationChanged { seconds } => {
-                Self::CrossfadeDurationChanged { seconds: *seconds }
-            }
+            QueueEvent::CrossfadeSettingsChanged { settings } => Self::CrossfadeSettingsChanged {
+                settings: (*settings).into(),
+            },
+            QueueEvent::PlaybackOrderChanged { order } => Self::PlaybackOrderChanged {
+                order: FfiPlaybackOrder::from(*order),
+            },
+            QueueEvent::ActionAtItemEndChanged { action } => Self::ActionAtItemEndChanged {
+                action: FfiActionAtItemEnd::from(*action),
+            },
             QueueEvent::RepeatModeChanged { mode } => Self::RepeatModeChanged {
                 mode: FfiRepeatMode::from(*mode),
             },
@@ -573,7 +607,6 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 item_id: *id,
                 index: *index as u64,
             },
-            _ => return Err(NotForwarded),
         })
     }
 }
@@ -609,11 +642,11 @@ mod tests {
     };
     use crate::types::{
         FfiAdvanceReason, FfiAudioCodecKind, FfiCancelReason, FfiContainerKind,
-        FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend, FfiDecoderChangeCause,
-        FfiEvictReason, FfiFrameDomain, FfiKeyFailureStage, FfiKeySource, FfiPlaybackResamplerKind,
-        FfiPlayerStatus, FfiRepeatMode, FfiResamplerKind, FfiRouteChangeReason,
-        FfiStretchBackendKind, FfiTimeControlStatus, FfiTotalBytesSource, FfiTrackFailureKind,
-        FfiTrackStatus,
+        FfiCrossfadeSettings, FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend,
+        FfiDecoderChangeCause, FfiEvictReason, FfiFrameDomain, FfiKeyFailureStage, FfiKeySource,
+        FfiPlaybackResamplerKind, FfiPlayerStatus, FfiRepeatMode, FfiResamplerKind,
+        FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTotalBytesSource,
+        FfiTrackFailureKind, FfiTrackStatus,
     };
 
     type ItemEventCase<T> = (T, fn(&FfiItemEvent) -> bool);
@@ -1265,23 +1298,33 @@ mod tests {
             ),
             (
                 QueueEvent::CrossfadeStarted {
-                    duration_seconds: 3.5,
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 3.5,
+                        ..Default::default()
+                    },
                 },
                 |event| {
                     matches!(
                         event,
                         FfiPlayerEvent::CrossfadeStarted {
-                            duration_seconds: 3.5
+                            settings: FfiCrossfadeSettings { duration: 3.5, .. }
                         }
                     )
                 },
             ),
             (
-                QueueEvent::CrossfadeDurationChanged { seconds: 4.0 },
+                QueueEvent::CrossfadeSettingsChanged {
+                    settings: kithara::play::CrossfadeSettings {
+                        duration: 4.0,
+                        ..Default::default()
+                    },
+                },
                 |event| {
                     matches!(
                         event,
-                        FfiPlayerEvent::CrossfadeDurationChanged { seconds: 4.0 }
+                        FfiPlayerEvent::CrossfadeSettingsChanged {
+                            settings: FfiCrossfadeSettings { duration: 4.0, .. }
+                        }
                     )
                 },
             ),

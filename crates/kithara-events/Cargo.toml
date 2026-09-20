@@ -10,7 +10,7 @@ keywords = ["events", "audio", "observer", "pubsub"]
 categories = ["asynchronous"]
 
 [dependencies]
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["event"] }
 kithara-platform = { workspace = true }
 
 crossbeam-queue = { workspace = true }

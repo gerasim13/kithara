@@ -145,9 +145,11 @@ impl SeleniumConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct PortLease {
     listener: Option<TcpListener>,
+    #[field(get, vis = "")]
     port: u16,
 }
 
@@ -176,19 +178,18 @@ impl PortLease {
         })
     }
 
-    fn port(&self) -> u16 {
-        self.port
-    }
-
     fn release(&mut self) {
         self.listener = None;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct Endpoints {
     test_server_port: u16,
+    #[field(get, vis = "")]
     page_url: String,
+    #[field(get, vis = "")]
     webdriver_url: String,
 }
 
@@ -209,16 +210,8 @@ impl Endpoints {
         format!("{}/assets/drm/master.m3u8", self.test_server_base_url())
     }
 
-    fn page_url(&self) -> &str {
-        &self.page_url
-    }
-
     fn webdriver_status_url(&self) -> String {
         format!("{}/status", self.webdriver_url())
-    }
-
-    fn webdriver_url(&self) -> &str {
-        &self.webdriver_url
     }
 }
 
@@ -532,6 +525,14 @@ struct Snapshot {
     dur: Option<f64>,
     playlist: Vec<String>,
     pos: Option<f64>,
+    /// Audio-thread process calls the session has served. The render callback
+    /// runs inside an `AudioWorkletProcessor` no page script can see, so two
+    /// snapshots that stand at the same count say the browser stopped calling
+    /// it — which reads exactly like a stalled decode from `pos` alone.
+    rt_process_calls: Option<u64>,
+    /// Underruns recorded over the same window: a callback that keeps running
+    /// while this climbs is starving rather than stopped.
+    rt_underruns: Option<u64>,
     status: String,
 }
 
@@ -542,6 +543,8 @@ impl Default for Snapshot {
             dur: None,
             playlist: Vec::new(),
             pos: None,
+            rt_process_calls: None,
+            rt_underruns: None,
             status: "<snapshot-unavailable>".to_string(),
         }
     }
@@ -641,6 +644,40 @@ impl WasmPlayerSelenium {
 
     async fn collect_browser_logs(&self) -> String {
         let mut logs = Vec::new();
+
+        // The page pumps the host from `requestAnimationFrame`, so a window
+        // that saw no motion has to say whether that loop was still running:
+        // a throttled or hidden page stops it, and the snapshots alone read
+        // exactly like a stalled decode.
+        let frames_script = r#"
+            const callback = arguments[arguments.length - 1];
+            let frames = 0;
+            const started = performance.now();
+            const report = () => "visibility=" + document.visibilityState
+              + " frames=" + frames
+              + " over=" + Math.round(performance.now() - started) + "ms";
+            // A loop that never runs is the answer this report exists for, so
+            // it is read off the clock rather than waited for forever.
+            const timer = setTimeout(() => callback(report()), 1000);
+            const done = (text) => { clearTimeout(timer); callback(text); };
+            const step = () => {
+              frames += 1;
+              if (performance.now() - started < 250) {
+                requestAnimationFrame(step);
+                return;
+              }
+              done(report());
+            };
+            requestAnimationFrame(step);
+        "#;
+        if let Ok(ret) = self
+            .driver
+            .execute_async(frames_script, Vec::<Value>::new())
+            .await
+            && let Ok(s) = ret.convert::<String>()
+        {
+            logs.push(format!("--- page loop ---\n{s}"));
+        }
 
         let script = r#"
             return [...document.querySelectorAll('#event-log > div')]
@@ -756,6 +793,8 @@ impl WasmPlayerSelenium {
             if (window.__player) {
                 out.pos = window.__player.currentTimeMs();
                 out.dur = window.__durationMs ?? 0;
+                out.rtProcessCalls = window.__player.rtProcessCalls();
+                out.rtUnderruns = window.__player.rtUnderruns();
             }
             return out;
         "#;
@@ -881,8 +920,12 @@ impl WasmPlayerSelenium {
             return Ok(());
         }
 
+        // A window that saw no motion is the one report that has to say why:
+        // the snapshots alone cannot tell a stalled render apart from a stalled
+        // download, and the page keeps the event log that can.
+        let logs = self.collect_browser_logs().await;
         Err(format!(
-            "{description}: playback did not advance enough; start={start:?} end={end:?}"
+            "{description}: playback did not advance enough; start={start:?} end={end:?}\nbrowser logs:\n{logs}"
         ))
     }
 

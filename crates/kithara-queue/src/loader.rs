@@ -291,6 +291,8 @@ mod tests {
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
+    #[derive(fieldwork::Fieldwork)]
+    #[fieldwork(with, vis = "")]
     struct LoaderFixtureSpec {
         cap: NonZeroUsize,
     }
@@ -302,14 +304,6 @@ mod tests {
                 None => unreachable!(),
             };
             Self { cap: CAP_3 }
-        }
-    }
-
-    impl LoaderFixtureSpec {
-        #[must_use]
-        fn with_cap(mut self, cap: NonZeroUsize) -> Self {
-            self.cap = cap;
-            self
         }
     }
 

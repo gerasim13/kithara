@@ -1,11 +1,12 @@
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
+use smallvec::SmallVec;
 
 use super::QueueControl;
 use crate::{
     event::{QueueEvent, QueueRepeatMode},
-    navigation::RepeatMode,
+    navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
     track::{TrackEntry, TrackRecord, TrackSource},
 };
 
@@ -23,8 +24,8 @@ where
     /// last-played index even after queue-end.
     #[must_use]
     pub fn current(&self) -> Option<TrackEntry> {
-        let idx = self.lock_navigation().current_index()?;
-        self.lock_tracks().get(idx).map(TrackRecord::entry)
+        let id = self.lock_navigation().current()?;
+        self.track(id)
     }
 
     /// The currently playing track's queue index (player-reported).
@@ -44,10 +45,37 @@ where
         });
     }
 
-    /// Enable or disable shuffle.
-    pub fn set_shuffle(&self, on: bool) {
+    pub fn set_playback_order(&self, order: PlaybackOrder) {
         self.command(|queue| {
-            queue.lock_navigation_mut().set_shuffle(on);
+            let ids = queue
+                .tracks()
+                .into_iter()
+                .map(|track| track.id)
+                .collect::<SmallVec<[_; 16]>>();
+            queue.lock_navigation_mut().set_playback_order(order, &ids);
+            queue
+                .bus
+                .publish(QueueEvent::PlaybackOrderChanged { order });
+        });
+    }
+
+    #[must_use]
+    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
+        *self
+            .action_at_item_end
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
+        self.command(|queue| {
+            *queue
+                .action_at_item_end
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = action;
+            queue
+                .bus
+                .publish(QueueEvent::ActionAtItemEndChanged { action });
         });
     }
 
@@ -109,11 +137,11 @@ where
             #[expr($.is_empty())]
             #[call(lock_tracks)]
             pub fn is_empty(&self) -> bool;
-            /// Current shuffle state.
+            /// Current traversal order.
             #[must_use]
-            #[expr($.is_shuffle_enabled())]
+            #[expr($.playback_order())]
             #[call(lock_navigation)]
-            pub fn is_shuffle_enabled(&self) -> bool;
+            pub fn playback_order(&self) -> PlaybackOrder;
             /// Number of tracks currently in the queue.
             #[must_use]
             #[expr($.len())]

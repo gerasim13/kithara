@@ -1,18 +1,21 @@
 use std::ops::Range;
 
+use kithara_derive::Ranged;
 use num_traits::cast::AsPrimitive;
 
 use crate::render::WaveBucket;
 
-pub const DEFAULT_ZOOM: f32 = 0.12;
-pub(crate) const MAX_ZOOM: f32 = 0.5;
-pub(crate) const MIN_ZOOM: f32 = 0.015;
+#[derive(Clone, Copy, Debug, PartialEq, Ranged)]
+#[ranged(min = 0.015, max = 0.5, default = 0.12, clamp)]
+pub struct Zoom(f32);
+
+pub const DEFAULT_ZOOM: f32 = Zoom::DEFAULT.0;
+#[cfg(test)]
+pub(crate) const MAX_ZOOM: f32 = Zoom::MAX.0;
+#[cfg(test)]
+pub(crate) const MIN_ZOOM: f32 = Zoom::MIN.0;
 
 const BUTTON_FACTOR: f32 = 0.7;
-
-pub(crate) const fn clamp_zoom(zoom: f32) -> f32 {
-    zoom.clamp(MIN_ZOOM, MAX_ZOOM)
-}
 
 /// Bars tile the track from its origin, so a bar's content never depends on
 /// the playhead; the window only selects which bars are visible and where
@@ -33,11 +36,16 @@ pub(crate) struct BarGrid {
 /// fraction of a pixel further along than the last, and once that fraction adds
 /// up to one the gap after a bar doubles — a black stripe repeating across the
 /// waveform at a regular interval.
-pub(crate) fn bar_grid(width: f32, step: f32, zoom: f32, window: &Range<f32>) -> Option<BarGrid> {
+pub(crate) fn bar_grid(
+    width: f32,
+    step: f32,
+    zoom: impl Into<Zoom>,
+    window: &Range<f32>,
+) -> Option<BarGrid> {
     if width <= 0.0 || step <= 0.0 {
         return None;
     }
-    let norm_width = clamp_zoom(zoom) * step / width;
+    let norm_width = f32::from(zoom.into()) * step / width;
     let first: i64 = (window.start / norm_width).floor().as_();
     let last: i64 = (window.end / norm_width).ceil().as_();
     Some(BarGrid {
@@ -101,27 +109,28 @@ pub(crate) fn visible_mark_range(marks: &[f32], window: &Range<f32>) -> Range<us
     start..end
 }
 
-pub(crate) fn window_bounds(position: f32, zoom: f32) -> Range<f32> {
+pub(crate) fn window_bounds(position: f32, zoom: impl Into<Zoom>) -> Range<f32> {
     let position = position.clamp(0.0, 1.0);
-    let half_zoom = clamp_zoom(zoom) / 2.0;
+    let half_zoom = f32::from(zoom.into()) / 2.0;
     position - half_zoom..position + half_zoom
 }
 
-pub(crate) fn zoom_for_wheel(zoom: f32, delta_y: f32) -> f32 {
+pub(crate) fn zoom_for_wheel(zoom: impl Into<Zoom>, delta_y: f32) -> Zoom {
+    let zoom = zoom.into();
     let factor = if delta_y > 0.0 { 1.25 } else { 0.8 };
-    clamp_zoom(zoom * factor)
+    Zoom::from(f32::from(zoom) * factor)
 }
 
 /// Narrows the visible window by one button press.
 #[must_use]
-pub fn zoom_in(zoom: f32) -> f32 {
-    clamp_zoom(zoom * BUTTON_FACTOR)
+pub fn zoom_in(zoom: Zoom) -> Zoom {
+    Zoom::from(f32::from(zoom) * BUTTON_FACTOR)
 }
 
 /// Widens the visible window by one button press.
 #[must_use]
-pub fn zoom_out(zoom: f32) -> f32 {
-    clamp_zoom(zoom / BUTTON_FACTOR)
+pub fn zoom_out(zoom: Zoom) -> Zoom {
+    Zoom::from(f32::from(zoom) / BUTTON_FACTOR)
 }
 
 #[cfg(test)]
@@ -132,7 +141,8 @@ mod tests {
 
     const EPSILON: f32 = 0.000_1;
 
-    fn assert_near(actual: f32, expected: f32) {
+    fn assert_near(actual: impl Into<f32>, expected: f32) {
+        let actual = actual.into();
         assert!(
             (actual - expected).abs() < EPSILON,
             "expected {expected}, got {actual}"
@@ -280,9 +290,18 @@ mod tests {
 
     #[kithara::test]
     fn buttons_step_wider_than_a_detent_and_clamp() {
-        assert_near(zoom_in(DEFAULT_ZOOM), 0.084);
-        assert_near(zoom_out(DEFAULT_ZOOM), 0.171_428_57);
-        assert_near(zoom_in(MIN_ZOOM), MIN_ZOOM);
-        assert_near(zoom_out(MAX_ZOOM), MAX_ZOOM);
+        assert_near(zoom_in(DEFAULT_ZOOM.into()), 0.084);
+        assert_near(zoom_out(DEFAULT_ZOOM.into()), 0.171_428_57);
+        assert_near(zoom_in(MIN_ZOOM.into()), MIN_ZOOM);
+        assert_near(zoom_out(MAX_ZOOM.into()), MAX_ZOOM);
+    }
+
+    #[kithara::test]
+    fn zoom_rejects_non_finite_documents_and_clamps_knob_input() {
+        assert!(Zoom::checked(f32::NAN).is_none());
+        assert!(Zoom::checked(f32::INFINITY).is_none());
+        assert_eq!(Zoom::from(0.0), Zoom::MIN);
+        assert_eq!(Zoom::from(1.0), Zoom::MAX);
+        assert_eq!(Zoom::from(f32::NAN), Zoom::DEFAULT);
     }
 }

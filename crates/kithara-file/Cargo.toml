@@ -49,7 +49,7 @@ usdt = ["kithara-test-utils/usdt"]
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
@@ -60,6 +60,7 @@ kithara-test-utils = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 humantime-serde = { workspace = true }

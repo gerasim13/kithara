@@ -204,7 +204,8 @@ struct RealtimeCapture {
 }
 
 #[cfg(not(target_os = "android"))]
-#[derive(Serialize)]
+#[derive(Serialize, kithara_derive::Mirror)]
+#[mirror(from_ref = RealtimeCapture)]
 struct CaptureMetrics {
     warmup_decode_errors: u64,
     warmup_underruns: u64,
@@ -243,18 +244,6 @@ struct MarkerTiming {
     measured_interval_frames: usize,
 }
 
-#[cfg(not(target_os = "android"))]
-impl From<&RealtimeCapture> for CaptureMetrics {
-    fn from(capture: &RealtimeCapture) -> Self {
-        Self {
-            warmup_decode_errors: capture.warmup_decode_errors,
-            warmup_underruns: capture.warmup_underruns,
-            decode_errors: capture.decode_errors,
-            underruns: capture.underruns,
-            load_observed_during_capture: capture.load_observed_during_capture,
-        }
-    }
-}
 
 #[cfg(not(target_os = "android"))]
 #[derive(Serialize)]

@@ -5,8 +5,9 @@ use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
 };
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_play::{GroupState, PlayError, effects::LimiterConfig, player::PlayerMember};
+use kithara_play::{PlayError, effects::LimiterConfig, player::PlayerMember};
 use kithara_signal::AudioSpec;
+use kithara_sync::GroupState;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig};

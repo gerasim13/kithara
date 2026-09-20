@@ -7,7 +7,13 @@ use crate::{
 
 /// A switch with two states and nothing else: the toggle and the checkbox are
 /// the same picture, one of them with a thumb sliding across it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = bool,
+    draw = self.paint(list, *data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_bool)]
 pub(crate) struct Binary {
     active: Face,
     idle: Face,

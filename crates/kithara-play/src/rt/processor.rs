@@ -4,10 +4,8 @@ use std::{
     sync::atomic::Ordering,
 };
 
-use bon::Builder;
 use firewheel::{
     StreamInfo,
-    dsp::fade::FadeCurve,
     event::ProcEvents,
     node::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
@@ -33,43 +31,11 @@ use crate::{
     session::SessionError,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) enum CrossfadeCurve {
-    #[default]
-    EqualPower,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ContextRequirement {
     #[default]
     Standalone,
     Session,
-}
-
-const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
-    match curve {
-        CrossfadeCurve::EqualPower => FadeCurve::SquareRoot,
-    }
-}
-
-#[derive(Clone, Debug, Builder)]
-pub(crate) struct CrossfadeSettings {
-    #[builder(default)]
-    pub(crate) curve: CrossfadeCurve,
-    #[builder(default = 1.0)]
-    pub(crate) duration: f32,
-}
-
-impl Default for CrossfadeSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-impl CrossfadeSettings {
-    pub(crate) const fn fade_curve(&self) -> FadeCurve {
-        map_curve(self.curve)
-    }
 }
 
 /// The realtime audio processor for the player node.
@@ -81,7 +47,7 @@ impl CrossfadeSettings {
 pub struct PlayerNodeProcessor {
     #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) crossfade: CrossfadeSettings,
+    pub(super) crossfade: crate::CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
@@ -405,7 +371,7 @@ impl PlayerNodeProcessor {
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
             render: RenderPass::new(pools, shape, gate_smoothing),
-            crossfade: CrossfadeSettings::default(),
+            crossfade: crate::CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
@@ -481,7 +447,8 @@ mod tests {
         node::{ProcStore, StreamStatus},
     };
     use kithara_platform::time::Duration;
-    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_warp::RenderContext;
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -544,11 +511,14 @@ mod tests {
         super::super::publish_render_context(
             &mut store,
             RenderContext::new(
-                SessionFrame::new(0)..SessionFrame::new(512),
-                NonZeroU32::new(44_100).expect("static sample rate"),
+                OutputContext::new(
+                    SessionFrame::new(0)..SessionFrame::new(512),
+                    NonZeroU32::new(44_100).expect("static sample rate"),
+                    SessionEpoch::new(3),
+                    Some(TransportRevision::first()),
+                )
+                .expect("invariant: fixture output range is ordered"),
                 None,
-                SessionEpoch::new(3),
-                Some(TransportRevision::first()),
             )
             .expect("invariant: fixture context is valid"),
         )
@@ -566,8 +536,11 @@ mod tests {
             .expect("required context");
 
         assert!(std::ptr::eq(left, right));
-        assert_eq!(left.session_epoch(), SessionEpoch::new(3));
-        assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
+        assert_eq!(left.output().session_epoch(), SessionEpoch::new(3));
+        assert_eq!(
+            left.output().transport_revision(),
+            Some(TransportRevision::first())
+        );
     }
 
     #[kithara::test]

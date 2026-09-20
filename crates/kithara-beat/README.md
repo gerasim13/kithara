@@ -42,6 +42,14 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
   them.
 - `RawBeats { beats, downbeats }` — pooled output positions in seconds, sorted
   and deduplicated.
+- `RawBeatGrid` / `BeatGridModel` — the served beat-grid contract: a document as
+  it arrives, and the same document once its times, ordinals, bar anchors and
+  meter have been checked. `BeatGridModel` is reachable only through
+  `TryFrom<RawBeatGrid>`, which `serde` also routes deserialization through, so
+  no unchecked grid exists. Model-only: no detector, no weights, no `nn`/`dsp`,
+  so a server reading a stored grid carries nothing of the analyzer. A local
+  pass reaches the same type through `kithara-analysis`, which states one grid
+  per publication from its own beat artifact.
 
 ## Features
 

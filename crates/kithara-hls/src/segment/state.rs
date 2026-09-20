@@ -201,42 +201,44 @@ where
 }
 
 /// In-flight: claimed via a `Missing -> Downloading` CAS, fetch pending.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = SegmentPhase,
+    sealed = sealed::Sealed,
+    data = super::fetch::DownloadClaim<S>,
+    generic = S,
+    bound = S: HasPool<u8> + Send + Sync + 'static
+)]
 pub(crate) struct Downloading;
 /// Committed on disk; carries the resolved `final_len`.
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = SegmentPhase,
+    sealed = sealed::Sealed,
+    data = super::fetch::LoadedProof,
+    generic = S,
+    bound = S: HasPool<u8> + Send + Sync + 'static
+)]
 pub(crate) struct Loaded;
 /// Returned to the dispatch pool (recoverable failure / cancel / evict).
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = SegmentPhase,
+    sealed = sealed::Sealed,
+    data = (),
+    generic = S,
+    bound = S: HasPool<u8> + Send + Sync + 'static
+)]
 pub(crate) struct Missing;
 /// Terminal: the downloader exhausted its retry budget on this slot. Never
 /// re-dispatched (`try_claim` only CAS's from `Missing`) and surfaced to
 /// readers as a terminal error via [`SegmentSlotState::is_failed`].
+#[derive(kithara_derive::Phase)]
+#[phase(
+    trait = SegmentPhase,
+    sealed = sealed::Sealed,
+    data = (),
+    generic = S,
+    bound = S: HasPool<u8> + Send + Sync + 'static
+)]
 pub(crate) struct Failed;
-
-impl sealed::Sealed for Downloading {}
-impl sealed::Sealed for Loaded {}
-impl sealed::Sealed for Missing {}
-impl sealed::Sealed for Failed {}
-
-impl<S> SegmentPhase<S> for Downloading
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    type Data = super::fetch::DownloadClaim<S>;
-}
-impl<S> SegmentPhase<S> for Loaded
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    type Data = super::fetch::LoadedProof;
-}
-impl<S> SegmentPhase<S> for Missing
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    type Data = ();
-}
-impl<S> SegmentPhase<S> for Failed
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    type Data = ();
-}

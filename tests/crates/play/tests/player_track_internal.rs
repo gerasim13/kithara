@@ -12,13 +12,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
+        CrossfadeSettings, PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
         bridge::RtMetrics,
         rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
     },
@@ -62,23 +61,43 @@ fn make_track_with(
     duration_secs: f64,
     item_id: TrackId,
 ) -> PlayerTrack {
+    make_track_with_crossfade_duration(constant_half, duration_secs, item_id, 1.0)
+}
+
+fn make_track_with_crossfade_duration(
+    constant_half: &'static [u8],
+    duration_secs: f64,
+    item_id: TrackId,
+    crossfade_duration: f32,
+) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
     let resource = Resource::from_reader(
         TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
         None,
     );
-    make_track_from_resource(resource, src, item_id)
+    make_track_from_resource_with_crossfade_duration(resource, src, item_id, crossfade_duration)
 }
 
 fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId) -> PlayerTrack {
+    make_track_from_resource_with_crossfade_duration(resource, src, item_id, 1.0)
+}
+
+fn make_track_from_resource_with_crossfade_duration(
+    resource: Resource,
+    src: Arc<str>,
+    item_id: TrackId,
+    crossfade_duration: f32,
+) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, src, &pools())
         .expect("player resource fits the test pool budget");
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()
         .sample_rate(sample_rate)
         .item_id(item_id)
-        .fade_duration(1.0)
-        .fade_curve(FadeCurve::SquareRoot)
+        .crossfade(CrossfadeSettings {
+            duration: crossfade_duration,
+            ..CrossfadeSettings::default()
+        })
         .build(Box::new(player_resource))
 }
 
@@ -132,10 +151,10 @@ async fn track_state_transitions(
     let mut track = make_track(constant_half);
     match scenario {
         TrackStateScenario::StartPreloading => {}
-        TrackStateScenario::FadeIn => track.fade_in(),
+        TrackStateScenario::FadeIn => track.fade_in(CrossfadeSettings::default()),
         TrackStateScenario::FadeOutAfterPlay => {
             track.play();
-            track.fade_out();
+            track.fade_out(CrossfadeSettings::default());
         }
         TrackStateScenario::Play => track.play(),
         TrackStateScenario::StopAfterPlay => {
@@ -418,9 +437,8 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
 
 #[kithara::test(tokio)]
 async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half: &'static [u8]) {
-    let mut track = make_track_with(constant_half, 10.0, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.2, sample_rate);
+    let mut track =
+        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -493,9 +511,8 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half
         MockReader::misreported_duration(Consts::AUDIO_SPEC, 900, constant_half),
         Some(Arc::clone(&src)),
     );
-    let mut track = make_track_from_resource(resource, src, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.0, sample_rate);
+    let mut track =
+        make_track_from_resource_with_crossfade_duration(resource, src, TrackId::allocate(), 0.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -548,9 +565,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half
 async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
     constant_half: &'static [u8],
 ) {
-    let mut track = make_track_with(constant_half, 0.01, ITEM);
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.0, sample_rate);
+    let mut track = make_track_with_crossfade_duration(constant_half, 0.01, ITEM, 0.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -598,9 +613,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
 
 #[kithara::test(tokio)]
 async fn handover_is_not_duplicated_at_eof_after_early_trigger(constant_half: &'static [u8]) {
-    let mut track = make_track_with(constant_half, 5.0, ITEM);
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.2, sample_rate);
+    let mut track = make_track_with_crossfade_duration(constant_half, 5.0, ITEM, 0.2);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -658,9 +671,8 @@ async fn prefetch_fires_before_handover(
     #[case] prefetch_duration: f32,
     #[case] seek_position: Option<f64>,
 ) {
-    let mut track = make_track_with(constant_half, duration, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.0, sample_rate);
+    let mut track =
+        make_track_with_crossfade_duration(constant_half, duration, TrackId::allocate(), 0.0);
     track.set_prefetch_duration(prefetch_duration);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
     let mut notification_tx = tx;
@@ -704,9 +716,8 @@ async fn prefetch_fires_before_handover(
 async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
     constant_half: &'static [u8],
 ) {
-    let mut track = make_track_with(constant_half, 10.0, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.2, sample_rate);
+    let mut track =
+        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
     track.set_prefetch_duration(2.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
     let mut notification_tx = tx;
@@ -766,9 +777,8 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
 
 #[kithara::test(tokio)]
 async fn prefetch_and_handover_both_fire_when_thresholds_coincide(constant_half: &'static [u8]) {
-    let mut track = make_track_with(constant_half, 10.0, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.2, sample_rate);
+    let mut track =
+        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
     track.set_prefetch_duration(0.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
     let mut notification_tx = tx;
