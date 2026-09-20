@@ -210,6 +210,89 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
 }
 
 #[kithara::test]
+fn zero_source_advance_commits_a_render_interval() {
+    let controls = StretchControls::new(1.0);
+    let config = WarpConfig::builder().stretch(controls).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
+    let renderer = warp.renderer(spec(), pools());
+    let revision = WarpMapRevision::first();
+    let source = 41;
+    let output = SessionFrame::new(1_000);
+    let context = RenderContext::new(
+        output..SessionFrame::new(2_000),
+        spec().sample_rate,
+        None,
+        SessionEpoch::new(1),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context is valid");
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(source)
+            .output(output)
+            .warp_map(revision)
+            .build(),
+    );
+    let snapshot = renderer.context.load().expect("published render snapshot");
+    let mut renderer = renderer;
+    renderer.rendered_source_end = Some((source, spec().sample_rate));
+
+    let (committed, output_start, source_start, source_end) = renderer
+        .next_render_snapshot(snapshot, 32)
+        .expect("an equal source frontier still commits emitted PCM");
+
+    assert_eq!(output_start, i64::from(output));
+    assert_eq!(source_start, source);
+    assert_eq!(source_end, source);
+    assert_eq!(committed.frontier().source(), source);
+    assert_eq!(committed.frontier().output(), SessionFrame::new(1_032));
+    assert_eq!(committed.frontier().warp_map(), Some(revision));
+}
+
+#[kithara::test]
+fn commit_keeps_callback_context_separate_from_output_identity() {
+    let controls = StretchControls::new(1.0);
+    let output_rate = controls.rate_target();
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
+    let mut renderer = warp.renderer(spec(), pools());
+    let output_map = WarpMapRevision::first();
+    let callback_map = output_map.checked_next().expect("fixture map advances");
+    controls.set_speed(2.0);
+    let callback_context = RenderContext::new(
+        SessionFrame::new(1_000)..SessionFrame::new(2_000),
+        spec().sample_rate,
+        None,
+        SessionEpoch::new(1),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context is valid")
+    .with_rate(controls.rate_target());
+    publisher.publish(
+        &callback_context,
+        PresentationFrontier::builder()
+            .source(41)
+            .output(SessionFrame::new(1_000))
+            .warp_map(callback_map)
+            .build(),
+    );
+    renderer.rendered_source_end = Some((41, spec().sample_rate));
+    let render_revision =
+        kithara_signal::pack_render_revision(output_rate.revision(), u64::from(output_map))
+            .expect("fixture revisions fit PCM provenance");
+    let snapshot = WarpRenderer::bind_output_identity(renderer.context.load(), render_revision);
+
+    renderer.commit_render(snapshot, 32, render_revision);
+
+    let committed = renderer.committed.as_ref().expect("output is committed");
+    assert_eq!(committed.context(), &callback_context);
+    assert_eq!(committed.frontier().warp_map(), Some(output_map));
+}
+
+#[kithara::test]
 fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     let controls = StretchControls::new(1.0);
     controls.set_speed(0.75);
@@ -471,6 +554,20 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     );
     let first = renderer.render_quantum(first).expect("prefix renders");
     assert_eq!(first.frames(), 16);
+    assert_eq!(
+        kithara_signal::render_warp_map_revision(first.meta.render_revision),
+        0,
+        "the callback snapshot still carries the map-0 frontier before activation"
+    );
+    assert_eq!(
+        renderer
+            .committed
+            .as_ref()
+            .expect("prefix PCM commits presentation")
+            .frontier()
+            .warp_map(),
+        None
+    );
     publish(16);
     let mut second = chunk(&pools, &[0.0; 64]);
     second.meta.frame_offset = 16;
@@ -490,6 +587,43 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
             .committed
             .as_ref()
             .expect("activated PCM commits presentation")
+            .frontier()
+            .warp_map(),
+        Some(revision)
+    );
+
+    let future_revision = revision.checked_next().expect("fixture revision advances");
+    warp.region_plan().install(Some(Arc::new(
+        crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate).with_activation(
+            WarpMap::identity(future_revision).reanchor(
+                96,
+                SessionFrame::new(96),
+                SessionBeat::default(),
+            ),
+        ),
+    )));
+    publish(80);
+    let mut before_future_activation = chunk(&pools, &[0.0; 32]);
+    before_future_activation.meta.frame_offset = 80;
+    renderer
+        .prepare_quantum(
+            before_future_activation.meta,
+            before_future_activation.frames(),
+        )
+        .expect("quantum before future activation is prepared");
+    let before_future_activation = renderer
+        .render_quantum(before_future_activation)
+        .expect("quantum before future activation renders");
+    assert_eq!(
+        kithara_signal::render_warp_map_revision(before_future_activation.meta.render_revision),
+        u64::from(revision),
+        "a future map must not mark an earlier quantum"
+    );
+    assert_eq!(
+        renderer
+            .committed
+            .as_ref()
+            .expect("pre-activation PCM commits presentation")
             .frontier()
             .warp_map(),
         Some(revision)

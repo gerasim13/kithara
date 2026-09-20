@@ -375,6 +375,19 @@ impl RenderSnapshot {
     }
 }
 
+#[cfg(feature = "render")]
+pub(crate) fn rebind_warp_map(
+    mut snapshot: RenderSnapshot,
+    warp_map: Option<WarpMapRevision>,
+) -> RenderSnapshot {
+    snapshot.frontier = PresentationFrontier::builder()
+        .source(snapshot.frontier.source())
+        .output(snapshot.frontier.output())
+        .maybe_warp_map(warp_map)
+        .build();
+    snapshot
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;

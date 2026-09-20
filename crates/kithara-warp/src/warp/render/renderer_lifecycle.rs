@@ -325,7 +325,16 @@ where
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
         if self.transition_pending() {
-            return self.advance_transition(channels, None);
+            let output = self.advance_transition(channels, None);
+            if let Some(output) = output.as_ref() {
+                let render_revision = output.meta.render_revision;
+                self.commit_render(
+                    Self::bind_output_identity(snapshot, render_revision),
+                    output.frames(),
+                    render_revision,
+                );
+            }
+            return output;
         }
         let result = self
             .render_terminal_pending(channels)
@@ -346,7 +355,12 @@ where
         };
         let output = self.emit(None, held_source_frames);
         if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output.frames());
+            let render_revision = output.meta.render_revision;
+            self.commit_render(
+                Self::bind_output_identity(snapshot, render_revision),
+                output.frames(),
+                render_revision,
+            );
         }
         output
     }
@@ -369,14 +383,23 @@ where
             self.applied_warp_map.map_or(0, u64::from),
         )
         .unwrap_or(rate_revision);
-        self.render_at(chunk, speed, snapshot, None, false)
+        let output = self.render_at(chunk, speed, None, false);
+        if let Some(output) = output.as_ref() {
+            let render_revision = output.meta.render_revision;
+            self.commit_rate_render(
+                Self::bind_output_identity(snapshot, render_revision),
+                output.frames(),
+                render_revision,
+                speed,
+            );
+        }
+        output
     }
 
     fn render_at(
         &mut self,
         chunk: AudioChunk,
         speed: f32,
-        snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
         carrier_activation: bool,
     ) -> Option<AudioChunk> {
@@ -398,7 +421,7 @@ where
         let activates = prepared
             .as_ref()
             .is_some_and(|prepared| prepared.activation.is_some());
-        let output = if !carrier_activation && !activates && self.unity_passthrough(speed) {
+        if !carrier_activation && !activates && self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
             let mut chunk = chunk;
@@ -417,16 +440,7 @@ where
                 self.clear_pending_source();
             }
             self.process_active(chunk, speed)
-        };
-        if let Some(output) = output.as_ref() {
-            self.commit_rate_render(
-                snapshot,
-                output.frames(),
-                kithara_signal::render_rate_revision(output.meta.render_revision),
-                speed,
-            );
         }
-        output
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
@@ -437,7 +451,8 @@ where
         }
         let snapshot = self.prepared_context.take();
         let rate_revision = prepared.rate.revision();
-        let target_rate_bits = prepared.speed.to_bits();
+        let speed = prepared.speed;
+        let target_rate_bits = speed.to_bits();
         chunk.meta.render_revision = kithara_signal::pack_render_revision(
             rate_revision,
             self.applied_warp_map.map_or(0, u64::from),
@@ -446,19 +461,16 @@ where
         let revision = prepared.warp_map;
         let carrier_activation =
             prepared.disposition == super::renderer::PreparedDisposition::CarrierActivation;
-        let mut output = self.render_at(
-            chunk,
-            prepared.speed,
-            snapshot,
-            Some(prepared),
-            carrier_activation,
-        )?;
+        let mut output = self.render_at(chunk, speed, Some(prepared), carrier_activation)?;
         self.discontinuity_pending = false;
         if let Some(revision) = revision {
             self.applied_warp_map = Some(revision);
             output.meta.render_revision =
                 kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
                     .unwrap_or(rate_revision);
+            if let Some(meta) = self.last_input_meta.as_mut() {
+                meta.render_revision = output.meta.render_revision;
+            }
             kithara::probe_event!(
                 prepared_render_revision_selected,
                 rate_revision,
@@ -468,6 +480,13 @@ where
                 source_frame_offset = output.meta.frame_offset
             );
         }
+        let render_revision = output.meta.render_revision;
+        self.commit_rate_render(
+            Self::bind_output_identity(snapshot, render_revision),
+            output.frames(),
+            render_revision,
+            speed,
+        );
         Some(output)
     }
 

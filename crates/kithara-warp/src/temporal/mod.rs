@@ -10,7 +10,7 @@ pub use controls::StretchControls;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use kithara_stretch::StretchKind;
-#[cfg(feature = "render")]
-pub(crate) use live::RenderState;
 pub use live::{RenderPublisher, RenderReader, RenderSnapshot};
+#[cfg(feature = "render")]
+pub(crate) use live::{RenderState, rebind_warp_map};
 pub use rate::RateTarget;

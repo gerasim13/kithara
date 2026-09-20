@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -281,7 +281,7 @@ where
         &mut self,
         snapshot: Option<RenderSnapshot>,
         output_frames: usize,
-        request_revision: u64,
+        render_revision: u64,
         applied_rate: f32,
     ) {
         let Some(snapshot) = snapshot else {
@@ -294,16 +294,30 @@ where
         };
         kithara::probe_event!(
             rate_applied,
-            request_revision,
+            request_revision = kithara_signal::render_rate_revision(render_revision),
             applied_rate_bits = applied_rate.to_bits(),
             session_frame,
             source_start,
             source_end
         );
-        self.commit(committed, session_frame, source_start);
+        self.commit(committed, render_revision, session_frame, source_start);
     }
 
-    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
+    pub(super) fn bind_output_identity(
+        snapshot: Option<RenderSnapshot>,
+        render_revision: u64,
+    ) -> Option<RenderSnapshot> {
+        let warp_map = NonZeroU64::new(kithara_signal::render_warp_map_revision(render_revision))
+            .map(WarpMapRevision::from_raw);
+        snapshot.map(|snapshot| crate::temporal::rebind_warp_map(snapshot, warp_map))
+    }
+
+    pub(super) fn commit_render(
+        &mut self,
+        snapshot: Option<RenderSnapshot>,
+        output_frames: usize,
+        render_revision: u64,
+    ) {
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -312,7 +326,7 @@ where
         else {
             return;
         };
-        self.commit(committed, output_start, source_start);
+        self.commit(committed, render_revision, output_start, source_start);
     }
 
     /// The single place a render becomes the committed one, so every committed
@@ -321,17 +335,15 @@ where
     pub(super) fn commit(
         &mut self,
         committed: RenderSnapshot,
+        render_revision: u64,
         output_start: i64,
         source_start: u64,
     ) {
         kithara::probe_event!(
             render_committed,
-            session_epoch = u64::from(committed.context().session_epoch()),
-            transport_revision = committed
-                .context()
-                .transport_revision()
-                .map_or(0, u64::from),
+            render_revision,
             output_start,
+            output_end = i64::from(committed.frontier().output()),
             source_start,
             source_end = committed.frontier().source()
         );
