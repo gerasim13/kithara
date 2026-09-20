@@ -270,7 +270,7 @@ impl WaveformAnalyzer {
             .into_iter()
             .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
             .collect();
-        Waveform::from(out)
+        Waveform::analysed(out)
     }
 
     pub fn write_resume(&self, out: &mut Vec<u8>) {

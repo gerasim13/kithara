@@ -5977,6 +5977,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "realfft",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
