@@ -44,7 +44,7 @@ impl Budget {
     /// differently.
     const IMMEDIATE_KIB: u64 = 32_768;
     /// The same for the retained host, whose bulk is the compute buffers Vello
-    /// sizes for the target on its first frame. Measured at 12_352 KiB.
+    /// sizes for the target on its first frame. Measured at 14_720 KiB.
     ///
     /// It used to be an order larger, because those buffers were fixed
     /// constants covering a target far bigger than a window: a renderer paid
