@@ -938,28 +938,122 @@ mod tests {
         }
     }
 
+    /// What an event wait actually observed, so a failure names the
+    /// outcome instead of reporting a bare boolean.
+    enum WaitOutcome {
+        /// The awaited event arrived.
+        Observed { lagged: u64, seen: usize },
+        /// The bus closed before the awaited event arrived.
+        Closed { lagged: u64, seen: usize },
+        /// The budget expired before the awaited event arrived.
+        TimedOut {
+            budget_ms: u64,
+            lagged: u64,
+            seen: usize,
+        },
+    }
+
+    impl WaitOutcome {
+        fn observed(&self) -> bool {
+            matches!(self, Self::Observed { .. })
+        }
+    }
+
+    impl std::fmt::Display for WaitOutcome {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Observed { lagged, seen } => {
+                    write!(f, "observed after {seen} event(s), {lagged} dropped")
+                }
+                Self::Closed { lagged, seen } => {
+                    write!(f, "bus closed after {seen} event(s), {lagged} dropped")
+                }
+                Self::TimedOut {
+                    budget_ms,
+                    lagged,
+                    seen,
+                } => write!(
+                    f,
+                    "no event within {budget_ms}ms, after {seen} event(s), {lagged} dropped"
+                ),
+            }
+        }
+    }
+
+    /// Waits for an event the bus may deliver behind a dropped burst.
+    ///
+    /// `Lagged` reports that the bus dropped the oldest envelopes and kept
+    /// delivering, so the wait continues exactly as the bridge's own event
+    /// task does; only `Closed` and the budget end it.
     #[kithara_test_utils::kithara::hang_watchdog]
+    async fn wait_for_event(
+        events: &mut EventReceiver<QueueBusEvent>,
+        timeout_ms: u64,
+        is_awaited: impl Fn(&QueueBusEvent) -> bool,
+    ) -> WaitOutcome {
+        let mut lagged = 0_u64;
+        let mut seen = 0_usize;
+        let ended = {
+            let lagged = &mut lagged;
+            let seen = &mut seen;
+            let wait = async move {
+                loop {
+                    match events.recv().await {
+                        Ok(Envelope { event, .. }) => {
+                            *seen += 1;
+                            if is_awaited(&event) {
+                                return true;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(dropped)) => *lagged += dropped,
+                        Err(broadcast::error::RecvError::Closed) => return false,
+                    }
+                }
+            };
+            kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait).await
+        };
+        match ended {
+            Ok(true) => WaitOutcome::Observed { lagged, seen },
+            Ok(false) => WaitOutcome::Closed { lagged, seen },
+            Err(_) => WaitOutcome::TimedOut {
+                budget_ms: timeout_ms,
+                lagged,
+                seen,
+            },
+        }
+    }
+
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
         timeout_ms: u64,
-    ) -> bool {
-        let wait = async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
-                if matches!(
-                    event,
-                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
-                        if seen == id && *seen_status == status
-                ) {
-                    return true;
-                }
-            }
-            false
-        };
-        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
-            .await
-            .unwrap_or(false)
+    ) -> WaitOutcome {
+        wait_for_event(events, timeout_ms, |event| {
+            matches!(
+                event,
+                QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: seen_status })
+                    if *seen == id && *seen_status == status
+            )
+        })
+        .await
+    }
+
+    async fn wait_for_eof_advance(
+        events: &mut EventReceiver<QueueBusEvent>,
+        id: TrackId,
+        timeout_ms: u64,
+    ) -> WaitOutcome {
+        wait_for_event(events, timeout_ms, |event| {
+            matches!(
+                event,
+                QueueBusEvent::Queue(QueueEvent::CurrentTrackAdvance {
+                    reason: AdvanceReason::NaturalEof,
+                    id: Some(seen),
+                }) if *seen == id
+            )
+        })
+        .await
     }
 
     /// The polling thread drives `Queue::tick`, including repeat-one replay.
@@ -991,9 +1085,10 @@ mod tests {
         let id = queue
             .append(track.to_string_lossy().into_owned())
             .expect("open queue accepts a local track");
+        let loaded = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await;
         assert!(
-            wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await,
-            "real local track must load before playback"
+            loaded.observed(),
+            "real local track must load before playback; wait: {loaded}"
         );
 
         let cancel = CancelToken::root();
@@ -1012,22 +1107,7 @@ mod tests {
             .expect("select task completes")
             .expect("loaded track starts through the real queue lifecycle");
 
-        let replay_started = kithara::platform::time::timeout(Duration::from_millis(2000), async {
-            while let Ok(Envelope { event, .. }) = events.recv().await {
-                if matches!(
-                    event,
-                    QueueBusEvent::Queue(QueueEvent::CurrentTrackAdvance {
-                        reason: AdvanceReason::NaturalEof,
-                        id: Some(seen),
-                    }) if seen == id
-                ) {
-                    return true;
-                }
-            }
-            false
-        })
-        .await
-        .unwrap_or(false);
+        let replay = wait_for_eof_advance(&mut events, id, 2000).await;
         let status = queue.track(id).map(|entry| entry.status);
         cancel.cancel();
         let (joined, owner) = spawn_blocking(move || {
@@ -1041,12 +1121,45 @@ mod tests {
         drop(owner);
 
         assert!(
-            replay_started,
-            "tick after EOF must replay the consumed repeat-one track; status: {status:?}"
+            replay.observed(),
+            "tick after EOF must replay the consumed repeat-one track; wait: {replay}, status: {status:?}"
         );
         assert!(
             joined.is_ok(),
             "polling thread must survive the reload it starts"
+        );
+    }
+
+    /// A burst that outruns the bus drops the oldest envelopes and keeps
+    /// delivering, so a wait must survive the gap instead of reading it as
+    /// the awaited event never arriving.
+    #[kithara::test(tokio)]
+    async fn a_wait_survives_a_lagged_bus_and_still_observes_the_next_event() {
+        const CAPACITY: usize = 4;
+
+        let bus = EventBus::new(CAPACITY);
+        let mut events = bus.subscribe::<QueueBusEvent>();
+        let id = TrackId::from(23_u64);
+
+        for _ in 0..=CAPACITY {
+            bus.publish(QueueEvent::TrackStatusChanged {
+                id,
+                status: TrackStatus::Loading,
+            });
+        }
+        bus.publish(QueueEvent::CurrentTrackAdvance {
+            reason: AdvanceReason::NaturalEof,
+            id: Some(id),
+        });
+
+        let outcome = wait_for_eof_advance(&mut events, id, 2000).await;
+        assert!(
+            outcome.observed(),
+            "a dropped burst must not end the wait; wait: {outcome}"
+        );
+        assert!(
+            matches!(&outcome, WaitOutcome::Observed { lagged, .. } if *lagged > 0),
+            "the burst must outrun the bus, else the wait never met a gap; wait: {outcome}"
         );
     }
 }
