@@ -25,13 +25,20 @@ pub enum PlayerCmd {
     /// Present a decoder seek for one track at its installed Warp activation.
     ScheduleSeek {
         item_id: TrackId,
+        scheduled_epoch: ScheduledSeekEpoch,
         seek_epoch: u64,
         disposition: ScheduledSeekDisposition,
         armed: bool,
     },
+    /// Arm exactly one previously admitted prepared launch.
+    ArmPreparedLaunch {
+        item_id: TrackId,
+        scheduled_epoch: ScheduledSeekEpoch,
+    },
     /// Cancel the installed prepared launch for one track.
     CancelPreparedLaunch {
         item_id: TrackId,
+        scheduled_epoch: ScheduledSeekEpoch,
         prepared_seek_epoch: u64,
         replacement_seek_epoch: u64,
         transport_seek_epoch: u64,
@@ -73,18 +80,29 @@ impl fmt::Debug for PlayerCmd {
                 .finish(),
             Self::ScheduleSeek {
                 item_id,
+                scheduled_epoch,
                 seek_epoch,
                 disposition,
                 armed,
             } => f
                 .debug_struct("ScheduleSeek")
                 .field("item_id", item_id)
+                .field("scheduled_epoch", scheduled_epoch)
                 .field("seek_epoch", seek_epoch)
                 .field("disposition", disposition)
                 .field("armed", armed)
                 .finish(),
+            Self::ArmPreparedLaunch {
+                item_id,
+                scheduled_epoch,
+            } => f
+                .debug_struct("ArmPreparedLaunch")
+                .field("item_id", item_id)
+                .field("scheduled_epoch", scheduled_epoch)
+                .finish(),
             Self::CancelPreparedLaunch {
                 item_id,
+                scheduled_epoch,
                 prepared_seek_epoch,
                 replacement_seek_epoch,
                 transport_seek_epoch,
@@ -93,6 +111,7 @@ impl fmt::Debug for PlayerCmd {
             } => f
                 .debug_struct("CancelPreparedLaunch")
                 .field("item_id", item_id)
+                .field("scheduled_epoch", scheduled_epoch)
                 .field("prepared_seek_epoch", prepared_seek_epoch)
                 .field("replacement_seek_epoch", replacement_seek_epoch)
                 .field("transport_seek_epoch", transport_seek_epoch)
@@ -107,6 +126,20 @@ impl fmt::Debug for PlayerCmd {
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
         }
+    }
+}
+
+/// Control-plane identity of one planned decoder presentation.
+///
+/// This is deliberately separate from the decoder's seek epoch: the control
+/// request exists before a decoder binding is available, while the decoder
+/// epoch is minted only by `begin_*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScheduledSeekEpoch(u64);
+
+impl ScheduledSeekEpoch {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
     }
 }
 

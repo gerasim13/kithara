@@ -5,8 +5,9 @@ use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, ReconcileCause, SegmentSet,
-    SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent,
-    SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot, TransportOperation,
+    SessionAnchor, SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncIntent, SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    TransportOperation,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use {
@@ -54,12 +55,12 @@ pub trait Player:
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
-    /// Prepares the entry of every queued track the deck does not play yet.
+    /// Reconciles the initial host-synced track and prepares queued launches.
     ///
     /// The owner moves the session axis, so the deadline a waiting track has
     /// to enter by moves with it: the entries are planned on the owner's pass
     /// over its decks, beside the acknowledgement of what the deck plays.
-    fn prepare_pending_entries(&mut self);
+    fn prepare_sync_launches(&mut self, output_now: SessionFrame) -> Result<(), PlayError>;
 
     /// Records the parent's committed session anchor; a deck under
     /// `HostSync` republishes its session grid on it.
@@ -339,8 +340,8 @@ where
         self.make_control().close()
     }
 
-    fn prepare_pending_entries(&mut self) {
-        Self::prepare_pending_entries(self);
+    fn prepare_sync_launches(&mut self, output_now: SessionFrame) -> Result<(), PlayError> {
+        Self::prepare_sync_launches(self, output_now)
     }
 
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
@@ -593,7 +594,7 @@ where
             .map_err(|_| PlayError::InvalidHostSeekPosition { seconds })?;
         let activation_floor = i64::from(frontier.output())
             .checked_add(lead)
-            .map(kithara_warp::SessionFrame::new)
+            .map(SessionFrame::new)
             .ok_or(PlayError::InvalidHostSeekPosition { seconds })?;
         Ok(target::PreparedHostSeek {
             activation_floor,
@@ -718,7 +719,7 @@ mod tests {
 
     #[kithara::test]
     fn host_seek_launches_a_deck_that_is_not_yet_audible_at_the_cue() {
-        let activation = kithara_warp::SessionFrame::new(96_000);
+        let activation = SessionFrame::new(96_000);
         let warp_map = kithara_warp::WarpMapRevision::first();
 
         assert!(matches!(
@@ -730,7 +731,7 @@ mod tests {
 
     #[kithara::test]
     fn host_seek_keeps_the_audible_stream_until_the_activation() {
-        let activation = kithara_warp::SessionFrame::new(96_000);
+        let activation = SessionFrame::new(96_000);
 
         assert!(matches!(
             target::host_seek_disposition(activation, kithara_warp::WarpMapRevision::first(), true),

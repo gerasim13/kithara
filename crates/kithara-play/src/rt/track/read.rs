@@ -399,7 +399,7 @@ impl PlayerTrack {
                 presentation_frontier(&context, source.frame(), warp_map_revision),
             );
         } else {
-            self.resource.clear_render();
+            self.resource.publish_render_preparation(&context);
         }
         let outcome = self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink);
         if let Some((source, warp_map_revision)) =

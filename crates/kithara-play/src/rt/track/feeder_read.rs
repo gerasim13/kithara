@@ -35,8 +35,12 @@ impl PlayerResource {
         context: &RenderContext,
         frames: usize,
     ) -> PreparedLaunchReadiness {
-        let Some((epoch, crate::bridge::ScheduledSeekDisposition::PreparedLaunch(identity), true)) =
-            self.scheduled_seek
+        let Some(crate::rt::track::feeder::ScheduledSeekRecord {
+            decoder_epoch: epoch,
+            disposition: crate::bridge::ScheduledSeekDisposition::PreparedLaunch(identity),
+            armed: true,
+            ..
+        }) = self.scheduled_seek
         else {
             return PreparedLaunchReadiness::NotReady;
         };
@@ -70,13 +74,13 @@ impl PlayerResource {
             self.scheduled_seek = None;
             return PreparedLaunchReadiness::NotReady;
         }
-        self.resource.get().publish_render_preparation(context);
         if self.resource.get_mut().present_seek(epoch)
             == kithara_audio::SeekPresentation::Superseded
         {
             self.scheduled_seek = None;
             return PreparedLaunchReadiness::NotReady;
         }
+        self.resource.get().publish_render_preparation(context);
         if output >= context.output_frames().end {
             return PreparedLaunchReadiness::NotReady;
         }
@@ -87,6 +91,14 @@ impl PlayerResource {
         let Some(required) = NonZeroUsize::new(suffix) else {
             return PreparedLaunchReadiness::NotReady;
         };
+        let underlying_status = self.resource.get_mut().sync_render_revision(
+            activation.revision,
+            required,
+            self.last_source_end,
+        );
+        if underlying_status == RevisionFloorStatus::WaitingForReplacement {
+            return PreparedLaunchReadiness::NotReady;
+        }
         if self.sync_render_revision(activation, required)
             == RevisionFloorStatus::WaitingForReplacement
         {
@@ -161,11 +173,10 @@ impl PlayerResource {
         };
         if matches!(
             self.scheduled_seek,
-            Some((
-                _,
-                crate::bridge::ScheduledSeekDisposition::PreparedLaunch(_),
-                _
-            ))
+            Some(crate::rt::track::feeder::ScheduledSeekRecord {
+                disposition: crate::bridge::ScheduledSeekDisposition::PreparedLaunch(_),
+                ..
+            })
         ) {
             return self.read_current(Some(context), track_id, output, range, metrics);
         }
@@ -180,11 +191,10 @@ impl PlayerResource {
                     RevisionFloorStatus::ReadyForSeekPresentation => {
                         if matches!(
                             self.scheduled_seek,
-                            Some((
-                                _,
-                                crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
-                                _
-                            ))
+                            Some(crate::rt::track::feeder::ScheduledSeekRecord {
+                                disposition: crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
+                                ..
+                            })
                         ) {
                             let _ = self.present_scheduled_seek();
                         }
@@ -236,11 +246,10 @@ impl PlayerResource {
             RevisionFloorStatus::ReadyForSeekPresentation => {
                 if matches!(
                     self.scheduled_seek,
-                    Some((
-                        _,
-                        crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
-                        _
-                    ))
+                    Some(crate::rt::track::feeder::ScheduledSeekRecord {
+                        disposition: crate::bridge::ScheduledSeekDisposition::SeekOnly { .. },
+                        ..
+                    })
                 ) {
                     let _ = self.present_scheduled_seek();
                 }

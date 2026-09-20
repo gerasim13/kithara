@@ -1,6 +1,6 @@
 use kithara_platform::time::Duration;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor, SessionFrame,
     SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
     SyncRejected, SyncStatusSnapshot, TransportRevision,
 };
@@ -10,7 +10,7 @@ use crate::{api::TrackId, sync::GroupState};
 
 #[derive(Clone)]
 pub(crate) struct PreparedHostSeek {
-    pub(crate) activation_floor: kithara_warp::SessionFrame,
+    pub(crate) activation_floor: SessionFrame,
     pub(crate) item: TrackId,
     pub(crate) grid_stamp: kithara_warp::BeatGridStamp,
     pub(crate) slot: crate::api::SlotId,
@@ -45,7 +45,7 @@ pub(crate) fn seek_outcome(
 /// decoder seek is scheduled. A deck that is not yet audible has no stream to
 /// preserve: it waits for the quantized activation and launches at the cue.
 pub(crate) const fn host_seek_disposition(
-    activation: kithara_warp::SessionFrame,
+    activation: SessionFrame,
     warp_map: kithara_warp::WarpMapRevision,
     audible: bool,
 ) -> crate::bridge::ScheduledSeekDisposition {
@@ -117,8 +117,11 @@ impl PlayerMember {
             ///
             /// Returns the deck's acknowledgement error.
             pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
-            /// Prepares the entry of every track the deck holds but does not play.
-            pub fn prepare_pending_entries(&mut self);
+            /// Reconciles the initial host-synced track and prepares queued launches.
+            pub fn prepare_sync_launches(
+                &mut self,
+                output_now: SessionFrame,
+            ) -> Result<(), crate::PlayError>;
         }
     }
 }

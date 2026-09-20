@@ -569,9 +569,15 @@ fn deliver_session_anchor<B: AudioBackend, S>(
 /// the tracks it holds but does not play, both against the session axis this
 /// pass leaves behind.
 pub(crate) fn advance_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
+    let Some(ctx) = state.ctx.as_ref() else {
+        return;
+    };
+    let output_now = SessionFrame::new(ctx.audio_clock().samples.0);
     let mut freed: Vec<BeatGridId> = Vec::new();
     for deck in state.root.nested_groups_mut() {
-        deck.prepare_pending_entries();
+        if let Err(error) = deck.prepare_sync_launches(output_now) {
+            tracing::warn!(%error, deck = %deck.id(), "deck did not prepare its sync launches");
+        }
         match deck.acknowledge_prepared() {
             Ok(Some(kithara_warp::SyncStatusSnapshot::Off { .. })) => freed.push(deck.id()),
             Ok(Some(_)) | Ok(None) => {}

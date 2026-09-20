@@ -100,8 +100,13 @@ where
         if self.runtime.core.items.current_item_id() != Some(item) {
             return Ok(attached);
         }
-        let prepared_launch = self.await_prepared_launch(item, &snapshot);
-        self.reconcile_item_grid(item, cause, None, prepared_launch)
+        if self.sync.mode() == kithara_warp::SyncMode::HostSync
+            && self.runtime.presentation_frontier_for(item, None).is_none()
+        {
+            return Ok(attached);
+        }
+        let (prepared_launch, source_cue) = self.await_prepared_launch(item, &snapshot);
+        self.reconcile_item_grid(item, cause, None, prepared_launch, source_cue)
             .map_err(|rejected| {
                 let (error, _) = rejected.into();
                 error
@@ -124,20 +129,24 @@ where
         cause: ReconcileCause,
         source: Option<AlignmentSource>,
         prepared_launch: bool,
+        source_cue: Option<Beat>,
     ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return Ok(None);
         };
-        self.sync.arm_deck_track(grid.id);
-        let (load, transport) = {
-            let sync = &self.sync;
-            sync.generations()
-        };
         let output_rate = self.runtime.core.engine.output_sample_rate();
         let axis = grid.snapshot.axis();
-        let observed = self.runtime.presentation_frontier();
-        let frontier = observed.on_axis(axis, output_rate);
+        let observed = self.runtime.presentation_frontier_for(item, None);
         let source = source.unwrap_or_else(|| {
+            let frontier = observed.map_or_else(
+                || {
+                    PresentationFrontier::builder()
+                        .output(kithara_warp::SessionFrame::new(0))
+                        .source(0)
+                        .build()
+                },
+                |frontier| frontier.on_axis(axis, output_rate),
+            );
             self.runtime.playback_snapshot().map_or(
                 AlignmentSource::Prepared(frontier),
                 |snapshot| {
@@ -146,7 +155,7 @@ where
                             presentation: frontier,
                             preparation_source: native_frame(
                                 snapshot.preparation_source(
-                                    observed.source(),
+                                    observed.map_or(0, |frontier| frontier.source()),
                                     self.runtime.core.response_budget_frames,
                                 ),
                                 axis,
@@ -161,10 +170,11 @@ where
                 },
             )
         });
-        let source_cue = prepared_launch
-            .then(|| self.runtime.core.items.initial_source_cue(item))
-            .flatten()
-            .and_then(|cue| source_cue_beat(&grid.snapshot, cue));
+        self.sync.arm_deck_track(grid.id);
+        let (load, transport) = {
+            let sync = &self.sync;
+            sync.generations()
+        };
         let admission = self.sync.transact(SyncOperation::Reconcile {
             target: grid.id,
             load,
@@ -503,12 +513,13 @@ where
             return Ok(());
         };
         self.runtime.retire_presented_source_cue(item);
-        let prepared_launch = self.await_prepared_launch(item, &grid.snapshot);
+        let (prepared_launch, source_cue) = self.await_prepared_launch(item, &grid.snapshot);
         self.reconcile_item_grid(
             item,
             ReconcileCause::TransportChanged,
             None,
             prepared_launch,
+            source_cue,
         )
         .map(|_| ())
         .map_err(|rejected| {
@@ -564,29 +575,44 @@ where
             ),
             playback_rate: kithara_warp::RateTarget::default().with_speed(snapshot.rate),
         };
-        self.reconcile_item_grid(item, ReconcileCause::TempoRetargeted, Some(source), false)
-            .map(|_| ())
-            .map_err(|rejected| {
-                let (error, _) = rejected.into();
-                error
-            })
+        self.reconcile_item_grid(
+            item,
+            ReconcileCause::TempoRetargeted,
+            Some(source),
+            false,
+            None,
+        )
+        .map(|_| ())
+        .map_err(|rejected| {
+            let (error, _) = rejected.into();
+            error
+        })
     }
 
     /// Whether the track's selected cue resolves on `grid` and so keeps
     /// waiting for a synchronized launch.
-    fn await_prepared_launch(&self, item: TrackId, grid: &BeatGridSnapshot) -> bool {
+    fn await_prepared_launch(
+        &self,
+        item: TrackId,
+        grid: &BeatGridSnapshot,
+    ) -> (bool, Option<Beat>) {
         let source_cue = self
             .runtime
             .core
             .items
             .initial_source_cue(item)
             .and_then(|cue| source_cue_beat(grid, cue));
-        self.sync.mode() == kithara_warp::SyncMode::HostSync
-            && self
-                .runtime
-                .core
-                .items
-                .await_initial_source_cue_if(item, source_cue.is_some())
+        let cue_is_owned = self
+            .runtime
+            .core
+            .items
+            .await_initial_source_cue_if(item, source_cue.is_some());
+        let prepared_launch = self.sync.mode() == kithara_warp::SyncMode::HostSync
+            && (self.runtime.presentation_frontier_for(item, None).is_none() || cue_is_owned);
+        (
+            prepared_launch,
+            prepared_launch.then_some(source_cue).flatten(),
+        )
     }
 
     /// Installs the track's own grid as its plan, unprojected.

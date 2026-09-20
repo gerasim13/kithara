@@ -99,26 +99,36 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::ScheduleSeek {
                     item_id,
+                    scheduled_epoch,
                     seek_epoch,
                     disposition,
                     armed,
                 } => {
+                    if let Some(track) = self.tracks.get_mut(item_id)
+                        && track.schedule_seek(scheduled_epoch, seek_epoch, disposition, armed)
+                        && let ScheduledSeekDisposition::PreparedLaunch(identity) = disposition
+                    {
+                        kithara_test_macros::probe_event!(
+                            prepared_launch_command_admitted,
+                            item_id = item_id.as_u64(),
+                            seek_epoch,
+                            activation_output = i64::from(identity.activation),
+                            warp_map_revision = u64::from(identity.warp_map),
+                            armed
+                        );
+                    }
+                }
+                PlayerCmd::ArmPreparedLaunch {
+                    item_id,
+                    scheduled_epoch,
+                } => {
                     if let Some(track) = self.tracks.get_mut(item_id) {
-                        track.schedule_seek(seek_epoch, disposition, armed);
-                        if let ScheduledSeekDisposition::PreparedLaunch(identity) = disposition {
-                            kithara_test_macros::probe_event!(
-                                prepared_launch_command_admitted,
-                                item_id = item_id.as_u64(),
-                                seek_epoch,
-                                activation_output = i64::from(identity.activation),
-                                warp_map_revision = u64::from(identity.warp_map),
-                                armed
-                            );
-                        }
+                        let _ = track.set_prepared_launch_armed(scheduled_epoch);
                     }
                 }
                 PlayerCmd::CancelPreparedLaunch {
                     item_id,
+                    scheduled_epoch,
                     prepared_seek_epoch,
                     replacement_seek_epoch,
                     transport_seek_epoch,
@@ -127,6 +137,7 @@ impl PlayerNodeProcessor {
                 } => {
                     let presented = self.tracks.get_mut(item_id).is_some_and(|track| {
                         track.replace_prepared_launch(
+                            scheduled_epoch,
                             prepared_seek_epoch,
                             replacement_seek_epoch,
                             transport_seek_epoch,
@@ -149,7 +160,11 @@ impl PlayerNodeProcessor {
                     let mut prepared = false;
                     for (_, track) in self.tracks.iter_mut() {
                         if paused || item_id.is_some_and(|item| item == track.item_id()) {
-                            prepared |= track.set_prepared_launch_armed(!paused);
+                            prepared |= if paused {
+                                track.disarm_prepared_launch()
+                            } else {
+                                false
+                            };
                         }
                     }
                     if prepared {
@@ -170,6 +185,15 @@ impl PlayerNodeProcessor {
     }
 
     fn handle_transition(&mut self, transition: TrackTransition) {
+        if let TrackTransition::FadeIn { item_id, settings } = &transition
+            && self
+                .tracks
+                .get_mut(*item_id)
+                .is_some_and(|track| track.defer_fade_in(*settings))
+        {
+            return;
+        }
+
         let mut leading_changed = false;
 
         if let TrackTransition::FadeIn { item_id, settings } = &transition {
@@ -283,7 +307,10 @@ mod tests {
     use super::*;
     use crate::{
         CrossfadeSettings,
-        bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition, SharedEq, slot_channels},
+        bridge::{
+            PreparedLaunchIdentity, ScheduledSeekDisposition, ScheduledSeekEpoch, SharedEq,
+            slot_channels,
+        },
         resource::Resource,
         rt::StreamShape,
         test_pools::pools,
@@ -393,6 +420,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: true,
@@ -413,6 +441,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: stale,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: false,
@@ -432,7 +461,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn current_prepared_launch_stays_paused_after_post_transfer_play() {
+    fn unarmed_prepared_launch_does_not_block_post_transfer_play() {
         let (mut processor, mut control) = processor();
         let item = TrackId::allocate();
         load(&mut control, item, "current.mp3");
@@ -440,6 +469,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: false,
@@ -455,7 +485,51 @@ mod tests {
 
         processor.drain_commands();
 
-        assert!(!processor.playback().playing.load(Ordering::SeqCst));
+        assert!(processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
+    fn stale_schedule_and_arm_do_not_mutate_the_current_lifecycle() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "current.mp3");
+        for (scheduled_epoch, armed) in [(2, false), (1, true)] {
+            control
+                .cmd_tx
+                .try_push(PlayerCmd::ScheduleSeek {
+                    item_id: item,
+                    scheduled_epoch: ScheduledSeekEpoch::new(scheduled_epoch),
+                    seek_epoch: scheduled_epoch,
+                    disposition: prepared_launch(),
+                    armed,
+                })
+                .expect("fixture command queue has capacity");
+        }
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ArmPreparedLaunch {
+                item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
+            })
+            .expect("fixture command queue has capacity");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: item,
+                settings: CrossfadeSettings::default(),
+            }))
+            .expect("fixture command queue has capacity");
+
+        processor.drain_commands();
+
+        assert_eq!(
+            processor
+                .tracks
+                .get_mut(item)
+                .expect("loaded fixture track")
+                .state(),
+            TrackState::FadingIn
+        );
     }
 
     #[kithara::test]
@@ -467,6 +541,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: true,
@@ -479,6 +554,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::CancelPreparedLaunch {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 prepared_seek_epoch: 7,
                 replacement_seek_epoch: 8,
                 transport_seek_epoch: 1,
@@ -514,6 +590,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: true,
@@ -526,6 +603,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::CancelPreparedLaunch {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 prepared_seek_epoch: 7,
                 replacement_seek_epoch: 8,
                 transport_seek_epoch: 1,
@@ -539,7 +617,7 @@ mod tests {
             .tracks
             .get_mut(item)
             .expect("loaded fixture track");
-        assert!(track.set_prepared_launch_armed(true));
+        assert!(track.set_prepared_launch_armed(ScheduledSeekEpoch::new(1)));
         assert_eq!(track.position(), 0.0);
         assert_eq!(processor.playback().position.load(Ordering::Relaxed), 1.0);
         assert_eq!(processor.playback().seek_epoch.load(Ordering::Relaxed), 0);
@@ -555,6 +633,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 seek_epoch: 7,
                 disposition: prepared_launch(),
                 armed: true,
@@ -564,6 +643,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::ScheduleSeek {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(2),
                 seek_epoch: 8,
                 disposition: prepared_launch(),
                 armed: true,
@@ -573,6 +653,7 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::CancelPreparedLaunch {
                 item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
                 prepared_seek_epoch: 7,
                 replacement_seek_epoch: 8,
                 transport_seek_epoch: 1,
@@ -584,10 +665,9 @@ mod tests {
         processor.drain_commands();
 
         assert!(
-            processor
-                .tracks
-                .get_mut(item)
-                .is_some_and(|track| track.set_prepared_launch_armed(true))
+            processor.tracks.get_mut(item).is_some_and(|track| {
+                track.set_prepared_launch_armed(ScheduledSeekEpoch::new(2))
+            })
         );
         assert!(!processor.playback().playing.load(Ordering::SeqCst));
     }
@@ -608,6 +688,78 @@ mod tests {
         processor.drain_commands();
 
         assert!(processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
+    fn armed_prepared_fade_in_waits_for_render_activation() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "prepared.mp3");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        let settings = CrossfadeSettings {
+            duration: 0.25,
+            ..CrossfadeSettings::default()
+        };
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: item,
+                settings,
+            }))
+            .expect("fixture command queue has capacity");
+
+        processor.drain_commands();
+
+        let track = processor
+            .tracks
+            .get_mut(item)
+            .expect("loaded fixture track");
+        assert_eq!(track.state(), TrackState::Preloading);
+        assert_eq!(track.crossfade_settings(), settings);
+    }
+
+    #[kithara::test]
+    fn unarmed_prepared_fade_in_starts_immediately() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "unarmed.mp3");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                scheduled_epoch: ScheduledSeekEpoch::new(1),
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: false,
+            })
+            .expect("fixture command queue has capacity");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id: item,
+                settings: CrossfadeSettings::default(),
+            }))
+            .expect("fixture command queue has capacity");
+
+        processor.drain_commands();
+
+        assert_eq!(
+            processor
+                .tracks
+                .get_mut(item)
+                .expect("loaded fixture track")
+                .state(),
+            TrackState::FadingIn
+        );
     }
 
     #[kithara::test]

@@ -80,6 +80,14 @@ where
         Ok(outcome)
     }
 
+    fn restore_pending(&self, index: usize) {
+        if let Some(pending) = self.phase.lock().pending_mut().and_then(Option::as_mut)
+            && pending.index == index
+        {
+            pending.state = PendingNextState::Armed;
+        }
+    }
+
     /// Load `items[index]` into the audio-thread arena in `Preloading`
     /// state, ready for sample-accurate gapless stitch (cf=0) or parallel
     /// fade (cf>0).
@@ -174,7 +182,17 @@ where
             return Ok(());
         };
 
-        self.start_playback_with(activated.item_id, settings);
+        if let Some(slot) = self.slot()
+            && let Err(error) =
+                self.core
+                    .engine
+                    .commit_track_transition(slot, activated.item_id, settings)
+        {
+            self.restore_pending(index);
+            return Err(error);
+        } else if self.slot().is_none() {
+            self.start_playback_with(activated.item_id, settings);
+        }
         self.publish_crossfade_started(settings);
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
@@ -302,6 +320,43 @@ mod tests {
         );
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
+    }
+
+    #[kithara::test]
+    fn failed_commit_restores_the_armed_selection() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        if let Some(pending_slot) = player.phase.lock().pending_mut() {
+            *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
+                src: Arc::from("next.mp3"),
+                state: PendingNextState::Armed,
+                index: 1,
+                duration_seconds: 162.0,
+            });
+        }
+        while player
+            .send_to_slot(PlayerCmd::SetPaused {
+                paused: true,
+                item_id: None,
+            })
+            .is_ok()
+        {}
+
+        assert!(matches!(
+            player.commit_next(1),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert_eq!(player.armed_next(), Some(1));
     }
 
     #[kithara::test]

@@ -3,7 +3,8 @@ use std::num::NonZeroU32;
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use kithara_warp::{
-    AlignmentSource, MapAxis, ReconcileCause, SyncAdmission, SyncRejected, WarpMap, WarpPlan,
+    AlignmentSource, MapAxis, PresentationFrontier, ReconcileCause, SessionFrame, SyncAdmission,
+    SyncMode, SyncRejected, WarpMap, WarpPlan,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -12,10 +13,12 @@ use super::PlayerImpl;
 use crate::{
     api::TrackId,
     bridge::{PreparedLaunchIdentity, ScheduledSeekDisposition},
+    error::PlayError,
     player::{
         core::grids::{native_frame, source_cue_beat, source_duration},
         protocol::PlayerMember,
     },
+    session::SessionError,
     sync::EntryRefusal,
 };
 
@@ -23,13 +26,59 @@ impl<S> PlayerImpl<S>
 where
     S: Send + Sync + 'static,
 {
-    /// Prepares the entry of every queued track the deck is not yet playing.
+    /// Reconciles the initial host-synced track and prepares queued launches.
     ///
     /// The audible track's own stream says where the crossfade begins, and the
     /// deck carries that frame onto the owner axis as the deadline a waiting
-    /// track must enter by. A track that already holds a prepared map keeps it:
-    /// the deadline does not move while the same track stays audible.
-    pub(crate) fn prepare_pending_entries(&mut self) {
+    /// track must enter by. A track that already holds a prepared map keeps
+    /// it: the deadline does not move while the same track stays audible, and
+    /// a second map would carry a warp map the launch the slot holds does
+    /// not.
+    pub(crate) fn prepare_sync_launches(
+        &mut self,
+        output_now: SessionFrame,
+    ) -> Result<(), PlayError> {
+        let response_budget = i64::try_from(self.runtime.core.response_budget_frames.get())
+            .map_err(|_| PlayError::from(SessionError::TransportFrameExhausted))?;
+        let activation_floor = i64::from(output_now)
+            .checked_add(response_budget)
+            .map(SessionFrame::new)
+            .ok_or_else(|| PlayError::from(SessionError::TransportFrameExhausted))?;
+
+        if let Some(item) = self.runtime.core.items.current_item_id()
+            && self.sync.mode() == SyncMode::HostSync
+            && self.runtime.presentation_frontier_for(item, None).is_none()
+            && self
+                .runtime
+                .core
+                .items
+                .track_grid(item)
+                .is_some_and(|grid| self.sync.prepared().get(grid.id).is_none())
+        {
+            let source = AlignmentSource::Prepared(
+                PresentationFrontier::builder()
+                    .output(activation_floor)
+                    .source(0)
+                    .build(),
+            );
+            self.reconcile_item_grid(
+                item,
+                ReconcileCause::GridAvailable,
+                Some(source),
+                true,
+                None,
+            )
+            .map_err(|rejected| {
+                let (error, _) = rejected.into();
+                PlayError::from(error)
+            })?;
+        }
+
+        self.prepare_queued_entries();
+        Ok(())
+    }
+
+    fn prepare_queued_entries(&mut self) {
         let Some(current) = self.runtime.core.items.current_item_id() else {
             return;
         };
@@ -80,27 +129,25 @@ where
                 continue;
             };
             self.sync.discard_stale_entry(grid.id, window);
-            if self.sync.prepared().get(grid.id).is_some() {
-                continue;
-            }
             let cue = self
                 .runtime
                 .core
                 .items
                 .initial_source_cue(item)
                 .and_then(|cue| source_cue_beat(&grid.snapshot, cue));
-            match self.sync.prepare_entry(grid.id, window, cue) {
-                Ok(_) => {
-                    if let Some(prepared) = self.sync.prepared().get(grid.id) {
-                        self.deliver_prepared_map(item, &prepared, true);
+            if self.sync.prepared().get(grid.id).is_none() {
+                match self.sync.prepare_entry(grid.id, window, cue) {
+                    Ok(_) => {}
+                    Err(EntryRefusal::Geometry(required)) => {
+                        tracing::debug!(?required, member = %grid.id, "queued track has no entry geometry");
+                    }
+                    Err(EntryRefusal::Group(error)) => {
+                        tracing::debug!(%error, member = %grid.id, "queued track refused its entry");
                     }
                 }
-                Err(EntryRefusal::Geometry(required)) => {
-                    tracing::debug!(?required, member = %grid.id, "queued track has no entry geometry");
-                }
-                Err(EntryRefusal::Group(error)) => {
-                    tracing::debug!(%error, member = %grid.id, "queued track refused its entry");
-                }
+            }
+            if let Some(prepared) = self.sync.prepared().get(grid.id) {
+                self.deliver_prepared_map(item, &prepared, true);
             }
         }
     }
@@ -111,6 +158,9 @@ where
     /// scheduled seek carries the source frame the map activates on. A track
     /// the deck has yet to play enters as a launch, so the renderer starts it
     /// on its activation instead of seeking an audible stream.
+    ///
+    /// The queued launch remains unarmed until the selected handover commits;
+    /// preparation must not make every waiting track eligible to start.
     pub(super) fn deliver_prepared_map(
         &self,
         item: TrackId,
@@ -184,7 +234,18 @@ where
         let Some(item) = self.runtime.core.items.current_item_id() else {
             return Ok(None);
         };
-        self.reconcile_item_grid(item, cause, source, prepared_launch)
+        let source_cue = prepared_launch
+            .then(|| {
+                self.runtime.core.items.track_grid(item).and_then(|grid| {
+                    self.runtime
+                        .core
+                        .items
+                        .initial_source_cue(item)
+                        .and_then(|cue| source_cue_beat(&grid.snapshot, cue))
+                })
+            })
+            .flatten();
+        self.reconcile_item_grid(item, cause, source, prepared_launch, source_cue)
     }
 
     /// Whether any queued track other than the audible one carries a grid.

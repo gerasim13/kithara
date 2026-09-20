@@ -85,12 +85,16 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGridId, SessionFrame};
+    use kithara_warp::{BeatGridId, SessionFrame, WarpMapRevision};
+    use ringbuf::traits::Consumer;
 
     use super::EngineImpl;
     use crate::{
         EngineConfig, PlayError, SharedEq, SlotId,
-        bridge::{ScheduledSeekDisposition, slot_channels},
+        bridge::{
+            PlayerCmd, PreparedLaunchIdentity, ScheduledSeekDisposition,
+            channels::ScheduledSeekReanchor, slot_channels,
+        },
         rt::PlayerNodeProcessor,
         test_pools::{TestPools, pools},
     };
@@ -149,6 +153,19 @@ mod tests {
         control.bind_seek(replaced, replacement);
         engine.slots.lock().insert(slot, control);
         let mut committed = false;
+
+        let missing_schedule = engine.schedule_track_seek(
+            slot,
+            missing,
+            Duration::ZERO,
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(0),
+            },
+        );
+        assert!(matches!(
+            missing_schedule,
+            Err(PlayError::MissingSeekBinding { item, .. }) if item == missing
+        ));
 
         let missing_result = engine.commit_validated_track_seek(
             slot,
@@ -224,6 +241,75 @@ mod tests {
         let control = slots.get(slot).expect("fixture slot remains resident");
         assert!(!control.can_schedule_track_seek(current));
     }
+
+    #[kithara::test]
+    fn armed_reanchor_installs_and_enqueues_its_successor_before_returning() {
+        let engine = engine();
+        let slot = SlotId::new(0);
+        let item = TrackId::allocate();
+        let (mut inputs, mut control) = slot_channels(SharedEq::new(0));
+        control.bind_seek(item, Arc::new(Seek(AtomicUsize::new(0))));
+        let first = PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: WarpMapRevision::first(),
+        };
+        control.schedule_track_seek(
+            item,
+            Duration::ZERO,
+            ScheduledSeekDisposition::PreparedLaunch(first),
+        );
+        assert!(control.set_prepared_launch_armed(item, true));
+        control.service_scheduled_seeks(
+            std::num::NonZeroUsize::new(448).expect("fixture response budget"),
+        );
+        let old_epoch = match inputs.cmd_rx.try_pop() {
+            Some(PlayerCmd::ScheduleSeek {
+                scheduled_epoch, ..
+            }) => scheduled_epoch,
+            _ => panic!("initial schedule must be transferred"),
+        };
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ArmPreparedLaunch { scheduled_epoch, .. })
+                if scheduled_epoch == old_epoch
+        ));
+        engine.slots.lock().insert(slot, control);
+        let successor = PreparedLaunchIdentity {
+            activation: SessionFrame::new(3_000),
+            warp_map: first.warp_map.checked_next().expect("successor revision"),
+        };
+        let mut installed = false;
+
+        assert!(engine.reanchor_scheduled_seek(
+            slot,
+            ScheduledSeekReanchor {
+                item_id: item,
+                position: Duration::ZERO,
+                expected: first.activation,
+                successor,
+            },
+            || installed = true,
+        ));
+        assert!(installed);
+        let new_epoch = match inputs.cmd_rx.try_pop() {
+            Some(PlayerCmd::ScheduleSeek {
+                item_id: scheduled_item,
+                scheduled_epoch,
+                disposition: ScheduledSeekDisposition::PreparedLaunch(identity),
+                armed: false,
+                ..
+            }) if scheduled_item == item && identity == successor => scheduled_epoch,
+            _ => panic!("successor schedule must be transferred before return"),
+        };
+        assert!(new_epoch > old_epoch);
+        assert!(matches!(
+            inputs.cmd_rx.try_pop(),
+            Some(PlayerCmd::ArmPreparedLaunch {
+                item_id: armed_item,
+                scheduled_epoch,
+            }) if armed_item == item && scheduled_epoch == new_epoch
+        ));
+    }
 }
 
 /// The sample rates the engine runs on. Decoded audio is resampled to the
@@ -291,12 +377,15 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(
+        let mut allocated = self.session.allocate_slot(
             player_id,
             Arc::clone(&self.config.stretch),
             self.config.rate_smoothing,
         )?;
         let slot_id = allocated.slot;
+        allocated
+            .control
+            .set_cancel_parent(self.config.cancel.as_ref());
 
         self.slots.lock().insert(slot_id, allocated.control);
 
@@ -354,11 +443,11 @@ impl<S> EngineImpl<S> {
             .get_mut(slot)
             .ok_or(PlayError::SlotNotFound(slot))
             .and_then(|control| {
-                if control.has_seek_binding(item) && control.can_schedule_track_seek(item) {
+                if !control.can_schedule_track_seek(item) {
+                    Err(PlayError::ScheduledSeekCapacity { slot })
+                } else if control.has_seek_binding(item) || disposition.is_prepared_launch() {
                     control.schedule_track_seek(item, position, disposition);
                     Ok(())
-                } else if control.has_seek_binding(item) {
-                    Err(PlayError::ScheduledSeekCapacity { slot })
                 } else {
                     Err(PlayError::MissingSeekBinding { slot, item })
                 }
@@ -419,12 +508,32 @@ impl<S> EngineImpl<S> {
             .is_some_and(|control| control.set_prepared_launch_armed(item, armed))
     }
 
+    pub(crate) fn commit_track_transition(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        settings: crate::CrossfadeSettings,
+    ) -> Result<(), PlayError> {
+        let mut slots = self.slots.lock();
+        let control = slots.get_mut(slot).ok_or(PlayError::SlotNotFound(slot))?;
+        let committed =
+            control.commit_track_transition(item, settings, self.config.response_budget_frames);
+        drop(slots);
+        if committed {
+            Ok(())
+        } else {
+            Err(PlayError::SlotChannelFull { slot })
+        }
+    }
+
     pub(crate) fn disarm_prepared_launches(&self, slot: SlotId) {
         if let Some(control) = self.slots.lock().get_mut(slot) {
             control.disarm_prepared_launches();
         }
     }
+}
 
+impl<S> EngineImpl<S> {
     /// Moves a pending synchronized seek and, once it moved, runs `install`
     /// before the slots lock is released, so no tick begins the moved seek
     /// against the previous region plan.
@@ -434,11 +543,13 @@ impl<S> EngineImpl<S> {
         reanchor: ScheduledSeekReanchor,
         install: impl FnOnce(),
     ) -> bool {
+        let item_id = reanchor.item_id;
         self.slots.lock().get_mut(slot).is_some_and(|control| {
             let moved =
                 control.reanchor_scheduled_seek(reanchor, self.config.response_budget_frames);
             if moved {
                 install();
+                control.service_scheduled_seek(item_id, self.config.response_budget_frames);
             }
             moved
         })

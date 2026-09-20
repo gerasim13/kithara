@@ -51,7 +51,9 @@ impl SlotTable {
 
     pub(super) fn remove(&mut self, slot: SlotId) -> Option<SlotControl> {
         let idx = self.slots.iter().position(|(id, _)| *id == slot)?;
-        Some(self.slots.remove(idx).1)
+        let mut control = self.slots.remove(idx).1;
+        control.cancel_all_scheduled_seeks();
+        Some(control)
     }
 
     pub(super) fn service_scheduled_seeks(&mut self, lead: std::num::NonZeroUsize) {
@@ -66,9 +68,15 @@ impl SlotTable {
         }
     }
 
+    pub(super) fn clear(&mut self) {
+        for (_, control) in &mut self.slots {
+            control.cancel_all_scheduled_seeks();
+        }
+        self.slots.clear();
+    }
+
     delegate::delegate! {
         to self.slots {
-            pub(super) fn clear(&mut self);
             pub(super) const fn len(&self) -> usize;
         }
         to self {

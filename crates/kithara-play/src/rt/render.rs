@@ -13,7 +13,7 @@ use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use kithara_warp::{RenderContext, StretchControls};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
-use ringbuf::HeapProd;
+use ringbuf::{HeapProd, traits::Producer};
 use smallvec::SmallVec;
 use tracing::warn;
 
@@ -22,7 +22,7 @@ use super::{
     track::{PreparedLaunchReadiness, RtSink, TrackReadOutcome},
 };
 use crate::{
-    bridge::{PlayerNotification, RtMetrics, TrackState},
+    bridge::{PlayerNotification, RtMetrics, ScheduledSeekDisposition, TrackState},
     rt::{TrackSlot, TrackSlots},
 };
 
@@ -145,16 +145,16 @@ impl RenderPass {
         for ch_buffer in &mut bus_bufs {
             ch_buffer.fill(0.0);
         }
-        let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
         let BlockTracks {
             loaded: loaded_tracks,
             active: active_tracks,
             active_slots,
         } = BlockTracks::of(tracks, prepared_ready);
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
-        if let Some((incoming, _)) = prepared_ready.filter(|_| !launching_from_stop) {
-            open_seam(tracks, &active_tracks, incoming);
+        if let Some((incoming, _)) = prepared_ready {
+            open_seam(tracks, &active_tracks, incoming, targets.notification_tx);
         }
+        let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
 
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
@@ -233,10 +233,14 @@ impl RenderPass {
                     && handoff.offset < frames
                 {
                     let offset = handoff.offset;
-                    for (next_arena_idx, (next_handle, next_state)) in
+                    for (next_arena_idx, (next_handle, next_state, pending_seek)) in
                         loaded_tracks.iter().enumerate()
                     {
-                        if *next_state != TrackState::Preloading || active_slots[next_arena_idx] {
+                        if !can_promote_successor(
+                            *next_state,
+                            *pending_seek,
+                            active_slots[next_arena_idx],
+                        ) {
                             continue;
                         }
 
@@ -377,9 +381,11 @@ impl RenderPass {
 }
 
 /// The tracks one render block works on.
+type LoadedTrack = (TrackSlot, TrackState, Option<ScheduledSeekDisposition>);
+
 struct BlockTracks {
     /// Every loaded track with the state it entered the block in.
-    loaded: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]>,
+    loaded: SmallVec<[LoadedTrack; PlayerNodeProcessor::MAX_TRACKS]>,
     /// The loaded tracks that sound in this block.
     active: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]>,
     /// Which arena slot each sounding track holds.
@@ -393,17 +399,21 @@ impl BlockTracks {
         tracks: &TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
         prepared_ready: Option<(TrackSlot, usize)>,
     ) -> Self {
-        let loaded: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> = tracks
+        let loaded: SmallVec<[LoadedTrack; PlayerNodeProcessor::MAX_TRACKS]> = tracks
             .iter()
-            .map(|(idx, track)| (idx, track.state()))
+            .map(|(idx, track)| (idx, track.state(), track.scheduled_seek_disposition()))
             .collect();
         let active: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> = loaded
             .iter()
             .enumerate()
-            .filter(|(_, (slot, state))| {
-                state.is_playing() || prepared_ready.is_some_and(|(prepared, _)| prepared == *slot)
+            .filter(|(_, (slot, state, pending_seek))| {
+                active_track(
+                    *state,
+                    *pending_seek,
+                    prepared_ready.is_some_and(|(prepared, _)| prepared == *slot),
+                )
             })
-            .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
+            .map(|(loaded_idx, (idx, state, _))| (loaded_idx, *idx, state.is_leading()))
             .collect();
         let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
         for (loaded_idx, _, _) in &active {
@@ -417,6 +427,25 @@ impl BlockTracks {
     }
 }
 
+fn active_track(
+    state: TrackState,
+    pending_seek: Option<ScheduledSeekDisposition>,
+    prepared_ready: bool,
+) -> bool {
+    (!pending_seek.is_some_and(ScheduledSeekDisposition::is_prepared_launch) && state.is_playing())
+        || prepared_ready
+}
+
+fn can_promote_successor(
+    state: TrackState,
+    pending_seek: Option<ScheduledSeekDisposition>,
+    active_slot: bool,
+) -> bool {
+    state == TrackState::Preloading
+        && !pending_seek.is_some_and(ScheduledSeekDisposition::is_prepared_launch)
+        && !active_slot
+}
+
 /// Crossfades into the launch this block starts.
 ///
 /// The incoming track sounds from its activation frame, so both envelopes
@@ -426,6 +455,7 @@ fn open_seam(
     tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     active: &[ActiveTrackEntry],
     incoming: TrackSlot,
+    notifications: &mut HeapProd<PlayerNotification>,
 ) {
     let Some(crossfade) = tracks
         .iter()
@@ -433,16 +463,24 @@ fn open_seam(
     else {
         return;
     };
+    let mut handover = false;
     for (_, handle, was_leading) in active {
         if *was_leading
             && *handle != incoming
             && let Some(track) = tracks.at_mut(*handle)
         {
             track.fade_out(crossfade);
+            handover = true;
         }
     }
-    if let Some(track) = tracks.at_mut(incoming) {
+    let changed_src = tracks.at_mut(incoming).and_then(|track| {
         track.fade_in(crossfade);
+        handover.then(|| Arc::clone(track.src()))
+    });
+    if let Some(src) = changed_src {
+        notifications
+            .try_push(PlayerNotification::Changed { src })
+            .ok();
     }
 }
 
@@ -590,5 +628,35 @@ mod block_multiplier_tests {
             Consts::START,
             "a target that never moves must not be perturbed by averaging",
         );
+    }
+}
+
+#[cfg(test)]
+mod eligibility_tests {
+    use kithara_test_utils::kithara;
+    use kithara_warp::{SessionFrame, WarpMapRevision};
+
+    use super::{ScheduledSeekDisposition, TrackState, active_track, can_promote_successor};
+    use crate::bridge::PreparedLaunchIdentity;
+
+    fn prepared_launch() -> ScheduledSeekDisposition {
+        ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
+            activation: SessionFrame::new(2_000),
+            warp_map: WarpMapRevision::first(),
+        })
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn pending_prepared_launch_needs_readiness_before_playing_or_promotion() {
+        let pending = Some(prepared_launch());
+
+        assert!(!active_track(TrackState::Playing, pending, false));
+        assert!(active_track(TrackState::Playing, pending, true));
+        assert!(!can_promote_successor(
+            TrackState::Preloading,
+            pending,
+            false
+        ));
+        assert!(can_promote_successor(TrackState::Preloading, None, false));
     }
 }

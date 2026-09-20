@@ -618,6 +618,7 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         .item_id(item)
         .build(Box::new(scheduled_revision_resource(105, 5)));
     track.schedule_seek(
+        crate::bridge::ScheduledSeekEpoch::new(1),
         7,
         crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
             crate::bridge::PreparedLaunchIdentity {
@@ -741,6 +742,7 @@ fn prepared_seam_uses_the_incoming_tracks_complete_crossfade_profile() {
         .build(Box::new(scheduled_revision_resource(105, 5)));
     incoming.fade_in(settings);
     incoming.schedule_seek(
+        crate::bridge::ScheduledSeekEpoch::new(1),
         7,
         crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
             crate::bridge::PreparedLaunchIdentity {
@@ -815,6 +817,7 @@ fn unarmed_prepared_launch_remains_silent_at_its_ready_activation() {
         .item_id(item)
         .build(Box::new(scheduled_revision_resource(105, 5)));
     track.schedule_seek(
+        crate::bridge::ScheduledSeekEpoch::new(1),
         7,
         crate::bridge::ScheduledSeekDisposition::PreparedLaunch(
             crate::bridge::PreparedLaunchIdentity {

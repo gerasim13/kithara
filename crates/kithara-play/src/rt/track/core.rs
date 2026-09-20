@@ -7,7 +7,11 @@ use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
+use crate::{
+    CrossfadeSettings,
+    bridge::{ScheduledSeekEpoch, TrackState},
+    worker::ServiceClass,
+};
 
 /// Per-track state in the processor arena.
 ///
@@ -115,7 +119,15 @@ impl PlayerTrack {
     }
 
     pub(crate) fn crossfade_settings(&self) -> CrossfadeSettings {
-        self.fade.settings()
+        self.fade.current_settings()
+    }
+
+    pub(crate) fn defer_fade_in(&mut self, settings: CrossfadeSettings) -> bool {
+        if !self.is_armed_prepared_launch() {
+            return false;
+        }
+        self.fade.stage_fade_in(settings);
+        true
     }
 
     /// Re-base this track onto a slot seek epoch the processor has applied.
@@ -163,21 +175,23 @@ impl PlayerTrack {
 
     pub(crate) fn replace_prepared_launch(
         &mut self,
+        scheduled_epoch: ScheduledSeekEpoch,
         prepared_epoch: u64,
         replacement_epoch: u64,
         transport_epoch: u64,
         target: f64,
     ) -> bool {
-        if !self.resource.has_prepared_launch(prepared_epoch) {
+        if !self.resource.has_prepared_launch(scheduled_epoch) {
             return false;
         }
-        if !self
-            .resource
-            .present_replacement_prepared_launch(prepared_epoch, replacement_epoch)
-        {
+        if !self.resource.present_replacement_prepared_launch(
+            scheduled_epoch,
+            prepared_epoch,
+            replacement_epoch,
+        ) {
             return false;
         }
-        self.resource.clear_prepared_launch(prepared_epoch);
+        self.resource.clear_prepared_launch(scheduled_epoch);
         self.observe_seek_epoch(transport_epoch);
         self.seek(target);
         true
@@ -242,11 +256,21 @@ impl PlayerTrack {
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
             pub fn schedule_seek(
                 &mut self,
+                scheduled_epoch: ScheduledSeekEpoch,
                 epoch: u64,
                 disposition: crate::bridge::ScheduledSeekDisposition,
                 armed: bool,
-            );
-            pub(crate) fn set_prepared_launch_armed(&mut self, armed: bool) -> bool;
+            ) -> bool;
+            pub(crate) fn set_prepared_launch_armed(
+                &mut self,
+                scheduled_epoch: ScheduledSeekEpoch,
+            ) -> bool;
+            pub(crate) fn disarm_prepared_launch(&mut self) -> bool;
+            #[must_use]
+            pub(crate) fn scheduled_seek_disposition(
+                &self,
+            ) -> Option<crate::bridge::ScheduledSeekDisposition>;
+            pub(crate) fn is_armed_prepared_launch(&self) -> bool;
             pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]

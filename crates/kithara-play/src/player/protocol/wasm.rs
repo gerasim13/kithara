@@ -239,7 +239,12 @@ impl PlayerMember {
 
     /// Entry preparation needs the player runtime, which the Host-owned wasm
     /// member does not reach.
-    pub const fn prepare_pending_entries(&mut self) {}
+    pub const fn prepare_sync_launches(
+        &mut self,
+        _output_now: SessionFrame,
+    ) -> Result<(), crate::PlayError> {
+        Ok(())
+    }
 }
 
 impl BeatGrid for PlayerMember {

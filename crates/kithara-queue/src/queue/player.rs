@@ -7,6 +7,7 @@ use kithara_play::{
     SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
+use kithara_warp::SessionFrame;
 
 use super::Queue;
 use crate::TrackId;
@@ -82,7 +83,10 @@ where
                 state: BeatGridState,
             ) -> Result<SyncAdmission, SyncError>;
             fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
-            fn prepare_pending_entries(&mut self);
+            fn prepare_sync_launches(
+                &mut self,
+                output_now: SessionFrame,
+            ) -> Result<(), PlayError>;
         }
     }
 

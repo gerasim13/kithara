@@ -3,21 +3,114 @@
 use std::num::NonZeroUsize;
 
 use kithara_events::TrackId;
+use ringbuf::traits::{Observer, Producer};
 
 use super::{ScheduledSeekReanchor, ScheduledTrackSeek, ScheduledTrackSeekState, SlotControl};
-use crate::bridge::ScheduledSeekDisposition;
+use crate::{
+    CrossfadeSettings,
+    bridge::{PlayerCmd, ScheduledSeekDisposition, TrackTransition},
+};
 
 impl SlotControl {
+    pub(crate) fn arm_and_service_prepared_launch(
+        &mut self,
+        item_id: TrackId,
+        lead: NonZeroUsize,
+    ) -> Option<bool> {
+        let scheduled_epoch = self
+            .scheduled_seeks
+            .iter()
+            .find(|seek| seek.item_id == item_id && seek.disposition.is_prepared_launch())
+            .map(|seek| seek.scheduled_epoch)?;
+        if !self.set_prepared_launch_epoch_armed(scheduled_epoch, true) {
+            return Some(false);
+        }
+        self.service_scheduled_seek(item_id, lead);
+        Some(
+            self.prepared_launch_epochs
+                .iter()
+                .any(|handoff| handoff.item_id == item_id && handoff.armed),
+        )
+    }
+
+    pub(crate) fn commit_track_transition(
+        &mut self,
+        item_id: TrackId,
+        settings: CrossfadeSettings,
+        lead: NonZeroUsize,
+    ) -> bool {
+        let pending = self
+            .scheduled_seeks
+            .iter()
+            .find(|seek| seek.item_id == item_id && seek.disposition.is_prepared_launch())
+            .map(|seek| seek.scheduled_epoch);
+        let delivered = self
+            .prepared_launch_epochs
+            .iter()
+            .find(|handoff| handoff.item_id == item_id)
+            .map(|handoff| (handoff.scheduled_epoch, handoff.armed));
+        let pending_needs_arm = pending.is_some();
+        let delivered_needs_arm = delivered.is_some_and(|(_, armed)| !armed);
+        let required = 1 + usize::from(delivered_needs_arm) + 2 * usize::from(pending_needs_arm);
+        if self.cmd_tx.vacant_len() < required {
+            return false;
+        }
+        if pending.is_some() && self.arm_and_service_prepared_launch(item_id, lead) != Some(true) {
+            return false;
+        }
+        if let Some((scheduled_epoch, false)) = delivered {
+            if self
+                .cmd_tx
+                .try_push(PlayerCmd::ArmPreparedLaunch {
+                    item_id,
+                    scheduled_epoch,
+                })
+                .is_err()
+            {
+                unreachable!("reserved command ring capacity must accept the arm command");
+            }
+            if !self.set_prepared_launch_epoch_armed(scheduled_epoch, true) {
+                return false;
+            }
+        }
+        self.cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id,
+                settings,
+            }))
+            .is_ok()
+    }
+
     pub(crate) fn set_prepared_launch_armed(&mut self, item_id: TrackId, armed: bool) -> bool {
+        let epoch = self
+            .scheduled_seeks
+            .iter()
+            .find(|seek| seek.item_id == item_id && seek.disposition.is_prepared_launch())
+            .map(|seek| seek.scheduled_epoch)
+            .or_else(|| {
+                self.prepared_launch_epochs
+                    .iter()
+                    .find(|handoff| handoff.item_id == item_id)
+                    .map(|handoff| handoff.scheduled_epoch)
+            });
+        epoch.is_some_and(|epoch| self.set_prepared_launch_epoch_armed(epoch, armed))
+    }
+
+    fn set_prepared_launch_epoch_armed(
+        &mut self,
+        scheduled_epoch: crate::bridge::ScheduledSeekEpoch,
+        armed: bool,
+    ) -> bool {
         for handoff in &mut self.prepared_launch_epochs {
-            if handoff.item_id == item_id {
+            if handoff.scheduled_epoch == scheduled_epoch {
                 handoff.armed = armed;
+                return true;
             }
         }
         let Some(seek) = self
             .scheduled_seeks
             .iter_mut()
-            .find(|seek| seek.item_id == item_id)
+            .find(|seek| seek.scheduled_epoch == scheduled_epoch)
         else {
             return false;
         };
@@ -62,11 +155,15 @@ impl SlotControl {
             .scheduled_seeks
             .iter()
             .position(|seek| seek.item_id == item_id);
-        let pending = queued.map(|index| self.scheduled_seeks[index]);
-        if pending.is_some_and(|seek| seek.disposition.activation() != expected) {
+        let pending = queued.map(|index| self.scheduled_seeks[index].clone());
+        if pending
+            .as_ref()
+            .is_some_and(|seek| seek.disposition.activation() != expected)
+        {
             return false;
         }
         let begun = pending
+            .as_ref()
             .is_none_or(|seek| !matches!(seek.state, ScheduledTrackSeekState::AwaitingStart));
         let lead = i64::try_from(lead.get()).unwrap_or(i64::MAX);
         if begun
@@ -83,11 +180,24 @@ impl SlotControl {
             .prepared_launch_epochs
             .iter()
             .find(|handoff| handoff.item_id == item_id)
-            .copied();
-        let (launch, armed) = pending.map_or_else(
+            .cloned();
+        if handoff
+            .as_ref()
+            .is_some_and(|handoff| handoff.identity.activation != expected)
+        {
+            return false;
+        }
+        let (launch, armed) = pending.as_ref().map_or_else(
             || handoff.map_or((false, false), |handoff| (true, handoff.armed)),
             |seek| (seek.disposition.is_prepared_launch(), seek.armed),
         );
+        if begun
+            && launch
+            && armed
+            && (self.cmd_tx.vacant_len() < 2 || !self.has_seek_binding(item_id))
+        {
+            return false;
+        }
         let disposition = if launch {
             ScheduledSeekDisposition::PreparedLaunch(successor)
         } else {
@@ -95,20 +205,21 @@ impl SlotControl {
                 activation: successor.activation,
             }
         };
-        if let (Some(index), false) = (queued, begun) {
-            self.scheduled_seeks[index].disposition = disposition;
-            return true;
-        }
-        self.prepared_launch_epochs
-            .retain(|handoff| handoff.item_id != item_id);
-        self.scheduled_seeks.retain(|seek| seek.item_id != item_id);
+        self.cancel_scheduled_seek(item_id);
+        let scheduled_epoch = self.allocate_scheduled_epoch();
+        let cancel = self
+            .cancel_parent
+            .as_ref()
+            .map(kithara_platform::CancelToken::child);
         self.scheduled_seeks.push(ScheduledTrackSeek {
             item_id,
+            scheduled_epoch,
             position,
             disposition,
             armed,
             state: ScheduledTrackSeekState::AwaitingStart,
             observed_output: None,
+            cancel,
         });
         true
     }
