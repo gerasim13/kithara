@@ -1,7 +1,7 @@
 use super::{Reader, Writer};
 
 /// Cap speculative `Vec` preallocation from untrusted length prefixes.
-pub(crate) const MAX_PREALLOC: usize = 4096;
+pub const MAX_PREALLOC: usize = 4096;
 
 /// Failure encoding or decoding an artifact byte blob.
 #[derive(Debug, thiserror::Error)]
@@ -27,25 +27,30 @@ pub enum BlobError {
 /// An artifact with a versioned little-endian byte encoding. Implementors write
 /// and read only the body; [`write_to`]/[`from_bytes`] frame the
 /// version header.
-pub(crate) trait Blob: Sized {
+pub trait Blob: Sized {
     /// Wire/disk format version. Bump when the body encoding changes.
     const VERSION: u32;
     /// Read the body; the header version has already been validated.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the body is truncated, over-long, or holds a value this
+    /// format rejects.
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError>;
     /// Append the body after the version header.
     fn encode(&self, w: &mut Writer<'_>);
 }
 
 /// Serialize to a versioned blob: the `u32` version, then the body.
-#[cfg(test)]
-pub(crate) fn to_bytes<T: Blob>(value: &T) -> Vec<u8> {
+#[must_use]
+pub fn to_bytes<T: Blob>(value: &T) -> Vec<u8> {
     let mut out = Vec::new();
     write_to(value, &mut out);
     out
 }
 
 /// Append a versioned blob to caller-owned storage.
-pub(crate) fn write_to<T: Blob>(value: &T, out: &mut Vec<u8>) {
+pub fn write_to<T: Blob>(value: &T, out: &mut Vec<u8>) {
     let mut writer = Writer::new(out);
     writer.write_u32(T::VERSION);
     value.encode(&mut writer);
@@ -53,7 +58,12 @@ pub(crate) fn write_to<T: Blob>(value: &T, out: &mut Vec<u8>) {
 
 /// Parses a blob produced by [`write_to`], rejecting a stale version or a body
 /// that does not consume the blob exactly.
-pub(crate) fn from_bytes<T: Blob>(bytes: &[u8]) -> Result<T, BlobError> {
+///
+/// # Errors
+///
+/// Errors if the version differs, the body is corrupt, or bytes are left
+/// over.
+pub fn from_bytes<T: Blob>(bytes: &[u8]) -> Result<T, BlobError> {
     let mut reader = Reader::new(bytes);
     let version = reader.read_u32()?;
     if version != T::VERSION {

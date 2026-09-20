@@ -1,6 +1,6 @@
 use bon::Builder;
 
-use super::Band;
+use crate::Band;
 
 struct Consts;
 

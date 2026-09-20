@@ -23,10 +23,10 @@ use unimock::{MockFn, matching};
 use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
+    Waveform,
     analyzer::TrackAnalysis,
     beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
-    waveform::bucket::Waveform,
 };
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]

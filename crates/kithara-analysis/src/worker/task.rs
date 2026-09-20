@@ -10,9 +10,8 @@ use tracing::{debug, warn};
 
 use super::schedule::Schedule;
 use crate::{
-    AnalysisProgress, BlobError,
+    AnalysisProgress, BlobError, Coverage, FrameRange,
     analyzer::{AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers},
-    coverage::{Coverage, FrameRange},
     producer::ring,
     slots::{
         Intake,

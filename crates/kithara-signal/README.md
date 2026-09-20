@@ -18,7 +18,8 @@
 
 It owns the value types shared by decoders, playback, Warp, and streaming
 analysis: format, owning chunk, timeline/provenance facts, frame/sample units,
-the physical session output axis, and pure sample/time conversion. Pool-region
+the physical session output axis, pure sample/time conversion, frame-range
+coverage, and the versioned blob framing that stores it. Pool-region
 mechanics remain in `kithara-bufpool`. Encoded/container media facts remain in
 `kithara-stream`. Musical geometry — beats, grids, warping — remains in
 `kithara-warp`.

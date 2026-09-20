@@ -4445,6 +4445,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-ui",
  "kithara-warp",
+ "kithara-waveform",
  "kithara-worker",
  "kithara-workspace-hack",
  "tracing",
@@ -4512,10 +4513,10 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-waveform",
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
- "realfft",
  "ringbuf 0.5.0",
  "serde",
  "serde_json",
@@ -5666,6 +5667,7 @@ dependencies = [
 name = "kithara-signal"
 version = "0.0.1-alpha4"
 dependencies = [
+ "delegate",
  "derive_more",
  "fast-interleave",
  "fieldwork",
@@ -5676,6 +5678,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5955,6 +5958,25 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "kithara-waveform"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "delegate",
+ "fieldwork",
+ "kithara-bufpool",
+ "kithara-derive",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "realfft",
  "tracing",
 ]
 

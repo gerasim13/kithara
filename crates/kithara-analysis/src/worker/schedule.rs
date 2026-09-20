@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::coverage::{Coverage, FrameRange};
+use crate::{Coverage, FrameRange};
 
 #[derive(Default)]
 pub(crate) struct Schedule {
@@ -115,7 +115,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::Schedule;
-    use crate::coverage::{Coverage, FrameRange};
+    use crate::{Coverage, FrameRange};
 
     struct Consts;
 

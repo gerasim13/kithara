@@ -1,13 +1,13 @@
 use std::mem::size_of;
 
 use kithara_platform::sync::Arc;
+use kithara_signal::{Blob, BlobError, Reader, Writer};
 
-use super::Band;
-use crate::blob::{self, Blob, BlobError, Reader, Writer};
+use crate::Band;
 
 /// Wire/disk format version for the [`Waveform`] blob. Bump when the encoding,
 /// the analysis parameters, or the caller's bucket resolution changes.
-pub(crate) const WAVEFORM_BYTES_VERSION: u32 = 1;
+pub const WAVEFORM_BYTES_VERSION: u32 = 1;
 
 /// One waveform column: three normalized frequency-band heights, each in
 /// `[0, 1]` on a shared scale after per-band perceptual gain. The deck paints
@@ -54,7 +54,7 @@ impl Waveform {
 
     /// Append the versioned waveform encoding to caller-owned storage.
     pub fn write_to(&self, out: &mut Vec<u8>) {
-        blob::write_to(self, out);
+        kithara_signal::write_to(self, out);
     }
 
     delegate::delegate! {
@@ -84,7 +84,7 @@ impl TryFrom<&[u8]> for Waveform {
     type Error = BlobError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
-        blob::from_bytes(bytes)
+        kithara_signal::from_bytes(bytes)
     }
 }
 
@@ -127,10 +127,10 @@ impl Blob for Waveform {
 
 #[cfg(test)]
 mod bytes_tests {
+    use kithara_signal::{BlobError, to_bytes};
     use kithara_test_utils::kithara;
 
     use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform};
-    use crate::blob::{BlobError, to_bytes};
 
     fn sample() -> Waveform {
         Waveform::from(vec![Bucket::new(0.1, 0.2, 0.3), Bucket::new(0.0, 1.0, 0.5)])

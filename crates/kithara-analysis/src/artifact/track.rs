@@ -6,10 +6,7 @@ use kithara_platform::sync::Arc;
 use tracing::debug;
 
 use super::snapshot::BeatSnapshot;
-use crate::{
-    coverage::{Coverage, FrameRange},
-    waveform::bucket::Waveform,
-};
+use crate::{Coverage, FrameRange, Waveform};
 
 /// Opaque identity the caller opens a pass with, echoed on every snapshot and
 /// never interpreted here: track identity belongs to the caller.

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 
-use crate::coverage::FrameRange;
+use crate::FrameRange;
 
 #[derive(Default)]
 pub(crate) struct Extent {
@@ -55,7 +55,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::Extent;
-    use crate::coverage::FrameRange;
+    use crate::FrameRange;
 
     fn rate() -> NonZeroU32 {
         NonZeroU32::new(44_100).expect("test rate is non-zero")

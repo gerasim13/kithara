@@ -28,8 +28,7 @@ use super::{
     node::NodeHarness,
 };
 use crate::{
-    AnalysisProgress,
-    coverage::FrameRange,
+    AnalysisProgress, FrameRange,
     test_pools::{TestPools, pools},
 };
 

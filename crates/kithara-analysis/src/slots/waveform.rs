@@ -1,11 +1,10 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_waveform::WaveformResume;
 use tracing::warn;
 
-use crate::{
-    BlobError, analyzer::WaveformPass, progress::WaveformResume, waveform::bucket::Waveform,
-};
+use crate::{BlobError, Waveform, analyzer::WaveformPass};
 
 pub(crate) type Config = Option<usize>;
 #[derive(Default)]

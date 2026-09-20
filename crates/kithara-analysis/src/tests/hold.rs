@@ -22,9 +22,8 @@ use super::{
     track::Track,
 };
 use crate::{
-    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
+    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, FrameRange, TrackAnalysis,
     beat::GridParams,
-    coverage::FrameRange,
     slots::beat::detect,
     test_pools::{Pools, TestPools, pools},
 };

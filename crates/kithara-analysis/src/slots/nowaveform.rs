@@ -1,8 +1,9 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_waveform::WaveformResume;
 
-use crate::{BlobError, progress::WaveformResume, waveform::bucket::Waveform};
+use crate::{BlobError, Waveform};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Config;

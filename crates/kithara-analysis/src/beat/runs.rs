@@ -6,10 +6,9 @@ use num_traits::cast::ToPrimitive;
 
 use super::detector::BeatDetectError;
 use crate::{
-    BlobError,
+    BlobError, Coverage, FrameRange,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    coverage::{Coverage, FrameRange},
     progress::BeatRunResume,
     slots::{Intake, Opens},
 };
@@ -532,8 +531,7 @@ mod tests {
 
     use super::{Intake, Opens, Runs};
     use crate::{
-        BeatAnalysisConfig,
-        coverage::FrameRange,
+        BeatAnalysisConfig, FrameRange,
         test_pools::{Pools, pools, pools_with},
     };
 

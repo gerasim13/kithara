@@ -8,8 +8,7 @@ use tracing::warn;
 
 use super::{AnalysisFingerprint, AnalysisToken, Extent, TrackAnalysis};
 use crate::{
-    AnalysisProgress, BeatSnapshot, BeatState, BlobError,
-    coverage::{Coverage, FrameRange},
+    AnalysisProgress, BeatSnapshot, BeatState, BlobError, Coverage, FrameRange,
     progress::{AnalysisResume, ResumeState},
     slots::{
         Intake, Opens,

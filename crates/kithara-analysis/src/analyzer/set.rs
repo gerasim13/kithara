@@ -7,8 +7,7 @@ use super::{
     AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig, session::TrackAnalyzers,
 };
 use crate::{
-    AnalysisProgress, BlobError,
-    coverage::Coverage,
+    AnalysisProgress, BlobError, Coverage,
     slots::{
         beat::{self, Config},
         waveform,
@@ -195,9 +194,8 @@ mod tests {
         AnalyzerBuilder,
     };
     use crate::{
-        BeatGridModel, BeatGridState, BeatState,
+        BeatGridModel, BeatGridState, BeatState, FrameRange,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
-        coverage::FrameRange,
         test_pools::{Pools, TestPools, pools, sample_buffer},
     };
 

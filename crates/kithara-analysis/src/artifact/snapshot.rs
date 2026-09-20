@@ -1,6 +1,6 @@
 use num_traits::cast::ToPrimitive;
 
-use crate::{BeatArtifact, coverage::FrameRange};
+use crate::{BeatArtifact, FrameRange};
 
 /// Whether a beat artifact can still change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

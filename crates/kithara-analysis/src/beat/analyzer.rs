@@ -11,10 +11,9 @@ use super::{
     runs::Runs,
 };
 use crate::{
-    BeatArtifact, BlobError,
+    BeatArtifact, BlobError, Coverage, FrameRange,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    coverage::{Coverage, FrameRange},
     progress::{BeatMarkResume, BeatResume, RawBeatsResume},
     slots::{Intake, Opens},
 };
@@ -602,7 +601,7 @@ mod tests {
             to self.analyzer {
                 fn apply_detection(&mut self, output: super::DetectOutput);
                 fn held_frames(&self) -> usize;
-                fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange>;
+                fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::FrameRange>;
                 fn write_resume(&mut self, out: &mut Vec<u8>);
             }
         }

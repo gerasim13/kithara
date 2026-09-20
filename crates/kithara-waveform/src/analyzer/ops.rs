@@ -1,12 +1,13 @@
 use std::{array, collections::btree_map::Entry};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_signal::{Coverage, FrameRange};
 use num_traits::cast::ToPrimitive;
 use realfft::num_complex::Complex;
 use tracing::debug;
 
-use super::{super::Band, Consts, Partial, WaveformAnalyzer};
-use crate::coverage::{Coverage, FrameRange};
+use super::{Consts, Partial, WaveformAnalyzer};
+use crate::Band;
 
 impl WaveformAnalyzer {
     pub(super) fn evict_overflow(&mut self) {

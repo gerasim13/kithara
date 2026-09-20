@@ -57,18 +57,18 @@ use super::{
 };
 #[cfg(feature = "analysis-beat")]
 use crate::BeatState;
+#[cfg(feature = "analysis-waveform")]
+use crate::FrameRange;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
 use crate::blob::to_bytes;
 #[cfg(feature = "analysis-waveform")]
-use crate::coverage::FrameRange;
-#[cfg(feature = "analysis-waveform")]
 use crate::producer::{AnalysisProducer, ring};
 #[cfg(all(feature = "analysis-beat", not(feature = "analysis-waveform")))]
 use crate::test_pools::pools;
 #[cfg(feature = "analysis-waveform")]
-use crate::waveform::{AnalysisParams, WaveformAnalyzer};
+use crate::{AnalysisParams, WaveformAnalyzer};
 #[cfg(not(feature = "analysis-waveform"))]
 use crate::{AnalysisProgress, TrackAnalysis};
 #[cfg(feature = "analysis-waveform")]

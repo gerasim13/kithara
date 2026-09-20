@@ -8,8 +8,7 @@ use super::{
     grid::extend_over,
 };
 use crate::{
-    BeatArtifact, BlobError,
-    coverage::{Coverage, FrameRange},
+    BeatArtifact, BlobError, Coverage, FrameRange,
     progress::BeatResume,
     slots::{Intake, Opens},
 };

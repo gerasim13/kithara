@@ -8,10 +8,9 @@ use tracing::warn;
 use super::{Intake, Opens};
 pub(crate) use crate::beat::{DetectOutput, DetectRequest};
 use crate::{
-    BeatArtifact, BlobError,
+    BeatArtifact, BlobError, Coverage, FrameRange,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
     beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
-    coverage::{Coverage, FrameRange},
     progress::BeatResume,
 };
 

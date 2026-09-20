@@ -5,9 +5,7 @@ use kithara_resampler::ResamplerBackend;
 
 use super::{Intake, Opens};
 use crate::{
-    BeatAnalysisConfig, BeatArtifact, BlobError,
-    coverage::{Coverage, FrameRange},
-    progress::BeatResume,
+    BeatAnalysisConfig, BeatArtifact, BlobError, Coverage, FrameRange, progress::BeatResume,
 };
 
 pub(crate) type Detector = ();

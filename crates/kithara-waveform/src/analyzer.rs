@@ -4,20 +4,16 @@ use std::{array, collections::BTreeMap};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
+use kithara_signal::{BlobError, Coverage, FrameRange, Writer};
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
-use super::{
+use crate::{
     Band,
     bucket::{Bucket, Waveform},
     bucketize::bucketize,
     params::AnalysisParams,
-};
-use crate::{
-    BlobError,
-    blob::Writer,
-    coverage::{Coverage, FrameRange},
-    progress::{WaveformResume, write_coverage, write_samples},
+    resume::WaveformResume,
 };
 
 struct Consts;
@@ -184,7 +180,13 @@ impl WaveformAnalyzer {
         Ok(())
     }
 
-    pub(crate) fn restore<S>(
+    /// Re-enter a stopped pass from its resume record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlobError::Corrupt`] if the record contradicts the pass it
+    /// claims to restore, or [`BlobError::Pool`] if its samples do not fit.
+    pub fn restore<S>(
         &mut self,
         pools: &PoolRegion<S>,
         resume: WaveformResume,
@@ -271,7 +273,7 @@ impl WaveformAnalyzer {
         Waveform::from(out)
     }
 
-    pub(crate) fn write_resume(&self, out: &mut Vec<u8>) {
+    pub fn write_resume(&self, out: &mut Vec<u8>) {
         let mut writer = Writer::new(out);
         writer.write_len(self.bands.len());
         for (index, bands) in &self.bands {
@@ -283,8 +285,8 @@ impl WaveformAnalyzer {
         writer.write_len(self.partial.len());
         for (index, partial) in &self.partial {
             writer.write_u64(*index);
-            write_samples(&mut writer, &partial.samples);
-            write_coverage(&mut writer, &partial.written);
+            writer.write_samples(&partial.samples);
+            writer.write_coverage(&partial.written);
             writer.write_u64(partial.seq);
         }
         writer.write_u64(self.opened);
@@ -352,6 +354,7 @@ fn normalize_bands(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_signal::{BlobError, Coverage, FrameRange};
     use kithara_test_fixtures::analysis_fixtures::{
         analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,
         waveform_opposed, waveform_square, waveform_tiny, waveform_tone,
@@ -360,11 +363,10 @@ mod tests {
 
     use super::{WaveformAnalyzer, hann_window, normalize_bands};
     use crate::{
-        BlobError,
-        coverage::{Coverage, FrameRange},
-        progress::{WaveformPartialResume, WaveformResume},
+        AnalysisParams, Band,
+        bucket::Bucket,
+        resume::{WaveformPartialResume, WaveformResume},
         test_pools::{TestPools, pools},
-        waveform::{AnalysisParams, Band, bucket::Bucket},
     };
 
     struct Consts;

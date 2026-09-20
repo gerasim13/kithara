@@ -73,11 +73,12 @@ all = [
     "tls-rustls",
     "ui",
     "warp",
+    "waveform",
     "worker",
     "workspace-hack",
 ]
 abr = ["dep:kithara-abr"]
-analysis = ["dep:kithara-analysis"]
+analysis = ["waveform", "dep:kithara-analysis"]
 assets = ["storage", "dep:kithara-assets"]
 audio = ["dep:kithara-audio"]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
@@ -104,6 +105,7 @@ stretch = ["dep:kithara-stretch"]
 sync = ["warp", "dep:kithara-sync"]
 ui = ["dep:kithara-ui"]
 warp = ["dep:kithara-warp"]
+waveform = ["dep:kithara-waveform"]
 worker = ["dep:kithara-worker"]
 workspace-hack = ["dep:kithara-workspace-hack"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
@@ -234,7 +236,7 @@ resample-rubato = [
     "kithara-resampler?/resample-rubato",
 ]
 analysis-beat = ["analysis", "kithara-analysis/analysis-beat"]
-analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform"]
+analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform", "kithara-waveform/dsp"]
 # Native-only C++ time-stretch backends. Native builds require at least one;
 # enabling both makes them selectable at runtime in the DJ deck.
 stretch-signalsmith = [
@@ -399,6 +401,7 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true, default-features = false }
 kithara-warp = { workspace = true, optional = true, default-features = false }
+kithara-waveform = { workspace = true, optional = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]

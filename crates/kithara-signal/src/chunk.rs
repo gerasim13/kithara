@@ -104,13 +104,13 @@ mod tests {
         )
     }
 
-    fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            sample_buffer(pools, &samples),
+            sample_buffer(pools, samples),
         )
     }
 
@@ -126,7 +126,7 @@ mod tests {
         let silence_pcm = silence_pcm();
         let pools = pools();
         assert_eq!(
-            chunk(&pools, audio_spec(2, 44_100), silence_pcm).frames(),
+            chunk(&pools, audio_spec(2, 44_100), &silence_pcm).frames(),
             3
         );
     }
@@ -136,7 +136,7 @@ mod tests {
         let silence_pcm = silence_pcm();
         let pools = pools();
         assert_eq!(
-            chunk(&pools, audio_spec(0, 44_100), silence_pcm[..4].to_vec()).frames(),
+            chunk(&pools, audio_spec(0, 44_100), &silence_pcm[..4]).frames(),
             0
         );
     }

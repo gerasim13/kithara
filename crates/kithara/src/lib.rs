@@ -47,6 +47,11 @@ pub mod analysis {
     pub use kithara_analysis::*;
 }
 
+#[cfg(feature = "waveform")]
+pub mod waveform {
+    pub use kithara_waveform::*;
+}
+
 #[cfg(feature = "broadcast")]
 pub mod broadcast {
     pub use kithara_broadcast::*;
