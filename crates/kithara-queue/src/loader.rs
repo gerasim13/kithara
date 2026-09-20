@@ -276,11 +276,12 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
+        ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
         player::PlayerControlSource,
     };
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
+    use kithara_waveform::Waveform;
 
     use super::*;
     use crate::{
@@ -503,6 +504,36 @@ mod tests {
         );
         assert!(returned.store().is_same(&supplied_store));
         assert!(!returned.store().is_same(&loader.store));
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_config_forwards_a_prepared_artifact() {
+        let fixture = LoaderFixtureSpec::default().build();
+        let Ok(src) = ResourceSrc::parse("https://example.com/a.mp3") else {
+            panic!("valid url");
+        };
+        let Ok(grid) = ResourceSrc::parse("https://example.com/a.grid") else {
+            panic!("valid artifact url");
+        };
+        let given = ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools()).build())
+            .beat_grid(ArtifactSource::from(grid.clone()))
+            .waveform(ArtifactSource::Value(Arc::new(Waveform::default())))
+            .build();
+        let Ok(returned) = fixture
+            .loader
+            .build_config(TrackId(7), TrackSource::Config(Box::new(given)))
+        else {
+            panic!("build_config should succeed");
+        };
+        assert!(
+            matches!(returned.beat_grid(), Some(ArtifactSource::Source(src)) if *src == grid),
+            "a grid source must reach the resource untouched"
+        );
+        assert!(
+            matches!(returned.waveform(), Some(ArtifactSource::Value(_))),
+            "a caller-held waveform must reach the resource untouched"
+        );
     }
 
     #[kithara::test(tokio)]

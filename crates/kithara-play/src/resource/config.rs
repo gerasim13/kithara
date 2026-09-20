@@ -4,6 +4,7 @@ use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
+use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_download::Downloader;
 use kithara_events::EventBus;
@@ -12,9 +13,10 @@ use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::WarpConfig;
+use kithara_waveform::Waveform;
 use url::Url;
 
-use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
+use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
 use crate::{EngineLoad, PlayWorker};
 
 /// Unified configuration for opening an audio resource.
@@ -35,6 +37,14 @@ where
     /// Audio resource source (URL or local path).
     #[builder(start_fn)]
     pub(crate) src: ResourceSrc,
+    /// A beat grid this track already has, as a structure the caller holds or
+    /// a source its bytes are read from. Analysis fills in only what no
+    /// prepared artifact covers, so a track opened with a grid here is never
+    /// re-analysed for one.
+    pub(crate) beat_grid: Option<ArtifactSource<BeatGridModel>>,
+    /// A waveform this track already has, on the same terms as
+    /// [`Self::beat_grid`].
+    pub(crate) waveform: Option<ArtifactSource<Waveform>>,
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
