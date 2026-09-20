@@ -16,6 +16,7 @@ kithara-platform = { workspace = true }
 
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
+fieldwork = { workspace = true }
 serde = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]

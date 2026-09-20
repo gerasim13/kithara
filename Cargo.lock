@@ -5666,6 +5666,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "derive_more",
  "fast-interleave",
+ "fieldwork",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
  "kithara-derive",

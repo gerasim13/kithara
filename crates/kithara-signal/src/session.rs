@@ -86,12 +86,20 @@ impl TransportRevision {
 /// frames, the rate they are counted in, the axis generation they belong to,
 /// and the transport fence they were committed under. It carries no musical
 /// geometry.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct OutputContext {
+    /// The sample rate defining [`Self::output_frames`].
+    #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// The exact half-open session-output frame range.
     output_frames: Range<SessionFrame>,
+    /// The generation of the session frame axis.
+    #[field(get, copy)]
     session_epoch: SessionEpoch,
+    /// The committed transport revision, including paused transport.
+    #[field(get, copy)]
     transport_revision: Option<TransportRevision>,
 }
 
@@ -110,30 +118,6 @@ impl OutputContext {
             session_epoch,
             transport_revision,
         })
-    }
-
-    /// Returns the exact half-open session-output frame range.
-    #[must_use]
-    pub const fn output_frames(&self) -> &Range<SessionFrame> {
-        &self.output_frames
-    }
-
-    /// Returns the sample rate defining [`Self::output_frames`].
-    #[must_use]
-    pub const fn sample_rate(&self) -> NonZeroU32 {
-        self.sample_rate
-    }
-
-    /// Returns the generation of the session frame axis.
-    #[must_use]
-    pub const fn session_epoch(&self) -> SessionEpoch {
-        self.session_epoch
-    }
-
-    /// Returns the committed transport revision, including paused transport.
-    #[must_use]
-    pub const fn transport_revision(&self) -> Option<TransportRevision> {
-        self.transport_revision
     }
 
     /// Returns the frames this pass covers, or `None` when the span is not representable.
