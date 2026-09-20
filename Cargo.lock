@@ -5069,6 +5069,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "objc2-foundation 0.3.2",
  "rand 0.10.2",
  "rustls-platform-verifier",
  "send_wrapper",

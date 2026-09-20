@@ -390,7 +390,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             )
         }
         let ffiConfig = FfiPlayerConfig(
-            store: config.store.inner,
+            store: config.store,
             keyOptions: FfiKeyOptions(rules: ffiRules),
             eqBandCount: UInt32(config.eqBandCount),
             authToken: config.authToken,

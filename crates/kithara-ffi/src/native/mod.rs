@@ -2,6 +2,8 @@
 pub(crate) mod android;
 pub mod asset;
 pub(crate) mod bridge;
+#[cfg_attr(target_os = "ios", path = "ios.rs")]
+mod cache;
 pub mod cipher;
 pub mod config;
 pub(crate) mod inner;
