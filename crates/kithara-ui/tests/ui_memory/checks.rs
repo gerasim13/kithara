@@ -40,7 +40,7 @@ impl Budget {
     /// Not zero: a driver is free to round and to keep its own scratch.
     const SLACK_KIB: usize = 512;
     /// Everything the immediate host holds for a settled page. Measured at
-    /// 26_928 KiB, and rounded up to leave room for a driver that rounds
+    /// 28_064 KiB, and rounded up to leave room for a driver that rounds
     /// differently.
     const IMMEDIATE_KIB: u64 = 32_768;
     /// The same for the retained host, whose bulk is the compute buffers Vello
@@ -88,17 +88,25 @@ struct Stages {
 }
 
 impl Stages {
-    /// One line per step, each showing what that step alone cost.
+    /// What each step cost, and what the host is left holding.
+    ///
+    /// Signed, because a step can also give memory back: a driver frees the
+    /// scratch a first frame asked for, and an unsigned difference would print
+    /// that release as `+0` and leave the reading looking like a step that
+    /// cost nothing. The held figure at the end is the one the budget is
+    /// written against.
     fn report(&self, host: &str) {
-        let kib = |bytes: u64| bytes / 1024;
+        let step = |from: u64, to: u64| (to as i64 - from as i64) / 1024;
         eprintln!(
-            "{host}: device {} KiB | renderer +{} KiB | first frame +{} KiB | warmup +{} KiB |              {} unchanged frames +{} KiB",
-            kib(self.device),
-            kib(self.renderer.saturating_sub(self.device)),
-            kib(self.first.saturating_sub(self.renderer)),
-            kib(self.settled.saturating_sub(self.first)),
+            "{host}: device {} KiB | renderer {:+} KiB | first frame {:+} KiB | warmup {:+} KiB | \
+             {} unchanged frames {:+} KiB | held {} KiB",
+            self.device / 1024,
+            step(self.device, self.renderer),
+            step(self.renderer, self.first),
+            step(self.first, self.settled),
             Budget::DRAWS,
-            kib(self.after.saturating_sub(self.settled)),
+            step(self.settled, self.after),
+            self.settled.saturating_sub(self.device) / 1024,
         );
     }
 }
