@@ -57,33 +57,30 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Makes a Free operation ackable only after the worker installs its map.
-    pub(crate) fn adopt_free(&mut self, receipt: crate::worker::FreeAdoptionReceipt) -> bool {
+    pub(crate) fn adopt_free(&mut self, receipt: kithara_sync::SyncExecutionReceipt) -> bool {
         let Some(preparing) = self.preparing.clone() else {
             return false;
         };
-        if preparing.operation != receipt.operation()
-            || preparing.warp_map != receipt.warp_map()
-            || (preparing.load, preparing.transport) != (receipt.load(), receipt.transport())
-            || self.generations != (receipt.load(), receipt.transport())
-        {
+        let stamp = receipt.stamp();
+        if preparing.stamp != stamp || self.generations != (stamp.load, stamp.transport) {
             return false;
         }
         self.preparing = None;
-        let crate::worker::FreeAdoptionReceipt::Installed(receipt) = receipt else {
+        let kithara_sync::SyncExecutionReceipt::Installed { alignment, .. } = receipt else {
             self.prepared.clear();
             return true;
         };
-        let Some(member) = self.member_grid(preparing.target) else {
+        let Some(member) = self.member_grid(stamp.target) else {
             self.prepared.clear();
             return true;
         };
         self.prepared.insert(PreparedSync {
-            operation: preparing.operation,
-            warp_map: preparing.warp_map,
-            source: receipt.source,
-            activation: receipt.output,
-            activation_beat: receipt.activation_beat,
-            target: preparing.target,
+            operation: stamp.operation,
+            warp_map: stamp.successor,
+            source: alignment.source,
+            activation: alignment.activation,
+            activation_beat: alignment.activation_beat,
+            target: stamp.target,
             projection: member,
             disposition: PreparedDisposition::Free,
         });

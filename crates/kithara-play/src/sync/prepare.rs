@@ -1,7 +1,8 @@
+pub(crate) use kithara_sync::MemberAlignment;
 use kithara_warp::{
     AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState,
-    LoadGeneration, MapAxis, MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier,
-    RateTarget, SessionBeat, SessionFrame, SyncOperationId, TransportRevision, WarpMapRevision,
+    MapAxis, MapPoint, MapPosition, MapRegion, Meter, PresentationFrontier, RateTarget,
+    SessionBeat, SessionFrame, SyncOperationId, WarpMapRevision,
 };
 use num_traits::ToPrimitive;
 
@@ -84,13 +85,9 @@ impl PreparedSyncs {
 /// Immutable Free handoff input reserved by the group until its worker claims it.
 #[derive(Clone, Debug)]
 pub(crate) struct FreePreparing {
-    pub(crate) operation: SyncOperationId,
-    pub(crate) warp_map: WarpMapRevision,
-    pub(crate) target: BeatGridId,
-    pub(crate) load: LoadGeneration,
-    pub(crate) transport: TransportRevision,
+    pub(crate) stamp: kithara_sync::SyncExecutionStamp,
+    pub(crate) alignment: MemberAlignment,
     pub(crate) manual_rate: RateTarget,
-    pub(crate) owner: BeatGridSnapshot,
 }
 
 /// The owner transition completed when a prepared map reaches presentation.
@@ -104,19 +101,6 @@ impl PreparedSync {
     pub(crate) fn frees_deck(&self) -> bool {
         self.disposition == PreparedDisposition::Free
     }
-}
-
-/// The beat alignment of one grid member onto its owner's grid and the
-/// owner-grid frame on which it becomes audible.
-///
-/// `source` counts output frames, the axis the decoded stream carries and the
-/// axis a Free adoption reports, so one meaning survives either disposition.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MemberAlignment {
-    pub(crate) alignment: BeatAlignment,
-    pub(crate) activation: SessionFrame,
-    pub(crate) activation_beat: SessionBeat,
-    pub(crate) source: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -584,24 +568,6 @@ pub(crate) fn handoff_member(
         source: output_source(member, owner, source_frame)
             .ok_or_else(|| MapRegion::point(MapPosition::Session(activation)))?,
     })
-}
-
-/// Computes a Free lane activation at the renderer's exact current frontier.
-/// It does not schedule or correct musical alignment.
-pub(crate) fn free_activation_at_frontier(
-    owner: &BeatGridSnapshot,
-    frontier: PresentationFrontier,
-) -> Result<(u64, SessionFrame, SessionBeat), MapRegion> {
-    let source = frontier.source();
-    let output = frontier.output();
-    let owner_point = MapPoint::new(owner.stamp(), MapPosition::Session(output));
-    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(owner_point) else {
-        return Err(MapRegion::point(MapPosition::Session(output)));
-    };
-    let owner_beat = *owner_beat.value().value();
-    let beat = SessionBeat::new(f64::from(owner_beat))
-        .map_err(|_| MapRegion::point(MapPosition::Session(output)))?;
-    Ok((source, output, beat))
 }
 
 /// Scales a member-native source frame onto the output axis the decoded

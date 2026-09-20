@@ -5516,6 +5516,7 @@ dependencies = [
  "kithara-play",
  "kithara-signal",
  "kithara-stream",
+ "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5775,6 +5776,14 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-sync"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-warp",
+ "kithara-workspace-hack",
 ]
 
 [[package]]

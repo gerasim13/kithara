@@ -2,10 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_events::TrackId;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::{
-    BeatGridSnapshot, LoadGeneration, RateTarget, SyncOperationId, TransportRevision,
-    WarpMapRevision, WarpPlan,
-};
+use kithara_sync::{MemberAlignment, SyncExecutionStamp};
+use kithara_warp::{PresentationFrontier, RateTarget, SyncOperationId, WarpMapRevision, WarpPlan};
 
 mod receipt;
 
@@ -16,14 +14,11 @@ pub(crate) use receipt::{
 /// Immutable control request that the Warp worker alone adopts at an input boundary.
 #[derive(Clone, Debug)]
 pub(crate) struct FreeAdoptionRequest {
-    pub(crate) operation: SyncOperationId,
-    pub(crate) warp_map: WarpMapRevision,
+    pub(crate) stamp: SyncExecutionStamp,
+    pub(crate) alignment: MemberAlignment,
     pub(crate) item: TrackId,
-    pub(crate) load: LoadGeneration,
-    pub(crate) transport: TransportRevision,
     pub(crate) decode_epoch: u64,
     pub(crate) manual_rate: RateTarget,
-    pub(crate) owner: BeatGridSnapshot,
     pub(crate) plan: Arc<WarpPlan>,
 }
 
@@ -34,35 +29,45 @@ pub(crate) enum FreeAdoptionCommit {
     Installed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FreeAdoptionReadiness {
+    Pending,
+    Rejected,
+    Ready,
+}
+
 impl FreeAdoptionRequest {
+    pub(crate) fn readiness(&self, frontier: PresentationFrontier) -> FreeAdoptionReadiness {
+        if frontier.source() > self.alignment.source
+            || frontier.output() > self.alignment.activation
+        {
+            return FreeAdoptionReadiness::Rejected;
+        }
+        let Some(warp_map) = frontier.warp_map() else {
+            return FreeAdoptionReadiness::Pending;
+        };
+        if warp_map != self.stamp.predecessor {
+            return FreeAdoptionReadiness::Rejected;
+        }
+        if frontier.source() < self.alignment.source
+            || frontier.output() < self.alignment.activation
+        {
+            return FreeAdoptionReadiness::Pending;
+        }
+        FreeAdoptionReadiness::Ready
+    }
+
     fn rejected(&self, reason: FreeAdoptionRejectReason) -> FreeAdoptionReceipt {
         FreeAdoptionReceipt::Rejected(FreeAdoptionRejected {
-            operation: self.operation,
-            warp_map: self.warp_map,
+            stamp: self.stamp,
             item: self.item,
-            load: self.load,
-            transport: self.transport,
             decode_epoch: self.decode_epoch,
             reason,
         })
     }
 
     fn same_identity(&self, other: &Self) -> bool {
-        (
-            self.operation,
-            self.warp_map,
-            self.item,
-            self.load,
-            self.transport,
-            self.decode_epoch,
-        ) == (
-            other.operation,
-            other.warp_map,
-            other.item,
-            other.load,
-            other.transport,
-            other.decode_epoch,
-        )
+        (self.stamp, self.item, self.decode_epoch) == (other.stamp, other.item, other.decode_epoch)
     }
 }
 
@@ -150,7 +155,7 @@ impl FreeAdoptionTransition {
         {
             let mut state = self.0.state.lock();
             let guards_request = state.latest.as_ref().is_some_and(|request| {
-                request.operation == operation && request.warp_map == warp_map
+                request.stamp.operation == operation && request.stamp.successor == warp_map
             });
             let (result, revoke) = mutate();
             if guards_request && revoke {
@@ -290,8 +295,9 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        AssetAxis, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapAxis, SessionAnchor,
-        SessionAxis, SessionBeat, SessionEpoch, SessionFrame, WarpPlan,
+        AssetAxis, Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+        LoadGeneration, MapAxis, MapPoint, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+        SessionFrame, TopologyRevision, TopologyStamp, TransportRevision, WarpPlan,
     };
 
     use super::*;
@@ -327,31 +333,110 @@ mod tests {
             anchor,
             None,
         );
-        FreeAdoptionRequest {
+        let target = fixture_grid();
+        let stamp = SyncExecutionStamp {
             operation: SyncOperationId::first(),
-            warp_map: WarpMapRevision::first(),
-            item,
+            predecessor: WarpMapRevision::first(),
+            successor: WarpMapRevision::first(),
+            target: target.id(),
             load: LoadGeneration::first(),
             transport: TransportRevision::first(),
+            topology: TopologyStamp::new(owner.id(), TopologyRevision::first()),
+            owner_grid: owner.stamp(),
+            target_grid: target.stamp(),
+            owner_axis: owner.axis(),
+            target_axis: target.axis(),
+        };
+        let alignment = MemberAlignment {
+            alignment: BeatAlignment::new(
+                MapPoint::new(target.stamp(), Beat::default()),
+                MapPoint::new(owner.stamp(), Beat::default()),
+            ),
+            activation: SessionFrame::new(48_000),
+            activation_beat: SessionBeat::default(),
+            source: 48_000,
+        };
+        FreeAdoptionRequest {
+            stamp,
+            alignment,
+            item,
             decode_epoch: 0,
             manual_rate: RateTarget::default(),
-            owner,
-            plan: Arc::new(WarpPlan::new(fixture_grid())),
+            plan: Arc::new(WarpPlan::new(target)),
         }
     }
 
     fn installed(request: &FreeAdoptionRequest) -> FreeAdoptionInstalled {
         FreeAdoptionInstalled {
-            operation: request.operation,
-            warp_map: request.warp_map,
+            stamp: request.stamp,
             item: request.item,
-            load: request.load,
-            transport: request.transport,
             decode_epoch: request.decode_epoch,
-            source: 48_000,
-            output: SessionFrame::new(48_000),
-            activation_beat: SessionBeat::default(),
+            alignment: request.alignment,
         }
+    }
+
+    #[kithara::test(native)]
+    fn free_activation_stays_at_the_renderer_frontier() {
+        let request = request(TrackId(7));
+        let frontier = |source, output, warp_map| {
+            PresentationFrontier::builder()
+                .source(source)
+                .output(SessionFrame::new(output))
+                .maybe_warp_map(warp_map)
+                .build()
+        };
+
+        assert_eq!(
+            request.readiness(frontier(47_999, 48_000, Some(request.stamp.predecessor))),
+            FreeAdoptionReadiness::Pending
+        );
+        assert_eq!(
+            request.readiness(frontier(48_000, 48_000, None)),
+            FreeAdoptionReadiness::Pending
+        );
+        assert_eq!(
+            request.readiness(frontier(48_000, 48_000, Some(request.stamp.predecessor))),
+            FreeAdoptionReadiness::Ready
+        );
+        assert_eq!(
+            request.readiness(frontier(48_001, 48_000, Some(request.stamp.predecessor))),
+            FreeAdoptionReadiness::Rejected
+        );
+        assert_eq!(
+            request.readiness(frontier(48_000, 48_001, Some(request.stamp.predecessor))),
+            FreeAdoptionReadiness::Rejected
+        );
+        assert_eq!(
+            request.readiness(frontier(48_001, 47_999, Some(request.stamp.predecessor))),
+            FreeAdoptionReadiness::Rejected
+        );
+        assert_eq!(
+            request.readiness(frontier(
+                48_000,
+                48_000,
+                request.stamp.predecessor.checked_next()
+            )),
+            FreeAdoptionReadiness::Rejected
+        );
+    }
+
+    #[kithara::test(native)]
+    fn geometry_rejection_preserves_the_exact_execution_stamp() {
+        let (control, worker) = free_adoption();
+        let request = request(TrackId(7));
+        let stamp = request.stamp;
+        control.publish(request.clone());
+        let generation = worker.pending_generation();
+
+        assert!(worker.reject_geometry(generation, &request));
+        assert!(matches!(
+            control.receipt(),
+            Some(FreeAdoptionReceipt::Rejected(FreeAdoptionRejected {
+                stamp: rejected,
+                reason: FreeAdoptionRejectReason::Geometry,
+                ..
+            })) if rejected == stamp
+        ));
     }
 
     #[kithara::test(native)]
@@ -383,10 +468,27 @@ mod tests {
     fn newest_request_is_the_only_request_worker_can_claim() {
         let (control, worker) = free_adoption();
         control.publish(request(TrackId(7)));
-        control.publish(request(TrackId(8)));
+        let mut successor = request(TrackId(8));
+        successor.stamp.successor = successor
+            .stamp
+            .successor
+            .checked_next()
+            .expect("successor revision");
+        control.publish(successor);
         let generation = worker.pending_generation();
         let request = worker.snapshot(generation, 0).expect("latest request");
         assert_eq!(request.item, TrackId(8));
+        assert_eq!(request.stamp.predecessor, WarpMapRevision::first());
+        assert_eq!(
+            request.readiness(
+                PresentationFrontier::builder()
+                    .source(request.alignment.source)
+                    .output(request.alignment.activation)
+                    .warp_map(request.stamp.predecessor)
+                    .build()
+            ),
+            FreeAdoptionReadiness::Ready
+        );
         let committed = Cell::new(false);
         assert_eq!(
             worker.commit(
@@ -479,20 +581,21 @@ mod tests {
         let (control, worker) = free_adoption();
         let stale = request(TrackId(7));
         let mut current = request(TrackId(8));
-        current.warp_map = current
-            .warp_map
+        current.stamp.successor = current
+            .stamp
+            .successor
             .checked_next()
             .expect("fixture revision advances");
         control.publish(stale.clone());
         control.publish(current.clone());
 
-        control.transition(stale.operation, stale.warp_map, || ((), true));
+        control.transition(stale.stamp.operation, stale.stamp.successor, || ((), true));
 
         let request = worker
             .snapshot(worker.pending_generation(), 0)
             .expect("newer request remains pending");
         assert_eq!(request.item, current.item);
-        assert_eq!(request.warp_map, current.warp_map);
+        assert_eq!(request.stamp, current.stamp);
     }
 
     #[kithara::test(native)]
@@ -502,7 +605,7 @@ mod tests {
         control.publish(request.clone());
         let generation = worker.pending_generation();
 
-        control.transition(request.operation, request.warp_map, || {
+        control.transition(request.stamp.operation, request.stamp.successor, || {
             assert!(worker.snapshot(generation, 0).is_none());
             ((), false)
         });

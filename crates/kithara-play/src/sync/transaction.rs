@@ -56,9 +56,9 @@ pub(super) fn status(topology: TopologyStamp, slots: &StatusSlots) -> SyncStatus
     }
     if let Some(preparing) = &slots.preparing {
         return SyncStatusSnapshot::Preparing {
-            operation: preparing.operation,
+            operation: preparing.stamp.operation,
             topology,
-            warp_map: preparing.warp_map,
+            warp_map: preparing.stamp.successor,
         };
     }
     if let Some(prepared) = &slots.prepared {
@@ -456,6 +456,14 @@ fn prepare_free<G: SyncGroup<NestedGroup = G>>(
             MapRegion::point(MapPosition::Session(source.frontier().output())),
         );
     };
+    let Some(predecessor) = source.frontier().warp_map() else {
+        return deferred(
+            grid,
+            slots,
+            operation,
+            MapRegion::point(MapPosition::Session(source.frontier().output())),
+        );
+    };
     let Some(warp_map) = slots.warp_map.checked_next() else {
         return Err(SyncRejected::new(
             SyncError::WarpMapRevisionExhausted {
@@ -483,22 +491,31 @@ fn prepare_free<G: SyncGroup<NestedGroup = G>>(
             MapRegion::point(MapPosition::Session(source.frontier().output())),
         );
     };
-    match handoff_member(grid, &member, Some(previous), source) {
-        Ok(_) => {}
+    let aligned = match handoff_member(grid, &member, Some(previous), source) {
+        Ok(aligned) => aligned,
         Err(required) => return deferred(grid, slots, operation, required),
-    }
+    };
+    let stamp = kithara_sync::SyncExecutionStamp {
+        operation: operation_id,
+        predecessor,
+        successor: warp_map,
+        target: member.id(),
+        load: *load,
+        transport: *transport,
+        topology: TopologyStamp::new(grid.id(), *slots.topology_revision),
+        owner_grid: grid.stamp(),
+        target_grid: member.stamp(),
+        owner_axis: grid.axis(),
+        target_axis: member.axis(),
+    };
     *slots.warp_map = warp_map;
     *slots.unavailable = None;
     *slots.waiting = None;
     slots.prepared.clear();
     *slots.preparing = Some(FreePreparing {
-        operation: operation_id,
-        warp_map,
-        target: member.id(),
-        load: *load,
-        transport: *transport,
+        stamp,
+        alignment: aligned,
         manual_rate,
-        owner: grid.clone(),
     });
     Ok(SyncAdmission::Preparing {
         operation: operation_id,

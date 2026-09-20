@@ -433,37 +433,39 @@ where
         if generation == 0 || generation == self.free_adoption_generation {
             return;
         }
-        let Some(frontier) = self.warp.adoption_frontier() else {
-            return;
-        };
         let Some(request) = adoption.snapshot(generation, decode_epoch) else {
             return;
         };
-        let Ok((source, output, activation_beat)) =
-            crate::sync::prepare::free_activation_at_frontier(&request.owner, frontier)
-        else {
-            if adoption.reject_geometry(generation, &request) {
-                self.free_adoption_generation = generation;
-            }
+        let Some(frontier) = self.warp.adoption_frontier() else {
             return;
         };
+        match request.readiness(frontier) {
+            crate::worker::FreeAdoptionReadiness::Pending => return,
+            crate::worker::FreeAdoptionReadiness::Rejected => {
+                if adoption.reject_geometry(generation, &request) {
+                    self.free_adoption_generation = generation;
+                }
+                return;
+            }
+            crate::worker::FreeAdoptionReadiness::Ready => {}
+        }
+        let alignment = request.alignment;
         let plan = Arc::new(request.plan.as_ref().clone().with_free_activation(
             kithara_warp::FreeActivation::new(
-                WarpMap::identity(request.warp_map).reanchor(source, output, activation_beat),
+                WarpMap::identity(request.stamp.successor).reanchor(
+                    alignment.source,
+                    alignment.activation,
+                    alignment.activation_beat,
+                ),
                 request.manual_rate,
             ),
         ));
         let seek_epoch = self.seek.epoch();
         let installed = FreeAdoptionInstalled {
-            operation: request.operation,
-            warp_map: request.warp_map,
+            stamp: request.stamp,
             item: request.item,
-            load: request.load,
-            transport: request.transport,
             decode_epoch,
-            source,
-            output,
-            activation_beat,
+            alignment,
         };
         if matches!(
             adoption.commit(
@@ -478,19 +480,19 @@ where
         ) {
             kithara_test_macros::probe_event!(
                 free_adoption_installed,
-                operation = u64::from(installed.operation),
-                warp_map = u64::from(installed.warp_map),
+                operation = u64::from(installed.stamp.operation),
+                warp_map = u64::from(installed.stamp.successor),
                 track = installed.item.as_u64(),
-                load = u64::from(installed.load),
-                transport = u64::from(installed.transport)
+                load = u64::from(installed.stamp.load),
+                transport = u64::from(installed.stamp.transport)
             );
             kithara_test_macros::probe_event!(
                 free_adoption_activation,
-                operation = u64::from(installed.operation),
-                warp_map = u64::from(installed.warp_map),
-                source = installed.source,
-                output = i64::from(installed.output),
-                activation_beat_bits = f64::from(installed.activation_beat).to_bits()
+                operation = u64::from(installed.stamp.operation),
+                warp_map = u64::from(installed.stamp.successor),
+                source = installed.alignment.source,
+                output = i64::from(installed.alignment.activation),
+                activation_beat_bits = f64::from(installed.alignment.activation_beat).to_bits()
             );
             self.free_adoption_generation = generation;
         }
@@ -803,9 +805,10 @@ mod tests {
     };
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        AssetAxis, BeatGridId, BeatGridRevision, BeatGridSnapshot, LoadGeneration, MapAxis,
-        PresentationFrontier, RenderContext, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
-        SessionFrame, StretchControls, StretchKind, SyncOperationId, TransportRevision, Warp,
+        AssetAxis, Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+        LoadGeneration, MapAxis, MapPoint, PresentationFrontier, RateTarget, RenderContext,
+        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, StretchControls,
+        StretchKind, SyncOperationId, TopologyRevision, TopologyStamp, TransportRevision, Warp,
         WarpMapRevision, WarpPlan,
     };
 
@@ -824,6 +827,46 @@ mod tests {
             BeatGridRevision::first(),
             MapAxis::Asset(AssetAxis::new(fixture_rate(), u64::MAX)),
         )
+    }
+
+    fn free_request(
+        owner: BeatGridSnapshot,
+        target: BeatGridSnapshot,
+        warp_map: WarpMapRevision,
+        item: TrackId,
+        manual_rate: RateTarget,
+        source: u64,
+        output: SessionFrame,
+    ) -> crate::worker::FreeAdoptionRequest {
+        let stamp = kithara_sync::SyncExecutionStamp {
+            operation: SyncOperationId::first(),
+            predecessor: WarpMapRevision::first(),
+            successor: warp_map,
+            target: target.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            topology: TopologyStamp::new(owner.id(), TopologyRevision::first()),
+            owner_grid: owner.stamp(),
+            target_grid: target.stamp(),
+            owner_axis: owner.axis(),
+            target_axis: target.axis(),
+        };
+        crate::worker::FreeAdoptionRequest {
+            stamp,
+            alignment: kithara_sync::MemberAlignment {
+                alignment: BeatAlignment::new(
+                    MapPoint::new(target.stamp(), Beat::default()),
+                    MapPoint::new(owner.stamp(), Beat::default()),
+                ),
+                activation: output,
+                activation_beat: SessionBeat::default(),
+                source,
+            },
+            item,
+            decode_epoch: 0,
+            manual_rate,
+            plan: Arc::new(WarpPlan::new(target)),
+        }
     }
 
     fn flush_deferred<S>(source: &mut S)
@@ -1294,6 +1337,7 @@ mod tests {
             PresentationFrontier::builder()
                 .source(0)
                 .output(SessionFrame::new(0))
+                .warp_map(old_warp_map)
                 .build(),
         );
         flush_deferred(&mut source);
@@ -1338,17 +1382,15 @@ mod tests {
             .checked_next()
             .expect("fixture map revision advances");
         let item = TrackId::allocate();
-        control.publish(crate::worker::FreeAdoptionRequest {
-            operation: SyncOperationId::first(),
+        control.publish(free_request(
+            owner,
+            fixture_grid(),
             warp_map,
             item,
-            load: LoadGeneration::first(),
-            transport: TransportRevision::first(),
-            decode_epoch: 0,
             manual_rate,
-            owner,
-            plan: Arc::new(WarpPlan::new(fixture_grid())),
-        });
+            64,
+            SessionFrame::new(64),
+        ));
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         flush_deferred(&mut source);
@@ -1380,8 +1422,8 @@ mod tests {
             control.receipt(),
             Some(crate::worker::FreeAdoptionReceipt::Installed(receipt))
                 if receipt.item == item
-                    && receipt.warp_map == warp_map
-                    && receipt.output == SessionFrame::new(64)
+                    && receipt.stamp.successor == warp_map
+                    && receipt.alignment.activation == SessionFrame::new(64)
         ));
 
         // The request saw exactly one 32-frame staged quantum; no earlier
@@ -1651,6 +1693,16 @@ mod tests {
         let mut warp = Warp::new((), &config);
         let publisher = warp.take_publisher().expect("fixture publisher");
         let region_plan = Arc::clone(warp.region_plan());
+        let old_warp_map = WarpMapRevision::first();
+        region_plan.install(Some(Arc::new(
+            WarpPlan::new(fixture_grid()).with_activation(
+                WarpMap::identity(old_warp_map).reanchor(
+                    0,
+                    SessionFrame::new(0),
+                    SessionBeat::default(),
+                ),
+            ),
+        )));
         let renderer = warp.renderer(spec, pools.clone());
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResetCounter {
             resets: Arc::clone(&resets),
@@ -1682,12 +1734,16 @@ mod tests {
             PresentationFrontier::builder()
                 .source(0)
                 .output(SessionFrame::new(0))
+                .warp_map(old_warp_map)
                 .build(),
         );
         let TrackStep::Produced(Fetch::Data { data: old, .. }) = source.step_track() else {
             panic!("the initial quiescent span is produced");
         };
-        assert_eq!(old.meta.render_revision, 0);
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(old.meta.render_revision),
+            u64::from(old_warp_map)
+        );
         assert!(source.free_adoption_boundary_is_quiescent());
 
         let owner = BeatGridSnapshot::session(
@@ -1705,18 +1761,18 @@ mod tests {
         );
         controls.set_speed(0.75);
         let manual_rate = controls.rate_target();
-        let warp_map = WarpMapRevision::first();
-        control.publish(crate::worker::FreeAdoptionRequest {
-            operation: SyncOperationId::first(),
-            warp_map,
-            item: TrackId::allocate(),
-            load: LoadGeneration::first(),
-            transport: TransportRevision::first(),
-            decode_epoch: 0,
-            manual_rate,
+        let warp_map = old_warp_map
+            .checked_next()
+            .expect("fixture map revision advances");
+        control.publish(free_request(
             owner,
-            plan: Arc::new(WarpPlan::new(fixture_grid())),
-        });
+            fixture_grid(),
+            warp_map,
+            TrackId::allocate(),
+            manual_rate,
+            128,
+            SessionFrame::new(128),
+        ));
         let TrackStep::Produced(Fetch::Data { data: target, .. }) = source.step_track() else {
             panic!("the next source step adopts Free before it produces PCM");
         };

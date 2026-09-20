@@ -246,7 +246,7 @@ where
         let preparing_before = self
             .sync
             .preparing()
-            .map(|preparing| (preparing.operation, preparing.warp_map));
+            .map(|preparing| (preparing.stamp.operation, preparing.stamp.successor));
         if sync_disable
             && let (Some(slot), Some(item)) = (
                 self.runtime.slot(),
@@ -271,7 +271,8 @@ where
                     let result = self.sync.transact_at(operation, now);
                     let revoke = result.is_ok()
                         && self.sync.preparing().is_none_or(|current| {
-                            (current.operation, current.warp_map) != (operation_id, warp_map)
+                            (current.stamp.operation, current.stamp.successor)
+                                != (operation_id, warp_map)
                         });
                     (result, revoke)
                 })
@@ -400,7 +401,7 @@ where
         let preparing_before = self
             .sync
             .preparing()
-            .map(|preparing| (preparing.operation, preparing.warp_map));
+            .map(|preparing| (preparing.stamp.operation, preparing.stamp.successor));
         let prepared = self.prepare_host_seek(seconds)?;
         let source = kithara_warp::AlignmentSource::Prepared(
             kithara_warp::PresentationFrontier::builder()
@@ -450,7 +451,8 @@ where
                             revoke.set(preparing_before.is_some_and(|identity| {
                                 result.is_ok()
                                     && sync.preparing().is_none_or(|current| {
-                                        (current.operation, current.warp_map) != identity
+                                        (current.stamp.operation, current.stamp.successor)
+                                            != identity
                                     })
                             }));
                             result

@@ -292,18 +292,14 @@ where
             return;
         };
         let plan = Arc::new(WarpPlan::new(grid.snapshot.clone()));
-        let (load, transport) = self.sync.generations();
         let published = self.runtime.core.items.publish_free_adoption(
             item,
             crate::worker::FreeAdoptionRequest {
-                operation: prepared.operation,
-                warp_map: prepared.warp_map,
+                stamp: prepared.stamp,
+                alignment: prepared.alignment,
                 item,
-                load,
-                transport,
                 decode_epoch: 0,
                 manual_rate: prepared.manual_rate,
-                owner: prepared.owner.clone(),
                 plan,
             },
         );
@@ -322,28 +318,47 @@ where
                 .core
                 .items
                 .track_grid(item)
-                .is_none_or(|grid| grid.id != preparing.target)
+                .is_none_or(|grid| grid.id != preparing.stamp.target)
         {
-            let (load, transport) = self.sync.generations();
             let _ = self
                 .sync
-                .adopt_free(crate::worker::FreeAdoptionReceipt::Rejected(
-                    crate::worker::FreeAdoptionRejected {
-                        operation: preparing.operation,
-                        warp_map: preparing.warp_map,
-                        item,
-                        load,
-                        transport,
-                        decode_epoch: 0,
-                        reason: crate::worker::FreeAdoptionRejectReason::Superseded,
-                    },
-                ));
+                .adopt_free(kithara_sync::SyncExecutionReceipt::Rejected {
+                    stamp: preparing.stamp,
+                    reason: kithara_sync::SyncExecutionReject::Superseded,
+                });
             return;
         }
         let Some(receipt) = self.runtime.core.items.free_adoption_receipt(item) else {
             return;
         };
         if receipt.item() == item {
+            let receipt = match receipt {
+                crate::worker::FreeAdoptionReceipt::Installed(value) => {
+                    kithara_sync::SyncExecutionReceipt::Installed {
+                        stamp: value.stamp,
+                        alignment: value.alignment,
+                    }
+                }
+                crate::worker::FreeAdoptionReceipt::Rejected(value) => {
+                    let reason = match value.reason {
+                        crate::worker::FreeAdoptionRejectReason::Superseded => {
+                            kithara_sync::SyncExecutionReject::Superseded
+                        }
+                        crate::worker::FreeAdoptionRejectReason::Geometry => {
+                            kithara_sync::SyncExecutionReject::Geometry
+                        }
+                        crate::worker::FreeAdoptionRejectReason::Closed
+                        | crate::worker::FreeAdoptionRejectReason::DecodeEpoch
+                        | crate::worker::FreeAdoptionRejectReason::SeekEpoch => {
+                            kithara_sync::SyncExecutionReject::Unavailable
+                        }
+                    };
+                    kithara_sync::SyncExecutionReceipt::Rejected {
+                        stamp: value.stamp,
+                        reason,
+                    }
+                }
+            };
             let _ = self.sync.adopt_free(receipt);
         }
     }

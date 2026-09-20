@@ -396,9 +396,10 @@ mod tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        AssetAxis, AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, LoadGeneration,
-        MapAxis, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
-        SyncOperationId, TransportRevision, WarpMapRevision, WarpPlan, WarpPlanSlot,
+        AssetAxis, AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+        LoadGeneration, MapAxis, MapPoint, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+        SessionFrame, SyncOperationId, TopologyRevision, TopologyStamp, TransportRevision,
+        WarpMapRevision, WarpPlan, WarpPlanSlot,
     };
 
     use super::{Playlist, Slot};
@@ -456,22 +457,45 @@ mod tests {
             SessionAxis::new(sample_rate, SessionEpoch::new(0)),
         )
         .expect("fixture anchor is valid");
-        crate::worker::FreeAdoptionRequest {
+        let owner = BeatGridSnapshot::session(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            anchor,
+            None,
+        );
+        let target = grid(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+        );
+        let stamp = kithara_sync::SyncExecutionStamp {
             operation: SyncOperationId::first(),
-            warp_map: WarpMapRevision::first(),
-            item,
+            predecessor: WarpMapRevision::first(),
+            successor: WarpMapRevision::first(),
+            target: target.id(),
             load: LoadGeneration::first(),
             transport: TransportRevision::first(),
+            topology: TopologyStamp::new(owner.id(), TopologyRevision::first()),
+            owner_grid: owner.stamp(),
+            target_grid: target.stamp(),
+            owner_axis: owner.axis(),
+            target_axis: target.axis(),
+        };
+        crate::worker::FreeAdoptionRequest {
+            stamp,
+            alignment: kithara_sync::MemberAlignment {
+                alignment: BeatAlignment::new(
+                    MapPoint::new(target.stamp(), Beat::default()),
+                    MapPoint::new(owner.stamp(), Beat::default()),
+                ),
+                activation: SessionFrame::new(0),
+                activation_beat: SessionBeat::default(),
+                source: 0,
+            },
+            item,
             decode_epoch: 0,
             manual_rate: kithara_warp::RateTarget::default(),
-            owner: BeatGridSnapshot::session(
-                BeatGridId::allocate().expect("fixture identity"),
-                BeatGridRevision::first(),
-                SessionEpoch::new(0),
-                anchor,
-                None,
-            ),
-            plan: plan(),
+            plan: Arc::new(WarpPlan::new(target)),
         }
     }
 

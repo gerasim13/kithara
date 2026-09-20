@@ -11,8 +11,8 @@ mod track;
 pub use core::PlayWorker;
 
 pub(crate) use adoption::{
-    FreeAdoptionCommit, FreeAdoptionControl, FreeAdoptionInstalled, FreeAdoptionReceipt,
-    FreeAdoptionRejectReason, FreeAdoptionRejected, FreeAdoptionRequest, FreeAdoptionTransition,
+    FreeAdoptionCommit, FreeAdoptionControl, FreeAdoptionInstalled, FreeAdoptionReadiness,
+    FreeAdoptionReceipt, FreeAdoptionRejectReason, FreeAdoptionRequest, FreeAdoptionTransition,
     FreeAdoptionWorker, free_adoption,
 };
 pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};

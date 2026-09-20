@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use kithara_events::TrackId;
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AlignmentSource, AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGrid, BeatGridId,
@@ -419,6 +418,7 @@ fn free_leaves_the_beat_timeline() {
                 presentation: PresentationFrontier::builder()
                     .source(48_000)
                     .output(SessionFrame::new(48_000))
+                    .warp_map(kithara_warp::WarpMapRevision::first())
                     .build(),
                 preparation_source: 48_448,
                 playback_rate: RateTarget::default(),
@@ -446,20 +446,12 @@ fn free_leaves_the_beat_timeline() {
         } if (current_operation, current_map) == (operation, warp_map)
     ));
     let (load, transport) = group.generations();
+    let preparing = group.preparing().cloned().expect("free preparation");
     assert!(
-        group.adopt_free(crate::worker::FreeAdoptionReceipt::Installed(
-            crate::worker::FreeAdoptionInstalled {
-                operation,
-                warp_map,
-                item: TrackId(1),
-                load,
-                transport,
-                decode_epoch: 0,
-                source: 48_448,
-                output: SessionFrame::new(48_448),
-                activation_beat: SessionBeat::default(),
-            },
-        ))
+        group.adopt_free(kithara_sync::SyncExecutionReceipt::Installed {
+            stamp: preparing.stamp,
+            alignment: preparing.alignment,
+        })
     );
     let prepared = group
         .prepared()
@@ -510,11 +502,7 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
             .warp_map(kithara_warp::WarpMapRevision::first())
             .build(),
     );
-    let SyncAdmission::Preparing {
-        operation,
-        warp_map,
-        ..
-    } = group
+    let SyncAdmission::Preparing { .. } = group
         .transact(SyncOperation::Sync {
             target: group.id(),
             load: LoadGeneration::first(),
@@ -523,6 +511,7 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
                 presentation: PresentationFrontier::builder()
                     .source(48_000)
                     .output(SessionFrame::new(48_000))
+                    .warp_map(kithara_warp::WarpMapRevision::first())
                     .build(),
                 preparation_source: 48_448,
                 playback_rate: RateTarget::default(),
@@ -534,20 +523,14 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
     else {
         panic!("Free must prepare")
     };
-    let (load, transport) = group.generations();
+    let (_load, _transport) = group.generations();
+    let stamp = group.preparing().expect("free preparation").stamp;
 
     assert!(
-        group.adopt_free(crate::worker::FreeAdoptionReceipt::Rejected(
-            crate::worker::FreeAdoptionRejected {
-                operation,
-                warp_map,
-                item: TrackId(1),
-                load,
-                transport,
-                decode_epoch: 0,
-                reason: crate::worker::FreeAdoptionRejectReason::Geometry,
-            },
-        ))
+        group.adopt_free(kithara_sync::SyncExecutionReceipt::Rejected {
+            stamp,
+            reason: kithara_sync::SyncExecutionReject::Geometry,
+        })
     );
     assert!(group.preparing().is_none());
     assert!(group.prepared().is_empty());
@@ -589,6 +572,7 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
                 presentation: PresentationFrontier::builder()
                     .source(48_000)
                     .output(SessionFrame::new(48_000))
+                    .warp_map(kithara_warp::WarpMapRevision::first())
                     .build(),
                 preparation_source: 48_448,
                 playback_rate: RateTarget::default(),
@@ -624,11 +608,7 @@ fn installed_free_receipt_is_consumed_once() {
             .warp_map(kithara_warp::WarpMapRevision::first())
             .build(),
     );
-    let SyncAdmission::Preparing {
-        operation,
-        warp_map,
-        ..
-    } = group
+    let SyncAdmission::Preparing { .. } = group
         .transact(SyncOperation::Sync {
             target: group.id(),
             load: LoadGeneration::first(),
@@ -637,6 +617,7 @@ fn installed_free_receipt_is_consumed_once() {
                 presentation: PresentationFrontier::builder()
                     .source(48_000)
                     .output(SessionFrame::new(48_000))
+                    .warp_map(kithara_warp::WarpMapRevision::first())
                     .build(),
                 preparation_source: 48_448,
                 playback_rate: RateTarget::default(),
@@ -648,21 +629,95 @@ fn installed_free_receipt_is_consumed_once() {
     else {
         panic!("Free must prepare")
     };
-    let (load, transport) = group.generations();
-    let receipt =
-        crate::worker::FreeAdoptionReceipt::Installed(crate::worker::FreeAdoptionInstalled {
-            operation,
-            warp_map,
-            item: TrackId(1),
-            load,
-            transport,
-            decode_epoch: 0,
-            source: 48_448,
-            output: SessionFrame::new(48_448),
-            activation_beat: SessionBeat::default(),
-        });
+    let preparing = group.preparing().cloned().expect("free preparation");
+    let mut target_mismatch = preparing.stamp;
+    target_mismatch.target = BeatGridId::allocate().expect("mismatched target");
+    let mut grid_mismatch = preparing.stamp;
+    grid_mismatch.target_grid = asset_grid(
+        BeatGridId::allocate().expect("mismatched grid"),
+        480_000,
+        24_000,
+    )
+    .stamp();
+    let mut topology_mismatch = preparing.stamp;
+    topology_mismatch.topology = kithara_warp::TopologyStamp::new(
+        BeatGridId::allocate().expect("mismatched topology"),
+        kithara_warp::TopologyRevision::first(),
+    );
+    let mut axis_mismatch = preparing.stamp;
+    axis_mismatch.target_axis = MapAxis::Asset(AssetAxis::new(
+        NonZeroU32::new(44_100).expect("sample rate"),
+        480_000,
+    ));
+    let mut successor_mismatch = preparing.stamp;
+    successor_mismatch.successor = successor_mismatch
+        .successor
+        .checked_next()
+        .expect("mismatched map revision");
+    for stamp in [
+        target_mismatch,
+        grid_mismatch,
+        topology_mismatch,
+        axis_mismatch,
+        successor_mismatch,
+    ] {
+        assert!(
+            !group.adopt_free(kithara_sync::SyncExecutionReceipt::Rejected {
+                stamp,
+                reason: kithara_sync::SyncExecutionReject::Superseded,
+            })
+        );
+        assert_eq!(
+            group.preparing().map(|value| value.stamp),
+            Some(preparing.stamp)
+        );
+    }
+    let stale_receipt = kithara_sync::SyncExecutionReceipt::Installed {
+        stamp: preparing.stamp,
+        alignment: preparing.alignment,
+    };
+    let SyncAdmission::Preparing { .. } = group
+        .transact(SyncOperation::Sync {
+            target: group.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                presentation: PresentationFrontier::builder()
+                    .source(48_000)
+                    .output(SessionFrame::new(48_000))
+                    .warp_map(kithara_warp::WarpMapRevision::first())
+                    .build(),
+                preparation_source: 48_448,
+                playback_rate: RateTarget::default(),
+            },
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Free,
+        })
+        .expect("replacement free")
+    else {
+        panic!("replacement Free must prepare")
+    };
+    let preparing = group.preparing().cloned().expect("replacement preparation");
+    assert_ne!(preparing.stamp, stale_receipt.stamp());
+    assert_eq!(
+        preparing.stamp.predecessor,
+        stale_receipt.stamp().predecessor
+    );
+    assert!(!group.adopt_free(stale_receipt));
+    assert_eq!(
+        group.preparing().map(|value| value.stamp),
+        Some(preparing.stamp)
+    );
+    let receipt = kithara_sync::SyncExecutionReceipt::Installed {
+        stamp: preparing.stamp,
+        alignment: preparing.alignment,
+    };
 
     assert!(group.adopt_free(receipt));
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Prepared { .. }
+    ));
     assert!(!group.adopt_free(receipt));
 }
 
@@ -693,35 +748,6 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
         (early.source, early.activation, early.activation_beat),
         (late.source, late.activation, late.activation_beat),
         "a later worker boundary must not reuse a scalar activation beat"
-    );
-}
-
-#[kithara::test]
-fn free_activation_stays_at_the_renderer_frontier() {
-    let owner = live_deck().snapshot();
-    let frontier = PresentationFrontier::builder()
-        .source(24_192)
-        .output(SessionFrame::new(93_824))
-        .warp_map(kithara_warp::WarpMapRevision::from_raw(
-            std::num::NonZero::new(2).expect("fixture revision"),
-        ))
-        .build();
-
-    let (source, output, beat) =
-        crate::sync::prepare::free_activation_at_frontier(&owner, frontier)
-            .expect("owner grid covers the renderer frontier");
-
-    assert_eq!(source, 24_192);
-    assert_eq!(output, SessionFrame::new(93_824));
-    let BeatGridQuery::Resolved(owner_beat) = owner.beat_at(MapPoint::new(
-        owner.stamp(),
-        MapPosition::Session(SessionFrame::new(93_824)),
-    )) else {
-        panic!("owner fixture resolves the frontier beat");
-    };
-    assert_eq!(
-        beat,
-        SessionBeat::new(f64::from(*owner_beat.value().value())).expect("finite beat")
     );
 }
 

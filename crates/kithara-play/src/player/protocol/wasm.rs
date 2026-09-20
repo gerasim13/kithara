@@ -55,7 +55,7 @@ impl PlayerSync {
             .and_then(|owned| owned.preparing().cloned())
     }
 
-    pub(crate) fn adopt_free(&mut self, receipt: crate::worker::FreeAdoptionReceipt) -> bool {
+    pub(crate) fn adopt_free(&mut self, receipt: kithara_sync::SyncExecutionReceipt) -> bool {
         self.owned
             .as_mut()
             .is_some_and(|owned| owned.adopt_free(receipt))
