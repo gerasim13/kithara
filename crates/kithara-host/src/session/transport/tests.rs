@@ -13,11 +13,9 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 use kithara_play::rt::{install_render_context, read_render_context};
+use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::{
-    Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, SessionEpoch,
-    SessionFrame,
-};
+use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -232,12 +230,15 @@ fn pre_process_publishes_the_exact_render_context() {
         .expect("invariant: the pre-process node published this exact block");
 
     assert_eq!(
-        context.output_frames(),
+        context.output().output_frames(),
         &(SessionFrame::new(0)..SessionFrame::new(block_frame(1)))
     );
-    assert_eq!(context.sample_rate(), sample_rate());
-    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
-    assert_eq!(context.transport_revision(), Some(active.revision()));
+    assert_eq!(context.output().sample_rate(), sample_rate());
+    assert_eq!(context.output().session_epoch(), SessionEpoch::new(0));
+    assert_eq!(
+        context.output().transport_revision(),
+        Some(active.revision())
+    );
     let beats = context
         .session_beats()
         .expect("invariant: active transport carries a musical range");
@@ -259,8 +260,8 @@ fn inactive_transport_is_a_valid_render_context() {
 
     let context = read_render_context(&extra.store, &info)
         .expect("invariant: inactive transport still publishes the session axis");
-    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
-    assert_eq!(context.transport_revision(), None);
+    assert_eq!(context.output().session_epoch(), SessionEpoch::new(0));
+    assert_eq!(context.output().transport_revision(), None);
     assert_eq!(context.session_beats(), None);
 }
 

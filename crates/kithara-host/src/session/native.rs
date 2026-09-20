@@ -11,9 +11,8 @@ use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{
-    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
-};
+use kithara_play::{SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember};
+use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
 use super::{

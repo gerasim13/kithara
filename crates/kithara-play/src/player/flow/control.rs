@@ -111,9 +111,13 @@ impl<S> PlayerRuntime<S> {
                 rate_requested,
                 request_revision = revision,
                 target_rate_bits = target.to_bits(),
-                session_epoch = u64::from(snapshot.context().session_epoch()),
-                transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
-                session_frame = i64::from(snapshot.context().output_frames().end)
+                session_epoch = u64::from(snapshot.context().output().session_epoch()),
+                transport_revision = snapshot
+                    .context()
+                    .output()
+                    .transport_revision()
+                    .map_or(0, u64::from),
+                session_frame = i64::from(snapshot.context().output().output_frames().end)
             );
         }
         self.core.worker.wake();

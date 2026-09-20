@@ -1,10 +1,12 @@
-use super::{
-    SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp, WarpMapRevision,
-};
-use crate::{
+use kithara_signal::SessionFrame;
+use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
-    SessionFrame,
+    WarpMapRevision,
+};
+
+use crate::{
+    SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot, SyncGroupTopologyError,
+    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.

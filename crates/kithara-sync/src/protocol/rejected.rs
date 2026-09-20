@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{SyncError, SyncGroup, SyncOperation};
+use crate::{SyncError, SyncGroup, SyncOperation};
 
 /// A rejected transaction together with the operation whose ownership was not accepted.
 #[derive(derive_more::Display, derive_more::Error, fieldwork::Fieldwork)]

@@ -2,11 +2,16 @@
 
 use kithara::{
     self,
-    platform::sync::Arc,
-    queue::{QueueControl, TrackStatus, Transition},
+    events::{EventReceiver, TrackId},
+    platform::{
+        sync::Arc,
+        time::{self, Duration},
+    },
+    queue::{AdvanceReason, QueueControl, QueueEvent, RepeatMode, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
+    event::TestEvent,
     offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
 };
 use kithara_test_fixtures::assets;
@@ -17,6 +22,30 @@ const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
+
+/// The advance a natural end asks for, named for the entry it lands on.
+async fn wait_for_eof_advance(events: &mut EventReceiver<TestEvent>, id: TrackId) {
+    let answered = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::CurrentTrackAdvance {
+                    id: Some(seen),
+                    reason: AdvanceReason::NaturalEof,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        answered,
+        "repeat-one must answer the end of {id:?} with an advance onto it"
+    );
+}
 
 #[derive(Clone, Copy)]
 enum InitialStart {
@@ -235,6 +264,50 @@ async fn reselect_playing_track_cancels_pending_switch() {
     assert!(
         first_onset_frame(&after_pcm, 0.005).is_some(),
         "track A must keep playing uninterrupted"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+/// Repeat-one advances onto the very item that just ended, so the advance
+/// runs while the render thread still reports the session as playing: it
+/// clears that flag only at the top of the block after it queued the end.
+/// The restart must not depend on the flag, and a prefetch reload is not a
+/// substitute — it re-loads the resource without stashing a select, so
+/// nothing would sound again.
+///
+/// The second pass waits for the queue's own statement that it answered the
+/// end, not for a reload. Which of the three statuses the advance lands on
+/// is a race the product does not control, and each reaches the restart by
+/// its own route: in place, through a re-select of the reloaded entry, or
+/// through a select the load applies. Only the advance is common to all
+/// three, so waiting on a reload would assert whichever route won, and a
+/// fixed budget of immediate renders would assert the loader's latency.
+#[kithara::test(tokio, flash(false))]
+async fn repeat_one_restarts_the_track_its_own_eof_ended() {
+    const PASS_BLOCKS: usize = 64;
+
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let source = assets::constant_wav_three_0_4s();
+    let id = append_loaded(&harness, &queue, &source).await;
+    queue.set_repeat(RepeatMode::One);
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
+        .expect("select the only track");
+
+    let mut advances = queue.subscribe();
+    let first_pass = render_loop(&queue, &harness, PASS_BLOCKS).await;
+    assert!(
+        first_onset_frame(&first_pass, 0.005).is_some(),
+        "the track must play once before repeat-one is judged"
+    );
+    wait_for_eof_advance(&mut advances, id).await;
+
+    let after_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
+    assert!(
+        first_onset_frame(&after_eof, 0.005).is_some(),
+        "repeat-one must restart the track its own EOF ended"
     );
     drop(queue);
     harness.close().await;

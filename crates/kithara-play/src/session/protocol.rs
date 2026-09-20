@@ -5,7 +5,8 @@ mod wire {
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
+    use kithara_sync::SyncError;
+    use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},

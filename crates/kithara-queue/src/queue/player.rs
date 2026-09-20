@@ -1,9 +1,11 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding, SyncAdmission,
-    SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding,
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
+};
+use kithara_sync::{
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
 
 use super::Queue;

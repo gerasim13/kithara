@@ -25,10 +25,9 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
-    warp::{
-        AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
-        SyncGroup, SyncIntent, SyncOperation,
-    },
+    signal::SessionFrame,
+    sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
+    warp::PresentationFrontier,
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
@@ -519,11 +518,31 @@ impl ProductHarness {
                 .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
         }
         harness.set_tempo(case, case.start_bpm(), true).await;
-        let _ = harness.render(case, harness.block_frames).await;
+        harness.warm_up_transport(case).await;
         if !case.paused {
             harness.start_staggered(case).await;
         }
         harness
+    }
+
+    /// The Host reports its transport from the last render it committed, so a
+    /// harness that hands a revision to `request_sync` must have committed one
+    /// first. The warm-up render usually is that commit; on a loaded host it
+    /// can return before the renderer publishes, and one more render is what
+    /// the wait costs.
+    async fn warm_up_transport(&mut self, case: SyncCase) {
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        loop {
+            let _ = self.render(case, self.block_frames).await;
+            if self.host.transport_revision().await.is_ok() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: no render committed a session transport",
+                case.id
+            );
+        }
     }
 
     async fn wait_loaded(&mut self, case: SyncCase, ids: &[kithara::events::TrackId]) {
@@ -656,7 +675,7 @@ impl ProductHarness {
         }
     }
 
-    async fn transport_revision(&self, case: SyncCase) -> kithara::warp::TransportRevision {
+    async fn transport_revision(&self, case: SyncCase) -> kithara::signal::TransportRevision {
         self.host
             .transport_revision()
             .await

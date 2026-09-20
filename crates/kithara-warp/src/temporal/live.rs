@@ -4,12 +4,11 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
+use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
-use crate::{
-    PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame, TransportRevision,
-};
+use crate::{PresentationFrontier, RenderContext, SessionBeat};
 
 const SEQLOCK_PHASES: u64 = 2;
 
@@ -65,7 +64,7 @@ impl RenderCell {
 
     fn publish(&self, context: &RenderContext, frontier: PresentationFrontier) {
         self.write(|cell| {
-            let output = context.output_frames();
+            let output = context.output().output_frames();
             cell.output_start
                 .store(i64::from(output.start), Ordering::Relaxed);
             cell.output_end
@@ -80,10 +79,12 @@ impl RenderCell {
                 }
                 None => cell.beats_present.store(0, Ordering::Relaxed),
             }
-            cell.session_epoch
-                .store(u64::from(context.session_epoch()), Ordering::Relaxed);
+            cell.session_epoch.store(
+                u64::from(context.output().session_epoch()),
+                Ordering::Relaxed,
+            );
             cell.transport_revision.store(
-                context.transport_revision().map_or(0, u64::from),
+                context.output().transport_revision().map_or(0, u64::from),
                 Ordering::Relaxed,
             );
             cell.frontier_source
@@ -91,7 +92,7 @@ impl RenderCell {
             cell.frontier_output
                 .store(i64::from(frontier.output()), Ordering::Relaxed);
             cell.sample_rate
-                .store(context.sample_rate().get(), Ordering::Relaxed);
+                .store(context.output().sample_rate().get(), Ordering::Relaxed);
         });
     }
 
@@ -128,13 +129,13 @@ impl RawSnapshot {
         };
         let transport_revision =
             NonZeroU64::new(self.transport_revision).map(TransportRevision::from);
-        let context = RenderContext::new(
+        let output = OutputContext::new(
             SessionFrame::new(self.output_start)..SessionFrame::new(self.output_end),
             sample_rate,
-            session_beats,
             SessionEpoch::new(self.session_epoch),
             transport_revision,
         )?;
+        let context = RenderContext::new(output, session_beats)?;
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
             .output(SessionFrame::new(self.frontier_output))
@@ -163,10 +164,10 @@ impl RenderPublisher {
             pub fn clear(&self);
             /// Publishes the exact callback context and its current presentation base.
             #[kithara::probe(
-                session_epoch = u64::from(context.session_epoch()),
-                transport_revision = context.transport_revision().map_or(0, u64::from),
-                output_start = i64::from(context.output_frames().start),
-                output_end = i64::from(context.output_frames().end),
+                session_epoch = u64::from(context.output().session_epoch()),
+                transport_revision = context.output().transport_revision().map_or(0, u64::from),
+                output_start = i64::from(context.output().output_frames().start),
+                output_end = i64::from(context.output().output_frames().end),
                 source = frontier.source()
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
@@ -190,7 +191,7 @@ impl RenderReader {
     #[cfg(feature = "render")]
     pub(crate) fn is_current(&self, snapshot: &RenderSnapshot) -> bool {
         self.load().is_some_and(|current| {
-            current.context.session_epoch() == snapshot.context.session_epoch()
+            current.context.output().session_epoch() == snapshot.context.output().session_epoch()
         })
     }
 
@@ -219,8 +220,9 @@ impl RenderSnapshot {
         source: u64,
         output_frames: usize,
     ) -> Option<Self> {
-        let previous = previous
-            .filter(|previous| previous.context.session_epoch() == self.context.session_epoch());
+        let previous = previous.filter(|previous| {
+            previous.context.output().session_epoch() == self.context.output().session_epoch()
+        });
         let minimum_source = previous
             .map_or_else(
                 || self.frontier.source(),
@@ -252,24 +254,26 @@ impl RenderSnapshot {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_test_utils::kithara;
 
     use super::RenderPublisher;
-    use crate::{
-        PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
-        TransportRevision,
-    };
+    use crate::{PresentationFrontier, RenderContext, SessionBeat};
 
     fn context(epoch: u64, start: i64) -> RenderContext {
-        RenderContext::new(
+        let output = OutputContext::new(
             SessionFrame::new(start)..SessionFrame::new(start + 128),
             NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
+            SessionEpoch::new(epoch),
+            Some(TransportRevision::first()),
+        )
+        .expect("fixture output range is ordered");
+        RenderContext::new(
+            output,
             Some(
                 SessionBeat::new(1.0).expect("fixture beat is finite")
                     ..SessionBeat::new(1.01).expect("fixture beat is finite"),
             ),
-            SessionEpoch::new(epoch),
-            Some(TransportRevision::first()),
         )
         .expect("fixture context is valid")
     }

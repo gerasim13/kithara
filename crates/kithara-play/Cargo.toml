@@ -65,13 +65,14 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
-usdt = ["kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
+usdt = ["kithara-test-utils/usdt", "kithara-sync/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
 mock = ["dep:unimock", "kithara-stream/mock"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-sync/perf",
     "kithara-warp/perf",
     "kithara-worker/perf",
 ]
@@ -94,6 +95,7 @@ kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-sync = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }

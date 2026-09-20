@@ -1,9 +1,10 @@
 use std::fmt;
 
-use super::{
-    BeatAlignment, SyncError, SyncGroup, SyncGroupTopologyError, SyncMemberKind, SyncMemberSnapshot,
+use kithara_warp::{
+    BeatAlignment, BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint,
 };
-use crate::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint};
+
+use crate::{SyncError, SyncGroup, SyncGroupTopologyError, SyncMemberKind, SyncMemberSnapshot};
 
 /// One exclusively owned live grid or statically typed nested synchronization group.
 #[derive(fieldwork::Fieldwork)]

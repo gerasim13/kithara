@@ -117,6 +117,9 @@ where
             )
         {
             self.cancel_stale_pending(id);
+            // WHY: `is_playing` is a session flag, not a verdict on this item. The render thread queues the natural end while rendering a
+            // block and clears the flag only at the top of the next `process`, so the item that just ended still reads as playing. A
+            // repeat-one advance answers that end by re-selecting this very entry, and weighing it against the flag drops the re-select.
             if self.player.is_playing() && reason != AdvanceReason::NaturalEof {
                 return Ok(());
             }

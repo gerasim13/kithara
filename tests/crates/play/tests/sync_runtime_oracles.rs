@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{platform::time::Duration, warp::SyncIntent};
+use kithara::{platform::time::Duration, sync::SyncIntent};
 use kithara_integration_tests::{
     cochlea::{
         CochleaReport, continuity_failures, synchronization_failures, time_stretch_failures,

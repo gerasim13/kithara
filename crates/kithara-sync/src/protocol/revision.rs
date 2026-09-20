@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::BeatGridId;
+use kithara_warp::BeatGridId;
 
 fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
     revision.get().checked_add(1).and_then(NonZeroU64::new)
@@ -70,38 +70,6 @@ impl SyncOperationId {
     }
 }
 
-/// Monotonic revision of one immutable warp map.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct WarpMapRevision(NonZeroU64);
-
-impl WarpMapRevision {
-    /// Returns the next owner-assigned revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first revision assigned by a warp-map owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
-
 /// Monotonic identity of one track load into a stable deck.
 #[derive(
     Clone,
@@ -134,40 +102,6 @@ impl LoadGeneration {
     }
 }
 
-/// Monotonic revision of committed session transport state.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[from(NonZeroU64)]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    /// Returns the next committed revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first committed transport revision.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
-
 /// Identity and immutable revision of one group topology snapshot.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -175,7 +109,7 @@ impl TransportRevision {
 pub struct TopologyStamp {
     /// Returns the stable identity of the group grid.
     #[field(get, copy)]
-    pub(super) group_id: BeatGridId,
+    pub(crate) group_id: BeatGridId,
     /// Returns the immutable topology revision.
     #[field(get, copy)]
     revision: TopologyRevision,

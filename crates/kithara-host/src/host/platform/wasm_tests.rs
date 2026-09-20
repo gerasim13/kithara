@@ -3,11 +3,12 @@ use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 use delegate::delegate;
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::Arc;
-use kithara_play::{GroupState, PlayError, SessionDispatcher, player::PlayerMember};
-use kithara_test_utils::{bufpool::TestPools, kithara};
-use kithara_warp::{
-    BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
+use kithara_play::{PlayError, SessionDispatcher, player::PlayerMember};
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
+use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_warp::BeatGridId;
 
 use super::{Host, Platform, Resident, SessionRuntime};
 use crate::{

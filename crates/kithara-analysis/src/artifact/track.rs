@@ -1,7 +1,9 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, sync::OnceLock};
 
 use bon::Builder;
+use kithara_beat::BeatGridModel;
 use kithara_platform::sync::Arc;
+use tracing::debug;
 
 use super::snapshot::BeatSnapshot;
 use crate::{
@@ -83,12 +85,35 @@ pub struct TrackAnalysis {
     #[builder(default)]
     settled: bool,
     revision: u64,
+    /// The grid this publication states, derived from the artifact above the
+    /// first time a consumer asks and kept with the publication that owns it.
+    /// Deriving rather than carrying it is what keeps one grid per
+    /// publication: no caller can hand in a grid its own artifact disagrees
+    /// with.
+    #[builder(skip)]
+    grid: OnceLock<Option<BeatGridModel>>,
 }
 
 impl TrackAnalysis {
     #[must_use]
     pub const fn beat(&self) -> Option<&BeatSnapshot> {
         self.beat.as_ref()
+    }
+
+    /// The beat grid of this publication in media seconds, shared with the
+    /// server-side contract. `None` when the pass proved no tempo; the reason
+    /// is traced, since a consumer can only follow a grid or not.
+    #[must_use]
+    pub fn grid(&self) -> Option<&BeatGridModel> {
+        self.grid
+            .get_or_init(|| match BeatGridModel::try_from(self) {
+                Ok(grid) => Some(grid),
+                Err(error) => {
+                    debug!(%error, revision = self.revision, "analysis states no beat grid");
+                    None
+                }
+            })
+            .as_ref()
     }
 
     #[must_use]

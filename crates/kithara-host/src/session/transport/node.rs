@@ -9,8 +9,9 @@ use firewheel::{
     },
 };
 use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
+use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::{RenderContext, SessionFrame};
+use kithara_warp::RenderContext;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -162,11 +163,11 @@ impl AudioNodeProcessor for SessionTransportProcessor {
 
 fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
     let output_frames = info.clock_samples_range();
-    RenderContext::new(
+    let output = OutputContext::new(
         SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
         info.sample_rate,
-        transport.session_beats.clone(),
         transport.session_epoch,
         transport.transport_revision,
-    )
+    )?;
+    RenderContext::new(output, transport.session_beats.clone())
 }

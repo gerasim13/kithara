@@ -28,10 +28,17 @@ pub use archive::{
     AnalysisFileWrite,
 };
 pub use artifact::{
-    AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis,
+    AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
+    ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
 };
 pub use blob::frame::BlobError;
 pub use coverage::{Coverage, FrameRange};
+/// The served beat-grid contract, re-exported from its owner so a consumer of
+/// a publication can name what [`TrackAnalysis::grid`] hands it. The types are
+/// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.
+pub use kithara_beat::{
+    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+};
 pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
 #[cfg(feature = "analysis-waveform")]

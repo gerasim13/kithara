@@ -184,6 +184,7 @@ mod tests {
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
@@ -194,7 +195,7 @@ mod tests {
         AnalyzerBuilder,
     };
     use crate::{
-        BeatState,
+        BeatGridModel, BeatGridState, BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
         coverage::FrameRange,
         test_pools::{Pools, TestPools, pools, sample_buffer},
@@ -590,5 +591,106 @@ mod tests {
             "the pass settled over a covered extent, so the grid is final"
         );
         assert_eq!(ended.coverage().frames(), ended.extent().unwrap_or(0));
+    }
+
+    /// Chunks of source the pass reads before it is asked for a grid: enough
+    /// to cover the markers the steady detector states.
+    const COVERED_CHUNKS: u32 = 24;
+
+    /// A detector that hears a beat every half second, whatever it is handed:
+    /// the pass, not the hearing, is what this test is about.
+    fn steady_detector() -> Box<dyn BeatDetector> {
+        let raw = RawBeats {
+            beats: (0..8u8).map(|n| BeatMark::at(f32::from(n) * 0.5)).collect(),
+            downbeats: (0..2u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
+        };
+        Box::new(Unimock::new(
+            BeatDetectorMock
+                .each_call(matching!(_))
+                .answers_arc(Arc::new(move |_, _| Ok(raw.clone())))
+                .at_least_times(1),
+        ))
+    }
+
+    /// Every publication of a real pass states the shared grid, and it states
+    /// it in media seconds on the source axis rather than in the frames the
+    /// artifact keeps. The same pass run on a server writes these documents;
+    /// a client that cannot run a detector reads them back unchanged, which is
+    /// what the round trip at the end stands for.
+    #[kithara::test(native, flash(false))]
+    fn every_publication_of_a_pass_states_the_grid_it_found(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
+            .with_waveform(8)
+            .with_beat_detector(steady_detector(), GridParams::default());
+        let mut detector = builder.take_detector();
+        let mut analyzers = builder
+            .build(spec().sample_rate, "track-a".into(), 0)
+            .expect("analysis buffers fit the test region");
+        // Four seconds of source, so the markers the detector states all fall
+        // inside what the pass has actually covered.
+        let mut extent = Extent::default();
+        for index in 0..COVERED_CHUNKS {
+            let at = u64::from(index) * 8192;
+            analyzers.push(
+                &chunk(&pools, &analysis_silence, 8192, at),
+                &mut extent,
+                detector.as_mut(),
+            );
+        }
+        let covered = u64::from(COVERED_CHUNKS) * 8192;
+
+        let early = analyzers.snapshot(detector.as_mut(), true, None);
+        let provisional = early.grid().expect("the pass states what it heard");
+        assert_eq!(provisional.as_raw().state, BeatGridState::Provisional);
+        assert!(
+            provisional.as_raw().duration.is_none(),
+            "an unknown length is absent rather than zero"
+        );
+        assert!(
+            (provisional.as_raw().bpm - 120.0).abs() < 1e-6,
+            "half-second beats are 120 bpm, got {}",
+            provisional.as_raw().bpm
+        );
+        let seconds: Vec<f64> = provisional
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.at)
+            .collect();
+        assert!(
+            seconds
+                .iter()
+                .enumerate()
+                .all(|(index, at)| (at - 0.5 * index.to_f64().unwrap_or(f64::NAN)).abs() < 1e-9),
+            "the markers stand on the source axis in media seconds: {seconds:?}"
+        );
+        assert_eq!(
+            provisional
+                .as_raw()
+                .beats
+                .iter()
+                .map(|beat| beat.ordinal)
+                .collect::<Vec<_>>(),
+            (0..seconds.len().to_i64().unwrap_or(0)).collect::<Vec<_>>(),
+            "the ordinals are the beats the music names, not array positions"
+        );
+
+        analyzers.settle();
+        let ended = analyzers.snapshot(detector.as_mut(), true, Some(covered));
+        let settled = ended.grid().expect("the settled pass states its grid");
+        assert_eq!(settled.as_raw().state, BeatGridState::Final);
+        assert!(
+            settled.as_raw().revision > provisional.as_raw().revision,
+            "a later publication carries a later revision"
+        );
+
+        let document = serde_json::to_string(settled).expect("a grid serializes");
+        let read_back: BeatGridModel =
+            serde_json::from_str(&document).expect("a client reads the stored grid");
+        assert_eq!(
+            &read_back, settled,
+            "what a server stores is what a client without an analyzer gets back"
+        );
     }
 }

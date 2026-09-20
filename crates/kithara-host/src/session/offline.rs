@@ -5,7 +5,8 @@ use kithara_platform::{
     sync::{Arc, mpsc},
     time::Duration,
 };
-use kithara_play::{GroupState, PlayError, effects::LimiterConfig, player::PlayerMember};
+use kithara_play::{PlayError, effects::LimiterConfig, player::PlayerMember};
+use kithara_sync::GroupState;
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
 use tracing::warn;

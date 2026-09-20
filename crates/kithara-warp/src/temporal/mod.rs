@@ -1,11 +1,13 @@
 mod context;
 mod controls;
+mod frontier;
 mod live;
 mod rate;
 mod region;
 
 pub use context::RenderContext;
 pub use controls::StretchControls;
+pub use frontier::PresentationFrontier;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")

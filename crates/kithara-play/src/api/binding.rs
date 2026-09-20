@@ -100,12 +100,13 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
     use kithara_warp::{
         AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor, SessionEpoch, SessionFrame,
+        SessionAnchor,
     };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};

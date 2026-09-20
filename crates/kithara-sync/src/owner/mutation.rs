@@ -1,7 +1,8 @@
-use kithara_warp::{
-    BeatGridId, BeatGridSnapshot, SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncMember, SyncMemberKind, SyncMemberSnapshot, TopologyOperation, TopologyRevision,
-    TopologyStamp,
+use kithara_warp::{BeatGridId, BeatGridSnapshot};
+
+use crate::{
+    SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
 };
 
 pub(super) fn materialize_topology<G: SyncGroup<NestedGroup = G>>(

@@ -16,7 +16,6 @@ pub mod policy;
 pub mod resource;
 pub mod rt;
 pub mod session;
-pub mod sync;
 pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
@@ -46,17 +45,13 @@ use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;
-pub use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
-};
+pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls};
 pub use player::{
     DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch, PlayerImpl,
     SelectTransition,
 };
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::{PlayerNode, StreamShape};
-pub use sync::GroupState;
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
     RegisteredAudio, ServiceClass, TrackConfig,

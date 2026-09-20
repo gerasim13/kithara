@@ -5,8 +5,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Beat-map alignment and synchronization contracts for Kithara."
-keywords = ["audio", "beatgrid", "dj", "playback", "synchronization"]
+description = "Beat-map geometry, alignment, and warp rendering for Kithara."
+keywords = ["audio", "beatgrid", "dj", "playback", "warp"]
 categories = ["multimedia::audio"]
 
 [package.metadata.cargo-machete]

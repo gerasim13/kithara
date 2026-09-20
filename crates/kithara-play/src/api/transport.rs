@@ -1,7 +1,6 @@
 use kithara_derive::Ranged;
-use kithara_warp::{
-    BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch, TransportRevision,
-};
+use kithara_signal::{SessionEpoch, TransportRevision};
+use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
 
 /// A musical tempo in beats per minute, inside the range the session clock can
 /// carry.
@@ -130,11 +129,9 @@ impl SessionTransportSnapshot {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::{
-        BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch,
-        SessionFrame,
-    };
+    use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat};
 
     use super::{SessionTransportSnapshot, Tempo, TempoError, TransportRevision};
 

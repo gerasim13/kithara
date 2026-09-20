@@ -4,7 +4,8 @@ use firewheel::{
     event::ProcEvents,
     node::{ProcInfo, ProcStore},
 };
-use kithara_warp::{SessionAnchor, SessionBeat, SessionEpoch, SessionFrame};
+use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_warp::{SessionAnchor, SessionBeat};
 use triple_buffer::Input;
 
 use super::commit::{

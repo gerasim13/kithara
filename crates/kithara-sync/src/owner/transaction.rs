@@ -1,12 +1,13 @@
-use kithara_warp::{
-    BeatGridId, BeatGridSnapshot, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent,
-    SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
-    TopologyRevision, TopologyStamp,
-};
+use kithara_warp::{BeatGridId, BeatGridSnapshot};
 
-use super::topology::{
+use super::mutation::{
     apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
     preview_topology, routed_group, validate_topology_candidate,
+};
+use crate::{
+    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
+    SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision,
+    TopologyStamp,
 };
 
 pub(super) fn status(

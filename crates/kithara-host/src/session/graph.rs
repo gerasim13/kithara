@@ -657,13 +657,14 @@ mod tests {
     };
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
+    use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
     };
     use kithara_warp::{
         Beat, BeatGrid, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
-        MapAxis, MapPoint, MapPosition, SessionAxis, SessionEpoch, SessionFrame,
+        MapAxis, MapPoint, MapPosition, SessionAxis,
     };
 
     use super::*;

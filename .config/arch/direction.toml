@@ -46,26 +46,31 @@ crates = ["kithara-audio", "kithara-warp"]
 
 [[layer]]
 index = 7
+name = "sync"
+crates = ["kithara-sync"]
+
+[[layer]]
+index = 8
 name = "playback"
 crates = ["kithara-analysis", "kithara-play"]
 
 [[layer]]
-index = 8
+index = 9
 name = "queue"
 crates = ["kithara-queue"]
 
 [[layer]]
-index = 9
+index = 10
 name = "ui"
 crates = ["kithara-ui"]
 
 [[layer]]
-index = 10
+index = 11
 name = "facade"
 crates = ["kithara"]
 
 [[layer]]
-index = 11
+index = 12
 name = "apps"
 crates = ["kithara-app", "kithara-ffi"]
 
