@@ -1,10 +1,10 @@
-use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
 use super::Player;
-use crate::sync::GroupState;
 
 pub(crate) type PlayerSync = GroupState<PlayerMember>;
 

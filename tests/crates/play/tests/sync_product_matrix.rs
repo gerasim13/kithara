@@ -26,10 +26,8 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
-    warp::{
-        AlignmentSource, LoadGeneration, PresentationFrontier, SyncAdmission, SyncGroup,
-        SyncIntent, SyncOperation,
-    },
+    sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
+    warp::PresentationFrontier,
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;

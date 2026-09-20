@@ -1,29 +1,7 @@
-use super::{
-    LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
-    WarpMapRevision,
-};
-use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame, TransportRevision};
+use kithara_signal::{SessionFrame, TransportRevision};
+use kithara_warp::{BeatGridId, MapRegion, PresentationFrontier, WarpMapRevision};
 
-/// A beat on a source grid aligned with a beat on a target grid.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct BeatAlignment {
-    /// Returns the point on the grid being aligned.
-    #[field(get, copy)]
-    source: MapPoint<Beat>,
-    /// Returns the corresponding point on the target grid.
-    #[field(get, copy)]
-    target: MapPoint<Beat>,
-}
-
-impl BeatAlignment {
-    /// Creates one directionally explicit alignment edge.
-    #[must_use]
-    pub const fn new(source: MapPoint<Beat>, target: MapPoint<Beat>) -> Self {
-        Self { source, target }
-    }
-}
+use crate::{LoadGeneration, SyncGroup, SyncMember, SyncOperationId, TopologyStamp};
 
 /// Playback state from which synchronization is requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

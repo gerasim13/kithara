@@ -4440,6 +4440,7 @@ dependencies = [
  "kithara-storage",
  "kithara-stream",
  "kithara-stretch",
+ "kithara-sync",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -5288,6 +5289,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-signal",
+ "kithara-sync",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-worker",
@@ -5515,6 +5517,7 @@ dependencies = [
  "kithara-play",
  "kithara-signal",
  "kithara-stream",
+ "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5583,6 +5586,7 @@ dependencies = [
  "kithara-play",
  "kithara-queue",
  "kithara-signal",
+ "kithara-sync",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5772,6 +5776,21 @@ dependencies = [
  "serde",
  "signalsmith-stretch",
  "smallvec",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-sync"
+version = "0.0.1-alpha4"
+dependencies = [
+ "delegate",
+ "derive_more",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
  "thiserror 2.0.18",
 ]
 

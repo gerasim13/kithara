@@ -3,13 +3,14 @@ use std::{collections::HashMap, mem, num::NonZeroU32};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
-    GroupState, PlayError,
+    PlayError,
     effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
-use kithara_warp::{
-    BeatGridId, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
 };
+use kithara_warp::BeatGridId;
 
 use super::super::{Host, HostOwned, SessionRuntime};
 use crate::{

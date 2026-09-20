@@ -1,13 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
-use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
-
-use crate::sync::GroupState;
 
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,

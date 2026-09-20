@@ -10,13 +10,11 @@ use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
+    SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
     session::RegisteredPlayer,
 };
-use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncStatusSnapshot,
-};
+use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
 
 use super::{

@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::BeatGridId;
+use kithara_warp::BeatGridId;
 
 fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
     revision.get().checked_add(1).and_then(NonZeroU64::new)
@@ -70,38 +70,6 @@ impl SyncOperationId {
     }
 }
 
-/// Monotonic revision of one immutable warp map.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct WarpMapRevision(NonZeroU64);
-
-impl WarpMapRevision {
-    /// Returns the next owner-assigned revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first revision assigned by a warp-map owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
-
 /// Monotonic identity of one track load into a stable deck.
 #[derive(
     Clone,
@@ -141,7 +109,7 @@ impl LoadGeneration {
 pub struct TopologyStamp {
     /// Returns the stable identity of the group grid.
     #[field(get, copy)]
-    pub(super) group_id: BeatGridId,
+    pub(crate) group_id: BeatGridId,
     /// Returns the immutable topology revision.
     #[field(get, copy)]
     revision: TopologyRevision,

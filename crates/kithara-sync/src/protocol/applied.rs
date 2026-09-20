@@ -1,7 +1,7 @@
-use super::{
-    LoadGeneration, PresentationFrontier, SyncOperationId, TopologyStamp, WarpMapRevision,
-};
-use crate::{BeatGridStamp, TransportRevision};
+use kithara_signal::TransportRevision;
+use kithara_warp::{BeatGridStamp, PresentationFrontier, WarpMapRevision};
+
+use crate::{LoadGeneration, SyncOperationId, TopologyStamp};
 
 /// An audible acknowledgement tied to every admission axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]

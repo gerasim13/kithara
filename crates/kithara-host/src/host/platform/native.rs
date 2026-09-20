@@ -3,11 +3,12 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    GroupState, PlayError,
+    PlayError,
     effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
-use kithara_warp::{BeatGridId, SyncAdmission, SyncOperation, SyncRejected};
+use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
+use kithara_warp::BeatGridId;
 
 use super::super::{Host, HostOwned, PlatformResult};
 use crate::session::{HostDispatcher, RootView};

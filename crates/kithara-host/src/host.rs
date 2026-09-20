@@ -4,14 +4,15 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
+    PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_signal::SessionEpoch;
-use kithara_warp::{
-    BeatGrid, BeatGridId, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
 };
+use kithara_warp::{BeatGrid, BeatGridId};
 mod config;
 #[cfg(feature = "offline")]
 mod offline;

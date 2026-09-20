@@ -4,12 +4,61 @@ use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-    BeatGridUnavailable, MapAxis, SessionAnchor, SessionAxis, SessionBeat, SyncError,
-    SyncMemberKind,
+    BeatGridUnavailable, MapAxis, SessionAnchor, SessionAxis, SessionBeat,
 };
 
-use super::GroupState;
-use crate::player::PlayerMember;
+use crate::{
+    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+};
+
+/// Test-only recursive group that delegates to the real owner state.
+///
+/// The production nested-group representation lives in `kithara-play`, which
+/// this crate must not depend on.
+struct TestGroup(GroupState<Self>);
+
+impl TestGroup {
+    fn unavailable(
+        id: BeatGridId,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+        member_kind: SyncMemberKind,
+    ) -> Self {
+        Self(GroupState::unavailable(id, sample_rate, epoch, member_kind))
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError>;
+        }
+    }
+}
+
+impl BeatGrid for TestGroup {
+    delegate::delegate! {
+        to self.0 {
+            fn id(&self) -> BeatGridId;
+            fn snapshot(&self) -> BeatGridSnapshot;
+        }
+    }
+}
+
+impl SyncGroup for TestGroup {
+    type NestedGroup = Self;
+
+    delegate::delegate! {
+        to self.0 {
+            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn status(&self) -> SyncStatusSnapshot;
+            fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
+            fn transact(
+                &mut self,
+                operation: SyncOperation<Self>,
+            ) -> Result<SyncAdmission, SyncRejected<Self>>;
+        }
+    }
+}
 
 fn session_grid(
     id: BeatGridId,
@@ -39,8 +88,8 @@ fn session_grid_at_rate(
     BeatGridSnapshot::session(id, revision, epoch, anchor, None)
 }
 
-fn fixture_group() -> GroupState<PlayerMember> {
-    GroupState::unavailable(
+fn fixture_group() -> TestGroup {
+    TestGroup::unavailable(
         BeatGridId::allocate().expect("invariant: fixture group id is available"),
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
         SessionEpoch::new(0),

@@ -3,12 +3,15 @@ use std::num::NonZeroU32;
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    MapAxis, SessionAxis, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected,
-    SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    MapAxis, SessionAxis,
 };
 
-use super::{topology::materialize_topology, transaction};
+use super::{mutation::materialize_topology, transaction};
+use crate::{
+    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyRevision, TopologyStamp,
+};
 
 /// Canonical mutable state for one recursive synchronization group.
 ///

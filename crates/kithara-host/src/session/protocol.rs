@@ -6,7 +6,7 @@ pub(crate) use kithara_play::{
     SessionSampleRate,
 };
 use kithara_play::{PlayError, player::PlayerMember};
-use kithara_warp::{
+use kithara_sync::{
     SyncAdmission, SyncApplied, SyncError, SyncOperation, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };

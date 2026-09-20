@@ -6,7 +6,7 @@ use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape, player::PlayerMember};
-use kithara_warp::{
+use kithara_sync::{
     SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
@@ -73,7 +73,7 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
 fn transact_root<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     operation: SyncOperation<PlayerMember>,
-) -> Result<kithara_warp::SyncAdmission, SyncRejected<PlayerMember>> {
+) -> Result<kithara_sync::SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             SyncError::CapabilityUnavailable {
@@ -831,7 +831,7 @@ mod tests {
         let operation = detach(&state);
         assert!(matches!(
             run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
         ));
         assert_eq!(member_count(&state), 0);
         assert_eq!(deck_count(&state), 0);
@@ -851,13 +851,13 @@ mod tests {
 
         assert!(matches!(
             run_host_cmd(&mut state, detach(first)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
         ));
         let after_first = state.root.topology().expect("updated topology").stamp();
         assert_ne!(after_first, before);
         assert!(matches!(
             run_host_cmd(&mut state, detach(second)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
         ));
 
         let after_second = state.root.topology().expect("updated topology");

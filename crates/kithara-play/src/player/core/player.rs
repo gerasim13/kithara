@@ -9,7 +9,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_signal::SessionEpoch;
-use kithara_warp::SyncMemberKind;
+use kithara_sync::SyncMemberKind;
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{

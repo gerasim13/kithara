@@ -4,6 +4,7 @@ mod cursor;
 mod map;
 #[cfg(feature = "render")]
 mod render;
+mod revision;
 mod support;
 
 pub use actuator::Warp;
@@ -12,4 +13,5 @@ pub use cursor::WarpCursor;
 pub use map::WarpMap;
 #[cfg(feature = "render")]
 pub use render::WarpRenderer;
+pub use revision::WarpMapRevision;
 pub use support::supports_playback_rate;

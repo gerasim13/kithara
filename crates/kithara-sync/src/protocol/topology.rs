@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use kithara_platform::sync::Arc;
+use kithara_warp::{BeatAlignment, BeatGridId, BeatGridSnapshot, BeatGridStamp};
 
-use super::{BeatAlignment, TopologyRevision, TopologyStamp};
-use crate::{BeatGridId, BeatGridSnapshot, BeatGridStamp};
+use crate::{TopologyRevision, TopologyStamp};
 
 /// One immutable observation of a direct live member.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]

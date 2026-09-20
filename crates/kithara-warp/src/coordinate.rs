@@ -347,3 +347,24 @@ mod tests {
         );
     }
 }
+
+/// A beat on a source grid aligned with a beat on a target grid.
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct BeatAlignment {
+    /// Returns the point on the grid being aligned.
+    #[field(get, copy)]
+    source: MapPoint<Beat>,
+    /// Returns the corresponding point on the target grid.
+    #[field(get, copy)]
+    target: MapPoint<Beat>,
+}
+
+impl BeatAlignment {
+    /// Creates one directionally explicit alignment edge.
+    #[must_use]
+    pub const fn new(source: MapPoint<Beat>, target: MapPoint<Beat>) -> Self {
+        Self { source, target }
+    }
+}

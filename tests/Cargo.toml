@@ -67,6 +67,7 @@ audio = [
     "kithara/storage",
     "kithara/stream",
     "kithara/stretch-signalsmith",
+    "kithara/sync",
     "kithara/tokio-net",
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
