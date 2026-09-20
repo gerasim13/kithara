@@ -43,14 +43,16 @@ impl Budget {
     /// 26_928 KiB, and rounded up to leave room for a driver that rounds
     /// differently.
     const IMMEDIATE_KIB: u64 = 32_768;
-    /// The same for the retained host, which is dominated by the compute
-    /// buffers Vello sizes to the target on its first frame.
+    /// The same for the retained host, whose bulk is the compute buffers Vello
+    /// sizes for the target on its first frame. Measured at 12_352 KiB.
     ///
-    /// This is a ratchet, not an endorsement: measured at 175_008 KiB, it is
-    /// above the 120 MiB the application is allowed in total, so the retained
-    /// host cannot carry a window on its own until it comes down. Pinned here
-    /// so that it can only ever fall.
-    const RETAINED_KIB: u64 = 180_224;
+    /// It used to be an order larger, because those buffers were fixed
+    /// constants covering a target far bigger than a window: a renderer paid
+    /// 165 MiB on its first frame whatever it drew, which on its own broke the
+    /// ceiling the application is allowed. They are derived from the frame's
+    /// tile grid now, and what the pages actually need of them is held down by
+    /// the `ui_buffers` binary beside this one.
+    const RETAINED_KIB: u64 = 16_384;
 }
 
 /// Bytes the graphics device holds, or `None` where the platform cannot say.
