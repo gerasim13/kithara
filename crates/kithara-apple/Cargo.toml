@@ -14,6 +14,9 @@ default = []
 accelerate = []
 audio-toolbox = []
 foundation = ["dep:block2", "dep:objc2", "dep:objc2-foundation"]
+# How much the graphics device holds. Only `objc2`: the one property this reads
+# is answered by a message send, so nothing heavier is needed.
+metal = ["dep:objc2"]
 
 [dependencies]
 kithara-platform = { workspace = true }
