@@ -90,12 +90,15 @@ public final class AssetLayoutRegistry: @unchecked Sendable {
 }
 
 /// Rust-owned asset store that can be shared by multiple players.
-public typealias AssetStore = FfiAssetStore
+///
+/// The store captures a snapshot of `layouts` during initialization. Later
+/// registry changes apply only to stores created afterward.
+public final class AssetStore: @unchecked Sendable {
+    let inner: FfiAssetStore
 
-extension FfiAssetStore {
-    /// Creates a store with a snapshot of `layouts`.
-    /// A nil root uses Documents/Files/Kithara on iOS and the native default elsewhere.
-    public convenience init(root: String? = nil, layouts: AssetLayoutRegistry = .init()) {
-        self.init(root: root, layouts: layouts.inner)
+    /// Creates an asset store rooted at `root` with a snapshot of `layouts`.
+    /// `nil` uses Kithara's platform-default cache directory.
+    public init(root: String? = nil, layouts: AssetLayoutRegistry = .init()) {
+        self.inner = FfiAssetStore(root: root, layouts: layouts.inner)
     }
 }
