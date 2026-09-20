@@ -4517,6 +4517,7 @@ dependencies = [
  "realfft",
  "ringbuf 0.5.0",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.18",
  "tracing",

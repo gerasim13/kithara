@@ -76,9 +76,10 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
 /// The artifact's beats with the ordinal each one holds, still paired with the
 /// source frame the bar lines name them by.
 ///
-/// Ordinals count from the first marker. Empty where a marker sits too far
-/// from a whole beat to name one, which leaves the tempo as the whole of what
-/// the pass can prove rather than an anchor nothing observed.
+/// Ordinals count from the first marker. A marker sitting too far from a whole
+/// beat to name one is left out rather than named wrongly: the grid then states
+/// a gap in its numbers, which is what a consumer following ordinals reads as
+/// "nothing proved here", while the beats around it stand as observed.
 fn place(
     snapshot: &BeatSnapshot,
     rate: f64,
@@ -96,8 +97,11 @@ fn place(
         .beats()
         .iter()
         .zip(artifact.beat_confidence().iter())
-        .map(|(frame, confidence)| {
+        .filter_map(|(frame, confidence)| {
             let at = seconds(*frame, rate);
+            if duration.is_some_and(|duration| at > duration) {
+                return None;
+            }
             let exact = (at - origin) / period;
             let rounded = exact.round();
             if (exact - rounded).abs() > ORDINAL_TOLERANCE_BEATS {
@@ -117,14 +121,7 @@ fn place(
                 },
             ))
         })
-        .collect::<Option<Vec<_>>>()
-        .map(|placed| {
-            placed
-                .into_iter()
-                .filter(|(_, beat)| duration.is_none_or(|duration| beat.at <= duration))
-                .collect()
-        })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The bar lines, each named by the beat it falls on.
@@ -405,22 +402,29 @@ mod tests {
         );
     }
 
-    /// Markers too far from a whole beat name none, so the pass falls back to
-    /// the one thing it can prove rather than inventing observed anchors.
+    /// A marker too far from a whole beat names none, so the grid leaves it
+    /// out rather than guessing an ordinal for it; the markers that do name a
+    /// beat stand as observed, with a gap where nothing was proved.
     #[kithara::test(native, flash(false))]
-    fn markers_that_name_no_beat_leave_the_tempo_alone() {
+    fn a_marker_that_names_no_beat_is_left_out_of_the_grid() {
         let model = grid(&analysis(
             Consts::RATE_48,
-            &[0, Consts::PERIOD_48, 40_000],
+            &[0, Consts::PERIOD_48, 40_000, 3 * Consts::PERIOD_48],
             &[],
             None,
             BeatState::Provisional,
         ));
 
         assert_eq!(model.as_raw().bpm, Consts::BPM);
-        assert!(
-            model.as_raw().beats.is_empty(),
-            "a guessed ordinal is not an observation"
+        assert_eq!(
+            model
+                .as_raw()
+                .beats
+                .iter()
+                .map(|beat| beat.ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1, 3],
+            "a guessed ordinal is not an observation, and its neighbours keep theirs"
         );
     }
 

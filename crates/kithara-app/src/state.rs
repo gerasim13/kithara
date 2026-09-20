@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use kithara::analysis::Coverage;
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
-    analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
+    analysis::{AnalysisProgress, BeatGridModel, BeatSnapshot, FrameRange, RawBeatGrid},
     events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
@@ -32,6 +32,10 @@ use crate::{
     pools::AppQueueControl,
     waveform::TrackAnalysis,
 };
+
+/// Timescale the deck stamps a beat position with: the grid states seconds,
+/// and the DJ surface carries them as a rational media time.
+const MEDIA_TIMESCALE: i32 = 600;
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -133,6 +137,12 @@ impl UiState {
         self.beat_marks = beats;
         self.downbeat_marks = downbeats;
         self.unready_ranges = analysis.as_ref().map_or_else(Arc::default, unready_ranges);
+        // State the grid once here, where the publication is stored: the per-frame
+        // snapshots this state is cloned into then carry it instead of deriving
+        // their own.
+        if let Some(analysis) = analysis.as_ref() {
+            let _ = analysis.grid();
+        }
         self.analysis = analysis;
     }
 }
@@ -301,6 +311,17 @@ pub(crate) mod test_fixture {
         cancel: CancelToken,
     ) -> Arc<StateController> {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        controller_on(queue, timestretch, cancel, state)
+    }
+
+    /// A controller over a state someone else writes into - the listener task,
+    /// as the running deck has it.
+    pub(crate) fn controller_on(
+        queue: AppQueueControl,
+        timestretch: Arc<StretchControls>,
+        cancel: CancelToken,
+        state: Arc<Mutex<UiState>>,
+    ) -> Arc<StateController> {
         Arc::new(StateController {
             queue,
             state,
@@ -313,7 +334,8 @@ pub(crate) mod test_fixture {
 
 #[derive(Debug, Default)]
 struct BeatClockState {
-    last_beat_number: Option<u64>,
+    /// The ordinal of the last beat announced, as the grid names it.
+    last_beat_number: Option<i64>,
     published_track: Option<usize>,
 }
 
@@ -326,15 +348,14 @@ impl StateController {
         let Some(analysis) = state.analysis.as_ref() else {
             return;
         };
-        let Some(beat) = analysis.beat() else {
+        let Some(grid) = analysis.grid().map(BeatGridModel::as_raw) else {
             return;
         };
-        let grid = beat.artifact();
-        let source_frames = analysis.source_frames();
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
         if beat_clock.published_track != Some(current_index)
-            && let Some(info) = bpm_info_from_state(beat, source_frames, state.duration)
+            && let Some(info) =
+                bpm_info_from_grid(grid, analysis.beat().and_then(BeatSnapshot::confidence))
         {
             self.queue
                 .bus()
@@ -343,65 +364,41 @@ impl StateController {
             beat_clock.last_beat_number = None;
         }
 
-        let beats = grid.beats();
-        if beats.is_empty() || source_frames == 0 || state.duration <= 0.0 {
+        if grid.beats.is_empty() {
             return;
         }
 
-        let max_frame = u64_to_f64(source_frames);
-        let current_frame = (((state.position / state.duration) * max_frame).clamp(0.0, max_frame))
-            .to_u64()
-            .unwrap_or(source_frames);
-        let crossed = beats.partition_point(|beat| *beat <= current_frame);
-        let latest = crossed.checked_sub(1).and_then(|idx| idx.to_u64());
-        let start = beat_clock.last_beat_number.map_or(0, |prev| prev + 1);
-        if let Some(latest) = latest {
-            for beat_number in start..=latest {
-                let beat_idx = usize::try_from(beat_number).unwrap_or(usize::MAX);
-                let timestamp =
-                    media_time_for_frame(beats[beat_idx], source_frames, state.duration);
-                self.queue.bus().publish(DjEvent::BeatTick {
-                    slot,
-                    beat_number,
-                    timestamp,
-                });
-            }
-            beat_clock.last_beat_number = Some(latest);
+        // The grid names each beat by its ordinal, so a marker the pass could not
+        // place leaves a gap in the numbers rather than renaming its neighbours.
+        let crossed = grid.beats.partition_point(|beat| beat.at <= state.position);
+        let last = beat_clock.last_beat_number;
+        for beat in grid.beats[..crossed]
+            .iter()
+            .filter(|beat| last.is_none_or(|prev| beat.ordinal > prev))
+        {
+            let Some(beat_number) = beat.ordinal.to_u64() else {
+                continue;
+            };
+            self.queue.bus().publish(DjEvent::BeatTick {
+                slot,
+                beat_number,
+                timestamp: MediaTime::with_seconds(beat.at, MEDIA_TIMESCALE),
+            });
+            beat_clock.last_beat_number = Some(beat.ordinal);
         }
     }
 }
 
-fn bpm_info_from_state(
-    beat: &BeatSnapshot,
-    source_frames: u64,
-    duration_secs: f64,
-) -> Option<BpmInfo> {
-    let grid = beat.artifact();
-    let first_beat = *grid.beats().first()?;
-    if source_frames == 0 || duration_secs <= 0.0 {
-        return None;
-    }
+/// The tempo the deck announces: read from the published grid, whose times are
+/// already media seconds on the source timeline, so the announcement does not
+/// depend on what the engine currently reports as the track length.
+fn bpm_info_from_grid(grid: &RawBeatGrid, confidence: Option<f32>) -> Option<BpmInfo> {
+    let first_beat = grid.beats.first()?;
     Some(BpmInfo::new(
-        grid.bpm(),
-        beat.confidence(),
-        Duration::from_secs_f64(
-            (u64_to_f64(first_beat) / u64_to_f64(source_frames)) * duration_secs,
-        ),
+        grid.bpm,
+        confidence,
+        Duration::from_secs_f64(first_beat.at),
     ))
-}
-
-fn media_time_for_frame(frame: u64, total_frames: u64, duration_secs: f64) -> MediaTime {
-    if total_frames == 0 || duration_secs <= 0.0 {
-        return MediaTime::ZERO;
-    }
-    MediaTime::with_seconds(
-        (u64_to_f64(frame) / u64_to_f64(total_frames)) * duration_secs,
-        600,
-    )
-}
-
-fn u64_to_f64(value: u64) -> f64 {
-    value.to_f64().unwrap_or(f64::MAX)
 }
 
 impl Drop for StateController {
@@ -638,28 +635,32 @@ fn variant_short_label(v: &VariantInfo) -> String {
 #[cfg(test)]
 mod tests {
     use ::kithara::{
-        analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
+        analysis::{AnalysisProgress, BeatArtifact, BeatGridState, BeatSnapshot, BeatState},
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
             time::{self, Duration},
             tokio::{sync::mpsc, task},
         },
-        play::PlayerEvent,
+        play::{DjEvent, PlayerEvent},
         queue::QueueEvent,
     };
     use kithara_test_utils::kithara;
 
     use super::{
-        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
-        unready_ranges,
+        BpmInfo, Coverage, EventReceiver, FrameRange, MEDIA_TIMESCALE, MediaTime, NonZeroU32,
+        StretchControls, UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions,
+        listen, unready_ranges,
     };
     use crate::{
         analysis::{
             AnalysisHandle, Request,
-            fixtures::{answer_subscribe, next_subscribe, queue_off, track, wait_for_revision},
+            fixtures::{
+                answer_subscribe, next_subscribe, queue_off, tone_mp3, track, wait_for_revision,
+            },
         },
         pools::AppQueueControl,
+        state::test_fixture::controller_on,
         waveform::TrackAnalysis,
     };
 
@@ -833,18 +834,32 @@ mod tests {
         host.close().await;
     }
 
-    fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
-        BeatSnapshot::new(
-            BeatArtifact::new(120.0, beats, Vec::new()),
-            BeatState::Provisional,
-            Vec::new(),
+    fn analysed(beats: Vec<(u64, Option<f32>)>) -> TrackAnalysis {
+        TrackAnalysis::builder()
+            .token("track".into())
+            .revision(1)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
+            .extent(44_100)
+            .beat(BeatSnapshot::new(
+                BeatArtifact::new(120.0, beats, Vec::new()),
+                BeatState::Provisional,
+                Vec::new(),
+            ))
+            .build()
+    }
+
+    fn published(analysis: &TrackAnalysis) -> BpmInfo {
+        let grid = analysis.grid().expect("the publication states a grid");
+        bpm_info_from_grid(
+            grid.as_raw(),
+            analysis.beat().and_then(BeatSnapshot::confidence),
         )
+        .expect("a grid names a tempo")
     }
 
     #[kithara::test(native, flash(false))]
     fn a_published_tempo_carries_the_confidence_its_grid_reports() {
-        let detected = beat(vec![(0, Some(0.4)), (22_050, Some(0.8))]);
-        let info = bpm_info_from_state(&detected, 44_100, 1.0).expect("a grid names a tempo");
+        let info = published(&analysed(vec![(0, Some(0.4)), (22_050, Some(0.8))]));
 
         assert!((info.bpm - 120.0).abs() < f64::EPSILON);
         let confidence = info.confidence.expect("detected markers name a confidence");
@@ -856,13 +871,153 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_tempo_with_nothing_detected_publishes_no_confidence() {
-        let guessed = beat(vec![(0, None), (22_050, None)]);
-        let info = bpm_info_from_state(&guessed, 44_100, 1.0).expect("a grid names a tempo");
+        let info = published(&analysed(vec![(0, None), (22_050, None)]));
 
         assert_eq!(
             info.confidence, None,
             "an extrapolated grid names no confidence rather than a zero"
         );
+    }
+
+    /// The deck announces the first beat where the grid puts it on the media
+    /// timeline, not where a proportion of whatever length the engine reports
+    /// would land.
+    #[kithara::test(native, flash(false))]
+    fn a_published_tempo_names_the_first_beat_in_media_seconds() {
+        let info = published(&analysed(vec![(22_050, Some(0.9)), (44_100, Some(0.9))]));
+
+        assert!(
+            (info.first_beat_offset.as_secs_f64() - 0.5).abs() < 1e-9,
+            "the first beat sits half a second in: {:?}",
+            info.first_beat_offset
+        );
+    }
+
+    fn publication(revision: u64, state: BeatState, beats: &[u64]) -> TrackAnalysis {
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 220_500));
+        TrackAnalysis::builder()
+            .token("deck-track".into())
+            .revision(revision)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
+            .extent(220_500)
+            // Settled as a publication either way: what a revision changes for
+            // the deck is the state of the grid the pass states, not whether
+            // the pass has more source to read.
+            .settled(true)
+            .coverage(coverage)
+            .beat(BeatSnapshot::new(
+                BeatArtifact::new(
+                    120.0,
+                    beats.iter().map(|&frame| (frame, Some(0.9))).collect(),
+                    Vec::new(),
+                ),
+                state,
+                Vec::new(),
+            ))
+            .build()
+    }
+
+    fn ticks(events: &mut EventReceiver<DjEvent>) -> Vec<MediaTime> {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|envelope| match envelope.event {
+                DjEvent::BeatTick { timestamp, .. } => Some(timestamp),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn stamps(beats: &[u64]) -> Vec<MediaTime> {
+        beats
+            .iter()
+            .map(|&frame| {
+                MediaTime::with_seconds(
+                    f64::from(u32::try_from(frame).unwrap_or(0)) / 44_100.0,
+                    MEDIA_TIMESCALE,
+                )
+            })
+            .collect()
+    }
+
+    /// End to end over the deck's own plumbing: what a pass publishes reaches
+    /// the listener, the listener puts it in the deck's state, and the deck
+    /// announces the tempo and the beats from the grid that publication
+    /// states - including the revision that follows the first.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn the_deck_follows_the_grid_each_publication_states(tone_mp3: String) {
+        let (host, queue) = queue_off().await;
+        let (state, mut requests, cancel) = deck(&queue);
+        let (track_id, _source) = track(&host, 1, &tone_mp3).await;
+        let tx = answer_subscribe(&mut requests, track_id).await;
+        let controller = controller_on(
+            queue.clone(),
+            StretchControls::new(1.0),
+            cancel.child(),
+            Arc::clone(&state),
+        );
+        let mut events = queue.bus().subscribe::<DjEvent>();
+
+        let first = [0, 22_050, 44_100];
+        tx.send(Some(
+            AnalysisProgress::try_from(publication(1, BeatState::Provisional, &first))
+                .expect("a settled publication is valid progress"),
+        ))
+        .expect("the pass publishes");
+        wait_for_revision(&state, 1).await;
+        controller.mutate(|st| st.position = 1.0);
+        controller.publish_dj_events(&controller.snapshot());
+
+        let announced = match events.try_recv().expect("the deck announces a tempo").event {
+            DjEvent::BpmDetected { info, .. } => info,
+            other => panic!("the deck announces the tempo first, not {other:?}"),
+        };
+        let grid_bpm = state
+            .lock()
+            .analysis
+            .as_ref()
+            .and_then(TrackAnalysis::grid)
+            .expect("the publication states a grid")
+            .as_raw()
+            .bpm;
+        assert!(
+            (announced.bpm - grid_bpm).abs() < f64::EPSILON,
+            "the announced tempo is the published grid's own: {announced:?}"
+        );
+        assert_eq!(
+            ticks(&mut events),
+            stamps(&first),
+            "every tick stands where the grid puts its beat, in media seconds"
+        );
+
+        let then = [0, 22_050, 44_100, 66_150, 88_200];
+        tx.send(Some(
+            AnalysisProgress::try_from(publication(2, BeatState::Final, &then))
+                .expect("a settled publication is valid progress"),
+        ))
+        .expect("the pass publishes again");
+        wait_for_revision(&state, 2).await;
+        controller.mutate(|st| st.position = 2.0);
+        controller.publish_dj_events(&controller.snapshot());
+
+        assert_eq!(
+            ticks(&mut events),
+            stamps(&then[3..]),
+            "the deck follows the later revision's grid without repeating itself"
+        );
+        assert_eq!(
+            state
+                .lock()
+                .analysis
+                .as_ref()
+                .and_then(TrackAnalysis::grid)
+                .expect("the later publication states a grid")
+                .as_raw()
+                .state,
+            BeatGridState::Final,
+            "the settled publication states a grid nothing will revise"
+        );
+        cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, flash(false))]

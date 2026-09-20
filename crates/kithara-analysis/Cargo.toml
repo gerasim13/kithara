@@ -70,6 +70,7 @@ kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
+serde_json = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
