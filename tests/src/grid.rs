@@ -110,8 +110,8 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::warp::{
-        Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-        MapPoint,
+        AssetExtent, Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
+        BeatGridState, MapPoint,
     };
     use kithara_test_utils::kithara;
 
@@ -138,7 +138,10 @@ mod tests {
     }
 
     fn axis() -> AssetAxis {
-        AssetAxis::new(NonZeroU32::new(48_000).expect("rate"), 8 * BEAT_FRAMES)
+        AssetAxis::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            AssetExtent::Bounded(8 * BEAT_FRAMES),
+        )
     }
 
     fn meter_at(set: SegmentSet, beat: f64) -> Meter {
@@ -174,7 +177,10 @@ mod tests {
     #[kithara::test]
     fn an_irregular_intro_bar_does_not_set_the_meter() {
         let beats = 26;
-        let axis = AssetAxis::new(NonZeroU32::new(48_000).expect("rate"), beats * BEAT_FRAMES);
+        let axis = AssetAxis::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            AssetExtent::Bounded(beats * BEAT_FRAMES),
+        );
         let set = segment_set(&artifact_of(beats, &[1, 7, 13, 17, 21, 25]), axis).expect("set");
         let meter = meter_at(set, 14.0);
 

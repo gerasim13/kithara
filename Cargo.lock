@@ -5937,6 +5937,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "firewheel-core",
+ "kithara-beat",
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
@@ -5951,6 +5952,7 @@ dependencies = [
  "portable-atomic",
  "realfft",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

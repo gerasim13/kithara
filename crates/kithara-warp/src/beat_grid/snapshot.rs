@@ -2,12 +2,14 @@ use kithara_platform::sync::Arc;
 
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
-    BeatGridState, BeatGridUnavailable, BeatGridView, segment::SegmentGridView,
+    BeatGridState, BeatGridUnavailable, BeatGridView,
+    projection::{GridProjection, GridProjectionError},
+    segment::SegmentGridView,
     session::SessionGridView,
 };
 use crate::{
-    Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter, MeterFacts, SegmentSet,
-    SessionAnchor, SessionEpoch,
+    AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter, MeterFacts,
+    SegmentSet, SessionAnchor, SessionEpoch,
 };
 
 /// One immutable, revisioned beat-grid observation.
@@ -42,6 +44,25 @@ impl BeatGridSnapshot {
     {
         Self::validate(view.axis(), view.state())?;
         Ok(Self::wrap(view))
+    }
+
+    /// Freezes one recording's geometry as it sounds on the grid it follows.
+    ///
+    /// The projection answers in the target's coordinates and keeps the
+    /// source's identity and revision, so a caller holding a stale coordinate
+    /// of the recording is refused by the stamp it already knows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GridProjectionError`] when either grid is on the wrong axis,
+    /// when the alignment names another revision of either grid, or when the
+    /// target places no position at the beat the alignment names.
+    pub fn projection(
+        source: Self,
+        target: Self,
+        alignment: crate::BeatAlignment,
+    ) -> Result<Self, GridProjectionError> {
+        GridProjection::new(source, target, alignment).map(Self::wrap)
     }
 
     /// Freezes validated segment-backed timing facts.
@@ -129,6 +150,10 @@ impl BeatGridSnapshot {
             pub fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             /// Resolves local tempo at a stamped native position.
             pub fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            /// Resolves the tempo ratio this snapshot applies to its source.
+            pub fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            /// Resolves the recording frame sounding at a stamped native position.
+            pub fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             /// Resolves meter at a stamped beat.
             pub fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -146,6 +171,8 @@ impl BeatGridView for BeatGridSnapshot {
             fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
     }
@@ -213,6 +240,10 @@ impl BeatGridView for UnavailableGridView {
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             #[call(unavailable_position)]
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            #[call(unavailable_position)]
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            #[call(unavailable_position)]
+            fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             #[call(unavailable_beat)]
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -226,7 +257,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{AssetAxis, SessionFrame};
+    use crate::{AssetAxis, AssetExtent, SessionFrame};
 
     #[derive(Debug)]
     struct StateOverride {
@@ -248,6 +279,8 @@ mod tests {
                 fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
                 fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
                 fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+                fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+                fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
                 fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
             }
         }
@@ -257,7 +290,7 @@ mod tests {
     fn freeze_rejects_an_invalid_external_axis_lifecycle_pair() {
         let sample_rate =
             NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero");
-        let axis = MapAxis::Asset(AssetAxis::new(sample_rate, 1));
+        let axis = MapAxis::Asset(AssetAxis::new(sample_rate, AssetExtent::Bounded(1)));
         let snapshot = BeatGridSnapshot::unavailable(
             BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
             BeatGridRevision::first(),
@@ -284,7 +317,7 @@ mod tests {
         let grid = BeatGridSnapshot::unavailable(
             BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
             BeatGridRevision::first(),
-            MapAxis::Asset(AssetAxis::new(sample_rate, 1)),
+            MapAxis::Asset(AssetAxis::new(sample_rate, AssetExtent::Bounded(1))),
         );
         let position = MapPoint::new(grid.stamp(), MapPosition::Session(SessionFrame::new(0)));
 
