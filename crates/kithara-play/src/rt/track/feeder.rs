@@ -237,10 +237,11 @@ impl PlayerResource {
     pub(super) fn consume_source(
         &mut self,
         mut frames: usize,
+        output_offset: usize,
         context: Option<&RenderContext>,
     ) -> Option<u64> {
         let mut source_frames = 0u64;
-        let mut output_start = 0usize;
+        let mut output_start = output_offset;
         while frames > 0 {
             let mut span = self.source_spans.pop_front()?;
             let consumed = frames.min(span.remaining());

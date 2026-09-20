@@ -408,6 +408,43 @@ fn a_split_callback_waiting_for_its_replacement_does_not_reread_the_prefix() {
 }
 
 #[kithara::test]
+fn consuming_a_suffix_reports_its_absolute_output_range() {
+    let resource = Resource::from_reader(RevisionReader::new(0), None);
+    let mut resource = PlayerResource::new(resource, Arc::from("suffix"), &pools())
+        .unwrap_or_else(|error| panic!("test player resource: {error}"));
+    let context = RenderContext::new(
+        SessionFrame::new(100)..SessionFrame::new(110),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    let mut left = [0.0; 10];
+    let mut right = [0.0; 10];
+    let mut output = [&mut left[..], &mut right[..]];
+    let trace = kithara_test_utils::test::usdt::scope();
+
+    let (outcome, source_frames) = resource.read_with_context(
+        Some(&context),
+        None,
+        &mut output,
+        5..10,
+        &RtMetrics::default(),
+    );
+
+    assert_eq!(outcome, crate::rt::track::ReadOutcome::Full { frames: 5 });
+    assert_eq!(source_frames, 5);
+    let consumed = trace
+        .events_of("pcm_consumed")
+        .into_iter()
+        .last()
+        .expect("suffix consumption emits provenance");
+    assert_eq!(consumed.field("output_start"), Some(105));
+    assert_eq!(consumed.field("output_end"), Some(110));
+}
+
+#[kithara::test]
 fn free_activation_replaces_a_128_frame_refill_before_its_target_is_presented() {
     const B: usize = 128;
     let controls = StretchControls::new(1.0);
