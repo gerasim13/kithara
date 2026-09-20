@@ -103,10 +103,10 @@ mod tests {
     use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal,
-        FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor,
+        AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery,
+        BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker,
+        BeatOrdinal, FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts,
+        SegmentSet, SessionAnchor,
     };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};
@@ -151,7 +151,7 @@ mod tests {
         )
         .expect("invariant: fixture segment is valid");
         let segments = SegmentSet::new(
-            MapAxis::Asset(AssetAxis::new(sample_rate(), 144_001)),
+            MapAxis::Asset(AssetAxis::new(sample_rate(), AssetExtent::Bounded(144_001))),
             vec![segment],
         )
         .expect("invariant: fixture asset topology is valid");
@@ -244,7 +244,7 @@ mod tests {
     #[kithara::test]
     fn binding_rejects_old_and_foreign_track_anchor_stamps() {
         let id = grid_id();
-        let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
+        let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), AssetExtent::Bounded(96_001)));
         let old = BeatGridSnapshot::unavailable(id, BeatGridRevision::first(), axis);
         let revision = old
             .revision()
@@ -282,7 +282,7 @@ mod tests {
         let unavailable = BeatGridSnapshot::unavailable(
             grid_id(),
             BeatGridRevision::first(),
-            MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001)),
+            MapAxis::Asset(AssetAxis::new(sample_rate(), AssetExtent::Bounded(96_001))),
         );
         let binding = TrackBinding::new(
             unavailable.clone(),

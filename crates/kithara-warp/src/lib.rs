@@ -13,14 +13,14 @@ mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat};
 pub use beat_grid::{
-    BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridQuery, BeatGridRegion,
-    BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridStamp, BeatGridState,
-    BeatGridUnavailable, BeatGridView,
+    BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridModelError,
+    BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError,
+    BeatGridStamp, BeatGridState, BeatGridUnavailable, BeatGridView, GridProjectionError,
 };
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{
-    AssetAxis, AssetFrame, Beat, BeatAlignment, BeatOrdinal, FrameUncertainty, MapAxis,
-    MapCoordinateError, MapPoint, MapPosition, SessionAxis,
+    AssetAxis, AssetExtent, AssetFrame, Beat, BeatAlignment, BeatOrdinal, FrameUncertainty,
+    MapAxis, MapCoordinateError, MapPoint, MapPosition, SessionAxis,
 };
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 pub use segment::{

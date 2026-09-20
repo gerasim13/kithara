@@ -1,4 +1,6 @@
 mod identity;
+mod model;
+mod projection;
 mod publisher;
 mod segment;
 mod session;
@@ -7,6 +9,8 @@ mod state;
 mod view;
 
 pub use identity::{BeatGridId, BeatGridIdAllocationError, BeatGridRevision, BeatGridStamp};
+pub use model::BeatGridModelError;
+pub use projection::GridProjectionError;
 pub use publisher::BeatGrid;
 pub use snapshot::{BeatGridSnapshot, BeatGridSnapshotError};
 pub use state::{BeatEstimate, BeatGridQuery, BeatGridRegion, BeatGridState, BeatGridUnavailable};

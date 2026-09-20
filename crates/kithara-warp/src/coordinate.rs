@@ -137,7 +137,21 @@ impl FrameUncertainty {
     }
 }
 
-/// The stable bounded coordinate axis of an analysed asset.
+/// How far a decoded asset is known to run.
+///
+/// An asset whose length nobody has established yet is a different statement
+/// from one that is empty, so the unknown end is named rather than spelled as
+/// a frame count no decoder would produce.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum AssetExtent {
+    /// The decoded asset ends before this exclusive frame bound.
+    Bounded(u64),
+    /// Nothing has established where the decoded asset ends.
+    Unknown,
+}
+
+/// The stable coordinate axis of an analysed asset.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
@@ -145,35 +159,45 @@ pub struct AssetAxis {
     /// Returns the sample rate defining asset frames.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
-    /// Returns the exclusive decoded-asset frame bound.
+    /// Returns how far the decoded asset is known to run.
     #[field(get, copy)]
-    frame_count: u64,
+    extent: AssetExtent,
 }
 
 impl AssetAxis {
-    /// Creates a bounded asset-native coordinate axis.
+    /// Creates an asset-native coordinate axis.
+    ///
+    /// An [`AssetExtent::Unknown`] extent leaves positions past the analysed
+    /// geometry uncovered rather than outside the domain: an end nobody has
+    /// established is no end of file.
     #[must_use]
-    pub const fn new(sample_rate: NonZeroU32, frame_count: u64) -> Self {
+    pub const fn new(sample_rate: NonZeroU32, extent: AssetExtent) -> Self {
         Self {
             sample_rate,
-            frame_count,
+            extent,
         }
     }
 
     pub(crate) fn contains(self, frame: AssetFrame) -> bool {
+        let AssetExtent::Bounded(frame_count) = self.extent else {
+            return true;
+        };
         frame
             .0
             .floor()
             .to_u64()
-            .is_some_and(|whole_frame| whole_frame < self.frame_count)
+            .is_some_and(|whole_frame| whole_frame < frame_count)
     }
 
     pub(crate) fn contains_or_eof(self, frame: AssetFrame) -> bool {
         if self.contains(frame) {
             return true;
         }
+        let AssetExtent::Bounded(frame_count) = self.extent else {
+            return true;
+        };
         let frame = f64::from(frame);
-        frame.fract() == 0.0 && frame.to_u64() == Some(self.frame_count)
+        frame.fract() == 0.0 && frame.to_u64() == Some(frame_count)
     }
 }
 

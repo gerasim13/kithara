@@ -5911,6 +5911,7 @@ dependencies = [
  "masonry",
  "naga 26.0.0",
  "num-traits",
+ "objc2 0.6.4",
  "parley",
  "png 0.17.16",
  "pollster",
@@ -5938,6 +5939,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "firewheel-core",
+ "kithara-beat",
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
@@ -5952,6 +5954,7 @@ dependencies = [
  "portable-atomic",
  "realfft",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

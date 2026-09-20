@@ -23,6 +23,7 @@ stretch-signalsmith = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-str
 stretch-bungee = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-stretch/stretch-bungee", "render"]
 
 [dependencies]
+kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true }
@@ -55,6 +56,7 @@ kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "
 kithara-warp = { path = ".", default-features = false, features = ["usdt"] }
 
 realfft = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

@@ -3,8 +3,8 @@ use std::num::NonZeroU32;
 use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AssetAxis, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-    BeatGridUnavailable, MapAxis, SessionAnchor, SessionAxis, SessionBeat,
+    AssetAxis, AssetExtent, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+    BeatGridState, BeatGridUnavailable, MapAxis, SessionAnchor, SessionAxis, SessionBeat,
 };
 
 use crate::{
@@ -165,7 +165,7 @@ fn group_enforces_grid_successors() {
     let wrong_axis = BeatGridSnapshot::unavailable(
         initial.id(),
         wrong_axis_revision,
-        MapAxis::Asset(AssetAxis::new(sample_rate, 0)),
+        MapAxis::Asset(AssetAxis::new(sample_rate, AssetExtent::Bounded(0))),
     );
     assert_eq!(
         group.publish_grid(wrong_axis.clone()),
