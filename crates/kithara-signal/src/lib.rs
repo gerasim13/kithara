@@ -8,6 +8,7 @@ mod fader;
 mod interleaved;
 mod planar;
 mod sample;
+mod session;
 mod spec;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
@@ -20,5 +21,6 @@ pub use fader::FaderValue;
 pub use interleaved::InterleavedView;
 pub use planar::{PlanarBuffer, PlanarView};
 pub use sample::sanitize_sample;
+pub use session::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
 pub use units::{FrameCount, SampleCount};

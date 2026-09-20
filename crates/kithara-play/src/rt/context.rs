@@ -82,8 +82,8 @@ pub fn read_render_context<'a>(
         .0
         .checked_add(frames)
         .ok_or("render context does not match the player process block")?;
-    let output_frames = context.output_frames();
-    if context.sample_rate() != info.sample_rate
+    let output_frames = context.output().output_frames();
+    if context.output().sample_rate() != info.sample_rate
         || i64::from(output_frames.start) != info.clock_samples.0
         || i64::from(output_frames.end) != end
     {

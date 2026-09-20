@@ -17,7 +17,6 @@ pub use operation::{
 };
 pub use rejected::SyncRejected;
 pub use revision::{
-    LoadGeneration, SyncOperationId, TopologyRevision, TopologyStamp, TransportRevision,
-    WarpMapRevision,
+    LoadGeneration, SyncOperationId, TopologyRevision, TopologyStamp, WarpMapRevision,
 };
 pub use topology::{SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberSnapshot};

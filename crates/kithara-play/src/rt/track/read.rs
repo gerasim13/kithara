@@ -349,7 +349,7 @@ impl PlayerTrack {
     /// this track wrote, which is what attributes a frame to a track.
     #[kithara::probe(
         track_id = self.item_id.as_u64(),
-        output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
+        output_base = context.map(|ctx| i64::from(ctx.output().output_frames().start)),
         range_start = range.start,
         range_end = range.end,
         served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
@@ -366,7 +366,7 @@ impl PlayerTrack {
             self.resource.clear_render();
             return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
         };
-        if context.sample_rate().get() != self.sample_rate {
+        if context.output().sample_rate().get() != self.sample_rate {
             self.resource.clear_render();
             self.handle_failed_end(sink.notifications);
             return TrackReadOutcome::Failed;
@@ -376,7 +376,10 @@ impl PlayerTrack {
             self.handle_failed_end(sink.notifications);
             return TrackReadOutcome::Failed;
         };
-        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
+        if let Some(source) = self
+            .resource
+            .presentation_source_end(context.output().sample_rate())
+        {
             self.resource
                 .publish_render(&context, presentation_frontier(&context, source.frame()));
         } else {
@@ -419,7 +422,7 @@ impl PlayerTrack {
 fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
     PresentationFrontier::builder()
         .source(source)
-        .output(context.output_frames().start)
+        .output(context.output().output_frames().start)
         .build()
 }
 
@@ -427,23 +430,25 @@ fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFr
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
+    use kithara_warp::RenderContext;
 
     use super::presentation_frontier;
 
     #[kithara::test]
     fn publication_uses_the_derived_subrange_start() {
-        let context = RenderContext::new(
+        let output = OutputContext::new(
             SessionFrame::new(1_000)..SessionFrame::new(1_200),
             NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
-            None,
             SessionEpoch::new(1),
             None,
         )
-        .expect("fixture context is valid")
-        .for_output_range(40..80)
-        .expect("fixture subrange is valid");
+        .expect("fixture output range is ordered");
+        let context = RenderContext::new(output, None)
+            .expect("fixture context is valid")
+            .for_output_range(40..80)
+            .expect("fixture subrange is valid");
 
         let frontier = presentation_frontier(&context, 8_000);
 

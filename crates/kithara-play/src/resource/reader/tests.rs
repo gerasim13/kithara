@@ -19,10 +19,10 @@ use kithara_bufpool::PoolRegion;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
-use kithara_warp::{SessionEpoch, SessionFrame, Warp, WarpConfig};
+use kithara_warp::{Warp, WarpConfig};
 use ringbuf::traits::{Consumer, Producer};
 
 use super::*;
@@ -448,14 +448,14 @@ fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
         .expect("fixture Warp owns its publisher");
     let reader = publisher.reader();
     let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
-    let context = RenderContext::new(
+    let output = OutputContext::new(
         SessionFrame::new(0)..SessionFrame::new(1),
         NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
-        None,
         SessionEpoch::new(1),
         None,
     )
-    .expect("fixture context is valid");
+    .expect("fixture output range is ordered");
+    let context = RenderContext::new(output, None).expect("fixture context is valid");
     publisher.publish(
         &context,
         PresentationFrontier::builder()

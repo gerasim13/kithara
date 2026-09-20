@@ -25,9 +25,10 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
+    signal::SessionFrame,
     warp::{
-        AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
-        SyncGroup, SyncIntent, SyncOperation,
+        AlignmentSource, LoadGeneration, PresentationFrontier, SyncAdmission, SyncGroup,
+        SyncIntent, SyncOperation,
     },
 };
 #[cfg(not(target_os = "android"))]
@@ -656,7 +657,7 @@ impl ProductHarness {
         }
     }
 
-    async fn transport_revision(&self, case: SyncCase) -> kithara::warp::TransportRevision {
+    async fn transport_revision(&self, case: SyncCase) -> kithara::signal::TransportRevision {
         self.host
             .transport_revision()
             .await

@@ -134,40 +134,6 @@ impl LoadGeneration {
     }
 }
 
-/// Monotonic revision of committed session transport state.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[from(NonZeroU64)]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    /// Returns the next committed revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first committed transport revision.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
-
 /// Identity and immutable revision of one group topology snapshot.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]

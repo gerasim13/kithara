@@ -1,8 +1,8 @@
 use super::{
     LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
-    TransportRevision, WarpMapRevision,
+    WarpMapRevision,
 };
-use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame};
+use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame, TransportRevision};
 
 /// A beat on a source grid aligned with a beat on a target grid.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]

@@ -1,8 +1,9 @@
 use std::{cmp::Ordering, num::NonZeroU32};
 
+use kithara_signal::{SessionEpoch, SessionFrame};
 use num_traits::cast::ToPrimitive;
 
-use super::{BeatGridStamp, SessionFrame};
+use super::BeatGridStamp;
 
 /// A value cannot represent a beat-grid coordinate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -133,32 +134,6 @@ impl FrameUncertainty {
             return Err(MapCoordinateError::NegativeUncertainty);
         }
         Ok(Self(value))
-    }
-}
-
-/// Monotonic generation of the live session-frame axis.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct SessionEpoch(u64);
-
-impl SessionEpoch {
-    /// Creates a session epoch.
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
     }
 }
 

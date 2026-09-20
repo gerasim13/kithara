@@ -7,10 +7,10 @@ use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
 };
+use kithara_signal::SessionEpoch;
 use kithara_warp::{
-    BeatGrid, BeatGridId, SessionEpoch, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation,
+    BeatGrid, BeatGridId, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation,
 };
 mod config;
 #[cfg(feature = "offline")]

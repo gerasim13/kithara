@@ -1,76 +1,49 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::ops::Range;
 
+use kithara_signal::OutputContext;
 use num_traits::ToPrimitive;
 
-use crate::{SessionBeat, SessionEpoch, SessionFrame, TransportRevision};
+use crate::SessionBeat;
 
 /// Immutable session position for one output subrange.
+///
+/// The physical axis is owned by [`OutputContext`]; this type adds the musical
+/// range the same pass covers when the transport is playing.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderContext {
-    /// The sample rate defining [`Self::output_frames`].
-    #[field(get, copy)]
-    sample_rate: NonZeroU32,
+    /// The physical output axis this render pass covers.
+    output: OutputContext,
     /// The corresponding half-open musical range when transport is playing.
     session_beats: Option<Range<SessionBeat>>,
-    /// The committed transport revision, including paused transport.
-    #[field(get, copy)]
-    transport_revision: Option<TransportRevision>,
-    /// The exact half-open session-output frame range.
-    output_frames: Range<SessionFrame>,
-    /// The generation of the session frame axis.
-    #[field(get, copy)]
-    session_epoch: SessionEpoch,
 }
 
 impl RenderContext {
     /// Creates a context whose output and musical ranges describe the same render pass.
     #[must_use]
-    pub fn new(
-        output_frames: Range<SessionFrame>,
-        sample_rate: NonZeroU32,
-        session_beats: Option<Range<SessionBeat>>,
-        session_epoch: SessionEpoch,
-        transport_revision: Option<TransportRevision>,
-    ) -> Option<Self> {
-        let output_is_ordered = output_frames.start <= output_frames.end;
+    pub fn new(output: OutputContext, session_beats: Option<Range<SessionBeat>>) -> Option<Self> {
         let beats_are_ordered = session_beats
             .as_ref()
             .is_none_or(|beats| beats.start <= beats.end);
-        let transport_matches_beats = session_beats.is_none() || transport_revision.is_some();
-        (output_is_ordered && beats_are_ordered && transport_matches_beats).then_some(Self {
-            sample_rate,
+        let transport_matches_beats =
+            session_beats.is_none() || output.transport_revision().is_some();
+        (beats_are_ordered && transport_matches_beats).then_some(Self {
+            output,
             session_beats,
-            transport_revision,
-            output_frames,
-            session_epoch,
         })
     }
 
     /// Derives the same context for a half-open range relative to this output block.
     #[must_use]
     pub fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
-        let output_start = i64::from(self.output_frames.start);
-        let total_frames = i64::from(self.output_frames.end).checked_sub(output_start)?;
-        let total_frames = usize::try_from(total_frames).ok()?;
-        if range.start > range.end || range.end > total_frames {
-            return None;
-        }
-        let output_start = output_start.checked_add(i64::try_from(range.start).ok()?)?;
-        let output_end =
-            i64::from(self.output_frames.start).checked_add(i64::try_from(range.end).ok()?)?;
+        let total_frames = self.output.frame_count()?;
+        let output = self.output.for_output_range(range.clone())?;
         let session_beats = match self.session_beats.as_ref() {
             Some(beats) => Some(beat_subrange(beats, range, total_frames)?),
             None => None,
         };
-        Self::new(
-            SessionFrame::new(output_start)..SessionFrame::new(output_end),
-            self.sample_rate,
-            session_beats,
-            self.session_epoch,
-            self.transport_revision,
-        )
+        Self::new(output, session_beats)
     }
 }
 
@@ -93,10 +66,11 @@ fn beat_subrange(
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_test_utils::kithara;
 
     use super::RenderContext;
-    use crate::{SessionBeat, SessionEpoch, SessionFrame, TransportRevision};
+    use crate::SessionBeat;
 
     const BLOCK_FRAMES: usize = 480;
 
@@ -108,71 +82,51 @@ mod tests {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero")
     }
 
-    fn context() -> RenderContext {
-        RenderContext::new(
+    fn output(transport_revision: Option<TransportRevision>) -> OutputContext {
+        OutputContext::new(
             SessionFrame::new(0)..SessionFrame::new(BLOCK_FRAMES as i64),
             sample_rate(),
-            Some(beat(0.0)..beat(0.02)),
             SessionEpoch::new(7),
-            Some(TransportRevision::first()),
+            transport_revision,
+        )
+        .expect("invariant: fixture output range is ordered")
+    }
+
+    fn context() -> RenderContext {
+        RenderContext::new(
+            output(Some(TransportRevision::first())),
+            Some(beat(0.0)..beat(0.02)),
         )
         .expect("invariant: fixture ranges and transport agree")
     }
 
     #[kithara::test]
     fn rejects_beats_without_a_transport_revision() {
-        assert!(
-            RenderContext::new(
-                SessionFrame::new(0)..SessionFrame::new(BLOCK_FRAMES as i64),
-                sample_rate(),
-                Some(beat(0.0)..beat(0.02)),
-                SessionEpoch::new(0),
-                None,
-            )
-            .is_none()
-        );
+        assert!(RenderContext::new(output(None), Some(beat(0.0)..beat(0.02))).is_none());
     }
 
     #[kithara::test]
-    fn rejects_unordered_output_and_beat_ranges() {
+    fn rejects_unordered_beat_ranges() {
         assert!(
             RenderContext::new(
-                SessionFrame::new(1)..SessionFrame::new(0),
-                sample_rate(),
-                None,
-                SessionEpoch::new(0),
-                None,
-            )
-            .is_none()
-        );
-        assert!(
-            RenderContext::new(
-                SessionFrame::new(0)..SessionFrame::new(1),
-                sample_rate(),
+                output(Some(TransportRevision::first())),
                 Some(beat(1.0)..beat(0.0)),
-                SessionEpoch::new(0),
-                Some(TransportRevision::first()),
             )
             .is_none()
         );
     }
 
     #[kithara::test]
-    fn derives_exact_output_subrange() {
+    fn derives_exact_beat_subrange() {
         let second_half = context()
             .for_output_range(BLOCK_FRAMES / 2..BLOCK_FRAMES)
             .expect("invariant: second half is inside the block");
 
         assert_eq!(
-            second_half.output_frames(),
+            second_half.output().output_frames(),
             &(SessionFrame::new(240)..SessionFrame::new(480))
         );
         assert_eq!(second_half.session_beats(), Some(&(beat(0.01)..beat(0.02))));
-        assert_eq!(second_half.session_epoch(), SessionEpoch::new(7));
-        assert_eq!(
-            second_half.transport_revision(),
-            Some(TransportRevision::first())
-        );
     }
 
     #[kithara::test]

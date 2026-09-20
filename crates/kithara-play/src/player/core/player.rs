@@ -8,7 +8,8 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use kithara_warp::{SessionEpoch, SyncMemberKind};
+use kithara_signal::SessionEpoch;
+use kithara_warp::SyncMemberKind;
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{

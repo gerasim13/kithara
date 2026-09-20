@@ -12,7 +12,7 @@ mod temporal;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod warp;
 
-pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
+pub use anchor::{CoordinateError, SessionAnchor, SessionBeat};
 pub use beat_grid::{
     BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridQuery, BeatGridRegion,
     BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridStamp, BeatGridState,
@@ -21,8 +21,9 @@ pub use beat_grid::{
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{
     AssetAxis, AssetFrame, Beat, BeatOrdinal, FrameUncertainty, MapAxis, MapCoordinateError,
-    MapPoint, MapPosition, SessionAxis, SessionEpoch,
+    MapPoint, MapPosition, SessionAxis,
 };
+pub(crate) use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
@@ -33,7 +34,7 @@ pub use sync::{
     SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
     SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot,
     SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
-    TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
+    TopologyRevision, TopologyStamp, TransportOperation, WarpMapRevision,
 };
 #[cfg(all(
     not(target_arch = "wasm32"),

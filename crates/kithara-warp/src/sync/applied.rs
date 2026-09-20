@@ -1,8 +1,7 @@
 use super::{
-    LoadGeneration, PresentationFrontier, SyncOperationId, TopologyStamp, TransportRevision,
-    WarpMapRevision,
+    LoadGeneration, PresentationFrontier, SyncOperationId, TopologyStamp, WarpMapRevision,
 };
-use crate::BeatGridStamp;
+use crate::{BeatGridStamp, TransportRevision};
 
 /// An audible acknowledgement tied to every admission axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]

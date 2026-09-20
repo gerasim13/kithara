@@ -1,7 +1,8 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis, SessionFrame};
+use kithara_signal::SessionFrame;
+use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
     commit::{

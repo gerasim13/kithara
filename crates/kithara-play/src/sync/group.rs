@@ -1,10 +1,11 @@
 use std::num::NonZeroU32;
 
+use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    MapAxis, SessionAxis, SessionEpoch, SyncAdmission, SyncApplied, SyncCapability, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncOperationId,
-    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    MapAxis, SessionAxis, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected,
+    SyncStatusSnapshot, TopologyRevision, TopologyStamp,
 };
 
 use super::{topology::materialize_topology, transaction};

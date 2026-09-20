@@ -10,10 +10,11 @@ use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
     effects::LimiterConfig, player::PlayerMember,
 };
+use kithara_signal::SessionEpoch;
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{
-    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
+    BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
     TopologyOperation,
 };
 
