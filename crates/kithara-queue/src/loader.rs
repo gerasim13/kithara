@@ -4,7 +4,7 @@ use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
 use kithara_download::DownloaderEvent;
-use kithara_events::{Envelope, EventBus, ScopeLabel, TrackId};
+use kithara_events::{Envelope, EventBus, RecvError, ScopeLabel, TrackId};
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
@@ -232,6 +232,9 @@ where
     /// [`TrackStatus::Slow`]. Returns a never-completing future:
     /// the caller `select!`s it against `Resource::new`, so the
     /// completion side always belongs to the resource future.
+    /// A `Lagged` bus dropped the oldest envelopes and keeps
+    /// delivering, so the watch survives the gap and only `Closed`
+    /// ends it.
     async fn watch_for_slow_status(
         id: TrackId,
         bus: Option<EventBus>,
@@ -242,10 +245,16 @@ where
             None => return std::future::pending().await,
         };
         let mut marked = false;
-        while let Ok(Envelope { event: ev, .. }) = rx.recv().await {
-            if !marked && matches!(ev, DownloaderEvent::LoadSlow { .. }) {
-                tracks.set_status(id, TrackStatus::Slow);
-                marked = true;
+        loop {
+            match rx.recv().await {
+                Ok(Envelope { event: ev, .. }) => {
+                    if !marked && matches!(ev, DownloaderEvent::LoadSlow { .. }) {
+                        tracks.set_status(id, TrackStatus::Slow);
+                        marked = true;
+                    }
+                }
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => break,
             }
         }
         std::future::pending().await
@@ -255,12 +264,15 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        future,
-        num::NonZeroU32,
+        future::{self, Future},
+        num::{NonZeroU32, NonZeroU64},
+        pin::pin,
         sync::atomic::{AtomicUsize, Ordering},
+        task::{Context, Waker},
     };
 
     use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_download::RequestId;
     use kithara_events::EventBus;
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
@@ -374,6 +386,58 @@ mod tests {
             Err(QueueError::Cancelled(cancelled)) if cancelled == id
         ));
         drop(permit);
+    }
+
+    /// The bus drops the oldest envelopes under a burst and keeps
+    /// delivering, so the slow watch has to survive the gap. The burst
+    /// below is longer than the bus capacity with nothing reading, which
+    /// makes the drop certain, and the `LoadSlow` behind it still has to
+    /// reach the watch.
+    #[kithara::test(native)]
+    fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
+        const CAPACITY: usize = 4;
+
+        let bus = EventBus::new(CAPACITY);
+        let tracks = Arc::new(Tracks::<TestPools>::new(bus.clone()));
+        let id = TrackId::allocate();
+        tracks.lock().push(TrackRecord::new(
+            id,
+            "slow".into(),
+            TrackSource::Uri("https://example.com/slow.mp3".into()),
+        ));
+
+        let mut watch = pin!(Loader::watch_for_slow_status(
+            id,
+            Some(bus.clone()),
+            Arc::clone(&tracks)
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            watch.as_mut().poll(&mut cx).is_pending(),
+            "the watch must subscribe before the burst it has to survive"
+        );
+
+        let request_id = RequestId::new(NonZeroU64::MIN);
+        for _ in 0..=CAPACITY {
+            bus.publish(DownloaderEvent::RequestStarted {
+                request_id,
+                wait_in_queue: Duration::ZERO,
+            });
+        }
+        bus.publish(DownloaderEvent::LoadSlow {
+            request_id,
+            elapsed: Duration::ZERO,
+        });
+
+        assert!(
+            watch.as_mut().poll(&mut cx).is_pending(),
+            "the watch never completes: it ends only with the resource it races"
+        );
+        assert_eq!(
+            tracks.lock()[0].status,
+            TrackStatus::Slow,
+            "a dropped burst must not deafen the watch to the `LoadSlow` behind it"
+        );
     }
 
     /// Test fixture: the [`Loader`] under test, the shared
