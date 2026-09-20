@@ -28,7 +28,8 @@ pub use archive::{
     AnalysisFileWrite,
 };
 pub use artifact::{
-    AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis,
+    AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
+    ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
 };
 pub use blob::frame::BlobError;
 pub use coverage::{Coverage, FrameRange};
