@@ -65,11 +65,29 @@ impl Parked {
 /// deadline is registered: a few OS timer quanta.
 pub(super) const MAX_PACE_LAG_NANOS: u64 = 50_000_000;
 
+/// What a timed park's deadline MEANS to the engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::flash) enum ParkRole {
+    /// The deadline is the event: nothing else releases this waiter on time,
+    /// so the clock owes it a stop.
+    Deadline,
+    /// The deadline is a BACKSTOP under a [`WaitGate`](crate::sync::WaitGate)
+    /// edge: the waiter expects a signal and carries a timeout only so a
+    /// missed edge cannot wedge it. Re-checking the edge when nothing has
+    /// happened observes nothing, so the clock bounds such a park instead of
+    /// stopping at it.
+    Backstop,
+}
+
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
     /// `Some` for deadline-less waiters only. See [`Parked`].
     pub(super) parked: Option<Parked>,
     pub(super) kind: WaitKind,
+    /// What this entry's deadline means. A [`ParkRole::Backstop`] entry never
+    /// becomes the advance target while some other deadline exists; a jump that
+    /// passes it still wakes it.
+    pub(super) role: ParkRole,
     pub(super) wake: Wake,
 }
 
@@ -80,6 +98,7 @@ impl Entry {
         Self {
             kind,
             wake,
+            role: ParkRole::Deadline,
             parked: Some(parked),
         }
     }
@@ -90,6 +109,18 @@ impl Entry {
         Self {
             kind,
             wake,
+            role: ParkRole::Deadline,
+            parked: None,
+        }
+    }
+
+    /// A waiter whose deadline is only a backstop under an edge. See
+    /// [`ParkRole::Backstop`].
+    fn backstop(kind: WaitKind, wake: Wake) -> Self {
+        Self {
+            kind,
+            wake,
+            role: ParkRole::Backstop,
             parked: None,
         }
     }
@@ -248,10 +279,25 @@ impl Core {
             self.registry.account_woken(&woken);
             return WakeBatch(woken);
         }
-        let Some((&(min, _), _)) = self.sched.timed.iter().next() else {
+        let Some((&(earliest, _), _)) = self.sched.timed.iter().next() else {
             // WHY: Quiescent with NO timed waiter to advance to. Any parked yield-waiter was already drained above (when `timed` is empty the
             // all-`Thread` guard is vacuously true), so reaching here means there is nothing runnable at all: stay put.
             return WakeBatch(Vec::new());
+        };
+        // WHY: A BACKSTOP park re-checks an edge that only another participant can move (`ParkRole::Backstop`). Stopping a PURELY VIRTUAL
+        // advance at one prices every wait at a hop per poll interval: behind a live worker a virtual day costs millions of hops and burns
+        // real seconds. Such an advance BOUNDS the jump instead - the loop below wakes every park the jump passed - and when no other
+        // deadline exists the backstop IS the target, so its timeout still fires and the clock can never freeze. A PACED advance keeps the
+        // earliest deadline: virtual time is tied to real time there, so a backstop costs nothing, while targeting a later deadline would
+        // hold the clock until real time reached it - the producer behind the backstop would starve.
+        let min = if paced {
+            earliest
+        } else {
+            self.sched
+                .timed
+                .iter()
+                .find(|(_, e)| e.role != ParkRole::Backstop)
+                .map_or(earliest, |(&(deadline, _), _)| deadline)
         };
         if paced {
             // WHY: PACE while real I/O is in flight: virtual time may not outrun real time, so the earliest deadline fires only once the
@@ -277,7 +323,8 @@ impl Core {
         self.sched.advance_log.push(min);
         let mut woken: Vec<Wake> = Vec::new();
         while let Some((&(d, _), _)) = self.sched.timed.iter().next() {
-            if d != min {
+            // WHY: `>`, not `!=`: the target skips BACKSTOP parks, so one jump can pass several of them and every one it passed is due.
+            if d > min {
                 break;
             }
             if let Some((_, entry)) = self.sched.timed.pop_first() {
@@ -363,6 +410,7 @@ impl FlashInner {
         &self,
         d: crate::flash::Duration,
         thread_id: ThreadKey,
+        role: ParkRole,
     ) {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
@@ -376,7 +424,14 @@ impl FlashInner {
         s.bound_pace_lag(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token))),
+            match role {
+                ParkRole::Deadline => {
+                    Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
+                }
+                ParkRole::Backstop => {
+                    Entry::backstop(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
+                }
+            },
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);

@@ -18,6 +18,6 @@ impl Handle {
 /// Error type kept for API compatibility (never actually returned on wasm32).
 #[derive(Debug, derive_more::Display)]
 #[display("no tokio runtime on wasm32")]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct TryCurrentError;
-
-impl std::error::Error for TryCurrentError {}

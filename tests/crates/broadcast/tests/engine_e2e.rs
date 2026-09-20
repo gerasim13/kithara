@@ -45,7 +45,7 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
         .with_player(move |player| {
             player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

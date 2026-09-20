@@ -34,7 +34,21 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_deref: DerivableConfig,
     #[serde(default)]
-    pub(crate) derivable_display: DerivableConfig,
+    pub(crate) derivable_clone: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_control: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_control_painter: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_built_default: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_debug: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_default: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_display: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_error: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_event: DerivableEventConfig,
     #[serde(default)]
@@ -42,9 +56,31 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
     #[serde(default)]
+    pub(crate) derivable_retained: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_serialize: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_skin_walk: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_patch: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_phase: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_view_control: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
+    #[serde(default)]
+    pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_mirror: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_node_control: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_enum_str: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_variants: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]

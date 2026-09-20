@@ -56,36 +56,46 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(derive_more::Debug)]
 pub struct FetchCmd {
     /// URL to fetch.
     #[builder(start_fn)]
     pub(crate) url: Url,
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
+    #[debug(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Live demand probe; `None` when the peer cannot tell.
+    #[debug(skip)]
     pub(crate) demand: Option<DemandFn>,
     /// Additional HTTP headers for this request.
+    #[debug(skip)]
     pub(crate) headers: Option<Headers>,
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
+    #[debug(skip)]
     pub(crate) on_complete: Option<OnCompleteFn>,
     /// Streaming path response callback — fires once when the
     /// response is ready, before the body streams. `None` for the
     /// channel path (`execute`/`batch`).
+    #[debug(skip)]
     pub(crate) on_response: Option<OnResponseFn>,
     /// Streaming path slow hook — fires once at `soft_timeout` if the
     /// fetch has not completed. `None` for callers that don't observe
     /// slowness. The request keeps running regardless.
+    #[debug(skip)]
     pub(crate) on_slow: Option<OnSlowFn>,
     /// Scheduling priority for proactive peer fetches.
+    #[debug(skip)]
     pub(crate) priority: Option<RequestPriority>,
     /// Optional byte range (HTTP Range request).
     pub(crate) range: Option<RangeSpec>,
     /// Optional per-request response validator.
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.
+    #[debug(skip)]
     pub(crate) validator: Option<ResponseValidator>,
     /// Streaming path body writer. `None` for channel path (`execute`/`batch`).
+    #[debug(skip)]
     pub(crate) writer: Option<WriterFn>,
     /// HTTP method.
     pub(crate) method: RequestMethod,
@@ -141,16 +151,6 @@ impl FetchCmd {
     #[must_use]
     pub const fn url(&self) -> &Url {
         &self.url
-    }
-}
-
-impl std::fmt::Debug for FetchCmd {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FetchCmd")
-            .field("method", &self.method)
-            .field("url", &self.url)
-            .field("range", &self.range)
-            .finish_non_exhaustive()
     }
 }
 

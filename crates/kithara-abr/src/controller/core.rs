@@ -13,7 +13,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
-use kithara_test_utils::{kithara, probe::IntoProbeArg};
+use kithara_test_utils::kithara;
 
 use super::peer::PeerEntry;
 use crate::{
@@ -41,7 +41,8 @@ impl Defaults {
 }
 
 /// Opaque peer identifier assigned by the ABR controller on `register`.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, kithara::IntoProbeArg)]
+#[probe_arg(encode_only)]
 pub struct AbrPeerId(NonZeroU64);
 
 impl AbrPeerId {
@@ -52,46 +53,41 @@ impl AbrPeerId {
     }
 }
 
-impl IntoProbeArg for AbrPeerId {
-    fn into_probe_arg(self) -> u64 {
-        self.0.get()
-    }
-}
-
 /// ABR controller settings.
 #[derive(Clone, Debug, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_DELTA)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
     #[builder(default = Defaults::MIN_SWITCH_INTERVAL)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
     #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
@@ -116,12 +112,6 @@ pub struct AbrSettings {
     /// Hysteresis ratio for up-switch.
     #[builder(default = Defaults::UP_HYSTERESIS_RATIO)]
     pub up_hysteresis_ratio: f64,
-}
-
-impl Default for AbrSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 /// Shared per-player ABR controller.
@@ -269,10 +259,22 @@ impl Drop for AbrController {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
+    use std::num::NonZeroU64;
 
-    use super::{AbrSettings, AbrSettingsPatch};
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::{kithara, probe::IntoProbeArg};
+
+    use super::{AbrPeerId, AbrSettings, AbrSettingsPatch};
+
+    #[kithara::test]
+    fn peer_id_probe_argument_preserves_the_non_zero_value() {
+        assert_eq!(AbrPeerId::new(NonZeroU64::MIN).into_probe_arg(), 1);
+        assert_eq!(
+            AbrPeerId::new(NonZeroU64::new(u64::MAX).expect("u64::MAX is non-zero"))
+                .into_probe_arg(),
+            u64::MAX
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_hysteresis_it_names() {

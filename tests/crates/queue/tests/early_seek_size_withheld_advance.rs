@@ -105,12 +105,15 @@ impl Harness {
         }
     }
 
-    fn player(&self) -> &PlayerImpl<TestPools> {
-        self.player.as_ref().expect("harness player is available")
-    }
-
-    fn take_player(&mut self) -> PlayerImpl<TestPools> {
-        self.player.take().expect("harness player was transferred")
+    delegate::delegate! {
+        to self.player {
+            #[expr($.expect("harness player is available"))]
+            #[call(as_ref)]
+            fn player(&self) -> &PlayerImpl<TestPools>;
+            #[expr($.expect("harness player was transferred"))]
+            #[call(take)]
+            fn take_player(&mut self) -> PlayerImpl<TestPools>;
+        }
     }
 
     async fn render(&self, frames: usize) -> Vec<f32> {
@@ -268,7 +271,15 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
     let player = harness.take_player();
     let queue = harness
         .host
-        .insert_control(Queue::new(QueueConfig::builder().player(player).build()))
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .crossfade_settings(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        ))
         .await
         .expect("insert queue into product offline Host");
     let mut queue_events = queue.subscribe::<TestEvent>();
@@ -325,7 +336,18 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
                     {
                         trigger = Trigger::DidPlayToEnd;
                     }
-                    _ => {}
+                    PlayerEvent::ItemDidFail { .. }
+                    | PlayerEvent::ItemDidPlayToEnd { .. }
+                    | PlayerEvent::StatusChanged { .. }
+                    | PlayerEvent::TimeControlStatusChanged { .. }
+                    | PlayerEvent::RateChanged { .. }
+                    | PlayerEvent::PlaybackStarted { .. }
+                    | PlayerEvent::VolumeChanged { .. }
+                    | PlayerEvent::MuteChanged { .. }
+                    | PlayerEvent::CurrentItemChanged { .. }
+                    | PlayerEvent::PrerollCompleted { .. }
+                    | PlayerEvent::PrefetchRequested
+                    | PlayerEvent::HandoverRequested { .. } => {}
                 }
             }
         }

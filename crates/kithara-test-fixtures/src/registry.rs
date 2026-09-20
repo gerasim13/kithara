@@ -2,6 +2,8 @@ use crate::context::BuildContext;
 
 pub(crate) enum AssetBuild {
     Ready(Vec<u8>),
+    /// Only a fetching family can fail to produce bytes.
+    #[cfg(feature = "remote")]
     Unavailable(String),
 }
 

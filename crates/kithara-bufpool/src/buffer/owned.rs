@@ -7,10 +7,13 @@ use crate::{
     pool::{Core, storage::Storage},
 };
 
+#[derive(derive_more::Deref, derive_more::DerefMut)]
 pub(crate) struct OwnedBuffer<const SHARDS: usize, B, const OBSERVE: bool>
 where
     B: Storage,
 {
+    #[deref(forward)]
+    #[deref_mut(forward)]
     pub(super) value: B,
     core: Arc<Core<SHARDS, B, OBSERVE>>,
     shard_idx: usize,

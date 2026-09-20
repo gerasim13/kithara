@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fs, ops::Range, path::PathBuf};
+use std::{fs, ops::Range, path::PathBuf};
 
 use arc_swap::ArcSwapOption;
 use bon::Builder;
@@ -76,32 +76,28 @@ impl MmapState {
 ///
 /// Uses `mmap-io` for file-backed storage with a lock-free `SegQueue`
 /// for fast-path wait notifications.
+#[derive(derive_more::Debug)]
 pub struct MmapDriver {
     /// Immutable committed snapshot for the lock-free read fast path.
+    #[debug("{:?}", self.committed.load().is_some())]
     pub(super) committed: ArcSwapOption<MemoryMappedFile>,
+    #[debug(skip)]
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
     /// Lock-free queue for fast-path range notifications.
+    #[debug(skip)]
     pub(super) ready_ranges: SegQueue<Range<u64>>,
     /// Multiplier a write past the mapping's end grows it by, from
     /// `MmapOptions::growth_factor`.
+    #[debug(skip)]
     pub(super) growth_factor: u64,
     /// Size a fresh mapping starts at, from `MmapOptions::initial_len`. A
     /// re-download reuses it so the rewrite generation is reserved exactly
     /// like the first one instead of restarting from the default and
     /// re-mapping its way back up.
+    #[debug(skip)]
     pub(super) initial_len: u64,
-}
-
-impl fmt::Debug for MmapDriver {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MmapDriver")
-            .field("path", &self.path)
-            .field("mode", &self.mode)
-            .field("committed", &self.committed.load().is_some())
-            .finish_non_exhaustive()
-    }
 }
 
 impl Driver for MmapDriver {

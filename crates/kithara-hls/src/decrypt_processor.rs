@@ -1,5 +1,3 @@
-use std::fmt;
-
 use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::sync::Arc;
@@ -10,18 +8,11 @@ pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
 }
 
 /// AES-128-CBC [`ResourceProcessor`] over a [`DecryptContext`].
+#[derive(derive_more::Debug)]
 pub(crate) struct DecryptProcessor {
-    ctx: DecryptContext,
+    #[debug("<redacted>")]
     identity: [u8; 32],
-}
-
-impl fmt::Debug for DecryptProcessor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DecryptProcessor")
-            .field("identity", &"<redacted>")
-            .field("ctx", &self.ctx)
-            .finish()
-    }
+    ctx: DecryptContext,
 }
 
 impl DecryptProcessor {
@@ -31,7 +22,7 @@ impl DecryptProcessor {
         let (key, iv) = identity.split_at_mut(ctx.key.len());
         key.copy_from_slice(&ctx.key);
         iv.copy_from_slice(&ctx.iv);
-        Self { ctx, identity }
+        Self { identity, ctx }
     }
 }
 

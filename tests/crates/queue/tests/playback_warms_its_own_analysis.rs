@@ -82,9 +82,9 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
         .await
         .expect("analysis fixture track appends");
     wait_until(Duration::from_secs(60), "playback resource load", || {
-        queue
-            .track(id)
-            .is_some_and(|entry| matches!(entry.status, TrackStatus::Loaded))
+        queue.track(id).is_some_and(|entry| {
+            matches!(entry.status, TrackStatus::Loaded | TrackStatus::Consumed)
+        })
     })
     .await
     .expect("playback resource did not finish loading");

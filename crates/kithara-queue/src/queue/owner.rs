@@ -2,7 +2,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 
 use super::{Queue, Transition};
-use crate::{QueueError, TrackSource, event::AdvanceReason};
+use crate::{QueueError, TrackSource};
 
 impl<S> Queue<S>
 where
@@ -64,18 +64,14 @@ where
             /// # Errors
             ///
             /// Returns a queue or player error when the successor cannot be selected.
-            pub fn advance_to_next(
-                &self,
-                transition: Transition,
-                reason: AdvanceReason,
-            ) -> Result<Option<TrackId>, QueueError>;
+            pub fn next(&self, transition: Transition) -> Result<Option<TrackId>, QueueError>;
 
             /// Return to the previous navigation-owned track.
             ///
             /// # Errors
             ///
             /// Returns a queue or player error when the predecessor cannot be selected.
-            pub fn return_to_previous(
+            pub fn previous(
                 &self,
                 transition: Transition,
             ) -> Result<Option<TrackId>, QueueError>;

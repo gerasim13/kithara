@@ -370,9 +370,12 @@ mod tests {
                 apply(state, Message::SelectCatalogTrack(1));
                 assert_eq!(state.selected_track, Some(1));
 
-                apply(state, Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0)));
+                apply(
+                    state,
+                    Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0.into())),
+                );
                 let deck = state.decks.get(DeckId(0)).expect("deck A");
-                assert_eq!(deck.view.timestretch.tempo, 50.0);
+                assert_eq!(f32::from(deck.view.timestretch.tempo), 50.0);
 
                 apply(state, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
                 let tracks = {

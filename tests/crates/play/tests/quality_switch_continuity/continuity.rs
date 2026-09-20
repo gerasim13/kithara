@@ -1,4 +1,4 @@
-use std::{array, fmt};
+use std::array;
 
 use cochlea_features::{Audio as ProbeAudio, ProbeOpts, SegmentOpts, probe, segment_timeline};
 use kithara_integration_tests::{TestServerHelper, cochlea::percentile_f32};
@@ -19,7 +19,24 @@ struct ChannelMetric {
     background_residual: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, derive_more::Display)]
+#[display(
+    "ch{channel} switched(step={:.6}@{}, bg={:.6}, residual={:.6}@{}, bg={:.6}) control(step={:.6}, residual={:.6}) excess(step={:.6}@{}, bg={:.6}, residual={:.6}@{}, bg={:.6}) limits(step={step_limit:.6}, residual={residual_limit:.6})",
+    switched.peak_step,
+    switched.peak_step_frame,
+    switched.background_step,
+    switched.peak_residual,
+    switched.peak_residual_frame,
+    switched.background_residual,
+    control.peak_step,
+    control.peak_residual,
+    excess.peak_step,
+    excess.peak_step_frame,
+    excess.background_step,
+    excess.peak_residual,
+    excess.peak_residual_frame,
+    excess.background_residual,
+)]
 struct ChannelComparison {
     channel: usize,
     switched: ChannelMetric,
@@ -27,32 +44,6 @@ struct ChannelComparison {
     excess: ChannelMetric,
     step_limit: f32,
     residual_limit: f32,
-}
-
-impl fmt::Display for ChannelComparison {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "ch{} switched(step={:.6}@{}, bg={:.6}, residual={:.6}@{}, bg={:.6}) control(step={:.6}, residual={:.6}) excess(step={:.6}@{}, bg={:.6}, residual={:.6}@{}, bg={:.6}) limits(step={:.6}, residual={:.6})",
-            self.channel,
-            self.switched.peak_step,
-            self.switched.peak_step_frame,
-            self.switched.background_step,
-            self.switched.peak_residual,
-            self.switched.peak_residual_frame,
-            self.switched.background_residual,
-            self.control.peak_step,
-            self.control.peak_residual,
-            self.excess.peak_step,
-            self.excess.peak_step_frame,
-            self.excess.background_step,
-            self.excess.peak_residual,
-            self.excess.peak_residual_frame,
-            self.excess.background_residual,
-            self.step_limit,
-            self.residual_limit,
-        )
-    }
 }
 
 #[derive(Debug)]

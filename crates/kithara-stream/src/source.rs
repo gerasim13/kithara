@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error as StdError, num::NonZeroUsize, ops::Range};
+use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_platform::{
     maybe_send::{MaybeSend, MaybeSync},
@@ -127,6 +127,8 @@ pub trait SourceProbe: Send + Sync + 'static {
 /// caller action; there is no overlap and no string-matching required.
 #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub enum PendingReason {
     /// A seek is pending (consumer flagged the timeline). The caller
     /// must abort the current read and let the seek apply — do **not**
@@ -174,8 +176,6 @@ pub enum NotReadyCause {
     #[display("source returned pending after wait ready")]
     SourcePending,
 }
-
-impl StdError for PendingReason {}
 
 /// Outcome of a [`Source::read_at`] call.
 ///

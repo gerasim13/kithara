@@ -50,7 +50,11 @@ async fn wait_for_failed(
                     TrackStatus::Loaded => {
                         return Err("track loaded from a stalled playlist".into());
                     }
-                    _ => {}
+                    TrackStatus::Pending
+                    | TrackStatus::Loading
+                    | TrackStatus::Slow
+                    | TrackStatus::Consumed
+                    | TrackStatus::Cancelled => {}
                 }
             }
             _ => {}

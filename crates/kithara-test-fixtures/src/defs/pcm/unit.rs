@@ -20,6 +20,10 @@ impl Consts {
     ];
     const TEST_DECAY: f32 = 400.0;
     const TEST_BURST_SECONDS: f32 = 0.01;
+    const WARP_BEATS: usize = 8;
+    const WARP_CLICK_OFFSET: usize = 8_192;
+    const WARP_NOMINAL_FRAMES: usize = 176_400;
+    const WARP_NOMINAL_PERIOD: usize = 22_050;
 }
 
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
@@ -135,14 +139,8 @@ impl Consts {
 #[case::warp_sine(warp_tone(352_800))]
 #[case::warp_pair(vec![0.25, -0.5])]
 #[case::warp_constant(vec![0.25; 10240])]
-#[case::warp_clicks({     let mut src = warp_silence(352_800);
-    for k in 0..8 {
-        warp_click(&mut src, k * 19_845 + 8192);
-    }
-    for k in 0..8 {
-        warp_click(&mut src, 158_760 + k * 24_255 + 8192);
-    }
- src })]
+#[case::warp_nominal_clicks(warp_nominal_clicks())]
+#[case::warp_clicks(warp_clicks())]
 fn unit_pcm(samples: Vec<f32>) -> Vec<u8> {
     samples.into_iter().flat_map(f32::to_le_bytes).collect()
 }
@@ -303,6 +301,30 @@ fn warp_click(buf: &mut [f32], frame: usize) {
         buf[idx] = s;
         buf[idx + 1] = s;
     }
+}
+
+/// Eight beats, then eight more at a faster period: a tempo change mid-track.
+fn warp_clicks() -> Vec<f32> {
+    let mut out = warp_silence(352_800);
+    for beat in 0..8 {
+        warp_click(&mut out, beat * 19_845 + 8192);
+    }
+    for beat in 0..8 {
+        warp_click(&mut out, 158_760 + beat * 24_255 + 8192);
+    }
+    out
+}
+
+/// Eight clicks one nominal period apart: the grid the warp core declares.
+fn warp_nominal_clicks() -> Vec<f32> {
+    let mut out = warp_silence(Consts::WARP_NOMINAL_FRAMES);
+    for beat in 0..Consts::WARP_BEATS {
+        warp_click(
+            &mut out,
+            beat * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET,
+        );
+    }
+    out
 }
 
 fn unit_f32(value: f64) -> f32 {

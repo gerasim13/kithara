@@ -17,6 +17,7 @@ use crate::{
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
+#[derive_where::derive_where(Clone; B: ResamplerBackend)]
 pub struct AnalyzerBuilder<B, S>
 where
     B: ResamplerBackend,
@@ -26,20 +27,6 @@ where
     beat_config: Option<BeatAnalysisConfig<B>>,
     #[field(get, vis = "pub(crate)")]
     pools: PoolRegion<S>,
-}
-
-impl<B, S> Clone for AnalyzerBuilder<B, S>
-where
-    B: ResamplerBackend,
-{
-    fn clone(&self) -> Self {
-        Self {
-            beat: self.beat.clone(),
-            waveform: self.waveform,
-            beat_config: self.beat_config.clone(),
-            pools: self.pools.clone(),
-        }
-    }
 }
 
 impl<B, S> AnalyzerBuilder<B, S>

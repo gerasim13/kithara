@@ -1,9 +1,9 @@
 mod control;
 mod event;
-mod geometry;
+pub(crate) mod geometry;
 mod host;
 mod measure;
-mod mount;
+pub(crate) mod mount;
 mod node;
 mod panel;
 mod size;

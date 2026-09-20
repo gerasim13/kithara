@@ -10,7 +10,13 @@ use crate::{
 /// Unlike the icon inside a button or a rail item, this one is the whole
 /// control: nothing sits beside it, so it has the middle of the box rather than
 /// a left edge to start from.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = GlyphData,
+    draw = self.paint(list, text, data, bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_bool, field = active)]
 pub(crate) struct Glyph {
     active_color: Rgba,
     color: Rgba,

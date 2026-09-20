@@ -61,9 +61,8 @@ class PlayerViewModelBase: ObservableObject {
     /// `bindEvents()` (invoked from `init`).
     let player = PlayerViewModelBase.makePlayer()
 
-    /// Build the demo player. Every DRM rule, the crossfade window and the
-    /// asset store are initial state, so they are declared here once rather
-    /// than mutated after construction.
+    /// Build the demo player with all initial policy and DRM state applied
+    /// atomically at construction.
     static func makePlayer() -> KitharaPlayer {
         let rules = bundledDrmProviders().map { provider -> KitharaPlayer.KeyRule in
             let salt = provider.salt
@@ -80,12 +79,18 @@ class PlayerViewModelBase: ObservableObject {
                 salt: salt
             )
         }
+        let settings: CrossfadeSettings
+        do {
+            settings = try CrossfadeSettings(duration: defaultCrossfadeSeconds)
+        } catch {
+            preconditionFailure("static crossfade settings must be valid: \(error)")
+        }
         return KitharaPlayer(
             config: KitharaPlayer.Config(
                 keyRules: rules,
                 store: AssetStore(root: defaultCacheDir),
-                crossfadeDuration: defaultCrossfadeSeconds,
-                playingRate: defaultRate
+                playingRate: defaultRate,
+                crossfadeSettings: settings
             )
         )
     }
@@ -145,7 +150,7 @@ class PlayerViewModelBase: ObservableObject {
         volume = player.volume
         isMuted = player.isMuted
         eqGains = Array(repeating: 0, count: player.eqBandCount)
-        crossfadeDuration = player.crossfadeDuration
+        crossfadeDuration = player.crossfadeSettings.duration
 
         bindEvents()
 
@@ -157,7 +162,7 @@ class PlayerViewModelBase: ObservableObject {
     // MARK: - Subclass hooks
 
     /// Attach subscriptions to player-level event streams. Called
-    /// from `init`. Combine subclass attaches a
+    /// from `init` AFTER DRM setup. Combine subclass attaches a
     /// Combine `sink`; Rx subclass attaches RxSwift `subscribe`.
     func bindEvents() {
         fatalError("override in subclass")
@@ -311,7 +316,7 @@ class PlayerViewModelBase: ObservableObject {
     }
 
     func advanceToNextItem() {
-        player.advanceToNextItem()
+        try? player.next()
     }
 
     func updatePeakBitrate(wifi: Double, cellular: Double) {
@@ -325,7 +330,9 @@ class PlayerViewModelBase: ObservableObject {
     func setCrossfadeDuration(_ seconds: Float) {
         let clamped = min(max(seconds, Self.crossfadeRange.lowerBound), Self.crossfadeRange.upperBound)
         crossfadeDuration = clamped
-        player.crossfadeDuration = clamped
+        if let settings = try? CrossfadeSettings(duration: clamped) {
+            try? player.setCrossfadeSettings(settings)
+        }
     }
 
     // MARK: - Transport

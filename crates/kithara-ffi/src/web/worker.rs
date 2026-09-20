@@ -16,7 +16,7 @@ use kithara::{
         PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
-    queue::{QueueConfig, TrackId},
+    queue::{QueueConfig, TrackId, Transition},
 };
 
 use crate::{
@@ -85,6 +85,9 @@ pub(crate) fn worker_main(
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
 ) {
+    /// Default crossfade window, in seconds. Mirrors the legacy worker.
+    const CROSSFADE_SECONDS: f32 = 5.0;
+
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
     // the Worker, killing the command + tick loops.
@@ -114,7 +117,10 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        queue.set_crossfade_duration(kithara::play::DEFAULT_CROSSFADE_DURATION);
+        let _ = queue.set_crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: CROSSFADE_SECONDS,
+            ..Default::default()
+        });
 
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
@@ -178,7 +184,15 @@ fn dispatch_cmd(
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
         }
         WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
-        WorkerCmd::SetCrossfade(secs) => queue.set_crossfade_duration(secs),
+        WorkerCmd::SetCrossfade(settings) => {
+            let _ = queue.set_crossfade_settings(settings);
+        }
+        WorkerCmd::Next => {
+            let _ = queue.next(Transition::None);
+        }
+        WorkerCmd::Previous => {
+            let _ = queue.previous(Transition::None);
+        }
         WorkerCmd::SetEqGain { band, gain_db } => {
             let band_idx: usize = num_traits::cast(band).unwrap_or(0);
             let _ = queue.set_eq_gain(band_idx, gain_db);
@@ -249,6 +263,8 @@ fn dispatch_cmd(
             apply_abr_mode(queue, variant_index);
         }
         WorkerCmd::SetRepeat(mode) => queue.set_repeat(mode),
+        WorkerCmd::SetPlaybackOrder(order) => queue.set_playback_order(order),
+        WorkerCmd::SetActionAtItemEnd(action) => queue.set_action_at_item_end(action),
         WorkerCmd::SetDucking(mode) => {
             if let Err(err) = queue.set_session_ducking(mode) {
                 clog!("[WORKER] session ducking failed: {err}");
@@ -333,8 +349,8 @@ struct SetupHlsAesArgs {
 /// cross-thread [`KeyRequestFactory`] (the real JS callback lives on the
 /// main thread; the worker-side processor routes each decrypt through
 /// [`key_processor_bridge`]) and writes the salt / static headers into the
-/// player-wide header map. The wasm counterpart of the native
-/// [`build_initial_key_state`](crate::native::inner) fold.
+/// player-wide header map. Mirrors
+/// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
 fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
     let SetupHlsAesArgs {
         salt,

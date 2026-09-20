@@ -118,16 +118,9 @@ pub(super) struct PendingResourceInner<S> {
 ///
 /// Cheap to [`Clone`] (one `Arc` bump); all clones share the same slot
 /// map, so consumer demand aggregates across `AssetStore` clones automatically.
+#[derive_where::derive_where(Clone)]
 pub(crate) struct PendingResourceIndex<S> {
     inner: Arc<PendingResourceInner<S>>,
-}
-
-impl<S> Clone for PendingResourceIndex<S> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
 }
 
 impl<S> PendingResourceIndex<S>

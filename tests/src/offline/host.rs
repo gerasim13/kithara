@@ -125,8 +125,11 @@ where
         self.host.run(move || f(&control)).await
     }
 
-    pub const fn host(&self) -> &OfflineHostHarness<S> {
-        &self.host
+    delegate::delegate! {
+        to self {
+            #[field(&host)]
+            pub const fn host(&self) -> &OfflineHostHarness<S>;
+        }
     }
 
     /// Drops the resident before waiting for Host session teardown.

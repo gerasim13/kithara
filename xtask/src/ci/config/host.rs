@@ -1,6 +1,5 @@
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -383,22 +382,14 @@ impl CiHost {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[display(
+    "build_cache_size {value:?} must be a positive whole number followed by GB and fit in u64 bytes"
+)]
+#[error(ignore)]
 pub(crate) struct BuildCacheSizeError {
     value: String,
 }
-
-impl fmt::Display for BuildCacheSizeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "build_cache_size {:?} must be a positive whole number followed by GB and fit in u64 bytes",
-            self.value
-        )
-    }
-}
-
-impl Error for BuildCacheSizeError {}
 
 /// Budget a profile inherits when it predates the field, and a floor rather
 /// than a fleet's working set: it is one ceiling for every target directory

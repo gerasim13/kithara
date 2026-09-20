@@ -1,9 +1,9 @@
-use std::fmt;
-
 use super::OwnedBuffer;
 use crate::PoolError;
 
 /// A checked UTF-8 guard returned by a registered [`crate::StringKey`].
+#[derive(derive_more::Debug)]
+#[debug("{:?}", _0.value)]
 pub struct PooledString<const SHARDS: usize>(pub(super) OwnedBuffer<SHARDS, String, true>);
 
 impl<const SHARDS: usize> PooledString<SHARDS> {
@@ -34,11 +34,5 @@ impl<const SHARDS: usize> std::ops::Deref for PooledString<SHARDS> {
 
     fn deref(&self) -> &Self::Target {
         &self.0.value
-    }
-}
-
-impl<const SHARDS: usize> fmt::Debug for PooledString<SHARDS> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.value.fmt(formatter)
     }
 }

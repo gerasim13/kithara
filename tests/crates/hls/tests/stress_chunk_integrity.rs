@@ -247,7 +247,7 @@ async fn stress_chunk_integrity(
             Direction::Ascending => {
                 warmup_ascending += 1;
             }
-            Direction::Descending => {
+            Direction::Descending if intra_chunk_breaks(&chunk) <= 1 => {
                 info!(
                     warmup_ascending,
                     warmup_unknown,
@@ -257,7 +257,7 @@ async fn stress_chunk_integrity(
                 );
                 break;
             }
-            Direction::Unknown => {
+            Direction::Descending | Direction::Unknown => {
                 warmup_unknown += 1;
             }
         }

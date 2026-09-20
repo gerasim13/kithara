@@ -1,17 +1,13 @@
 use bon::Builder;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::ids::InternId;
 
 /// The deck's tempo, editable in place.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.deck.bpm_size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Bpm {
     pub(crate) placeholder: Option<InternId>,
-}
-
-impl Control for Bpm {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.deck.bpm_size
-    }
 }
 
 #[cfg(feature = "render")]

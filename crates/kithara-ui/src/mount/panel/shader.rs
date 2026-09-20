@@ -1,6 +1,8 @@
-use crate::{mount::Control, shader::ShaderSpec, size::SizeSpec, skin::SkinDoc};
+use crate::{shader::ShaderSpec, size::SizeSpec};
 
 /// A document-owned shader that occupies its declared layout box.
+#[derive(kithara_derive::Control)]
+#[control(size = SizeSpec::FILL)]
 pub(crate) struct Shader<'a> {
     pub(crate) spec: &'a ShaderSpec,
 }
@@ -8,11 +10,5 @@ pub(crate) struct Shader<'a> {
 impl<'a> Shader<'a> {
     pub(crate) const fn new(spec: &'a ShaderSpec) -> Self {
         Self { spec }
-    }
-}
-
-impl Control for Shader<'_> {
-    fn size(&self, _skin: &SkinDoc) -> SizeSpec {
-        SizeSpec::FILL
     }
 }

@@ -24,7 +24,8 @@ use crate::{
 /// (whose internals are private), produced by mapping the inner ring's errors.
 pub mod error {
     /// Failure of an awaited `recv`.
-    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq, derive_more::Error)]
+    #[error(ignore)]
     pub enum RecvError {
         /// All senders dropped and the ring is drained.
         #[display("channel closed")]
@@ -34,10 +35,9 @@ pub mod error {
         Lagged(u64),
     }
 
-    impl std::error::Error for RecvError {}
-
     /// Failure of a non-blocking `try_recv`.
-    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq, derive_more::Error)]
+    #[error(ignore)]
     pub enum TryRecvError {
         /// No message is currently buffered for this receiver.
         #[display("channel empty")]
@@ -50,23 +50,14 @@ pub mod error {
         Lagged(u64),
     }
 
-    impl std::error::Error for TryRecvError {}
-
     /// Returned by `Sender::send` when there are no live receivers; carries the
     /// value back. Callers typically discard it via `.ok()`.
-    #[derive(derive_more::Display)]
+    #[derive(derive_more::Debug, derive_more::Display)]
+    #[debug("SendError(..)")]
     #[display("sending on a channel with no receivers")]
+    #[derive(derive_more::Error)]
+    #[error(ignore)]
     pub struct SendError<T>(pub T);
-
-    // WHY: Debug/Display without a `T` bound (opaque payload) so the error is `Error` for every payload type, matching how callers use
-    // it.
-    impl<T> std::fmt::Debug for SendError<T> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("SendError(..)")
-        }
-    }
-
-    impl<T> std::error::Error for SendError<T> {}
 }
 
 pub use error::{RecvError, SendError, TryRecvError};

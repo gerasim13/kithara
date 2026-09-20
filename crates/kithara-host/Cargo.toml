@@ -51,6 +51,7 @@ kithara-worker = { workspace = true, optional = true }
 arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 fieldwork = { workspace = true }
 firewheel = { workspace = true }
 ringbuf = { workspace = true }

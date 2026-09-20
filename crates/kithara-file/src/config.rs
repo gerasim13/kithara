@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf};
+use std::path::PathBuf;
 
 use bon::Builder;
 use kithara_assets::AssetStore;
@@ -25,6 +25,8 @@ pub enum FileSrc {
 #[derive(Builder, Patch)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
+#[derive(derive_more::Debug)]
 pub struct FileConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -42,7 +44,7 @@ where
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
     #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    #[patch(humantime)]
     pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
@@ -56,6 +58,7 @@ where
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     #[patch(skip)]
+    #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
     pub extension: Option<String>,
@@ -76,51 +79,6 @@ where
     /// core.
     #[builder(default = 256)]
     pub reader_event_capacity: usize,
-}
-
-impl<S> Clone for FileConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            src: self.src.clone(),
-            store: self.store.clone(),
-            pools: self.pools.clone(),
-            bus: self.bus.clone(),
-            cancel: self.cancel.clone(),
-            discriminator: self.discriminator.clone(),
-            downloader: self.downloader.clone(),
-            headers: self.headers.clone(),
-            extension: self.extension.clone(),
-            event_channel_capacity: self.event_channel_capacity,
-            reader_event_capacity: self.reader_event_capacity,
-            tmp_claim_poll_interval: self.tmp_claim_poll_interval,
-            look_ahead_bytes: self.look_ahead_bytes,
-        }
-    }
-}
-
-impl<S> fmt::Debug for FileConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FileConfig")
-            .field("src", &self.src)
-            .field("bus", &self.bus)
-            .field("cancel", &self.cancel)
-            .field("headers", &self.headers)
-            .field("discriminator", &self.discriminator)
-            .field("pools", &self.pools)
-            .field("store", &self.store)
-            .field("extension", &self.extension)
-            .field("event_channel_capacity", &self.event_channel_capacity)
-            .field("reader_event_capacity", &self.reader_event_capacity)
-            .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
-            .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(test)]

@@ -89,7 +89,17 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
         .into_iter()
         .filter_map(|event| match event {
             PlayerEvent::RateChanged { rate } => Some(rate),
-            _ => None,
+            PlayerEvent::StatusChanged { .. }
+            | PlayerEvent::TimeControlStatusChanged { .. }
+            | PlayerEvent::PlaybackStarted { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::MuteChanged { .. }
+            | PlayerEvent::CurrentItemChanged { .. }
+            | PlayerEvent::PrerollCompleted { .. }
+            | PlayerEvent::ItemDidPlayToEnd { .. }
+            | PlayerEvent::ItemDidFail { .. }
+            | PlayerEvent::PrefetchRequested
+            | PlayerEvent::HandoverRequested { .. } => None,
         })
         .collect()
 }
@@ -104,7 +114,7 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
         .with_player(move |player| {
             player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
             player
-                .select_item(0, true)
+                .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
         })
         .await;

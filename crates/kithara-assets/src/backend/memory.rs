@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fmt,
     io::{Error as IoError, ErrorKind},
     path::Path,
     sync::Weak,
@@ -48,14 +47,19 @@ impl MemCacheKey {
 /// Shares existing [`MemResource`] instances for the same composite key
 /// (`asset_root`, `ResourceKey`, `RequestIdentity`) via an internal weak
 /// cache. Distinct `asset_roots` stay isolated by construction.
+#[derive_where::derive_where(Clone)]
+#[derive(derive_more::Debug)]
 pub struct MemAssetStore<S> {
     /// Weak cache of active resources to ensure sharing.
+    #[debug("{:?}", self.active_resources.len())]
     active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     /// Single canonical removal channel. Synchronises in-memory
     /// `active_resources` clearing with the [`AvailabilityIndex`].
     /// See [`AssetDeleter`].
+    #[debug(skip)]
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
+    #[debug(skip)]
     cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
     pools: PoolRegion<S>,
@@ -118,30 +122,6 @@ pub(crate) struct MemStoreSetup<S> {
     pub(crate) cancel: CancelToken,
     pub(crate) mem_resource_capacity: Option<usize>,
     pub(crate) pools: PoolRegion<S>,
-}
-
-impl<S> Clone for MemAssetStore<S> {
-    fn clone(&self) -> Self {
-        Self {
-            active_resources: Arc::clone(&self.active_resources),
-            deleter: Arc::clone(&self.deleter),
-            availability: self.availability.clone(),
-            pools: self.pools.clone(),
-            cancel: self.cancel.clone(),
-            mem_resource_capacity: self.mem_resource_capacity,
-        }
-    }
-}
-
-impl<S> fmt::Debug for MemAssetStore<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemAssetStore")
-            .field("active_resources", &self.active_resources.len())
-            .field("availability", &self.availability)
-            .field("pools", &self.pools)
-            .field("mem_resource_capacity", &self.mem_resource_capacity)
-            .finish_non_exhaustive()
-    }
 }
 
 impl<S> MemAssetStore<S>

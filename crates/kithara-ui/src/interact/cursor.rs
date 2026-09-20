@@ -1,14 +1,20 @@
 use super::Hit;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
+#[cfg_attr(feature = "iced", mirror(into = iced::mouse::Interaction))]
 pub(crate) enum CursorShape {
     None,
     Grab,
     Grabbing,
     Pointer,
+    #[cfg_attr(feature = "iced", mirror(rename = ResizingDiagonallyDown))]
     ResizeDiagonalDown,
+    #[cfg_attr(feature = "iced", mirror(rename = ResizingDiagonallyUp))]
     ResizeDiagonalUp,
+    #[cfg_attr(feature = "iced", mirror(rename = ResizingHorizontally))]
     ResizeH,
+    #[cfg_attr(feature = "iced", mirror(rename = ResizingVertically))]
     ResizeV,
     Text,
 }

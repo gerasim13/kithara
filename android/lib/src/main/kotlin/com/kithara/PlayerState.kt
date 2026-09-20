@@ -110,6 +110,31 @@ sealed interface KitharaPlayerEvent {
 
     /** Queue reached the end (no more tracks to play). */
     data object QueueEnded : KitharaPlayerEvent
+
+    data class CrossfadeSettingsChanged(val settings: CrossfadeSettings) : KitharaPlayerEvent
+    data class PlaybackOrderChanged(val order: PlaybackOrder) : KitharaPlayerEvent
+    data class ActionAtItemEndChanged(val action: ActionAtItemEnd) : KitharaPlayerEvent
+}
+
+enum class PlaybackOrder { Sequential, Shuffle }
+
+enum class ActionAtItemEnd { Advance, Pause, None }
+
+enum class CrossfadeCurve { Linear, EqualPower }
+
+data class CrossfadeSettings(
+    val duration: Float = 1f,
+    val curve: CrossfadeCurve = CrossfadeCurve.EqualPower,
+    val depth: Float = 1f,
+    val position: Float = 0.5f,
+) {
+    init {
+        require(duration.isFinite() && duration >= 0f) { "duration must be finite and non-negative" }
+        require(depth.isFinite() && depth in 0f..1f) { "depth must be finite and in 0..1" }
+        require(position.isFinite() && position > 0f && position < 1f) {
+            "position must be finite and inside 0..1"
+        }
+    }
 }
 
 /**
@@ -118,7 +143,7 @@ sealed interface KitharaPlayerEvent {
  * Mirrors the Apple-idiomatic namespace-struct pattern:
  * - [None] — immediate cut. Matches AVQueuePlayer's user-initiated
  *   selection idiom (tap on a track in a list).
- * - [Crossfade] — use the player's configured crossfade duration.
+ * - [Crossfade] — use the player's configured crossfade settings.
  *   Typical for Next/Prev buttons and auto-advance at track end.
  * - [CrossfadeWith] — explicit override.
  */
@@ -126,9 +151,9 @@ sealed interface Transition {
     /** Immediate cut. */
     data object None : Transition
 
-    /** Use the player's configured crossfade duration. */
+    /** Use the player's configured crossfade settings. */
     data object Crossfade : Transition
 
-    /** Use an explicit crossfade duration in seconds. */
-    data class CrossfadeWith(val seconds: Float) : Transition
+    /** Use an explicit crossfade profile. */
+    data class CrossfadeWith(val settings: CrossfadeSettings) : Transition
 }

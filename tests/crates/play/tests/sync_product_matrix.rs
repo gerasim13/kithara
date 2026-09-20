@@ -180,12 +180,11 @@ impl SyncCase {
         self.id
     }
 
-    const fn start_bpm(self) -> f64 {
-        self.ride.start_bpm()
-    }
-
-    pub(super) const fn final_bpm(self) -> f64 {
-        self.ride.final_bpm()
+    delegate::delegate! {
+        to self.ride {
+            const fn start_bpm(self) -> f64;
+            pub(super) const fn final_bpm(self) -> f64;
+        }
     }
 }
 
@@ -534,7 +533,7 @@ impl ProductHarness {
             let mut loaded = true;
             for (index, (deck, id)) in self.decks.iter().zip(ids).enumerate() {
                 match deck.track(*id).map(|track| track.status) {
-                    Some(TrackStatus::Loaded) => {}
+                    Some(TrackStatus::Loaded | TrackStatus::Consumed) => {}
                     Some(TrackStatus::Failed(error)) => {
                         panic!("{}: deck {index} failed to load: {error}", case.id)
                     }

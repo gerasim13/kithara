@@ -1,7 +1,4 @@
-use std::{
-    f64::consts::{PI, TAU},
-    fmt,
-};
+use std::f64::consts::{PI, TAU};
 
 use kithara::{
     audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
@@ -58,23 +55,16 @@ impl SinePhaseSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display(
+    "phase drift at frame {at_frame}: expected={expected_rad:.4}rad measured={measured_rad:.4}rad jump={jump_samples:.3} samples (amp={amplitude:.3})"
+)]
 pub(crate) struct PhaseDrift {
     pub(crate) at_frame: u64,
     pub(crate) expected_rad: f64,
     pub(crate) measured_rad: f64,
     pub(crate) jump_samples: f64,
     pub(crate) amplitude: f64,
-}
-
-impl fmt::Display for PhaseDrift {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "phase drift at frame {}: expected={:.4}rad measured={:.4}rad jump={:.3} samples (amp={:.3})",
-            self.at_frame, self.expected_rad, self.measured_rad, self.jump_samples, self.amplitude,
-        )
-    }
 }
 
 pub(crate) fn wrap_pi(x: f64) -> f64 {

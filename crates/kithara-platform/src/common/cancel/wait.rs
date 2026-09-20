@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     future::Future,
     pin::Pin,
     task::{Context, Poll},
@@ -11,9 +10,13 @@ use crate::sync::Arc;
 /// Future returned by [`CancelToken::cancelled`](super::CancelToken::cancelled).
 /// Resolves once the token's subtree is cancelled. `Unpin`; cancel-safe (drop
 /// unregisters its slot).
+#[derive(derive_more::Debug)]
 pub struct Cancelled<'a> {
+    #[debug(skip)]
     node: &'a Arc<Node>,
+    #[debug(skip)]
     slot: Option<u64>,
+    #[debug(skip)]
     done: bool,
 }
 
@@ -48,12 +51,6 @@ impl Drop for Cancelled<'_> {
         if let Some(id) = self.slot.take() {
             self.node.unregister(id);
         }
-    }
-}
-
-impl fmt::Debug for Cancelled<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Cancelled").finish_non_exhaustive()
     }
 }
 

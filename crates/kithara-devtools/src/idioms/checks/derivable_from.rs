@@ -21,6 +21,7 @@ impl Check for DerivableFrom {
             ctx,
             Kind::From,
             ctx.config.thresholds.derivable_from.enabled,
+            crate::idioms::config::DerivableSeverity::Warn,
         )
     }
 }
@@ -68,9 +69,23 @@ mod tests {
     }
 
     #[test]
-    fn excludes_cfg_test_module() {
+    fn detects_cfg_test_module() {
         let src = "#[cfg(test)] mod tests { struct X(u32); impl From<u32> for X { fn from(value: u32) -> Self { Self(value) } } }";
-        assert_eq!(fix_source(src, Kind::From).unwrap().1.writes, 0);
+        assert_eq!(fix_source(src, Kind::From).unwrap().1.writes, 1);
+    }
+
+    #[test]
+    fn fixes_the_type_in_the_impl_module() {
+        let src = "struct X(u32);\nmod first {\n    struct X(u32);\n    impl From<u32> for X { fn from(value: u32) -> Self { Self(value) } }\n}\nmod second {\n    struct X(u32);\n}\n";
+        let fixed = fix_source(src, Kind::From).unwrap().0;
+
+        assert_eq!(fixed.matches("#[derive(derive_more::From)]").count(), 1);
+        let first = fixed.find("mod first").unwrap();
+        let derive = fixed.find("#[derive(derive_more::From)]").unwrap();
+        let second = fixed.find("mod second").unwrap();
+        assert!(first < derive && derive < second, "{fixed}");
+        assert!(fixed.starts_with("struct X(u32);"));
+        assert!(fixed.contains("mod second {\n    struct X(u32);\n}"));
     }
 
     #[test]

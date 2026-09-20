@@ -5,7 +5,6 @@ use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum DecoderBackend {
     Symphonia,
     Apple,
@@ -13,7 +12,6 @@ pub enum DecoderBackend {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum DecoderChangeCause {
     Initial,
     VariantSwitch,
@@ -24,7 +22,6 @@ pub enum DecoderChangeCause {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum DecodeErrorClass {
     Interrupted,
     VariantChange,
@@ -32,7 +29,6 @@ pub enum DecodeErrorClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum DecodeErrorKind {
     Io,
     UnsupportedCodec,
@@ -50,7 +46,6 @@ pub enum DecodeErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum FrameDomain {
     Source,
     Output,
@@ -74,7 +69,6 @@ impl GaplessSpan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ResamplerKind {
     Rubato,
     Apple,
@@ -83,7 +77,6 @@ pub enum ResamplerKind {
 }
 
 #[derive(Debug, Clone, Event)]
-#[non_exhaustive]
 pub enum DecoderEvent {
     DecoderChanged {
         backend: DecoderBackend,

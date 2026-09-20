@@ -7,7 +7,6 @@ use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum PlayerStatus {
     #[default]
     Unknown,
@@ -58,7 +57,6 @@ impl TrackRef {
 /// identity — the omission that once let a background slot's end advance
 /// the queue.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum ItemRole {
     /// The item the listener is hearing. The only role that drives
     /// auto-advance.
@@ -97,7 +95,6 @@ impl ItemRole {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum TimeControlStatus {
     #[default]
     Paused,
@@ -106,7 +103,6 @@ pub enum TimeControlStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum WaitingReason {
     ToMinimizeStalls,
     EvaluatingBufferingRate,
@@ -115,7 +111,6 @@ pub enum WaitingReason {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum ItemStatus {
     #[default]
     Unknown,
@@ -287,7 +282,6 @@ impl TimeRange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum PortType {
     BuiltInSpeaker,
     BuiltInReceiver,
@@ -317,14 +311,12 @@ pub struct RouteDescription {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum InterruptionKind {
     Began,
     Ended { should_resume: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum RouteChangeReason {
     Unknown,
     NewDeviceAvailable,
@@ -356,7 +348,6 @@ impl BpmInfo {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum StretchBackendKind {
     Signalsmith,
     Bungee,
@@ -364,7 +355,6 @@ pub enum StretchBackendKind {
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum PlayerEvent {
     StatusChanged {
         status: PlayerStatus,
@@ -428,7 +418,6 @@ pub enum PlayerEvent {
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum EngineEvent {
     Started,
     Stopped,
@@ -459,7 +448,6 @@ pub enum EngineEvent {
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum SessionEvent {
     Interruption {
         kind: InterruptionKind,
@@ -486,7 +474,6 @@ pub enum PlaybackDirection {
 }
 
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum DjEvent {
     BpmDetected {
         slot: SlotId,

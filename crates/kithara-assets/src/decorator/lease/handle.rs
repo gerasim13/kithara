@@ -56,6 +56,7 @@ impl<W: WriteSide, L> LeaseWriter<W, L> {
 /// Reader (Ready) phase of a leased resource. Pins the asset while any clone is
 /// alive; read-only. Carries the write-side machinery (`byte_recorder`,
 /// `remove`) so [`reactivate`](ReadSide::reactivate) can rebuild a full writer.
+#[derive_where::derive_where(Clone; R: ReadSide, L: Clone)]
 pub struct LeaseReader<R, L> {
     lease: L,
     events: LeaseEvents,
@@ -84,24 +85,6 @@ impl<R: ReadSide, L> LeaseReader<R, L> {
             remove,
             resource_key,
             inner,
-        }
-    }
-}
-
-impl<R, L> Clone for LeaseReader<R, L>
-where
-    R: ReadSide,
-    L: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            lease: self.lease.clone(),
-            byte_recorder: self.byte_recorder.clone(),
-            events: self.events.clone(),
-            remove: self.remove.clone(),
-            live: self.live.clone(),
-            resource_key: self.resource_key.clone(),
         }
     }
 }

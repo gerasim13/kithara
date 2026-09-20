@@ -23,8 +23,8 @@ use super::{
     },
     pictures::{PictureDoc, PicturePatch},
     primitives::{
-        ChromePatch, ChromeSkin, FrameSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin,
-        TextRoleSkin, WindowPatch, WindowSkin,
+        ChromePatch, ChromeSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin, WindowPatch,
+        WindowSkin,
     },
 };
 use crate::{
@@ -84,25 +84,32 @@ macro_rules! skin_sections {
 
 macro_rules! define_skin_doc {
     ($($field:ident: $section:ident => $patch:ident,)*) => {
-        #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+        #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
         #[serde(deny_unknown_fields)]
         #[non_exhaustive]
         pub struct SkinDoc {
             /// What this skin dresses the extensions a document places in, by
             /// kind. The toolkit owns no section for content it does not draw,
             /// so this is the only thing a skin can say about one.
+            #[skin(skip_frames, skip_roles)]
             pub custom: CustomDoc,
+            #[skin(skip_frames, skip_roles)]
             pub id: DocId,
+            #[skin(skip_frames, skip_roles)]
             pub palette: PaletteDoc,
             /// The pictures this skin carries, which is the whole set a
             /// document may name.
+            #[skin(skip_frames, skip_roles)]
             pub pictures: PictureDoc,
+            #[skin(skip_frames, skip_roles)]
             pub schema: String,
+            #[skin(skip_frames, skip_roles)]
             pub version: u32,
             /// What this skin restates for one control instance, by the path
             /// the document gave it. A control the skin never names wears the
             /// sections below unchanged.
             #[serde(default)]
+            #[skin(skip_frames, skip_roles)]
             pub overrides: BTreeMap<String, SkinLayer>,
             $(pub $field: $section,)*
         }
@@ -204,18 +211,6 @@ macro_rules! define_skin_doc {
                     $($field: patch.$field,)*
                 }
                 .apply(self);
-            }
-        }
-
-        impl Frames for SkinDoc {
-            fn each_frame(&mut self, visit: &mut dyn FnMut(&mut FrameSkin)) {
-                $(self.$field.each_frame(visit);)*
-            }
-        }
-
-        impl Roles for SkinDoc {
-            fn each_role(&mut self, visit: &mut dyn FnMut(&mut TextRoleSkin)) {
-                $(self.$field.each_role(visit);)*
             }
         }
     };

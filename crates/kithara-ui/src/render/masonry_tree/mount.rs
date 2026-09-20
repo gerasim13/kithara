@@ -38,7 +38,7 @@ use crate::{
 /// only once its painter is neutral, and until then the control still holds its
 /// place. Which controls are still waiting is the census in `tests`, not a
 /// silent arm in a match.
-pub(super) trait NodeControl {
+pub(crate) trait NodeControl {
     fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
@@ -59,7 +59,7 @@ pub(super) trait NodeControl {
 
 /// What a control is handed when it mounts: the box it was given, the endpoint
 /// behind it, and who owns the pointer over it.
-pub(super) struct Cx<'a> {
+pub(crate) struct Cx<'a> {
     /// The skin this instance wears, which is the host's own unless the skin
     /// names this path.
     pub(super) skin: &'a Skin,
@@ -69,58 +69,6 @@ pub(super) struct Cx<'a> {
     pub(super) read: Option<&'a Binding>,
     pub(super) declared: Size<Length>,
 }
-
-macro_rules! painted_controls {
-    ($($control:ty),+ $(,)?) => {
-        $(
-            impl NodeControl for $control {
-                fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-                where
-                    A: std::fmt::Debug + Send + 'static,
-                {
-                    painted(self, host, cx)
-                }
-            }
-        )+
-    };
-}
-
-painted_controls!(
-    mount::Summary,
-    mount::Brand,
-    mount::Spacer,
-    mount::Divider,
-    mount::Preset,
-    mount::Settings,
-    mount::Glyph<'_>,
-    mount::Bpm,
-    mount::Time,
-    mount::Telemetry,
-    mount::Wave<'_>,
-    mount::Lottie<'_>,
-    mount::Sprite,
-    mount::PortalMap,
-    mount::Range,
-    mount::ContextBar<'_>,
-    mount::Segmented<'_>,
-    mount::Select,
-    mount::Readout,
-    mount::Knob,
-    mount::Chip,
-    mount::Tab,
-    mount::Meter,
-    mount::Cell,
-    mount::Swatch,
-    mount::StatusDot<'_>,
-    mount::Toggle,
-    mount::Checkbox,
-    mount::VuVertical,
-    mount::VuStereo,
-    mount::Crossfader,
-    mount::Fader,
-    mount::NavItem,
-    mount::Button,
-);
 
 impl NodeControl for mount::Drag {
     fn wire<A>(&self, host: &MasonryHost<'_, A>, _cx: &Cx<'_>, output: &mut MasonryNode<A>)
@@ -565,7 +513,11 @@ pub(crate) const fn activates(spec: &ControlSpec) -> bool {
 }
 
 /// Mounts a control that draws itself, adding nothing to the picture.
-fn painted<Control, A>(control: &Control, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+pub(crate) fn painted<Control, A>(
+    control: &Control,
+    host: &MasonryHost<'_, A>,
+    cx: &Cx<'_>,
+) -> MasonryNode<A>
 where
     Control: Draws,
     Control::Painter: Retained + 'static,

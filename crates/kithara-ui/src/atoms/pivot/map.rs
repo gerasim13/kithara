@@ -6,7 +6,11 @@ use crate::{
 };
 
 /// A tempo axis with one arc from the master tempo to each target.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = PortalMapData,
+    draw = self.paint(list, text, data, bounds)
+)]
 pub(crate) struct PortalMap {
     metrics: PortalMapSkin,
     accent: Rgba,

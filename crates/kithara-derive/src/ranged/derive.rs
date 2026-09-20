@@ -308,6 +308,7 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use syn::parse_quote;
 
     use super::derive;
@@ -322,7 +323,7 @@ mod tests {
             .to_string()
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_float_field_is_guarded_against_non_finite_values() {
         let expanded = expansion(parse_quote! {
             #[ranged(min = -24.0, max = 6.0, default = 0.0, clamp)]
@@ -339,7 +340,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_integer_field_carries_no_float_predicate() {
         let expanded = expansion(parse_quote! {
             #[ranged(min = 0, max = 100, default = 100)]
@@ -356,7 +357,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn without_clamp_no_conversion_into_the_type_exists() {
         let expanded = expansion(parse_quote! {
             #[ranged(min = 0.25, max = 4.0, default = 1.0)]
@@ -369,7 +370,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn without_a_default_the_type_has_none() {
         let expanded = expansion(parse_quote! {
             #[ranged(min = 1.0, max = 1_000.0)]
@@ -386,7 +387,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_negated_bound_is_read_as_a_number() {
         let expanded = expansion(parse_quote! {
             #[ranged(min = -24.0, max = 6.0, default = 0.0)]
@@ -399,7 +400,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_struct_with_named_fields_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -410,7 +411,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_struct_with_two_fields_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -421,7 +422,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_generic_type_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -432,7 +433,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_non_primitive_field_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -443,12 +444,12 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_missing_attribute_is_refused() {
         assert!(refusal(parse_quote! { struct Bare(u8); }).contains("needs `#[ranged("));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_unknown_key_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -459,7 +460,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_repeated_key_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -470,7 +471,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_float_literal_on_an_integer_field_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -481,7 +482,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_minimum_above_the_maximum_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -492,7 +493,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn integer_ordering_preserves_adjacent_large_bounds() {
         for input in [
             parse_quote! { #[ranged(min = 9007199254740993, max = 9007199254740992)] struct Large(u64); },
@@ -506,7 +507,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_default_outside_the_range_is_refused() {
         assert!(
             refusal(parse_quote! {
@@ -517,7 +518,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn clamp_without_a_default_is_refused() {
         assert!(
             refusal(parse_quote! {

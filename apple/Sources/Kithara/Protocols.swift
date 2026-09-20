@@ -114,6 +114,10 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Queue behavior after the current item reaches its end.
     var repeatMode: RepeatMode { get set }
 
+    var playbackOrder: PlaybackOrder { get }
+    var actionAtItemEnd: ActionAtItemEnd { get }
+    var crossfadeSettings: CrossfadeSettings { get }
+
     /// Synchronous current playback time in seconds. Drops to `0`
     /// when the current item is removed. Mirrors iOS sync
     /// `currentTime: Double`.
@@ -149,7 +153,8 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
 
     /// Skip to the next item in the queue. No-op if already on the
     /// last item or the queue is empty.
-    func advanceToNextItem()
+    func next() throws
+    func previous() throws
 
     /// Remove all items from the queue.
     func removeAllItems()

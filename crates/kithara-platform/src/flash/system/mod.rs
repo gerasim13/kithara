@@ -57,4 +57,4 @@ pub(in crate::flash) use inner::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
 };
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
-pub(in crate::flash) use sched::AsyncHandle;
+pub(in crate::flash) use sched::{AsyncHandle, ParkRole};

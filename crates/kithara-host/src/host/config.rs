@@ -14,6 +14,7 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 };
 
 /// Configuration for the shared output session owned by `Host`.
+#[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
 #[non_exhaustive]
 pub enum HostConfig<S> {
     /// Device-backed platform session.
@@ -50,16 +51,6 @@ pub enum HostConfig<S> {
         /// Admission, priority, and cancellation configuration for the session task.
         task: TaskConfig,
     },
-}
-
-#[cfg(not(feature = "offline"))]
-impl<S> Copy for HostConfig<S> {}
-
-#[cfg(not(feature = "offline"))]
-impl<S> Clone for HostConfig<S> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 #[bon::bon]

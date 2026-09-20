@@ -37,6 +37,7 @@ pub enum GaplessMode {
 #[derive(Debug, Clone, Copy, PartialEq, Builder, Deserialize)]
 #[builder(const, state_mod(vis = "pub"))]
 #[serde(default, deny_unknown_fields)]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct SilenceTrimParams {
     /// When true, also trim trailing silence at EOF using the same
     /// threshold. Disabled by default because tail content is more
@@ -56,12 +57,6 @@ pub struct SilenceTrimParams {
     /// audio as-is — better safe than sorry.
     #[builder(default = 4096)]
     pub scan_window_frames: u64,
-}
-
-impl Default for SilenceTrimParams {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }
 
 impl SilenceTrimParams {

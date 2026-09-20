@@ -64,6 +64,33 @@ pub(crate) fn bridge_duration_secs() -> f64 {
     })
 }
 
+/// Number of audio-thread process calls the slot has served.
+///
+/// Monotonic, so a reader samples twice and looks at the delta. In a browser
+/// the render callback runs inside an `AudioWorkletProcessor` the page cannot
+/// see: when the browser stops calling it — Firefox terminates a `process`
+/// that overruns its watchdog — the session still reports itself as playing
+/// and the position simply stops. A delta of zero separates that from a
+/// callback that runs and finds nothing to play.
+pub(crate) fn bridge_process_calls() -> u64 {
+    BRIDGE_PLAYBACK.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or(0, |s| s.process_count.load(Ordering::Relaxed))
+    })
+}
+
+/// Number of underruns the audio thread has recorded. Read alongside
+/// [`bridge_process_calls`]: a callback that runs while this climbs is
+/// starving, not stopped.
+pub(crate) fn bridge_underruns() -> u64 {
+    BRIDGE_PLAYBACK.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or(0, |s| s.metrics().snapshot().underruns())
+    })
+}
+
 pub(crate) fn bridge_is_playing() -> bool {
     BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()

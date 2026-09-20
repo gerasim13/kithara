@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
-    path::{Path, PathBuf},
+    path::{Path as FsPath, PathBuf},
     thread,
     time::{Duration, Instant},
 };
@@ -42,7 +42,7 @@ struct SccacheSlot {
 }
 
 impl SccacheSlot {
-    fn acquire_shared(shared_root: &Path, slots: usize) -> Result<Self> {
+    fn acquire_shared(shared_root: &FsPath, slots: usize) -> Result<Self> {
         let lock_root = shared_root.join(SCCACHE_SLOT_CONTROL_NAMESPACE);
         fs::create_dir_all(&lock_root).with_context(|| {
             format!(
@@ -71,8 +71,11 @@ impl SccacheSlot {
         bail!("all {slots} host sccache slots are already in use")
     }
 
-    const fn index(&self) -> usize {
-        self.index
+    delegate::delegate! {
+        to self {
+            #[field(index)]
+            const fn index(&self) -> usize;
+        }
     }
 }
 
@@ -141,7 +144,7 @@ fn lease_owner(job_id: Option<&str>, pid: u32) -> Result<String> {
     }
 }
 
-fn cache_lease(cache_root: &Path) -> Result<PathBuf> {
+fn cache_lease(cache_root: &FsPath) -> Result<PathBuf> {
     let job_id = if is_gitlab() {
         Some(env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?)
     } else {
@@ -158,7 +161,7 @@ struct SccachePaths {
 }
 
 impl SccachePaths {
-    fn shared(cache_root: &Path, slot: usize, cache_size: &str) -> Self {
+    fn shared(cache_root: &FsPath, slot: usize, cache_size: &str) -> Self {
         Self {
             directory: cache_root
                 .join(SCCACHE_SLOT_CACHE_NAMESPACE)
@@ -172,7 +175,7 @@ impl SccachePaths {
         }
     }
 
-    fn disposable(cache_root: &Path, slot: usize, cache_size: &str) -> Self {
+    fn disposable(cache_root: &FsPath, slot: usize, cache_size: &str) -> Self {
         Self {
             directory: cache_root
                 .join(SCCACHE_SLOT_CACHE_NAMESPACE)
@@ -182,7 +185,7 @@ impl SccachePaths {
         }
     }
 
-    fn local(cache_root: &Path, cache_size: &str) -> Self {
+    fn local(cache_root: &FsPath, cache_size: &str) -> Self {
         Self {
             directory: cache_root.join("sccache"),
             server_uds: None,
@@ -198,8 +201,8 @@ struct PreparedSccache {
 
 impl PreparedSccache {
     fn for_environment(
-        shared_root: &Path,
-        cache_root: &Path,
+        shared_root: &FsPath,
+        cache_root: &FsPath,
         config: &CiConfig,
         cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
@@ -208,8 +211,8 @@ impl PreparedSccache {
 
     fn for_target(
         target_is_windows: bool,
-        shared_root: &Path,
-        cache_root: &Path,
+        shared_root: &FsPath,
+        cache_root: &FsPath,
         config: &CiConfig,
         cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
@@ -249,7 +252,10 @@ impl PreparedSccache {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct CiEnvironment {
+    #[field(get, vis = "pub(crate)")]
     shared_root: PathBuf,
     pub(crate) cache_root: PathBuf,
     pub(crate) swiftpm_cache: PathBuf,
@@ -337,7 +343,7 @@ impl CiEnvironment {
         if let Some(socket_root) = sccache
             .as_ref()
             .and_then(|sccache| sccache.paths.server_uds.as_deref())
-            .and_then(Path::parent)
+            .and_then(FsPath::parent)
         {
             fs::create_dir_all(socket_root).with_context(|| {
                 format!(
@@ -451,10 +457,6 @@ impl CiEnvironment {
         self.vars.clone()
     }
 
-    pub(crate) fn shared_root(&self) -> &Path {
-        &self.shared_root
-    }
-
     pub(crate) const fn uses_sccache(&self) -> bool {
         self.sccache.is_some()
     }
@@ -511,7 +513,11 @@ fn shared_root(config: &CiConfig, cache_group: CacheGroup) -> PathBuf {
     }
 }
 
-fn prepare_shared_root(config: &CiConfig, cache_group: CacheGroup, home: &Path) -> Result<PathBuf> {
+fn prepare_shared_root(
+    config: &CiConfig,
+    cache_group: CacheGroup,
+    home: &FsPath,
+) -> Result<PathBuf> {
     let configured = shared_root(config, cache_group);
     let root = if configured.is_dir() {
         configured
@@ -565,8 +571,8 @@ fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result
 }
 
 fn build_target_dir(
-    project_root: &Path,
-    shared_root: &Path,
+    project_root: &FsPath,
+    shared_root: &FsPath,
     target_scope: &str,
     owner: TargetOwner,
 ) -> Result<PathBuf> {
@@ -587,8 +593,8 @@ fn build_target_dir(
 }
 
 fn prepare_build_target(
-    project_root: &Path,
-    shared_root: &Path,
+    project_root: &FsPath,
+    shared_root: &FsPath,
     target_scope: &str,
     config: &CiConfig,
     isolated_target: bool,
@@ -610,8 +616,8 @@ fn prepare_build_target(
 }
 
 fn expose_build_target(
-    project_root: &Path,
-    backing: &Path,
+    project_root: &FsPath,
+    backing: &FsPath,
     gitlab: bool,
     target_is_windows: bool,
 ) -> Result<PathBuf> {
@@ -641,7 +647,7 @@ fn expose_build_target(
 }
 
 #[cfg(unix)]
-fn create_target_link(backing: &Path, target: &Path) -> Result<()> {
+fn create_target_link(backing: &FsPath, target: &FsPath) -> Result<()> {
     std::os::unix::fs::symlink(backing, target).with_context(|| {
         format!(
             "linking stable CI target {} to {}",
@@ -652,7 +658,7 @@ fn create_target_link(backing: &Path, target: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
+fn create_target_link(_backing: &FsPath, _target: &FsPath) -> Result<()> {
     unreachable!("Windows keeps its build target in the checkout")
 }
 
@@ -676,7 +682,7 @@ fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
 /// against unchanged code. So the gate re-asks until the room appears or the
 /// profile's wait runs out, and the retry it was asking a human for costs a
 /// poll instead of a whole job.
-fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
+fn ensure_room_for_a_job(config: &CiConfig, shared_root: &FsPath) -> Result<()> {
     let required = config.host.free_bytes_for_a_job();
     if !is_ci() || free_bytes(shared_root)? >= required {
         return Ok(());
@@ -705,7 +711,7 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
 }
 
 /// The checkouts whose build caches the budget owns.
-fn gitlab_workspaces(build_root: &Path) -> PathBuf {
+fn gitlab_workspaces(build_root: &FsPath) -> PathBuf {
     build_root.join("workspaces/gitlab")
 }
 
@@ -718,7 +724,7 @@ fn gitlab_workspaces(build_root: &Path) -> PathBuf {
 /// reclaim has no candidate at all and the sentence described work that never
 /// happened. What an operator needs at that point is the opposite — that the
 /// space is held somewhere this gate does not look.
-fn refusal(free: u64, required: u64, workspaces: &Path, reclaimed_from: usize) -> String {
+fn refusal(free: u64, required: u64, workspaces: &FsPath, reclaimed_from: usize) -> String {
     if reclaimed_from == 0 {
         return format!(
             "the CI cache has {free} bytes free and a job needs {required}; no reclaimable build \
@@ -753,8 +759,8 @@ fn refusal(free: u64, required: u64, workspaces: &Path, reclaimed_from: usize) -
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
 fn reclaim_build_caches(
-    workspaces: &Path,
-    cache_root: &Path,
+    workspaces: &FsPath,
+    cache_root: &FsPath,
     free: u64,
     required: u64,
 ) -> Result<usize> {
@@ -793,12 +799,16 @@ pub(crate) fn is_gitlab() -> bool {
 /// asks; occupancy does not, and comparing the host's disk against a threshold
 /// sized for the CI volume rejected every macOS job while the volume was barely
 /// half full.
-fn free_bytes(path: &Path) -> Result<u64> {
+fn free_bytes(path: &FsPath) -> Result<u64> {
     fs4::available_space(path)
         .with_context(|| format!("reading available space for {}", path.display()))
 }
 
-fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiConfig) -> Result<()> {
+fn set_path(
+    vars: &mut BTreeMap<OsString, OsString>,
+    home: &FsPath,
+    config: &CiConfig,
+) -> Result<()> {
     let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
@@ -845,7 +855,7 @@ mod tests {
         const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
     }
 
-    fn reclaim(root: &Path) -> usize {
+    fn reclaim(root: &FsPath) -> usize {
         reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
     }
 
@@ -880,7 +890,7 @@ mod tests {
         let config = super::super::config::fixture();
         let mut vars = BTreeMap::new();
 
-        set_path(&mut vars, Path::new("/ci-home"), &config).unwrap();
+        set_path(&mut vars, FsPath::new("/ci-home"), &config).unwrap();
 
         let paths = env::split_paths(vars.get(OsStr::new("PATH")).unwrap()).collect::<Vec<_>>();
         assert!(
@@ -891,7 +901,7 @@ mod tests {
 
     #[test]
     fn shared_shell_slot_paths_do_not_contain_runner_identity() {
-        let root = Path::new("/cache/review/macos-aarch64");
+        let root = FsPath::new("/cache/review/macos-aarch64");
 
         let paths = SccachePaths::shared(root, 1, "25G");
 
@@ -923,7 +933,7 @@ mod tests {
     fn disposable_slots_use_concurrent_id_for_disk_only() {
         const SLOTS: usize = 2;
 
-        let root = Path::new("/cache/review/linux-aarch64");
+        let root = FsPath::new("/cache/review/linux-aarch64");
 
         assert_eq!(disposable_slot(Some("0"), SLOTS).unwrap(), 0);
         assert_eq!(disposable_slot(Some("1"), SLOTS).unwrap(), 1);
@@ -935,7 +945,7 @@ mod tests {
     #[test]
     fn windows_prepared_environment_disables_sccache() {
         let config = super::super::config::fixture();
-        let root = Path::new("/cache");
+        let root = FsPath::new("/cache");
 
         let prepared =
             PreparedSccache::for_environment(root, root, &config, CacheGroup::Windows).unwrap();
@@ -946,7 +956,7 @@ mod tests {
     #[test]
     fn windows_target_disables_sccache_independently_of_lane() {
         let config = super::super::config::fixture();
-        let root = Path::new("/cache");
+        let root = FsPath::new("/cache");
 
         let prepared =
             PreparedSccache::for_target(true, root, root, &config, CacheGroup::Macos).unwrap();
@@ -963,9 +973,9 @@ mod tests {
 
     #[test]
     fn shared_slot_endpoint_is_trust_independent_and_disks_are_separate() {
-        let review_root = Path::new("/cache/review/macos-aarch64");
-        let trusted_root = Path::new("/cache/trusted/macos-aarch64");
-        let linux_root = Path::new("/cache/review/linux-aarch64");
+        let review_root = FsPath::new("/cache/review/macos-aarch64");
+        let trusted_root = FsPath::new("/cache/trusted/macos-aarch64");
+        let linux_root = FsPath::new("/cache/review/linux-aarch64");
         let review = SccachePaths::shared(review_root, 1, "25G");
         let same = SccachePaths::shared(review_root, 1, "25G");
         let trusted = SccachePaths::shared(trusted_root, 1, "25G");
@@ -986,7 +996,7 @@ mod tests {
 
     #[test]
     fn local_sccache_paths_keep_the_shared_layout_and_configured_budget() {
-        let root = Path::new("/cache/review/macos-aarch64");
+        let root = FsPath::new("/cache/review/macos-aarch64");
 
         let paths = SccachePaths::local(root, "50G");
 
@@ -1216,7 +1226,7 @@ mod tests {
 
     #[test]
     fn a_refusal_with_nothing_to_reclaim_does_not_claim_it_reclaimed() {
-        let message = refusal(10, 20, Path::new("/ci/workspaces/gitlab"), 0);
+        let message = refusal(10, 20, FsPath::new("/ci/workspaces/gitlab"), 0);
 
         assert!(
             !message.contains("after reclaiming"),
@@ -1230,7 +1240,7 @@ mod tests {
 
     #[test]
     fn a_refusal_that_reclaimed_says_how_much_it_had_to_work_with() {
-        let message = refusal(10, 20, Path::new("/ci/workspaces/gitlab"), 3);
+        let message = refusal(10, 20, FsPath::new("/ci/workspaces/gitlab"), 3);
 
         assert!(
             message.contains("after reclaiming from 3 build cache(s)"),
@@ -1254,19 +1264,19 @@ mod tests {
     #[test]
     fn a_lane_builds_in_its_own_directory_under_the_shared_root() {
         let target = build_target_dir(
-            Path::new("/runner/_work/kithara/kithara"),
-            Path::new("/cache"),
+            FsPath::new("/runner/_work/kithara/kithara"),
+            FsPath::new("/cache"),
             "review-linux-x86_64",
             TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-test".to_owned()),
         )
         .unwrap();
 
-        assert_eq!(target, Path::new("/cache/target/lane-linux-test"));
+        assert_eq!(target, FsPath::new("/cache/target/lane-linux-test"));
         assert_ne!(
             target,
             build_target_dir(
-                Path::new("/runner/_work/kithara/kithara"),
-                Path::new("/cache"),
+                FsPath::new("/runner/_work/kithara/kithara"),
+                FsPath::new("/cache"),
                 "review-linux-x86_64",
                 TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-lint".to_owned()),
             )
@@ -1277,8 +1287,8 @@ mod tests {
     #[test]
     fn gitlab_targets_are_persistent_and_private_to_one_slot() {
         let target = build_target_dir(
-            Path::new("/builds/disrupt/kithara"),
-            Path::new("/cache"),
+            FsPath::new("/builds/disrupt/kithara"),
+            FsPath::new("/cache"),
             "review-linux-aarch64",
             TargetOwner::Slot("0".to_owned(), 2),
         )
@@ -1286,13 +1296,13 @@ mod tests {
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
+            FsPath::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
         );
         assert_ne!(
             target,
             build_target_dir(
-                Path::new("/builds/disrupt/kithara"),
-                Path::new("/cache"),
+                FsPath::new("/builds/disrupt/kithara"),
+                FsPath::new("/cache"),
                 "review-linux-aarch64",
                 TargetOwner::Slot("1".to_owned(), 2),
             )
@@ -1300,8 +1310,8 @@ mod tests {
         );
         assert!(
             build_target_dir(
-                Path::new("/builds/disrupt/kithara"),
-                Path::new("/cache"),
+                FsPath::new("/builds/disrupt/kithara"),
+                FsPath::new("/cache"),
                 "review-linux-aarch64",
                 TargetOwner::Slot("../trusted".to_owned(), 2),
             )
@@ -1309,13 +1319,13 @@ mod tests {
         );
         assert_eq!(
             build_target_dir(
-                Path::new("/builds/disrupt/kithara"),
-                Path::new("/cache"),
+                FsPath::new("/builds/disrupt/kithara"),
+                FsPath::new("/cache"),
                 "review-linux-aarch64",
                 TargetOwner::Job("4711".to_owned()),
             )
             .unwrap(),
-            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
+            FsPath::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
         );
     }
 
@@ -1355,13 +1365,13 @@ mod tests {
     #[test]
     fn non_gitlab_targets_stay_with_the_checkout() {
         let target = build_target_dir(
-            Path::new("/work/kithara"),
-            Path::new("/cache"),
+            FsPath::new("/work/kithara"),
+            FsPath::new("/cache"),
             "review-macos-aarch64",
             TargetOwner::Checkout,
         )
         .unwrap();
 
-        assert_eq!(target, Path::new("/work/kithara/target"));
+        assert_eq!(target, FsPath::new("/work/kithara/target"));
     }
 }

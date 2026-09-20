@@ -20,19 +20,13 @@ type InnerStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 
 /// Response from a fetch — headers available immediately, body as
 /// async stream.
+#[derive(derive_more::Debug)]
 pub struct FetchResponse {
     /// Body as an async byte stream.
+    #[debug(skip)]
     pub body: BodyStream,
     /// HTTP response headers.
     pub headers: Headers,
-}
-
-impl std::fmt::Debug for FetchResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FetchResponse")
-            .field("headers", &self.headers)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Async byte stream with cancel + timeout.
@@ -40,14 +34,10 @@ impl std::fmt::Debug for FetchResponse {
 /// Wraps the raw HTTP body stream. Consumer pulls chunks at own pace,
 /// providing natural backpressure. I/O happens on the consumer's task,
 /// not on the downloader's worker threads.
+#[derive(derive_more::Debug)]
 pub struct BodyStream {
+    #[debug(skip)]
     inner: InnerStream,
-}
-
-impl std::fmt::Debug for BodyStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BodyStream").finish_non_exhaustive()
-    }
 }
 
 /// Bytes-backed body — `Send` on every target. Used to ferry a fully buffered

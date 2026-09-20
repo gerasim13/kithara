@@ -630,12 +630,7 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
-    /**
-     * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-     * for an immediate cut.
-     */
-    func advanceToNextItem()
+    func actionAtItemEnd()  -> FfiActionAtItemEnd
 
     /**
      * Append an item to the tail of the queue. AVQueuePlayer-style
@@ -650,7 +645,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func append(item: AudioPlayerItem) throws
 
-    func crossfadeDuration()  -> Float
+    func crossfadeSettings()  -> FfiCrossfadeSettings
 
     /**
      * Currently playing item (if any). Resolves the queue's current
@@ -698,6 +693,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func pause()
 
     func play()
+
+    func playbackOrder()  -> FfiPlaybackOrder
 
     /**
      * Target playback speed used by `play()`. When the player is
@@ -760,12 +757,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setAbrMode(mode: FfiAbrMode)
 
     /**
-     * Change the crossfade window at runtime. The initial value belongs in
-     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
-     */
-    func setCrossfadeDuration(seconds: Float)
-
-    /**
      * # Errors
      *
      * Returns error if the engine is not running.
@@ -776,11 +767,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func setObserver(observer: PlayerObserver)
 
-    /**
-     * Replace the playback-rate target at runtime. The initial value
-     * belongs in
-     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
-     */
     func setPlayingRate(rate: Float)
 
     /**
@@ -796,25 +782,32 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setVolume(volume: Float)
 
     /**
-     * Register a wildcard DRM key processor at runtime with a fresh salt.
-     * Items already in the queue keep their registry; initial rules belong
-     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
-     * which is applied through the same path.
+     * Register a runtime DRM key processor for every host (`"*"`).
+     *
+     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
+     * into the player-wide `SALT_HEADER` (so it accompanies every
+     * outgoing manifest/segment/key request), and forwards it to
+     * `processor.process_key(key, salt)` on each decrypt.
+     *
+     * Items already in the queue keep their original key registry —
+     * re-call this method *before* [`Self::insert`] for the new processor
+     * to apply.
      */
     func setupHlsAes(processor: FfiKeyProcessor)
 
     /**
-     * Append a domain-scoped DRM key rule at runtime; see
-     * [`Self::setup_hls_aes`].
+     * Register a runtime DRM key processor with explicit rule control
+     * (custom domains, headers, salt). The rule's salt — if any — is
+     * mirrored into the player-wide header map under `SALT_HEADER`.
+     *
+     * Items already in the queue keep their original key registry.
      */
     func setupHlsAesWithRule(rule: FfiKeyRule)
 
     /**
-     * Replace the player-wide auth header at runtime. Stores `auth_token`
-     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Player-wide auth header. Stores `auth_token` under
+     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
-     * The initial value belongs in
-     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
     func setupNetwork(authToken: String)
 
@@ -844,6 +837,46 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
     func volume()  -> Float
+
+    /**
+     * Advance to the next item, or do nothing at queue exhaustion.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+    func advanceToNextItem() throws
+
+    /**
+     * Return to the previous item in navigation history.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+    func returnToPreviousItem() throws
+
+    /**
+     * Set the automatic terminal action.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+    func setActionAtItemEnd(action: FfiActionAtItemEnd) throws
+
+    /**
+     * Set the profile captured by future transitions.
+     *
+     * # Errors
+     * Returns an error when the profile contains an invalid value.
+     */
+    func setCrossfadeSettings(settings: FfiCrossfadeSettings) throws
+
+    /**
+     * Set the queue traversal order.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+    func setPlaybackOrder(order: FfiPlaybackOrder) throws
 
     /**
      * Select `item` in the queue with the given transition.
@@ -934,9 +967,13 @@ open class AudioPlayer: AudioPlayerProtocol, @unchecked Sendable {
     public func uniffiCloneHandle() -> UInt64 {
         return try! rustCall { uniffi_kithara_ffi_fn_clone_audioplayer(self.handle, $0) }
     }
-public convenience init(config: FfiPlayerConfig) {
+    /**
+     * # Errors
+     * Returns an error when the player configuration cannot be created.
+     */
+public convenience init(config: FfiPlayerConfig)throws  {
     let handle =
-        try! rustCall() {
+        try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_constructor_audioplayer_new(
         FfiConverterTypeFfiPlayerConfig_lower(config),$0
     )
@@ -956,16 +993,12 @@ public convenience init(config: FfiPlayerConfig) {
 
 
 
-    /**
-     * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
-     * for an immediate cut.
-     */
-open func advanceToNextItem()  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_advance_to_next_item(
+open func actionAtItemEnd() -> FfiActionAtItemEnd  {
+    return try!  FfiConverterTypeFfiActionAtItemEnd_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_action_at_item_end(
             self.uniffiCloneHandle(),$0
     )
-}
+})
 }
 
     /**
@@ -987,9 +1020,9 @@ open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConver
 }
 }
 
-open func crossfadeDuration() -> Float  {
-    return try!  FfiConverterFloat.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_crossfade_duration(
+open func crossfadeSettings() -> FfiCrossfadeSettings  {
+    return try!  FfiConverterTypeFfiCrossfadeSettings_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_crossfade_settings(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1100,6 +1133,14 @@ open func play()  {try! rustCall() {
             self.uniffiCloneHandle(),$0
     )
 }
+}
+
+open func playbackOrder() -> FfiPlaybackOrder  {
+    return try!  FfiConverterTypeFfiPlaybackOrder_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_playback_order(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
 
     /**
@@ -1218,18 +1259,6 @@ open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
 }
 
     /**
-     * Change the crossfade window at runtime. The initial value belongs in
-     * [`FfiPlayerConfig::crossfade_duration`](crate::config::FfiPlayerConfig).
-     */
-open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_duration(
-            self.uniffiCloneHandle(),
-        FfiConverterFloat.lower(seconds),$0
-    )
-}
-}
-
-    /**
      * # Errors
      *
      * Returns error if the engine is not running.
@@ -1259,11 +1288,6 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 }
 }
 
-    /**
-     * Replace the playback-rate target at runtime. The initial value
-     * belongs in
-     * [`FfiPlayerConfig::playing_rate`](crate::config::FfiPlayerConfig).
-     */
 open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
@@ -1297,10 +1321,16 @@ open func setVolume(volume: Float)  {try! rustCall() {
 }
 
     /**
-     * Register a wildcard DRM key processor at runtime with a fresh salt.
-     * Items already in the queue keep their registry; initial rules belong
-     * in [`FfiPlayerConfig::key_options`](crate::config::FfiPlayerConfig),
-     * which is applied through the same path.
+     * Register a runtime DRM key processor for every host (`"*"`).
+     *
+     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
+     * into the player-wide `SALT_HEADER` (so it accompanies every
+     * outgoing manifest/segment/key request), and forwards it to
+     * `processor.process_key(key, salt)` on each decrypt.
+     *
+     * Items already in the queue keep their original key registry —
+     * re-call this method *before* [`Self::insert`] for the new processor
+     * to apply.
      */
 open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes(
@@ -1311,8 +1341,11 @@ open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
 }
 
     /**
-     * Append a domain-scoped DRM key rule at runtime; see
-     * [`Self::setup_hls_aes`].
+     * Register a runtime DRM key processor with explicit rule control
+     * (custom domains, headers, salt). The rule's salt — if any — is
+     * mirrored into the player-wide header map under `SALT_HEADER`.
+     *
+     * Items already in the queue keep their original key registry.
      */
 open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes_with_rule(
@@ -1323,11 +1356,9 @@ open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
 }
 
     /**
-     * Replace the player-wide auth header at runtime. Stores `auth_token`
-     * under `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
+     * Player-wide auth header. Stores `auth_token` under
+     * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
-     * The initial value belongs in
-     * [`FfiPlayerConfig::auth_token`](crate::config::FfiPlayerConfig).
      */
 open func setupNetwork(authToken: String)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_network(
@@ -1386,6 +1417,74 @@ open func volume() -> Float  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+
+    /**
+     * Advance to the next item, or do nothing at queue exhaustion.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+open func advanceToNextItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_advance_to_next_item(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+    /**
+     * Return to the previous item in navigation history.
+     *
+     * # Errors
+     * Returns an error when queue navigation fails.
+     */
+open func returnToPreviousItem()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_return_to_previous_item(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+    /**
+     * Set the automatic terminal action.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+open func setActionAtItemEnd(action: FfiActionAtItemEnd)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_action_at_item_end(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiActionAtItemEnd_lower(action),$0
+    )
+}
+}
+
+    /**
+     * Set the profile captured by future transitions.
+     *
+     * # Errors
+     * Returns an error when the profile contains an invalid value.
+     */
+open func setCrossfadeSettings(settings: FfiCrossfadeSettings)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_settings(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiCrossfadeSettings_lower(settings),$0
+    )
+}
+}
+
+    /**
+     * Set the queue traversal order.
+     *
+     * # Errors
+     * Returns an error for an unknown external enum value.
+     */
+open func setPlaybackOrder(order: FfiPlaybackOrder)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_playback_order(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiPlaybackOrder_lower(order),$0
+    )
+}
 }
 
     /**
@@ -3633,6 +3732,68 @@ public func FfiConverterTypeFfiCacheIdentityRule_lower(_ value: FfiCacheIdentity
 }
 
 
+public struct FfiCrossfadeSettings: Equatable, Hashable {
+    public let duration: Float
+    public let curve: FfiCrossfadeCurve
+    public let depth: Float
+    public let position: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(duration: Float, curve: FfiCrossfadeCurve, depth: Float, position: Float) {
+        self.duration = duration
+        self.curve = curve
+        self.depth = depth
+        self.position = position
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiCrossfadeSettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCrossfadeSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCrossfadeSettings {
+        return
+            try FfiCrossfadeSettings(
+                duration: FfiConverterFloat.read(from: &buf),
+                curve: FfiConverterTypeFfiCrossfadeCurve.read(from: &buf),
+                depth: FfiConverterFloat.read(from: &buf),
+                position: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiCrossfadeSettings, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.duration, into: &buf)
+        FfiConverterTypeFfiCrossfadeCurve.write(value.curve, into: &buf)
+        FfiConverterFloat.write(value.depth, into: &buf)
+        FfiConverterFloat.write(value.position, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCrossfadeSettings_lift(_ buf: RustBuffer) throws -> FfiCrossfadeSettings {
+    return try FfiConverterTypeFfiCrossfadeSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCrossfadeSettings_lower(_ value: FfiCrossfadeSettings) -> RustBuffer {
+    return FfiConverterTypeFfiCrossfadeSettings.lower(value)
+}
+
+
 /**
  * FFI-friendly per-item configuration. All fields immutable after
  * [`crate::item::AudioPlayerItem::new`].
@@ -4068,12 +4229,6 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
 
 /**
  * FFI-friendly player configuration.
- *
- * Carries the player's whole initial state: every field is applied while
- * [`crate::player::AudioPlayer::new`] constructs the engine through the
- * same runtime setters (`setup_hls_aes_with_rule`, `setup_network`,
- * `set_crossfade_duration`, `set_playing_rate`), so a caller never has to follow the
- * constructor with a setup call to reach the state it wanted from the start.
  */
 public struct FfiPlayerConfig {
     /**
@@ -4081,8 +4236,7 @@ public struct FfiPlayerConfig {
      */
     public let store: FfiAssetStore
     /**
-     * DRM key handling — the only place key rules are declared. Pass an
-     * empty [`FfiKeyOptions`] when no DRM is needed.
+     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
      */
     public let keyOptions: FfiKeyOptions
     /**
@@ -4090,24 +4244,16 @@ public struct FfiPlayerConfig {
      */
     public let eqBandCount: UInt32
     /**
-     * Player-wide auth token written to
-     * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
-     * HTTP headers. Empty means no token; change it later through
-     * [`crate::player::AudioPlayer::setup_network`].
+     * Player-wide auth token merged into item HTTP headers. Empty means no token.
      */
     public let authToken: String
     /**
-     * Initial crossfade window in seconds. Callers that have no opinion
-     * pass [`default_crossfade_duration`]; change it later through
-     * [`crate::player::AudioPlayer::set_crossfade_duration`].
-     */
-    public let crossfadeDuration: Float
-    /**
-     * Initial playback-rate target (1.0 = normal). Callers that have no
-     * opinion pass [`default_playing_rate`]; change it later through
-     * [`crate::player::AudioPlayer::set_playing_rate`].
+     * Initial playback-rate target (1.0 = normal).
      */
     public let playingRate: Float
+    public let playbackOrder: FfiPlaybackOrder
+    public let actionAtItemEnd: FfiActionAtItemEnd
+    public let crossfadeSettings: FfiCrossfadeSettings
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4116,34 +4262,25 @@ public struct FfiPlayerConfig {
          * Shared asset store used by every item created by this player.
          */store: FfiAssetStore,
         /**
-         * DRM key handling — the only place key rules are declared. Pass an
-         * empty [`FfiKeyOptions`] when no DRM is needed.
+         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
          */eqBandCount: UInt32,
         /**
-         * Player-wide auth token written to
-         * [`crate::observer::AUTH_TOKEN_HEADER`] and merged into every item's
-         * HTTP headers. Empty means no token; change it later through
-         * [`crate::player::AudioPlayer::setup_network`].
+         * Player-wide auth token merged into item HTTP headers. Empty means no token.
          */authToken: String,
         /**
-         * Initial crossfade window in seconds. Callers that have no opinion
-         * pass [`default_crossfade_duration`]; change it later through
-         * [`crate::player::AudioPlayer::set_crossfade_duration`].
-         */crossfadeDuration: Float,
-        /**
-         * Initial playback-rate target (1.0 = normal). Callers that have no
-         * opinion pass [`default_playing_rate`]; change it later through
-         * [`crate::player::AudioPlayer::set_playing_rate`].
-         */playingRate: Float) {
+         * Initial playback-rate target (1.0 = normal).
+         */playingRate: Float, playbackOrder: FfiPlaybackOrder, actionAtItemEnd: FfiActionAtItemEnd, crossfadeSettings: FfiCrossfadeSettings) {
         self.store = store
         self.keyOptions = keyOptions
         self.eqBandCount = eqBandCount
         self.authToken = authToken
-        self.crossfadeDuration = crossfadeDuration
         self.playingRate = playingRate
+        self.playbackOrder = playbackOrder
+        self.actionAtItemEnd = actionAtItemEnd
+        self.crossfadeSettings = crossfadeSettings
     }
 
 
@@ -4166,8 +4303,10 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf),
                 authToken: FfiConverterString.read(from: &buf),
-                crossfadeDuration: FfiConverterFloat.read(from: &buf),
-                playingRate: FfiConverterFloat.read(from: &buf)
+                playingRate: FfiConverterFloat.read(from: &buf),
+                playbackOrder: FfiConverterTypeFfiPlaybackOrder.read(from: &buf),
+                actionAtItemEnd: FfiConverterTypeFfiActionAtItemEnd.read(from: &buf),
+                crossfadeSettings: FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
         )
     }
 
@@ -4176,8 +4315,10 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
         FfiConverterString.write(value.authToken, into: &buf)
-        FfiConverterFloat.write(value.crossfadeDuration, into: &buf)
         FfiConverterFloat.write(value.playingRate, into: &buf)
+        FfiConverterTypeFfiPlaybackOrder.write(value.playbackOrder, into: &buf)
+        FfiConverterTypeFfiActionAtItemEnd.write(value.actionAtItemEnd, into: &buf)
+        FfiConverterTypeFfiCrossfadeSettings.write(value.crossfadeSettings, into: &buf)
     }
 }
 
@@ -4478,8 +4619,90 @@ public func FfiConverterTypeFfiAbrMode_lower(_ value: FfiAbrMode) -> RustBuffer 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum FfiActionAtItemEnd: Equatable, Hashable {
+
+    case advance
+    case pause
+    case none
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiActionAtItemEnd: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiActionAtItemEnd: FfiConverterRustBuffer {
+    typealias SwiftType = FfiActionAtItemEnd
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiActionAtItemEnd {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .advance
+
+        case 2: return .pause
+
+        case 3: return .none
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiActionAtItemEnd, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .advance:
+            writeInt(&buf, Int32(1))
+
+
+        case .pause:
+            writeInt(&buf, Int32(2))
+
+
+        case .none:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActionAtItemEnd_lift(_ buf: RustBuffer) throws -> FfiActionAtItemEnd {
+    return try FfiConverterTypeFfiActionAtItemEnd.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActionAtItemEnd_lower(_ value: FfiActionAtItemEnd) -> RustBuffer {
+    return FfiConverterTypeFfiActionAtItemEnd.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum FfiAdvanceReason: Equatable, Hashable {
 
+    case initialLoad
     case naturalEof
     case crossfadePreArm
     case userSelect
@@ -4511,25 +4734,27 @@ public struct FfiConverterTypeFfiAdvanceReason: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        case 1: return .naturalEof
+        case 1: return .initialLoad
 
-        case 2: return .crossfadePreArm
+        case 2: return .naturalEof
 
-        case 3: return .userSelect
+        case 3: return .crossfadePreArm
 
-        case 4: return .userNext
+        case 4: return .userSelect
 
-        case 5: return .userPrev
+        case 5: return .userNext
 
-        case 6: return .trackFailed
+        case 6: return .userPrev
 
-        case 7: return .removedCurrent
+        case 7: return .trackFailed
 
-        case 8: return .`repeat`
+        case 8: return .removedCurrent
 
-        case 9: return .cancelled
+        case 9: return .`repeat`
 
-        case 10: return .unknown
+        case 10: return .cancelled
+
+        case 11: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -4539,44 +4764,48 @@ public struct FfiConverterTypeFfiAdvanceReason: FfiConverterRustBuffer {
         switch value {
 
 
-        case .naturalEof:
+        case .initialLoad:
             writeInt(&buf, Int32(1))
 
 
-        case .crossfadePreArm:
+        case .naturalEof:
             writeInt(&buf, Int32(2))
 
 
-        case .userSelect:
+        case .crossfadePreArm:
             writeInt(&buf, Int32(3))
 
 
-        case .userNext:
+        case .userSelect:
             writeInt(&buf, Int32(4))
 
 
-        case .userPrev:
+        case .userNext:
             writeInt(&buf, Int32(5))
 
 
-        case .trackFailed:
+        case .userPrev:
             writeInt(&buf, Int32(6))
 
 
-        case .removedCurrent:
+        case .trackFailed:
             writeInt(&buf, Int32(7))
 
 
-        case .`repeat`:
+        case .removedCurrent:
             writeInt(&buf, Int32(8))
 
 
-        case .cancelled:
+        case .`repeat`:
             writeInt(&buf, Int32(9))
 
 
-        case .unknown:
+        case .cancelled:
             writeInt(&buf, Int32(10))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(11))
 
         }
     }
@@ -5185,6 +5414,80 @@ public func FfiConverterTypeFfiContainerKind_lift(_ buf: RustBuffer) throws -> F
 #endif
 public func FfiConverterTypeFfiContainerKind_lower(_ value: FfiContainerKind) -> RustBuffer {
     return FfiConverterTypeFfiContainerKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiCrossfadeCurve: Equatable, Hashable {
+
+    case linear
+    case equalPower
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiCrossfadeCurve: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCrossfadeCurve: FfiConverterRustBuffer {
+    typealias SwiftType = FfiCrossfadeCurve
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCrossfadeCurve {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .linear
+
+        case 2: return .equalPower
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiCrossfadeCurve, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .linear:
+            writeInt(&buf, Int32(1))
+
+
+        case .equalPower:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCrossfadeCurve_lift(_ buf: RustBuffer) throws -> FfiCrossfadeCurve {
+    return try FfiConverterTypeFfiCrossfadeCurve.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCrossfadeCurve_lower(_ value: FfiCrossfadeCurve) -> RustBuffer {
+    return FfiConverterTypeFfiCrossfadeCurve.lower(value)
 }
 
 
@@ -6784,6 +7087,80 @@ public func FfiConverterTypeFfiKeySource_lower(_ value: FfiKeySource) -> RustBuf
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum FfiPlaybackOrder: Equatable, Hashable {
+
+    case sequential
+    case shuffle
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPlaybackOrder: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlaybackOrder: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPlaybackOrder
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlaybackOrder {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .sequential
+
+        case 2: return .shuffle
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiPlaybackOrder, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .sequential:
+            writeInt(&buf, Int32(1))
+
+
+        case .shuffle:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackOrder_lift(_ buf: RustBuffer) throws -> FfiPlaybackOrder {
+    return try FfiConverterTypeFfiPlaybackOrder.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackOrder_lower(_ value: FfiPlaybackOrder) -> RustBuffer {
+    return FfiConverterTypeFfiPlaybackOrder.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum FfiPlaybackResamplerKind: Equatable, Hashable {
 
     case rubato
@@ -6922,12 +7299,16 @@ public enum FfiPlayerEvent: Equatable, Hashable {
      * A crossfade between tracks just started. `duration_seconds` is
      * the configured crossfade window — UIs can drive progress from it.
      */
-    case crossfadeStarted(durationSeconds: Float
+    case crossfadeStarted(settings: FfiCrossfadeSettings
     )
     /**
      * The configured crossfade window changed at runtime.
      */
-    case crossfadeDurationChanged(seconds: Float
+    case crossfadeSettingsChanged(settings: FfiCrossfadeSettings
+    )
+    case playbackOrderChanged(order: FfiPlaybackOrder
+    )
+    case actionAtItemEndChanged(action: FfiActionAtItemEnd
     )
     case trackAdded(itemId: TrackId, index: UInt64
     )
@@ -7022,60 +7403,66 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
 
         case 14: return .queueEnded
 
-        case 15: return .crossfadeStarted(durationSeconds: try FfiConverterFloat.read(from: &buf)
+        case 15: return .crossfadeStarted(settings: try FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
         )
 
-        case 16: return .crossfadeDurationChanged(seconds: try FfiConverterFloat.read(from: &buf)
+        case 16: return .crossfadeSettingsChanged(settings: try FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
         )
 
-        case 17: return .trackAdded(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
+        case 17: return .playbackOrderChanged(order: try FfiConverterTypeFfiPlaybackOrder.read(from: &buf)
         )
 
-        case 18: return .trackRemoved(itemId: try FfiConverterTypeTrackId.read(from: &buf)
+        case 18: return .actionAtItemEndChanged(action: try FfiConverterTypeFfiActionAtItemEnd.read(from: &buf)
         )
 
-        case 19: return .trackLoadFailed(itemId: try FfiConverterTypeTrackId.read(from: &buf), reason: try FfiConverterString.read(from: &buf), autoSkipped: try FfiConverterBool.read(from: &buf)
+        case 19: return .trackAdded(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 20: return .repeatModeChanged(mode: try FfiConverterTypeFfiRepeatMode.read(from: &buf)
+        case 20: return .trackRemoved(itemId: try FfiConverterTypeTrackId.read(from: &buf)
         )
 
-        case 21: return .nextTrackReady(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
+        case 21: return .trackLoadFailed(itemId: try FfiConverterTypeTrackId.read(from: &buf), reason: try FfiConverterString.read(from: &buf), autoSkipped: try FfiConverterBool.read(from: &buf)
         )
 
-        case 22: return .currentItemAdvanced(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf), reason: try FfiConverterTypeFfiAdvanceReason.read(from: &buf)
+        case 22: return .repeatModeChanged(mode: try FfiConverterTypeFfiRepeatMode.read(from: &buf)
         )
 
-        case 23: return .engineStarted
-
-        case 24: return .engineStopped
-
-        case 25: return .crossfadeCompleted
-
-        case 26: return .crossfadeCancelled
-
-        case 27: return .masterVolumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        case 23: return .nextTrackReady(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 28: return .audioRouteChanged(reason: try FfiConverterTypeFfiRouteChangeReason.read(from: &buf)
+        case 24: return .currentItemAdvanced(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf), reason: try FfiConverterTypeFfiAdvanceReason.read(from: &buf)
         )
 
-        case 29: return .djBpmDetected(slot: try FfiConverterUInt64.read(from: &buf), bpm: try FfiConverterDouble.read(from: &buf), confidence: try FfiConverterOptionFloat.read(from: &buf), firstBeatOffsetSeconds: try FfiConverterDouble.read(from: &buf)
+        case 25: return .engineStarted
+
+        case 26: return .engineStopped
+
+        case 27: return .crossfadeCompleted
+
+        case 28: return .crossfadeCancelled
+
+        case 29: return .masterVolumeChanged(volume: try FfiConverterFloat.read(from: &buf)
         )
 
-        case 30: return .djKeylockChanged(on: try FfiConverterBool.read(from: &buf)
+        case 30: return .audioRouteChanged(reason: try FfiConverterTypeFfiRouteChangeReason.read(from: &buf)
         )
 
-        case 31: return .djStretchBackendChanged(kind: try FfiConverterTypeFfiStretchBackendKind.read(from: &buf)
+        case 31: return .djBpmDetected(slot: try FfiConverterUInt64.read(from: &buf), bpm: try FfiConverterDouble.read(from: &buf), confidence: try FfiConverterOptionFloat.read(from: &buf), firstBeatOffsetSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 32: return .assetCommitted(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), finalLen: try FfiConverterOptionUInt64.read(from: &buf)
+        case 32: return .djKeylockChanged(on: try FfiConverterBool.read(from: &buf)
         )
 
-        case 33: return .assetFailed(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        case 33: return .djStretchBackendChanged(kind: try FfiConverterTypeFfiStretchBackendKind.read(from: &buf)
         )
 
-        case 34: return .assetEvicted(assetRoot: try FfiConverterString.read(from: &buf), reason: try FfiConverterTypeFfiEvictReason.read(from: &buf)
+        case 34: return .assetCommitted(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), finalLen: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 35: return .assetFailed(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        )
+
+        case 36: return .assetEvicted(assetRoot: try FfiConverterString.read(from: &buf), reason: try FfiConverterTypeFfiEvictReason.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -7155,79 +7542,89 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             writeInt(&buf, Int32(14))
 
 
-        case let .crossfadeStarted(durationSeconds):
+        case let .crossfadeStarted(settings):
             writeInt(&buf, Int32(15))
-            FfiConverterFloat.write(durationSeconds, into: &buf)
+            FfiConverterTypeFfiCrossfadeSettings.write(settings, into: &buf)
 
 
-        case let .crossfadeDurationChanged(seconds):
+        case let .crossfadeSettingsChanged(settings):
             writeInt(&buf, Int32(16))
-            FfiConverterFloat.write(seconds, into: &buf)
+            FfiConverterTypeFfiCrossfadeSettings.write(settings, into: &buf)
+
+
+        case let .playbackOrderChanged(order):
+            writeInt(&buf, Int32(17))
+            FfiConverterTypeFfiPlaybackOrder.write(order, into: &buf)
+
+
+        case let .actionAtItemEndChanged(action):
+            writeInt(&buf, Int32(18))
+            FfiConverterTypeFfiActionAtItemEnd.write(action, into: &buf)
 
 
         case let .trackAdded(itemId,index):
-            writeInt(&buf, Int32(17))
+            writeInt(&buf, Int32(19))
             FfiConverterTypeTrackId.write(itemId, into: &buf)
             FfiConverterUInt64.write(index, into: &buf)
 
 
         case let .trackRemoved(itemId):
-            writeInt(&buf, Int32(18))
+            writeInt(&buf, Int32(20))
             FfiConverterTypeTrackId.write(itemId, into: &buf)
 
 
         case let .trackLoadFailed(itemId,reason,autoSkipped):
-            writeInt(&buf, Int32(19))
+            writeInt(&buf, Int32(21))
             FfiConverterTypeTrackId.write(itemId, into: &buf)
             FfiConverterString.write(reason, into: &buf)
             FfiConverterBool.write(autoSkipped, into: &buf)
 
 
         case let .repeatModeChanged(mode):
-            writeInt(&buf, Int32(20))
+            writeInt(&buf, Int32(22))
             FfiConverterTypeFfiRepeatMode.write(mode, into: &buf)
 
 
         case let .nextTrackReady(itemId,index):
-            writeInt(&buf, Int32(21))
+            writeInt(&buf, Int32(23))
             FfiConverterTypeTrackId.write(itemId, into: &buf)
             FfiConverterUInt64.write(index, into: &buf)
 
 
         case let .currentItemAdvanced(itemId,reason):
-            writeInt(&buf, Int32(22))
+            writeInt(&buf, Int32(24))
             FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
             FfiConverterTypeFfiAdvanceReason.write(reason, into: &buf)
 
 
         case .engineStarted:
-            writeInt(&buf, Int32(23))
-
-
-        case .engineStopped:
-            writeInt(&buf, Int32(24))
-
-
-        case .crossfadeCompleted:
             writeInt(&buf, Int32(25))
 
 
-        case .crossfadeCancelled:
+        case .engineStopped:
             writeInt(&buf, Int32(26))
 
 
-        case let .masterVolumeChanged(volume):
+        case .crossfadeCompleted:
             writeInt(&buf, Int32(27))
+
+
+        case .crossfadeCancelled:
+            writeInt(&buf, Int32(28))
+
+
+        case let .masterVolumeChanged(volume):
+            writeInt(&buf, Int32(29))
             FfiConverterFloat.write(volume, into: &buf)
 
 
         case let .audioRouteChanged(reason):
-            writeInt(&buf, Int32(28))
+            writeInt(&buf, Int32(30))
             FfiConverterTypeFfiRouteChangeReason.write(reason, into: &buf)
 
 
         case let .djBpmDetected(slot,bpm,confidence,firstBeatOffsetSeconds):
-            writeInt(&buf, Int32(29))
+            writeInt(&buf, Int32(31))
             FfiConverterUInt64.write(slot, into: &buf)
             FfiConverterDouble.write(bpm, into: &buf)
             FfiConverterOptionFloat.write(confidence, into: &buf)
@@ -7235,31 +7632,31 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
 
 
         case let .djKeylockChanged(on):
-            writeInt(&buf, Int32(30))
+            writeInt(&buf, Int32(32))
             FfiConverterBool.write(on, into: &buf)
 
 
         case let .djStretchBackendChanged(kind):
-            writeInt(&buf, Int32(31))
+            writeInt(&buf, Int32(33))
             FfiConverterTypeFfiStretchBackendKind.write(kind, into: &buf)
 
 
         case let .assetCommitted(assetRoot,relPath,finalLen):
-            writeInt(&buf, Int32(32))
+            writeInt(&buf, Int32(34))
             FfiConverterString.write(assetRoot, into: &buf)
             FfiConverterString.write(relPath, into: &buf)
             FfiConverterOptionUInt64.write(finalLen, into: &buf)
 
 
         case let .assetFailed(assetRoot,relPath,reason):
-            writeInt(&buf, Int32(33))
+            writeInt(&buf, Int32(35))
             FfiConverterString.write(assetRoot, into: &buf)
             FfiConverterString.write(relPath, into: &buf)
             FfiConverterString.write(reason, into: &buf)
 
 
         case let .assetEvicted(assetRoot,reason):
-            writeInt(&buf, Int32(34))
+            writeInt(&buf, Int32(36))
             FfiConverterString.write(assetRoot, into: &buf)
             FfiConverterTypeFfiEvictReason.write(reason, into: &buf)
 
@@ -8095,7 +8492,7 @@ public enum FfiTransition: Equatable, Hashable {
 
     case none
     case crossfade
-    case crossfadeWith(seconds: Float
+    case crossfadeWith(settings: FfiCrossfadeSettings
     )
 
 
@@ -8122,7 +8519,7 @@ public struct FfiConverterTypeFfiTransition: FfiConverterRustBuffer {
 
         case 2: return .crossfade
 
-        case 3: return .crossfadeWith(seconds: try FfiConverterFloat.read(from: &buf)
+        case 3: return .crossfadeWith(settings: try FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -8141,9 +8538,9 @@ public struct FfiConverterTypeFfiTransition: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
 
 
-        case let .crossfadeWith(seconds):
+        case let .crossfadeWith(settings):
             writeInt(&buf, Int32(3))
-            FfiConverterFloat.write(seconds, into: &buf)
+            FfiConverterTypeFfiCrossfadeSettings.write(settings, into: &buf)
 
         }
     }
@@ -8709,29 +9106,6 @@ public func queryIdentityLayout(rules: [FfiCacheIdentityRule]) -> FfiAssetLayout
     )
 })
 }
-/**
- * Crossfade window a player starts with when the caller has no opinion.
- * Re-exports the engine-owned [`kithara::play::DEFAULT_CROSSFADE_DURATION`]
- * so Swift and Kotlin can default their own configuration to it instead of
- * restating the number.
- */
-public func defaultCrossfadeDuration() -> Float  {
-    return try!  FfiConverterFloat.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_func_default_crossfade_duration($0
-    )
-})
-}
-/**
- * Playback rate a player starts with when the caller has no opinion.
- * Re-exports the engine-owned [`kithara::play::DEFAULT_PLAYING_RATE`] for
- * the same reason as [`default_crossfade_duration`].
- */
-public func defaultPlayingRate() -> Float  {
-    return try!  FfiConverterFloat.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_func_default_playing_rate($0
-    )
-})
-}
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -8773,12 +9147,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_func_default_crossfade_duration() != 51240) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_func_default_playing_rate() != 53814) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
@@ -8859,13 +9227,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 53698) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 13245) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 1470) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 23497) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
@@ -8898,6 +9266,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_play() != 3044) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 46526) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_playing_rate() != 25490) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8925,9 +9296,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 37317) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8937,7 +9305,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 11047) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
@@ -8946,13 +9314,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 18214) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 56394) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 43124) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {
@@ -8965,6 +9333,21 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 33255) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 29933) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 50899) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
@@ -8988,7 +9371,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 34400) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
         return InitializationResult.apiChecksumMismatch
     }
 

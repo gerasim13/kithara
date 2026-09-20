@@ -640,6 +640,8 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         ("apple:test", ".rules-verify-and-branch", true),
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
+        // The simulator suite blocks rather than reports: no other host can
+        // answer for the iOS surface.
         ("apple:ios-test", ".rules-verify-and-branch", false),
     ] {
         assert_active_review_job(&config, job, owner, judged);
@@ -818,22 +820,37 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
     );
     assert_eq!(rules[1]["when"].as_str(), Some("always"));
     let config = GitlabConfig::load(root);
-    for owner in [".rules-review-or-nightly"] {
-        let rules = config.definition(owner)["rules"]
-            .as_sequence()
-            .expect("job rules");
-        for kind in ["branch", "merge-request"] {
-            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
-            let rule = rules
-                .iter()
-                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
-                .expect("review rule");
-            assert_eq!(
-                rule["interruptible"].as_bool(),
-                Some(true),
-                "{owner}: {kind}"
-            );
-        }
+    // A rule inherits the block's `interruptible` unless it overrides it, and
+    // the kinds a review ref runs under are spread over the two blocks that
+    // declare them: a branch on `.rules-verify-and-branch`, a merge request on
+    // the `.rules-verify` rules it references.
+    for (owner, kind) in [
+        (".rules-verify-and-branch", "branch"),
+        (".rules-verify", "merge-request"),
+        (".rules-review-or-nightly", "branch"),
+        (".rules-review-or-nightly", "merge-request"),
+    ] {
+        let block = config.definition(owner);
+        let rules = block["rules"].as_sequence().expect("job rules");
+        let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+        let rule = rules
+            .iter()
+            .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+            .expect("review rule");
+        assert_eq!(
+            rule["interruptible"]
+                .as_bool()
+                .or_else(|| block["interruptible"].as_bool()),
+            Some(true),
+            "{owner}: {kind}"
+        );
+    }
+    // The lanes a review ref never cancels keep saying so on the block itself.
+    for owner in [
+        ".rules-integration",
+        ".rules-nightly",
+        ".rules-review-or-nightly",
+    ] {
         assert_eq!(
             config.definition(owner)["interruptible"].as_bool(),
             Some(false),

@@ -1,7 +1,7 @@
 use delegate::delegate;
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
-use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
+use kithara_play::{CrossfadeSettings, EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::QueueControl;
 use crate::event::QueueEvent;
@@ -30,13 +30,31 @@ where
         self.with_open_result(|queue| queue.player.reset_eq())
     }
 
-    pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.command(|queue| {
-            queue.player.set_crossfade_duration(seconds);
-            queue.bus.publish(QueueEvent::CrossfadeDurationChanged {
-                seconds: queue.player.crossfade_duration(),
-            });
-        });
+    /// Update the profile captured by future transitions.
+    ///
+    /// # Errors
+    /// Returns an error when any profile value is invalid.
+    pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), PlayError> {
+        let settings = settings.validate()?;
+        self.with_open_result(|queue| {
+            *queue
+                .crossfade_settings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
+            queue.player.set_crossfade_duration(settings.duration);
+            queue
+                .bus
+                .publish(QueueEvent::CrossfadeSettingsChanged { settings });
+            Ok(())
+        })
+    }
+
+    #[must_use]
+    pub fn crossfade_settings(&self) -> CrossfadeSettings {
+        *self
+            .crossfade_settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Set the default playback rate.
@@ -81,9 +99,6 @@ where
             /// Whether playback is active.
             #[must_use]
             pub fn is_playing(&self) -> bool;
-            /// Current crossfade duration in seconds.
-            #[must_use]
-            pub fn crossfade_duration(&self) -> f32;
             /// Live engine playback rate (player-reported, 0.0 when paused).
             #[must_use]
             pub fn rate(&self) -> f32;

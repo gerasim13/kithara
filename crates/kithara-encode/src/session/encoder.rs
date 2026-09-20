@@ -1,14 +1,16 @@
-use std::{fmt, mem::size_of};
+use std::mem::size_of;
 
 use crate::{EncodeConfig, EncodeError, EncodeResult, EncodedAccessUnit};
 
 /// Continuous encoder from interleaved `f32` PCM to access units.
+#[derive(derive_more::Debug)]
 pub struct EncoderSession {
-    pending: Vec<f32>,
-    packet_frames: u32,
-    next_frame: u64,
     channels: usize,
+    next_frame: u64,
+    packet_frames: u32,
     packet_samples: usize,
+    #[debug("{:?}", self.pending_samples.len())]
+    pending_samples: Vec<f32>,
 }
 
 impl EncoderSession {
@@ -37,7 +39,7 @@ impl EncoderSession {
             next_frame: 0,
             packet_frames,
             packet_samples,
-            pending: Vec::with_capacity(packet_samples),
+            pending_samples: Vec::with_capacity(packet_samples),
         })
     }
 
@@ -48,14 +50,18 @@ impl EncoderSession {
     /// Returns invalid input if the final frame count cannot be represented by
     /// the access-unit duration.
     pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        if self.pending.is_empty() {
+        if self.pending_samples.is_empty() {
             return Ok(Vec::new());
         }
-        let frames = self.pending.len() / self.channels;
+        let frames = self.pending_samples.len() / self.channels;
         let duration = u32::try_from(frames).map_err(|_| {
             EncodeError::InvalidInput("final PCM packet duration does not fit into u32".to_owned())
         })?;
-        Ok(vec![Self::unit(&self.pending, self.next_frame, duration)])
+        Ok(vec![Self::unit(
+            &self.pending_samples,
+            self.next_frame,
+            duration,
+        )])
     }
 
     /// Encode complete interleaved frames and return completed access units.
@@ -72,7 +78,7 @@ impl EncoderSession {
             )));
         }
         let total_samples = self
-            .pending
+            .pending_samples
             .len()
             .checked_add(samples.len())
             .ok_or_else(|| EncodeError::InvalidInput("PCM input size overflow".to_owned()))?;
@@ -103,14 +109,14 @@ impl EncoderSession {
         };
 
         let mut remaining = samples;
-        if !self.pending.is_empty() {
-            let needed = self.packet_samples - self.pending.len();
+        if !self.pending_samples.is_empty() {
+            let needed = self.packet_samples - self.pending_samples.len();
             let take = needed.min(remaining.len());
-            self.pending.extend_from_slice(&remaining[..take]);
+            self.pending_samples.extend_from_slice(&remaining[..take]);
             remaining = &remaining[take..];
-            if self.pending.len() == self.packet_samples {
-                emit(&self.pending)?;
-                self.pending.clear();
+            if self.pending_samples.len() == self.packet_samples {
+                emit(&self.pending_samples)?;
+                self.pending_samples.clear();
             }
         }
 
@@ -118,7 +124,8 @@ impl EncoderSession {
         for packet in remaining[..ready_samples].chunks_exact(self.packet_samples) {
             emit(packet)?;
         }
-        self.pending.extend_from_slice(&remaining[ready_samples..]);
+        self.pending_samples
+            .extend_from_slice(&remaining[ready_samples..]);
         self.next_frame = end_frame;
         Ok(units)
     }
@@ -132,18 +139,5 @@ impl EncoderSession {
             dts: pts,
             pts,
         }
-    }
-}
-
-impl fmt::Debug for EncoderSession {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EncoderSession")
-            .field("channels", &self.channels)
-            .field("next_frame", &self.next_frame)
-            .field("packet_frames", &self.packet_frames)
-            .field("packet_samples", &self.packet_samples)
-            .field("pending_samples", &self.pending.len())
-            .finish()
     }
 }

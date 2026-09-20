@@ -16,7 +16,7 @@ use kithara::{
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
@@ -486,7 +486,12 @@ async fn local_queue_playlist_behavior(
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
-    queue.set_crossfade_duration(2.0);
+    queue
+        .set_crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: 2.0,
+            ..Default::default()
+        })
+        .expect("valid crossfade settings");
 
     let mut rx = queue.subscribe();
     let mut ids: Vec<TrackId> = Vec::with_capacity(urls.len());
@@ -566,9 +571,9 @@ async fn local_queue_playlist_behavior(
     wait_for_loader_done_event(&mut rx, &queue, ids[1], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
-    let xf_duration = queue.crossfade_duration();
+    let xf_duration = queue.crossfade_settings().duration;
     queue
-        .run(move |q| q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext))
+        .run(move |q| q.next(Transition::Crossfade))
         .await
         .expect("advance local-track crossfade");
     let started = wait_for_queue_event(
@@ -578,10 +583,11 @@ async fn local_queue_playlist_behavior(
     )
     .await
     .expect("CrossfadeStarted event");
-    if let QueueEvent::CrossfadeStarted { duration_seconds } = started {
+    if let QueueEvent::CrossfadeStarted { settings } = started {
         assert!(
-            (duration_seconds - xf_duration).abs() < 0.01,
-            "crossfade duration mismatch: event={duration_seconds:.2} vs config={xf_duration:.2}"
+            (settings.duration - xf_duration).abs() < 0.01,
+            "crossfade duration mismatch: event={:.2} vs config={xf_duration:.2}",
+            settings.duration
         );
     }
     wait_for_queue_event(

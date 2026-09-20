@@ -34,6 +34,7 @@ enum DetectorConfig {
 }
 
 #[derive(Clone)]
+#[derive_where::derive_where(Default)]
 pub(crate) struct Config<B>(Option<BeatConfig<B>>)
 where
     B: ResamplerBackend;
@@ -107,27 +108,10 @@ where
     }
 }
 
-impl<B> Default for Config<B>
-where
-    B: ResamplerBackend,
-{
-    fn default() -> Self {
-        Self(None)
-    }
-}
-
+#[derive_where::derive_where(Default)]
 pub(crate) struct Slot<B>(Option<BeatPass<B>>)
 where
     B: ResamplerBackend;
-
-impl<B> Default for Slot<B>
-where
-    B: ResamplerBackend,
-{
-    fn default() -> Self {
-        Self(None)
-    }
-}
 
 impl<B> Slot<B>
 where

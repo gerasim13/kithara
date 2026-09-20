@@ -5,7 +5,6 @@ use kithara_stream::SeekEpoch;
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum HlsFailure {
     /// Playlist parse / structure error.
     #[display("playlist: {_0}")]
@@ -27,7 +26,6 @@ pub enum HlsFailure {
 /// lifecycle (enqueue → started → completed/failed/cancelled),
 /// subscribe to `DownloaderEvent` on the same bus scope.
 #[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum HlsEvent {
     /// Reader entered a new segment (or first segment after open / seek).
     SegmentReadStart {

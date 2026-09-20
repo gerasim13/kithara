@@ -157,6 +157,19 @@ impl WorkerBridge {
         wasm::bridge_position_secs()
     }
 
+    /// Audio-thread process calls served so far. Monotonic, so a caller
+    /// samples twice and reads the delta.
+    pub(crate) fn process_calls(&self) -> u64 {
+        let _ = self;
+        wasm::bridge_process_calls()
+    }
+
+    /// Underruns the audio thread has recorded so far.
+    pub(crate) fn underruns(&self) -> u64 {
+        let _ = self;
+        wasm::bridge_underruns()
+    }
+
     /// Forward a command to the worker.
     ///
     /// # Errors

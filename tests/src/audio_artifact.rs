@@ -80,12 +80,15 @@ pub struct AudioArtifactSet {
 
 /// One listening artifact per harness: PCM pushed by the render funnel,
 /// markers stamped by control calls, published on drop.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get, get_mut)]
 pub struct AudioArtifactTap {
     set: AudioArtifactSet,
     recording: Option<AudioArtifactRecording>,
     markers: Vec<Marker>,
     frames: u64,
     channels: u16,
+    #[field(get_mut = timeline)]
     timeline: ArtifactTimeline,
     source_grids: BTreeMap<u64, BeatGridSnapshot>,
     evidence: BTreeMap<String, Value>,
@@ -164,10 +167,6 @@ impl AudioArtifactTap {
         });
         self.timeline
             .point("control", self.frames, "command", label);
-    }
-
-    pub fn timeline(&mut self) -> &mut ArtifactTimeline {
-        &mut self.timeline
     }
 
     pub fn source_grid(&mut self, track: u64, grid: BeatGridSnapshot) {

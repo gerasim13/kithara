@@ -3,22 +3,16 @@ use bon::Builder;
 use crate::{
     expand::Binding,
     ids::InternId,
-    mount::Control,
     size::{Dim, SizeSpec},
-    skin::SkinDoc,
 };
 
 /// The strip under the tree that names the scope in view.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::Control)]
+#[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height)))]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct ContextBar<'a> {
     pub(crate) scope_items: &'a [InternId],
     pub(crate) scope: Option<&'a Binding>,
-}
-
-impl Control for ContextBar<'_> {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height))
-    }
 }
 
 #[cfg(feature = "render")]

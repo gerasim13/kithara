@@ -1,18 +1,14 @@
 use bon::Builder;
 
-use crate::{module::ScalarFormat, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::module::ScalarFormat;
 
 /// One formatted number read from an endpoint.
-#[derive(Builder)]
+#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[control(size = skin.telemetry.size)]
+#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Telemetry {
     pub(crate) format: ScalarFormat,
     pub(crate) framed: bool,
-}
-
-impl Control for Telemetry {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.telemetry.size
-    }
 }
 
 #[cfg(feature = "render")]

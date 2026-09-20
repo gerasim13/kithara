@@ -5,7 +5,11 @@ use crate::{
 };
 
 /// A rail with a handle at each end, marking the interval between them.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = ScalarRange,
+    draw = self.paint(list, *data, bounds)
+)]
 pub(crate) struct Range {
     metrics: RangeSkin,
     rail: Rgba,

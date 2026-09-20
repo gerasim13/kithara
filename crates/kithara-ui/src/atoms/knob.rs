@@ -5,7 +5,13 @@ use crate::{
     skin::KnobSkin,
 };
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = crate::atoms::painter::Captioned,
+    draw = self.paint(list, text, data.value, data.label.as_deref(), bounds)
+)]
+#[derive(kithara_derive::Retained)]
+#[retained(setter = set_scalar, field = value)]
 pub(crate) struct Knob {
     metrics: KnobSkin,
     body_border: Rgba,

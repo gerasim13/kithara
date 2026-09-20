@@ -80,9 +80,6 @@ pub struct PlayerRuntime<S> {
 }
 
 impl<S> PlayerRuntime<S> {
-    /// Minimum playback rate to prevent stalling.
-    pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
-
     pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
     }

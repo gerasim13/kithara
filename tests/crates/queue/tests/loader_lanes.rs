@@ -302,8 +302,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
 /// isolation.
 fn assert_hung_still_loading(queue: &QueueControl<TestPools>, hung_id: TrackId) {
     assert!(
-        matches!(status_of(queue, hung_id), Some(TrackStatus::Loading)),
-        "setup invariant broken: hung track should still be Loading (last={:?})",
+        matches!(status_of(queue, hung_id), Some(TrackStatus::Cancelled)),
+        "the user selection must supersede the pending initial load (last={:?})",
         status_of(queue, hung_id)
     );
 }

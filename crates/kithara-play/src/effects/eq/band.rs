@@ -42,6 +42,7 @@ impl From<u8> for FilterKind {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(get)]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct EqBandConfig {
     #[builder(default)]
     #[field(get(copy))]
@@ -58,12 +59,6 @@ pub struct EqBandConfig {
 impl EqBandConfig {
     pub const fn set_gain_db(&mut self, gain_db: GainDb) {
         self.gain_db = gain_db;
-    }
-}
-
-impl Default for EqBandConfig {
-    fn default() -> Self {
-        Self::builder().build()
     }
 }
 

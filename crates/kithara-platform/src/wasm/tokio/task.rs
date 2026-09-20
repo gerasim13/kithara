@@ -134,12 +134,12 @@ impl<T> Future for JoinHandle<T> {
 #[derive(Debug, derive_more::Display, fieldwork::Fieldwork)]
 #[display("task failed to execute to completion")]
 #[fieldwork(get)]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct JoinError {
     #[field(get = is_cancelled)]
     cancelled: bool,
 }
-
-impl std::error::Error for JoinError {}
 
 #[cfg(test)]
 mod tests {

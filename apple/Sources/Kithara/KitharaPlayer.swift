@@ -77,10 +77,14 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .trackStatusChanged(itemId: audioId, status: status)
         case .queueEnded:
             return .queueEnded
-        case .crossfadeStarted(let durationSeconds):
-            return .crossfadeStarted(durationSeconds: durationSeconds)
-        case .crossfadeDurationChanged(let seconds):
-            return .crossfadeDurationChanged(seconds: seconds)
+        case .crossfadeStarted(let settings):
+            return .crossfadeStarted(settings: CrossfadeSettings(ffi: settings))
+        case .crossfadeSettingsChanged(let settings):
+            return .crossfadeSettingsChanged(settings: CrossfadeSettings(ffi: settings))
+        case .playbackOrderChanged(let order):
+            return .playbackOrderChanged(order: PlaybackOrder(ffi: order))
+        case .actionAtItemEndChanged(let action):
+            return .actionAtItemEndChanged(action: ActionAtItemEnd(ffi: action))
         case .repeatModeChanged(let mode):
             return .repeatModeChanged(mode: RepeatMode(ffi: mode))
         case .trackAdded,
@@ -244,8 +248,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Target playback speed used by ``play()``. Mirrors the iOS
     /// `playingRate`: while playing, ``rate`` equals
-    /// this value; on pause, ``rate`` falls to `0`. The initial value
-    /// belongs in ``Config/playingRate``.
+    /// this value; on pause, ``rate`` falls to `0`.
     public var playingRate: Float {
         get { _inner.playingRate() }
         set { _inner.setPlayingRate(rate: newValue) }
@@ -334,14 +337,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             self.queryParams = queryParams
             self.salt = salt
         }
-
-        /// The common "one processor for every host" rule: a match-any
-        /// domain pattern carrying a freshly generated lowercase-hex salt,
-        /// mirrored into the player-wide `X-Encrypted-Key` header. A pure
-        /// constructor — put the result into ``Config/keyRules``.
-        public static func wildcard(processor: KeyProcessor) -> KeyRule {
-            KeyRule(processor: processor, domains: ["*"], salt: drmLowercaseHexSalt())
-        }
     }
 
     /// Configuration for player creation.
@@ -354,15 +349,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
-        /// Auth token sent on every player HTTP request. Empty means no
-        /// token; replace it later with ``KitharaPlayer/setupNetwork(authToken:)``.
         public var authToken: String
-        /// Crossfade window in seconds applied from construction. Replace
-        /// it later through ``KitharaPlayer/crossfadeDuration``.
-        public var crossfadeDuration: Float
-        /// Playback-rate target applied from construction (1.0 = normal).
-        /// Replace it later through ``KitharaPlayer/playingRate``.
         public var playingRate: Float
+        public var playbackOrder: PlaybackOrder
+        public var actionAtItemEnd: ActionAtItemEnd
+        public var crossfadeSettings: CrossfadeSettings
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
@@ -371,29 +362,48 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             keyRules: [KeyRule] = [],
             store: AssetStore = AssetStore(),
             authToken: String = "",
-            crossfadeDuration: Float = defaultCrossfadeDuration(),
-            playingRate: Float = defaultPlayingRate()
+            playingRate: Float = 1.0,
+            playbackOrder: PlaybackOrder = .sequential,
+            actionAtItemEnd: ActionAtItemEnd = .advance,
+            crossfadeSettings: CrossfadeSettings = .default
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.store = store
             self.authToken = authToken
-            self.crossfadeDuration = crossfadeDuration
             self.playingRate = playingRate
+            self.playbackOrder = playbackOrder
+            self.actionAtItemEnd = actionAtItemEnd
+            self.crossfadeSettings = crossfadeSettings
         }
     }
 
     /// Create a new player instance.
     public init(config: Config = Config()) {
+        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
+            FfiKeyRule(
+                processor: KeyProcessorBridge(processor: rule.processor),
+                headers: rule.headers,
+                queryParams: rule.queryParams,
+                salt: rule.salt,
+                domains: rule.domains
+            )
+        }
         let ffiConfig = FfiPlayerConfig(
             store: config.store.inner,
-            keyOptions: FfiKeyOptions(rules: config.keyRules.map { $0.toFfi() }),
+            keyOptions: FfiKeyOptions(rules: ffiRules),
             eqBandCount: UInt32(config.eqBandCount),
             authToken: config.authToken,
-            crossfadeDuration: config.crossfadeDuration,
-            playingRate: config.playingRate
+            playingRate: config.playingRate,
+            playbackOrder: config.playbackOrder.ffi,
+            actionAtItemEnd: config.actionAtItemEnd.ffi,
+            crossfadeSettings: config.crossfadeSettings.ffi
         )
-        self._inner = AudioPlayer(config: ffiConfig)
+        do {
+            self._inner = try AudioPlayer(config: ffiConfig)
+        } catch {
+            preconditionFailure("validated player configuration was rejected: \(error)")
+        }
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
@@ -701,38 +711,48 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// Select the item at the given position of the engine's queue.
+    /// Select an item at the given queue index.
     ///
     /// - Parameters:
-    ///   - index: Queue index (0-based) into ``items()``.
-    ///   - transition: How the switch plays: `.none` for an immediate
-    ///     cut (AVQueuePlayer user-initiated-selection idiom, default),
+    ///   - index: Queue index (0-based).
+    ///   - transition: How the switch plays — `.none` for an immediate
+    ///     cut (AVQueuePlayer user-initiated-selection idiom — default),
     ///     `.crossfade` to use the player's configured duration.
-    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the index is out
-    ///   of range, or whatever ``selectItem(_:transition:)`` throws.
+    /// - Throws: ``KitharaError`` if the index is out of range or the item
+    ///   is not yet inserted into the engine.
     public func selectItem(at index: Int, transition: Transition = .none) throws {
         let snapshot = items()
         guard snapshot.indices.contains(index) else {
-            let error = KitharaError.invalidArgument(
-                "item index \(index) out of range (len: \(snapshot.count))"
-            )
+            let error = KitharaError.invalidArgument("queue index \(index) out of range")
             publishCommandError(error, itemId: nil)
             throw error
         }
-        try selectItem(snapshot[index], transition: transition)
+        try select(snapshot[index], transition: transition)
     }
 
-    /// Select an item by identity (AVQueuePlayer-style). The engine
-    /// resolves the item itself, so concurrent `insert`/`remove` cannot
-    /// redirect the selection.
+    /// Select an item by identity (AVQueuePlayer-style).
+    ///
+    /// Resolves the item's current index via ``items()`` and delegates to
+    /// ``selectItem(at:transition:)``. Race-free against concurrent
+    /// `insert`/`remove` that would shift indices.
     ///
     /// - Parameters:
     ///   - item: The item to select. Must currently be in the queue.
     ///   - transition: `.none` by default (immediate cut); pass
     ///     `.crossfade` for Next/Prev button UX.
-    /// - Throws: ``KitharaError`` if the item is not in the queue or is
-    ///   not yet loaded.
+    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the item is not in
+    ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
+        let snapshot = items()
+        guard snapshot.contains(where: { $0.ffiTrackId == item.ffiTrackId }) else {
+            let error = KitharaError.invalidArgument("item \(item.id) not in queue")
+            publishCommandError(error, itemId: item.audioId)
+            throw error
+        }
+        try select(item, transition: transition)
+    }
+
+    private func select(_ item: KitharaPlayerItem, transition: Transition) throws {
         do {
             try _inner.select(item: item._inner, transition: transition.ffi)
         } catch let ffiError as FfiError {
@@ -742,11 +762,28 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// Crossfade duration in seconds applied on item transitions. The
-    /// initial value belongs in ``Config/crossfadeDuration``.
-    public var crossfadeDuration: Float {
-        get { _inner.crossfadeDuration() }
-        set { _inner.setCrossfadeDuration(seconds: newValue) }
+    public var crossfadeSettings: CrossfadeSettings {
+        CrossfadeSettings(ffi: _inner.crossfadeSettings())
+    }
+
+    public var playbackOrder: PlaybackOrder {
+        PlaybackOrder(ffi: _inner.playbackOrder())
+    }
+
+    public var actionAtItemEnd: ActionAtItemEnd {
+        ActionAtItemEnd(ffi: _inner.actionAtItemEnd())
+    }
+
+    public func setCrossfadeSettings(_ settings: CrossfadeSettings) throws {
+        try _inner.setCrossfadeSettings(settings: settings.ffi)
+    }
+
+    public func setPlaybackOrder(_ order: PlaybackOrder) throws {
+        try _inner.setPlaybackOrder(order: order.ffi)
+    }
+
+    public func setActionAtItemEnd(_ action: ActionAtItemEnd) throws {
+        try _inner.setActionAtItemEnd(action: action.ffi)
     }
 
     // MARK: - Queue navigation
@@ -754,8 +791,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// Skip to the next item in the queue. No-op if already on the
     /// last item or the queue is empty. Mirrors AVQueuePlayer's
     /// `advanceToNextItem`.
-    public func advanceToNextItem() {
-        _inner.advanceToNextItem()
+    public func next() throws {
+        try _inner.advanceToNextItem()
+    }
+
+    public func previous() throws {
+        try _inner.returnToPreviousItem()
     }
 
     /// Stop playback, clear the queue, and reset the current-item
@@ -767,24 +808,10 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     // MARK: - Network / DRM hooks
 
-    /// Replace the auth token sent on every player HTTP request.
-    /// Pass an empty string to clear. The initial value belongs in
-    /// ``Config/authToken``.
+    /// Configure the auth token sent on every player HTTP request.
+    /// Pass an empty string to clear.
     public func setupNetwork(authToken: String) {
         _inner.setupNetwork(authToken: authToken)
-    }
-
-    /// Register a wildcard DRM key processor at runtime with a fresh salt.
-    /// Items already queued keep their rules. Initial rules belong in
-    /// ``Config/keyRules``, which is applied through the same path.
-    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
-        _inner.setupHlsAes(processor: ClosureKeyProcessorBridge(decrypt: keyDecryptor))
-    }
-
-    /// Append a domain-scoped DRM key rule at runtime; see
-    /// ``setupHlsAes(keyDecryptor:)``.
-    public func setupHlsAes(rule: KeyRule) {
-        _inner.setupHlsAesWithRule(rule: rule.toFfi())
     }
 
     /// Per-network bitrate ceilings (bits/sec). Pass `0` for either
@@ -792,6 +819,31 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// every variant.
     public func updatePeakBitrate(wifi: Double, cellular: Double) {
         _inner.updatePeakBitrate(wifiBps: wifi, cellularBps: cellular)
+    }
+
+    /// Register a runtime DRM key decryptor on every host (default
+    /// `"*"` wildcard). The closure receives the encrypted key bytes
+    /// plus the player-generated salt that was attached to outgoing
+    /// requests under `X-Encrypted-Key`. Returning `nil` from the
+    /// closure preserves the input ciphertext unchanged.
+    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
+        let bridge = ClosureKeyProcessorBridge(decrypt: keyDecryptor)
+        _inner.setupHlsAes(processor: bridge)
+    }
+
+    /// Register a runtime DRM key processor with explicit rule control
+    /// (custom domains, headers, query params, salt). The rule's salt,
+    /// if any, is mirrored into the player-wide HTTP header set so it
+    /// accompanies every outgoing request matching the rule's domains.
+    public func setupHlsAes(rule: KeyRule) {
+        let ffiRule = FfiKeyRule(
+            processor: KeyProcessorBridge(processor: rule.processor),
+            headers: rule.headers,
+            queryParams: rule.queryParams,
+            salt: rule.salt,
+            domains: rule.domains
+        )
+        _inner.setupHlsAesWithRule(rule: ffiRule)
     }
 
 }
@@ -830,30 +882,6 @@ public protocol KeyProcessor: Sendable {
     func processKey(_ key: Data, salt: String) -> Data
 }
 
-extension KitharaPlayer.KeyRule {
-    fileprivate func toFfi() -> FfiKeyRule {
-        FfiKeyRule(
-            processor: KeyProcessorBridge(processor: processor),
-            headers: headers,
-            queryParams: queryParams,
-            salt: salt,
-            domains: domains
-        )
-    }
-}
-
-private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
-    private let decrypt: (Data, String) -> Data?
-
-    init(decrypt: @escaping (Data, String) -> Data?) {
-        self.decrypt = decrypt
-    }
-
-    func processKey(key: Data, salt: String) -> Data {
-        decrypt(key, salt) ?? key
-    }
-}
-
 private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
     private let processor: KeyProcessor
 
@@ -863,6 +891,19 @@ private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked S
 
     func processKey(key: Data, salt: String) -> Data {
         processor.processKey(key, salt: salt)
+    }
+}
+
+/// Closure-based bridge for ``KitharaPlayer/setupHlsAes(keyDecryptor:)``.
+private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
+    private let decrypt: (Data, String) -> Data?
+
+    init(decrypt: @escaping (Data, String) -> Data?) {
+        self.decrypt = decrypt
+    }
+
+    func processKey(key: Data, salt: String) -> Data {
+        decrypt(key, salt) ?? key
     }
 }
 

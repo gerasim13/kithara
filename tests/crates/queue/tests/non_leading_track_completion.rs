@@ -222,9 +222,7 @@ async fn outgoing_eof_does_not_advance_the_promoted_successor() {
     while events.try_recv().is_ok() {}
 
     harness
-        .run(&queue, move |q| {
-            q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
-        })
+        .run(&queue, move |q| q.next(Transition::Crossfade))
         .await
         .expect("start a real crossfade to the successor");
     let pcm = render_loop(&queue, &harness, OUTGOING_EOF_BLOCKS).await;

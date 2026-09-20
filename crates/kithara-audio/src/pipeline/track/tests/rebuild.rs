@@ -25,9 +25,10 @@ use kithara_stream::{
     SourcePhase, SourceProbe, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType,
     VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId, WorkerWake,
+    mock::{CountingWorkerWake, NoopWorkerWake},
 };
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, mock::CallCounter};
 
 use crate::{
     AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind,
@@ -321,35 +322,6 @@ impl Decoder for RouteSignalDecoder {
     }
 
     fn update_byte_len(&self, _len: u64) {}
-}
-
-struct TestWake;
-
-impl WorkerWake for TestWake {
-    fn defer(&self) {}
-
-    fn wake(&self) {}
-}
-
-#[derive(Default)]
-struct CountingWake {
-    count: AtomicU64,
-}
-
-impl CountingWake {
-    fn count(&self) -> u64 {
-        self.count.load(Ordering::Acquire)
-    }
-}
-
-impl WorkerWake for CountingWake {
-    fn defer(&self) {
-        self.count.fetch_add(1, Ordering::Release);
-    }
-
-    fn wake(&self) {
-        self.count.fetch_add(1, Ordering::Release);
-    }
 }
 
 pub(super) struct TestControl {
@@ -960,7 +932,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         Arc::new(AtomicU64::new(0)),
         RebuildRuntime {
             handle: runtime_handle,
-            wake: Arc::new(TestWake),
+            wake: Arc::new(NoopWorkerWake),
         },
         Some(control.clone() as Arc<dyn VariantControl>),
     );
@@ -1179,7 +1151,7 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
         Arc::new(AtomicU64::new(0)),
         RebuildRuntime {
             handle: runtime_handle,
-            wake: Arc::new(TestWake),
+            wake: Arc::new(NoopWorkerWake),
         },
         Some(control.clone() as Arc<dyn VariantControl>),
     );
@@ -1613,7 +1585,7 @@ async fn rebuild_prepares_generation_profiles_before_rt_install() {
         source.decode.gapless_mode(),
         RebuildRuntime {
             handle: source.rebuild.runtime().clone(),
-            wake: Arc::new(TestWake),
+            wake: Arc::new(NoopWorkerWake),
         },
     );
     let rebuild = source
@@ -2283,7 +2255,8 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
 async fn rebuild_factory_panic_fails_track_without_hang() {
     let RebuildFixture { mut source, .. } = test_source(1).await;
 
-    let wake = Arc::new(CountingWake::default());
+    let wake_count = CallCounter::default();
+    let wake = Arc::new(CountingWorkerWake::new(wake_count.clone()));
     let panicking_factory = DecoderFactory::new(
         |_reader, _info| panic!("decoder construction blew up"),
         None,
@@ -2308,7 +2281,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     // push a `SoftFailed` completion, and wake the worker rather than
     // stranding the FSM in `RebuildingDecoder`.
     source.rebuild.run_inline();
-    assert_eq!(wake.count(), 1, "factory panic must wake the worker");
+    assert_eq!(wake_count.get(), 1, "factory panic must wake the worker");
     source.flush_deferred();
 
     // The worker's next step must reach the terminal recreate failure,

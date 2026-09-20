@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use kithara::{
-    play::SessionDuckingMode,
-    queue::{RepeatMode, TrackId, Transition},
+    play::{CrossfadeSettings, SessionDuckingMode},
+    queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
 
 /// Commands sent from the main-thread bridge to the engine Worker.
@@ -21,7 +21,9 @@ pub(crate) enum WorkerCmd {
     Stop,
     Seek(f64),
     SetVolume(f32),
-    SetCrossfade(f32),
+    SetCrossfade(CrossfadeSettings),
+    Next,
+    Previous,
     SetEqGain {
         band: u32,
         gain_db: f32,
@@ -75,6 +77,8 @@ pub(crate) enum WorkerCmd {
         variant_index: Option<u32>,
     },
     SetRepeat(RepeatMode),
+    SetPlaybackOrder(PlaybackOrder),
+    SetActionAtItemEnd(ActionAtItemEnd),
     /// Lower or restore the whole session output through the owning Host.
     SetDucking(SessionDuckingMode),
     /// Apply per-network peak-bitrate ceilings to the worker's current ABR

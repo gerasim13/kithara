@@ -11,15 +11,10 @@ pub enum GlideInterpolation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Builder)]
 #[builder(const, state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct GlideConfig {
     #[builder(default = GlideInterpolation::Quadratic)]
     pub interpolation: GlideInterpolation,
     #[builder(default = true)]
     pub anti_alias: bool,
-}
-
-impl Default for GlideConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
 }

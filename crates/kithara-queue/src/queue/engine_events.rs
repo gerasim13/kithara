@@ -12,6 +12,7 @@ use super::{
     types::{CachedPosition, CrossfadeArm, Transition},
 };
 use crate::{
+    ActionAtItemEnd,
     attempts::LoadClass,
     event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus},
 };
@@ -21,7 +22,10 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
-        let Some(next) = self.next_selectable_entry() else {
+        if self.action_at_item_end() != ActionAtItemEnd::Advance {
+            return;
+        }
+        let Some(next) = self.next_selectable_entry(AdvanceReason::CrossfadePreArm) else {
             return;
         };
         if !matches!(next.status, TrackStatus::Loaded) {
@@ -41,7 +45,10 @@ where
     }
 
     fn handle_prefetch_requested(&self) {
-        let Some(next) = self.next_selectable_entry() else {
+        if self.action_at_item_end() != ActionAtItemEnd::Advance {
+            return;
+        }
+        let Some(next) = self.peek_selectable_entry() else {
             return;
         };
         if !matches!(next.status, TrackStatus::Consumed) {
@@ -131,8 +138,7 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, "ItemDidFail received — track aborted mid-stream");
-        if self.current().is_none() {
-            self.bus.publish(QueueEvent::QueueEnded);
+        if self.current().is_none_or(|current| current.id != track.id) {
             return;
         }
         if self.is_paused() {
@@ -150,12 +156,23 @@ where
             track.id,
             TrackStatus::Failed("mid-stream engine failure".to_string()),
         );
+        let action = self.action_at_item_end();
         self.bus.publish(QueueEvent::TrackLoadFailed {
             id: track.id,
             reason: "mid-stream engine failure".to_string(),
-            auto_skipped: true,
+            auto_skipped: action == ActionAtItemEnd::Advance,
         });
-        let _ = self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed);
+        match action {
+            ActionAtItemEnd::Advance => {
+                if let Err(error) =
+                    self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed)
+                {
+                    debug!(%error, "failed to advance after track failure");
+                }
+            }
+            ActionAtItemEnd::Pause => self.pause(),
+            ActionAtItemEnd::None => {}
+        }
     }
 
     /// `item` is the player's verdict on which item in its arena ended.
@@ -169,8 +186,7 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, "ItemDidPlayToEnd received");
-        if self.current().is_none() {
-            self.bus.publish(QueueEvent::QueueEnded);
+        if self.current().is_none_or(|current| current.id != track.id) {
             return;
         }
         if self.is_paused() {
@@ -184,7 +200,17 @@ where
             debug!(%track, pos, dur, ?item, "not the leading item: not advancing");
             return;
         }
-        let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
+        match self.action_at_item_end() {
+            ActionAtItemEnd::Advance => {
+                if let Err(error) =
+                    self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof)
+                {
+                    debug!(%error, "failed to advance after natural EOF");
+                }
+            }
+            ActionAtItemEnd::Pause => self.pause(),
+            ActionAtItemEnd::None => {}
+        }
     }
 
     pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
@@ -223,9 +249,12 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        QueueControl,
+        ActionAtItemEnd, QueueControl,
         event::{QueueEvent, TrackStatus},
-        queue::state::tests::{make_queue, wait_for_queue_event},
+        queue::{
+            state::tests::{make_queue, wait_for_queue_event},
+            types::SelectPhase,
+        },
         test_pools::TestPools,
     };
 
@@ -236,7 +265,8 @@ mod tests {
         let second = queue
             .append("https://example.com/repeated.mp3")
             .expect("open queue accepts second repeated source");
-        queue.lock_navigation_mut().select(1);
+        let ids = [first, second];
+        queue.lock_navigation_mut().select(second, &ids);
         queue.player.set_rate(1.0);
         (first, second)
     }
@@ -289,6 +319,47 @@ mod tests {
             ),
             "a background failure must not fail its queue entry"
         );
+    }
+
+    #[kithara::test(tokio)]
+    async fn pause_and_none_suppress_natural_eof_progression() {
+        for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
+            let queue = make_queue();
+            let first = queue
+                .append("https://example.com/first.mp3")
+                .expect("append first");
+            let second = queue
+                .append("https://example.com/second.mp3")
+                .expect("append second");
+            *queue.lock_pending_select_mut() = SelectPhase::Idle;
+            queue.lock_navigation_mut().select(first, &[first, second]);
+            queue.player.play();
+            queue.set_action_at_item_end(action);
+            let mut events = queue.subscribe();
+
+            queue.handle_item_did_play_to_end(&ItemRole::Leading(TrackRef::new(
+                first,
+                SlotId::new(0),
+                Arc::from("https://example.com/first.mp3"),
+            )));
+
+            assert_eq!(queue.current().map(|entry| entry.id), Some(first));
+            assert!(matches!(
+                *queue.lock_pending_select_mut(),
+                SelectPhase::Idle
+            ));
+            if action == ActionAtItemEnd::Pause {
+                assert!(queue.is_paused());
+            }
+            assert!(
+                !wait_for_queue_event(
+                    &mut events,
+                    |event| matches!(event, QueueEvent::QueueEnded),
+                    50
+                )
+                .await
+            );
+        }
     }
 
     #[kithara::test(tokio)]

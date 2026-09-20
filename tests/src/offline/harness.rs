@@ -65,8 +65,15 @@ pub async fn offline_queue_fixture_with_options(
     options: OfflinePlayerOptions,
     sample_rate: u32,
 ) -> (OfflinePlayerHarness, QueueControl<TestPools>) {
+    let crossfade_duration = options.crossfade_duration;
     let harness = OfflinePlayerHarness::with_sample_rate(options, sample_rate).await;
-    let config = QueueConfig::builder().player(harness.take_player()).build();
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: crossfade_duration,
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .build();
     let queue = harness.insert_control(Queue::new(config)).await;
     (harness, queue)
 }
@@ -114,8 +121,15 @@ impl OfflinePlayerHarness {
         }
     }
 
-    pub const fn player(&self) -> &PlayerControl<TestPools> {
-        &self.player_control
+    delegate::delegate! {
+        to self {
+            #[field(&player_control)]
+            pub const fn player(&self) -> &PlayerControl<TestPools>;
+            #[field(&worker)]
+            pub const fn worker(&self) -> &PlayWorker<TestPools>;
+            #[field(&host)]
+            pub const fn host(&self) -> &OfflineHostHarness<TestPools>;
+        }
     }
 
     pub fn take_player(&self) -> PlayerImpl<TestPools> {
@@ -149,10 +163,6 @@ impl OfflinePlayerHarness {
         self.host.run(move || f(&control)).await
     }
 
-    pub const fn worker(&self) -> &PlayWorker<TestPools> {
-        &self.worker
-    }
-
     pub fn set_host_level(&self, level: f32) {
         self.player
             .lock()
@@ -176,10 +186,6 @@ impl OfflinePlayerHarness {
         P: PlayerControlSource<Schema = TestPools> + Send + 'static,
     {
         self.insert(player).await.control().clone()
-    }
-
-    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
-        &self.host
     }
 
     pub async fn close(self) {

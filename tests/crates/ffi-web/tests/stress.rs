@@ -135,14 +135,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
     let sample_rate = spec.sample_rate.get() as usize;
     let mut buf = vec![0.0f32; 4096];
 
-    let mut warmup = 0usize;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup += n;
-    }
+    let warmup = warm_up(&mut audio, &mut buf).await;
     assert!(warmup > 0, "warmup must read some data");
 
     let duration_secs = audio
@@ -244,6 +237,26 @@ async fn read_with_yield(
     buf: &mut [f32],
 ) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
+}
+
+/// Pull the pipeline's first PCM, returning how many samples it produced.
+///
+/// A read that stays pending for its whole budget is a pipeline still
+/// fetching, not a pipeline that has nothing to give: only the end of the
+/// stream ends the warmup early. Collapsing the two would judge a slow
+/// browser as a silent one.
+async fn warm_up(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+) -> usize {
+    let mut produced = 0usize;
+    for _ in 0..20 {
+        let Some(count) = read_with_yield(audio, buf).await else {
+            break;
+        };
+        produced += count;
+    }
+    produced
 }
 
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
@@ -417,14 +430,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     let mut audio = create_pipeline_with_url(url).await;
 
     let mut buf = vec![0.0f32; 4096];
-    let mut warmup = 0;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup += n;
-    }
+    let warmup = warm_up(&mut audio, &mut buf).await;
     assert!(warmup > 0, "warmup must read some data");
     info!(warmup, "Pipeline warmed up");
 
@@ -551,14 +557,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 
     let mut buf = vec![0.0f32; 4096];
 
-    let mut warmup_samples = 0usize;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup_samples += n;
-    }
+    let warmup_samples = warm_up(&mut audio, &mut buf).await;
     assert!(warmup_samples > 0, "warmup must produce data");
     info!(warmup_samples, "Warmup complete");
 
@@ -692,14 +691,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     let mut audio = create_pipeline_with_url(url).await;
     let mut buf = vec![0.0f32; 4096];
 
-    let mut warmup = 0usize;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup += n;
-    }
+    let warmup = warm_up(&mut audio, &mut buf).await;
     assert!(warmup > 0, "warmup must produce data");
 
     let duration = audio.duration().unwrap_or(Duration::from_secs(60));
@@ -848,14 +840,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
     let sample_rate = spec.sample_rate.get() as usize;
     let mut buf = vec![0.0f32; 4096];
 
-    let mut warmup = 0usize;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup += n;
-    }
+    let warmup = warm_up(&mut audio, &mut buf).await;
     assert!(warmup > 0, "warmup must read some data");
 
     let duration = audio.duration().unwrap_or(Duration::from_secs(60));
@@ -960,14 +945,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress(
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];
 
-    let mut warmup = 0usize;
-    for _ in 0..20 {
-        let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        warmup += n;
-    }
+    let warmup = warm_up(&mut audio, &mut buf).await;
     assert!(warmup > 0, "warmup must read some data");
 
     while events_rx.try_recv().is_ok() {}

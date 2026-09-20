@@ -87,12 +87,18 @@ impl TrackState {
 }
 
 /// Transition command for a track.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TrackTransition {
     /// Start fading in the track with the given queue-item identity.
-    FadeIn(TrackId),
+    FadeIn {
+        item_id: TrackId,
+        settings: crate::CrossfadeSettings,
+    },
     /// Start fading out the track with the given queue-item identity.
-    FadeOut(TrackId),
+    FadeOut {
+        item_id: TrackId,
+        settings: crate::CrossfadeSettings,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
