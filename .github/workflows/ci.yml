@@ -11,12 +11,28 @@ on:
         description: Space-separated additional required lane names, or all.
         type: string
         default: ''
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Leave unset on
+          ordinary runs and dispatch once with it set when a format change
+          has to replace what the store already answers for.
+        default: ''
+        type: string
   workflow_dispatch:
     inputs:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
         default: ''
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Leave unset on
+          ordinary runs and dispatch once with it set when a format change
+          has to replace what the store already answers for.
+        default: ''
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,12 +45,6 @@ env:
   # macOS or Windows leave the variable unset and land in the temporary
   # directory instead.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  # This branch bumps the stored analysis blob to v7, and a fixture written by
-  # an older build reads as a version miss. The analysis fixtures are the only
-  # ones carrying that format, so they alone are produced again; the entry is
-  # dropped once every runner's cache holds the new revision.
-  KITHARA_FIXTURE_REFRESH: >-
-    rhythm_analyzed_analysis,rhythm_expected_analysis,rhythm_expected_analysis_scenario_1,rhythm_expected_analysis_scenario_1_origin_zero,rhythm_expected_analysis_scenario_1_origin_zero_listening,rhythm_expected_analysis_scenario_1_origin_zero_listening_long,rhythm_expected_analysis_scenario_1_origin_zero_long,rhythm_expected_analysis_scenario_1_origin_zero_pickup_listening,rhythm_expected_analysis_scenario_1_origin_zero_pickup_long,rhythm_expected_analysis_scenario_2,library_analysis
 
 # A newer push supersedes a run for the same branch. Different branches remain
 # independent, while repeated commits cannot fill the runner queue with work
@@ -128,6 +138,7 @@ jobs:
       role: gate
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   deep:
     name: Deep
@@ -144,6 +155,7 @@ jobs:
       role: deep
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   # Mutation testing is its own group, not a tail of `deep`: the suites run
   # per group of crates and are judged per group, so a clean group's lane is
@@ -163,6 +175,7 @@ jobs:
       role: mutants
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   platforms:
     name: Platforms
@@ -175,6 +188,7 @@ jobs:
       role: platforms
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   quality:
     name: Quality
@@ -191,6 +205,7 @@ jobs:
       role: quality
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   ui:
     name: UI

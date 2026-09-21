@@ -13,6 +13,16 @@ on:
           release.
         required: true
         type: string
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Empty on every
+          ordinary run: the store is keyed by name, so a format change leaves
+          entries that still answer to their name and only a deliberate run
+          replaces them. Dispatch the pipeline once with this set, and leave
+          it unset afterwards.
+        default: ''
+        type: string
       kind:
         description: >-
           Pipeline kind the lanes run under. A lane's membership names the
@@ -102,6 +112,7 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       isolated-target: ${{ matrix.isolated_target }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -128,3 +139,4 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       isolated-target: ${{ matrix.isolated_target }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
