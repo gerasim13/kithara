@@ -50,10 +50,13 @@ Icon?
 # Logs
 *.log
 
-# Coverage / profiling artifacts
+# Coverage / profiling artifacts. The report directory is named at the root
+# (`COVERAGE_OUTPUT_DIR`, default `./coverage`) or under `target/`, so the
+# rule is anchored: an unanchored `coverage/` also swallows source modules
+# that happen to be named after what they cover.
 **/*.profraw
 **/*.profdata
-coverage/
+/coverage/
 lcov.info
 
 # Temporary / local environment files
