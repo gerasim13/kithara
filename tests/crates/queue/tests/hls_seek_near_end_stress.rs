@@ -87,6 +87,12 @@ impl Consts {
     /// phase it was in, because this deadline cannot know which wait it
     /// interrupted.
     const ITER_DEADLINE: Duration = Duration::from_secs(10);
+    /// The whole test's budget. Every iteration is already bounded by
+    /// [`Self::ITER_DEADLINE`], which names the phase it interrupted; a test
+    /// timeout below the sum of those deadlines would preempt that report and
+    /// leave a stall unattributed, so it covers all of them.
+    const TEST_TIMEOUT: Duration =
+        Duration::from_secs(Self::ITER_DEADLINE.as_secs() * Self::FRESH_ITERATIONS as u64);
 }
 
 #[derive(Debug)]
@@ -124,6 +130,11 @@ fn every_phase_budget_is_reachable_under_the_iteration_deadline() {
             Consts::ITER_DEADLINE,
         );
     }
+    assert!(
+        Consts::TEST_TIMEOUT >= Consts::ITER_DEADLINE * Consts::FRESH_ITERATIONS,
+        "TEST_TIMEOUT ({:?}) preempts the iteration backstop, which names the stalled phase",
+        Consts::TEST_TIMEOUT,
+    );
 }
 
 /// The step an attempt is executing, published so the iteration backstop can
@@ -527,7 +538,7 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Consts::TEST_TIMEOUT))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
 #[cfg_attr(
