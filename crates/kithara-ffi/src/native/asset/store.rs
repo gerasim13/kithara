@@ -29,7 +29,7 @@ pub struct FfiAssetStore {
 
 impl FfiAssetStore {
     fn build(root: Option<String>, layouts: AssetLayoutRegistry) -> Result<Self, PoolError> {
-        let backend = root.map_or_else(super::super::cache::default_backend, |root| {
+        let backend = root.map_or_else(super::super::storage::default_backend, |root| {
             StorageBackend::Disk {
                 root: PathBuf::from(root),
             }

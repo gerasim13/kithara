@@ -2,7 +2,6 @@
 pub(crate) mod android;
 pub mod asset;
 pub(crate) mod bridge;
-mod cache;
 pub mod cipher;
 pub mod config;
 pub(crate) mod inner;
@@ -11,6 +10,7 @@ pub mod logging;
 mod runtime;
 pub mod salt;
 pub(crate) mod session;
+mod storage;
 
 pub(crate) use bridge::{event_bridge, item_bridge};
 pub(crate) use inner::Inner;
