@@ -16,35 +16,12 @@
 /// or a machine that offers no Metal device at all.
 #[must_use]
 pub fn allocated_bytes() -> Option<u64> {
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        apple::allocated_bytes()
+        kithara_apple::metal::allocated_bytes()
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         None
-    }
-}
-
-#[cfg(target_vendor = "apple")]
-mod apple {
-    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
-
-    unsafe extern "C" {
-        /// Returns the process's default Metal device, retained, or null on a
-        /// machine that offers none.
-        fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
-    }
-
-    pub(super) fn allocated_bytes() -> Option<u64> {
-        // SAFETY: `MTLCreateSystemDefaultDevice` returns either null or a
-        // device owned by the caller, which `Retained::from_raw` takes over
-        // and releases on drop. `currentAllocatedSize` is a property of
-        // `MTLDevice` returning `NSUInteger`, read here as `usize`.
-        unsafe {
-            let device = Retained::from_raw(MTLCreateSystemDefaultDevice())?;
-            let bytes: usize = msg_send![&*device, currentAllocatedSize];
-            Some(bytes as u64)
-        }
     }
 }

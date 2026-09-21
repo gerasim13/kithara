@@ -32,6 +32,15 @@ fast:
     just lint _shared
     just lint idioms --check derivable_getter --check derivable_delegation
 
+# Merge gate chain: the fast chain plus this tool's own tests. They resolve the
+# shipped package graph and the configured lane commands as they stand, so they
+# answer a diff and belong before a merge rather than after it. They stay out of
+# `fast`, which the commit hook runs: a git hook exports `GIT_DIR`, and the tests
+# that drive temporary repositories inherit it.
+gate:
+    just lint fast
+    cargo test -p xtask
+
 # Full CI chain: fast checks, xtask tests, quality scans, and idioms.
 # It runs every idiom check below, so it takes the shared part directly rather
 # than through `fast`, whose two-check pass it would then repeat.

@@ -6,7 +6,7 @@ use kithara::{
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
-        tokio::task::spawn_blocking,
+        tokio::task::yield_now,
     },
     play::RegisteredAudio,
     stream::{Stream, StreamType},
@@ -183,13 +183,13 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// Async twin of [`read_block_with_position`]; same reason for the guard, and
 /// the same budget.
 ///
-/// The backoff goes through `spawn_blocking` because [`paced_backoff`] blocks
-/// its thread. A bare `sleep` would date the retry instead, and under flash a
-/// dated retry is free: the engine services that deadline in isolation, so a
-/// pull whose producer has nothing to give walks the virtual clock forward by
-/// itself until it has expired the producer's own deadlines. The blocking
-/// closure is real work in flight and holds the engine's slot for its lifetime,
-/// so a retry spends real time and no virtual time at all.
+/// The retry is the engine-backed [`yield_now`], the async member of the
+/// cooperative-yield class the sync twin reaches through `paced_backoff`: it
+/// registers no deadline, so it cannot walk the virtual clock past a producer
+/// that has nothing to give, and it spends no real time, so the budget keeps
+/// measuring the pipeline instead of the host. A `spawn_blocking` backoff
+/// spends both — tokio's blocking pool is not flash-active, so `paced_backoff`
+/// there takes its native arm and sleeps for real.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
@@ -209,9 +209,7 @@ where
                     retries < READ_PENDING_RETRIES,
                     "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
                 );
-                spawn_blocking(|| paced_backoff(Duration::from_millis(1)))
-                    .await
-                    .expect("phase scan pending pace");
+                yield_now().await;
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
             Err(e) => panic!("{label}: read error: {e}"),
