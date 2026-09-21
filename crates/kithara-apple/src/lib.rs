@@ -4,3 +4,5 @@ pub mod accelerate;
 pub mod audio_toolbox;
 #[cfg(all(feature = "foundation", any(target_os = "macos", target_os = "ios")))]
 pub mod foundation;
+#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+pub mod metal;

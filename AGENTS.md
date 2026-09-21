@@ -89,7 +89,7 @@ exposes domain modules only, and recipes live under `.config/just/`.
 
 - Format: `just fmt`; check-only `just fmt check`.
 - Compile and Clippy: `just check`; `just check clippy`.
-- Lint: `just lint`; `just lint fast`; `just lint full`.
+- Lint: `just lint`; `just lint fast`; `just lint gate`; `just lint full`.
 - Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
   Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
 - Duplication report: `just lint similarity [<crate>/src ...]`.
@@ -137,7 +137,8 @@ A change is done only when all of these hold:
   rather than an incidental detail.
 - `just fmt check` and `just lint fast` are clean, with no new baseline
   entries and no lint suppressions. Both `lint fast` (the commit hook) and
-  `lint full` run `style` through `_shared`. The `linux-lint` gate runs
+  `lint full` run `style` through `_shared`. A review lints through
+  `lint gate`, which adds this tool's own tests. The `linux-lint` gate runs
   `lint full` on main and branch pushes.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.

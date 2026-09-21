@@ -82,14 +82,14 @@ velato = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
+# The graphics device answers how much it holds. The platform call that asks it
+# belongs to `kithara-apple`, which owns every Apple ABI this workspace uses.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara-apple = { workspace = true, features = ["metal"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 hotpath = { workspace = true, optional = true }
-
-# The graphics device answers how much it holds; `kithara_ui::gpu` asks it
-# through one message send, so nothing heavier than `objc2` is needed.
-[target.'cfg(target_vendor = "apple")'.dependencies]
-objc2 = { workspace = true }
 
 [dev-dependencies]
 kithara-platform = { path = "../kithara-platform" }
@@ -110,6 +110,10 @@ iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
+# The budget guard reads the renderer's bump allocators back, which vello only
+# does when this is on. A dev-dependency so a shipped build keeps the fast path
+# rather than a readback on every frame.
+vello = { workspace = true, features = ["debug_layers"] }
 
 [lints]
 workspace = true
@@ -136,6 +140,13 @@ test = true
 name = "ui_memory"
 path = "tests/ui_memory.rs"
 required-features = ["capture"]
+
+# Its own binary for the same reason `ui_memory` is: it draws, and a drawing
+# test beside that one is counted into its readings.
+[[test]]
+name = "ui_buffers"
+path = "tests/ui_buffers.rs"
+required-features = ["capture", "masonry"]
 
 [[test]]
 name = "frame_perf"

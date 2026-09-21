@@ -40,17 +40,19 @@ impl Budget {
     /// Not zero: a driver is free to round and to keep its own scratch.
     const SLACK_KIB: usize = 512;
     /// Everything the immediate host holds for a settled page. Measured at
-    /// 26_928 KiB, and rounded up to leave room for a driver that rounds
+    /// 28_064 KiB, and rounded up to leave room for a driver that rounds
     /// differently.
     const IMMEDIATE_KIB: u64 = 32_768;
-    /// The same for the retained host, which is dominated by the compute
-    /// buffers Vello sizes to the target on its first frame.
+    /// The same for the retained host, whose bulk is the compute buffers Vello
+    /// sizes for the target on its first frame. Measured at 14_720 KiB.
     ///
-    /// This is a ratchet, not an endorsement: measured at 175_008 KiB, it is
-    /// above the 120 MiB the application is allowed in total, so the retained
-    /// host cannot carry a window on its own until it comes down. Pinned here
-    /// so that it can only ever fall.
-    const RETAINED_KIB: u64 = 180_224;
+    /// It used to be an order larger, because those buffers were fixed
+    /// constants covering a target far bigger than a window: a renderer paid
+    /// 165 MiB on its first frame whatever it drew, which on its own broke the
+    /// ceiling the application is allowed. They are derived from the frame's
+    /// tile grid now, and what the pages actually need of them is held down by
+    /// the `ui_buffers` binary beside this one.
+    const RETAINED_KIB: u64 = 16_384;
 }
 
 /// Bytes the graphics device holds, or `None` where the platform cannot say.
@@ -86,17 +88,25 @@ struct Stages {
 }
 
 impl Stages {
-    /// One line per step, each showing what that step alone cost.
+    /// What each step cost, and what the host is left holding.
+    ///
+    /// Signed, because a step can also give memory back: a driver frees the
+    /// scratch a first frame asked for, and an unsigned difference would print
+    /// that release as `+0` and leave the reading looking like a step that
+    /// cost nothing. The held figure at the end is the one the budget is
+    /// written against.
     fn report(&self, host: &str) {
-        let kib = |bytes: u64| bytes / 1024;
+        let step = |from: u64, to: u64| (to as i64 - from as i64) / 1024;
         eprintln!(
-            "{host}: device {} KiB | renderer +{} KiB | first frame +{} KiB | warmup +{} KiB |              {} unchanged frames +{} KiB",
-            kib(self.device),
-            kib(self.renderer.saturating_sub(self.device)),
-            kib(self.first.saturating_sub(self.renderer)),
-            kib(self.settled.saturating_sub(self.first)),
+            "{host}: device {} KiB | renderer {:+} KiB | first frame {:+} KiB | warmup {:+} KiB | \
+             {} unchanged frames {:+} KiB | held {} KiB",
+            self.device / 1024,
+            step(self.device, self.renderer),
+            step(self.renderer, self.first),
+            step(self.first, self.settled),
             Budget::DRAWS,
-            kib(self.after.saturating_sub(self.settled)),
+            step(self.settled, self.after),
+            self.settled.saturating_sub(self.device) / 1024,
         );
     }
 }

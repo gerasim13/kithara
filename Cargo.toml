@@ -686,5 +686,13 @@ lto = "fat"
 codegen-units = 1
 
 [patch.crates-io]
+# The renderer's bump-allocated buffers are hand-picked constants sized for
+# vello's own 8K test scenes, so a window pays 165 MiB on its first frame
+# whatever it draws. The fork derives them from the frame instead and makes
+# `DebugLayers` nameable so the sizes can be checked. Upstream at
+# linebender/vello; drop this once it lands.
+vello = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
+vello_encoding = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
+vello_shaders = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
 btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
