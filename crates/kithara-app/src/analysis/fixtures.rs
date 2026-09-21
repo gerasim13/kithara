@@ -110,6 +110,23 @@ pub(crate) fn snapshot(
         .build()
 }
 
+/// A settled pass that produced beats and no waveform: the cache entry of a
+/// track whose waveform came from somewhere else.
+pub(crate) fn beats_only(fingerprint: AnalysisFingerprint) -> TrackAnalysis {
+    let mut coverage = RangeSet::new();
+    coverage.insert(0..1_000);
+    TrackAnalysis::builder()
+        .token("test-track".into())
+        .revision(4)
+        .source_sample_rate(axis())
+        .extent(1_000)
+        .settled(true)
+        .coverage(coverage)
+        .fingerprint(fingerprint)
+        .beat(grid())
+        .build()
+}
+
 pub(crate) fn analysis() -> TrackAnalysis {
     snapshot("test-track".into(), 1, 1_000, fingerprint(), None)
 }

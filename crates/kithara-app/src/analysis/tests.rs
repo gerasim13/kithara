@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use ::kithara::{
-    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis},
+    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis, Waveform},
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
     },
@@ -20,10 +20,10 @@ use super::{
     AnalysisService, TrackArtifacts,
     entry::Stage,
     fixtures::{
-        analysis, app_config, axis, document, fingerprint, grid, long_wav, memory_store,
-        other_axis, persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
-        rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot, test_pools,
-        tone_mp3, track, track_prepared, track_sourced,
+        analysis, app_config, axis, beats_only, document, fingerprint, grid, long_wav,
+        memory_store, other_axis, persistence, progress, queue_off, queue_off_named, revision_held,
+        revision_of, rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot,
+        test_pools, tone_mp3, track, track_prepared, track_sourced,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -890,6 +890,92 @@ async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
         "and the pass itself analysed no waveform"
     );
     assert!(analysis.beat().is_some(), "only the beats were analysed");
+    cancel.cancel();
+    host.close().await;
+}
+
+/// Two origins cover the two artifacts between them: the grid the caller
+/// handed over and a waveform this track was analysed for once before. There
+/// is nothing left for a pass to do, so none opens.
+#[kithara::test(native, tokio)]
+async fn a_supplied_grid_over_a_cached_waveform_opens_no_pass(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(served_grid()),
+        None,
+    )
+    .await;
+    let cached = snapshot(
+        "test-track".into(),
+        6,
+        1_000,
+        owner.runner.fingerprint().clone(),
+        None,
+    );
+    owner
+        .cache
+        .put(target_of(&owner, &source), progress(cached));
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "between the caller and the cache both artifacts are covered"
+    );
+    let held = rx.borrow().clone().expect("the deck is served at once");
+    assert_eq!(
+        held.grid().expect("a grid is published").as_raw().model_id,
+        served_grid().as_raw().model_id,
+        "the grid is the caller's"
+    );
+    assert!(
+        held.waveform().is_some(),
+        "and the waveform is the cached pass's"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+/// The same the other way round: the waveform was handed over and the beats
+/// are in the cache from an earlier pass.
+#[kithara::test(native, tokio)]
+async fn a_supplied_waveform_over_cached_beats_opens_no_pass(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        None,
+        Some(served_waveform()),
+    )
+    .await;
+    let cached = beats_only(owner.runner.fingerprint().clone());
+    owner
+        .cache
+        .put(target_of(&owner, &source), progress(cached));
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "the beats are cached and the waveform was handed over"
+    );
+    let held = rx.borrow().clone().expect("the deck is served at once");
+    assert!(held.grid().is_some(), "the cached beats are published");
+    assert_eq!(
+        held.waveform().map(Waveform::buckets),
+        Some(served_waveform().buckets()),
+        "and the waveform is the one the caller handed over, bucket for bucket"
+    );
     cancel.cancel();
     host.close().await;
 }
