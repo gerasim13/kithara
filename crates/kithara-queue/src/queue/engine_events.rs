@@ -4,7 +4,7 @@ use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
 use kithara_events::{Envelope, EventSet, TrackId};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{ItemRole, PlayerEvent};
+use kithara_play::{ItemRole, PlaybackFault, PlayerEvent};
 use tracing::debug;
 
 use super::{
@@ -132,12 +132,12 @@ where
     /// failure may skip and flag, and it flags the entry the event names —
     /// never one merely sharing its source, which a playlist repeating a
     /// track would take out of selection for the rest of the session.
-    pub(super) fn handle_item_did_fail(&self, item: &ItemRole) {
+    pub(super) fn handle_item_did_fail(&self, item: &ItemRole, fault: PlaybackFault) {
         let track = item.track();
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
-        debug!(%track, pos, dur, "ItemDidFail received — track aborted mid-stream");
+        debug!(%track, pos, dur, %fault, "ItemDidFail received — track aborted mid-stream");
         if self.current().is_none_or(|current| current.id != track.id) {
             return;
         }
@@ -152,14 +152,12 @@ where
             debug!(%track, pos, dur, ?item, "not the leading item: not failing the queue entry");
             return;
         }
-        self.set_status(
-            track.id,
-            TrackStatus::Failed("mid-stream engine failure".to_string()),
-        );
+        let reason = format!("mid-stream engine failure: {fault}");
+        self.set_status(track.id, TrackStatus::Failed(reason.clone()));
         let action = self.action_at_item_end();
         self.bus.publish(QueueEvent::TrackLoadFailed {
+            reason,
             id: track.id,
-            reason: "mid-stream engine failure".to_string(),
             auto_skipped: action == ActionAtItemEnd::Advance,
         });
         match action {
@@ -218,8 +216,8 @@ where
             PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                 self.handle_item_did_play_to_end(item);
             }
-            PlayerBusEvent::Player(PlayerEvent::ItemDidFail { item }) => {
-                self.handle_item_did_fail(item);
+            PlayerBusEvent::Player(PlayerEvent::ItemDidFail { item, fault }) => {
+                self.handle_item_did_fail(item, *fault);
             }
             PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
@@ -243,9 +241,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_audio::DecodeErrorKind;
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
     use kithara_platform::sync::Arc;
-    use kithara_play::{ItemRole, PlayerEvent, TrackRef};
+    use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
     use crate::{
@@ -276,11 +275,14 @@ mod tests {
         let queue = make_queue();
         let (first, second) = selected_second(&queue);
 
-        queue.handle_item_did_fail(&ItemRole::Leading(TrackRef::new(
-            second,
-            SlotId::new(0),
-            Arc::from("https://example.com/repeated.mp3"),
-        )));
+        queue.handle_item_did_fail(
+            &ItemRole::Leading(TrackRef::new(
+                second,
+                SlotId::new(0),
+                Arc::from("https://example.com/repeated.mp3"),
+            )),
+            PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+        );
 
         assert!(
             !matches!(
@@ -298,6 +300,37 @@ mod tests {
         );
     }
 
+    /// The queue's failure text must name the fault the player reported.
+    ///
+    /// The status and the published event both used to read one constant, so
+    /// every mid-stream failure in a run report was the same indistinguishable
+    /// string: a decode fault, an output rate the render context disagreed
+    /// with, and a range it could not supply were one message. Nothing in a
+    /// report could then say which defect ended the track.
+    #[kithara::test(tokio)]
+    async fn a_leading_failure_records_the_fault_the_player_reported() {
+        let queue = make_queue();
+        let (_first, second) = selected_second(&queue);
+
+        queue.handle_item_did_fail(
+            &ItemRole::Leading(TrackRef::new(
+                second,
+                SlotId::new(0),
+                Arc::from("https://example.com/repeated.mp3"),
+            )),
+            PlaybackFault::OutputRateMismatch,
+        );
+
+        let Some(TrackStatus::Failed(reason)) = queue.track(second).map(|entry| entry.status)
+        else {
+            panic!("the entry named by the player event must be failed");
+        };
+        assert!(
+            reason.contains("output sample-rate mismatch"),
+            "the failure text must name the fault, got {reason:?}"
+        );
+    }
+
     #[kithara::test(tokio)]
     async fn background_end_and_failure_leave_the_current_entry_untouched() {
         let queue = make_queue();
@@ -309,7 +342,7 @@ mod tests {
         ));
 
         queue.handle_item_did_play_to_end(&item);
-        queue.handle_item_did_fail(&item);
+        queue.handle_item_did_fail(&item, PlaybackFault::Decode(DecodeErrorKind::InvalidData));
 
         assert_eq!(queue.current().map(|entry| entry.id), Some(current));
         assert!(

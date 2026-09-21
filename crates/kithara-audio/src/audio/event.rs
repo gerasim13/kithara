@@ -265,7 +265,14 @@ pub(crate) fn map_playback_resampler_kind(name: &'static str) -> PlaybackResampl
     }
 }
 
-pub(crate) const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
+/// Reduce a decoder error to the `Copy` code that can travel on the audio thread.
+///
+/// `DecodeError` owns strings and a boxed source, so it cannot cross a render
+/// callback that must not allocate or drop. This crate owns `DecodeErrorKind`
+/// and `kithara-decode` owns `DecodeError`, so neither can carry an inherent
+/// conversion: the mapping is published here, next to the kind it produces.
+#[must_use]
+pub const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
     match error {
         DecodeError::Io { .. } => DecodeErrorKind::Io,
         DecodeError::UnsupportedCodec { .. } => DecodeErrorKind::UnsupportedCodec,

@@ -547,7 +547,7 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::VolumeChanged { volume } => Self::VolumeChanged { volume: *volume },
             PlayerEvent::MuteChanged { muted } => Self::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => Self::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item } => Self::ItemDidFail {
+            PlayerEvent::ItemDidFail { item, .. } => Self::ItemDidFail {
                 item_id: Some(item.id()),
             },
             PlayerEvent::PlaybackStarted { .. }
@@ -626,7 +626,7 @@ mod tests {
         events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
         play::{
-            DjEvent, EngineEvent, ItemRole, MediaTime, PlayerEvent, PlayerStatus,
+            DjEvent, EngineEvent, ItemRole, MediaTime, PlaybackFault, PlayerEvent, PlayerStatus,
             RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
             TimeControlStatus, TrackRef,
         },
@@ -1240,6 +1240,7 @@ mod tests {
             (
                 PlayerEvent::ItemDidFail {
                     item: item_role(11),
+                    fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
                 },
                 |event| matches!(event, FfiPlayerEvent::ItemDidFail { item_id: Some(id) } if *id == TrackId::from(11_u64)),
             ),
@@ -1596,6 +1597,7 @@ mod tests {
                 SlotId::new(0),
                 "src".into(),
             )),
+            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
         };
 
         assert!(matches!(
