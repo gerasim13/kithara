@@ -894,6 +894,102 @@ async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     host.close().await;
 }
 
+/// The mirror of the served-waveform case: one publication carries a grid the
+/// caller handed over and a waveform this build analysed, and neither origin
+/// is visible to the consumer that reads them.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_supplied_grid_is_published_beside_a_locally_analysed_waveform(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(served_grid()),
+        None,
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    assert_eq!(
+        running_track(&owner),
+        Some(track_id),
+        "the waveform is still missing, so a pass opens"
+    );
+    settle(&mut owner).await;
+
+    let held = rx.borrow().clone().expect("the deck holds the publication");
+    let grid = held.grid().expect("the supplied grid is published");
+    assert_eq!(
+        grid.as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.ordinal)
+            .collect::<Vec<_>>(),
+        served_grid()
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.ordinal)
+            .collect::<Vec<_>>(),
+        "the pass that filled in the waveform renamed no beat of the grid it was handed"
+    );
+    assert!(
+        held.waveform().is_some(),
+        "and the waveform the pass produced is published beside it"
+    );
+    let analysis = held.analysis().expect("the pass published");
+    assert!(
+        analysis.beat().is_none(),
+        "the pass analysed no beats: the track already had a grid"
+    );
+    assert!(
+        analysis.waveform().is_some(),
+        "only the waveform was analysed"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+/// A prepared artifact publishes on its own, before any pass has run. What is
+/// settled belongs to the pass and to nothing else, so a publication carrying
+/// only supplied artifacts states no settled result at all.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_supplied_artifact_publishes_without_claiming_a_settled_pass(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(served_grid()),
+        None,
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    let held = rx.borrow().clone().expect("the grid publishes at once");
+    assert!(
+        held.grid().is_some(),
+        "the supplied grid is usable immediately"
+    );
+    assert!(
+        held.analysis().is_none(),
+        "no pass has finished, so the publication claims nothing a pass would claim"
+    );
+    assert!(
+        held.waveform().is_none(),
+        "and it invents no waveform to go with the grid it has"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
 /// Wait until the entry holds the artifact its source answers with. The owner
 /// is driven by hand here, the way every other test in this file drives it.
 async fn read_artifacts(owner: &mut Owner, reads: usize) {
