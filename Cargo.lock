@@ -4862,6 +4862,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-mp4",
  "kithara-mpa",
  "kithara-platform",
  "kithara-resampler",
@@ -5368,6 +5369,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "re_mp4",
+ "tracing",
 ]
 
 [[package]]

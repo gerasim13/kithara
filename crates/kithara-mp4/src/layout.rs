@@ -40,34 +40,10 @@ impl Fmp4Layout {
     /// - a fragment is malformed: no `traf`, zero duration, or a byte range
     ///   that does not advance.
     pub fn read<R: ReadAt>(source: &R, total: u64) -> Option<Self> {
-        let mp4 = Mp4::read(ReadAtCursor::new(source, total), total).ok()?;
-        if mp4.moofs.is_empty() {
-            return None;
-        }
-
-        let timescale = audio_track_timescale(&mp4)?;
-        if timescale == 0 {
-            return None;
-        }
-
-        let first_moof_start = mp4.moofs.first()?.start;
-        if first_moof_start == 0 {
-            return None;
-        }
-
-        let mut fragments: Vec<Fragment> = Vec::with_capacity(mp4.moofs.len());
-        let mut prev_decode_ticks: Option<u64> = None;
-
-        for (idx, moof) in mp4.moofs.iter().enumerate() {
-            let byte_end = mp4.moofs.get(idx + 1).map_or(total, |next| next.start);
-            let fragment = fragment_from_moof(moof, byte_end, prev_decode_ticks)?;
-            prev_decode_ticks = Some(
-                fragment
-                    .decode_ticks
-                    .saturating_add(fragment.duration_ticks),
-            );
-            fragments.push(fragment);
-        }
+        let mp4 = parse(source, total)?;
+        let timescale = timescale_of(&mp4, total)?;
+        let first_moof_start = init_end(&mp4, total)?;
+        let fragments = fragments_of(&mp4, total)?;
 
         Some(Self {
             init_range: 0..first_moof_start,
@@ -94,6 +70,73 @@ impl Fmp4Layout {
     pub fn fragments(&self) -> &[Fragment] {
         &self.fragments
     }
+}
+
+/// Walk the box headers into a parsed mp4, rejecting bytes that are not a
+/// fragmented mp4 at all.
+fn parse<R: ReadAt>(source: &R, total: u64) -> Option<Mp4> {
+    let mp4 = match Mp4::read(ReadAtCursor::new(source, total), total) {
+        Ok(mp4) => mp4,
+        Err(error) => {
+            tracing::debug!(%error, total, "mp4 box walk found no parsable mp4");
+            return None;
+        }
+    };
+    if mp4.moofs.is_empty() {
+        tracing::debug!(total, "mp4 has no moof chain; not a fragmented file");
+        return None;
+    }
+    Some(mp4)
+}
+
+/// Timescale every tick in the layout is measured against.
+fn timescale_of(mp4: &Mp4, total: u64) -> Option<u32> {
+    let Some(timescale) = audio_track_timescale(mp4).filter(|scale| *scale != 0) else {
+        tracing::warn!(total, "fragmented mp4 carries no usable audio timescale");
+        return None;
+    };
+    Some(timescale)
+}
+
+/// Where the init segment ends: the start of the first `moof`.
+fn init_end(mp4: &Mp4, total: u64) -> Option<u64> {
+    let first_moof_start = mp4.moofs.first()?.start;
+    if first_moof_start == 0 {
+        tracing::warn!(
+            total,
+            "first moof starts at byte zero, leaving no init segment"
+        );
+        return None;
+    }
+    Some(first_moof_start)
+}
+
+/// Every fragment in file order. A single malformed fragment voids the
+/// layout: a seek index with a hole in it is worse than none.
+fn fragments_of(mp4: &Mp4, total: u64) -> Option<Vec<Fragment>> {
+    let mut fragments: Vec<Fragment> = Vec::with_capacity(mp4.moofs.len());
+    let mut prev_decode_ticks: Option<u64> = None;
+
+    for (idx, moof) in mp4.moofs.iter().enumerate() {
+        let byte_end = mp4.moofs.get(idx + 1).map_or(total, |next| next.start);
+        let Some(fragment) = fragment_from_moof(moof, byte_end, prev_decode_ticks) else {
+            tracing::warn!(
+                fragment_index = idx,
+                moof_start = moof.start,
+                byte_end,
+                "malformed fragment; the file yields no layout"
+            );
+            return None;
+        };
+        prev_decode_ticks = Some(
+            fragment
+                .decode_ticks
+                .saturating_add(fragment.duration_ticks),
+        );
+        fragments.push(fragment);
+    }
+
+    Some(fragments)
 }
 
 /// Build one fragment from its `moof`, carrying `prev_decode_ticks` in for a

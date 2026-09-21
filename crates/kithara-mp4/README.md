@@ -53,6 +53,19 @@ if let Some(layout) = Fmp4Layout::read(&source, total) {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+A media segment carries no `moov`, so it has no layout to read; `read_samples` walks its `(moof, mdat)` pairs instead and enumerates the individual samples a decoder feeds its codec.
+
+```rust
+# use kithara_mp4::ReadAt;
+# fn demo<S: ReadAt>(segment: &S, total: u64, track_id: u32) -> Result<(), kithara_mp4::Mp4Error> {
+for sample in kithara_mp4::read_samples(segment, total, track_id)? {
+    let _access_unit = sample.byte_range;
+    let _pts = sample.decode_ticks;
+}
+# Ok(())
+# }
+```
+
 `Fmp4Layout::read` returns `None` for anything it cannot index: bytes that do not parse as mp4, a classic non-fragmented file with no `moof` chain, a track whose timescale is unavailable, or a malformed fragment.
 
 Times come out as media ticks against the track's timescale. Converting them to a clock type, and projecting fragments onto whatever per-segment descriptor a protocol speaks, belongs to the caller — a file source fills in its own single-variant descriptor, an HLS variant has no use for this crate at all because its segment boundaries come from the playlist.
@@ -69,14 +82,20 @@ Times come out as media ticks against the track's timescale. Converting them to 
 
 <tr><td><code>Fragment</code></td><td>struct</td><td>One <code>moof</code> + <code>mdat</code> fragment — byte range, decode ticks, duration ticks</td></tr>
 
+<tr><td><code>read_samples</code></td><td>fn</td><td>Walks a <code>moov</code>-less media segment and enumerates one track's samples</td></tr>
+
+<tr><td><code>Sample</code></td><td>struct</td><td>One access unit — byte range, absolute decode ticks, duration ticks</td></tr>
+
+<tr><td><code>Mp4Error</code></td><td>struct</td><td>Why a walk could not deliver; carries a fixed phrase a caller wraps in its own error vocabulary</td></tr>
+
 </table>
 
 ## Features
 
-The crate has no cargo features. It carries no decoder, no allocator policy, and no protocol vocabulary: `re_mp4` is its only dependency, and a fixed sixteen-kilobyte window is the whole of its scratch.
+The crate has no cargo features. It carries no decoder, no allocator policy, and no protocol vocabulary: it depends on `re_mp4` for box shapes and `tracing` for the reasons a walk gave nothing back, and a fixed sixteen-kilobyte window is the whole of its scratch.
 
 ## Integration
 
-`kithara-file` builds its seek index from a fully cached track through this crate. Consumers implement `ReadAt` over whatever storage they already hold; nothing here reads a path or owns a handle.
+`kithara-file` builds its seek index from a fully cached track through `Fmp4Layout`, and `kithara-decode` enumerates each media segment's frames through `read_samples`. Consumers implement `ReadAt` over whatever storage they already hold; nothing here reads a path or owns a handle.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-mp4) for the walk's guarantees and the layout it promises.
