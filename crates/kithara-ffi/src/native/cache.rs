@@ -1,10 +1,19 @@
 use kithara::assets::StorageBackend;
 
+#[cfg(target_os = "ios")]
+pub(super) fn default_backend() -> StorageBackend {
+    kithara_apple::foundation::prepare_documents_directory("Files/Kithara")
+        .map_or_else(StorageBackend::default, |root| StorageBackend::Disk {
+            root,
+        })
+}
+
+#[cfg(not(target_os = "ios"))]
 pub(super) fn default_backend() -> StorageBackend {
     StorageBackend::default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "ios")))]
 mod tests {
     use super::*;
     use crate::asset::FfiAssetStore;
