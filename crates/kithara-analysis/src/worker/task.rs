@@ -11,7 +11,9 @@ use tracing::{debug, warn};
 use super::schedule::Schedule;
 use crate::{
     AnalysisProgress, BlobError, Coverage, FrameRange,
-    analyzer::{AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers},
+    analyzer::{
+        AnalysisDemand, AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers,
+    },
     producer::ring,
     slots::{
         Intake,
@@ -28,6 +30,7 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) revision: u64,
+    pub(crate) demand: AnalysisDemand,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +73,7 @@ where
     publish_frames: u64,
     published_at: u64,
     revision: u64,
+    demand: AnalysisDemand,
     producer_drain_limit: usize,
 }
 
@@ -119,6 +123,7 @@ where
             scratch: None,
             token: job.token,
             revision: job.revision,
+            demand: job.demand,
             tx: job.tx,
         })
     }
@@ -154,6 +159,7 @@ where
                     self.rate,
                     &self.token,
                     self.revision,
+                    self.demand,
                 ) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
@@ -212,6 +218,7 @@ where
             self.rate,
             &self.token,
             self.revision,
+            self.demand,
         )?;
         let mut detector = detector;
         let mut folded = false;
@@ -474,6 +481,7 @@ fn open<'a, B, S>(
     rate: NonZeroU32,
     token: &AnalysisToken,
     revision: u64,
+    demand: AnalysisDemand,
 ) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
@@ -483,7 +491,7 @@ where
         Ok(analyzers)
     } else {
         let analyzers = builder
-            .build(rate, token.clone(), revision)
+            .build(rate, token.clone(), revision, demand)
             .inspect_err(|error| {
                 warn!(?error, "analysis: analyzer buffer initialization failed");
             })?;

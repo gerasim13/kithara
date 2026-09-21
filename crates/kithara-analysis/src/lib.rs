@@ -19,7 +19,8 @@ mod tests;
 mod worker;
 
 pub use analyzer::{
-    AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisConfigPatch, BeatAnalysisConfigPatchError,
+    AnalysisDemand, AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisConfigPatch,
+    BeatAnalysisConfigPatchError,
 };
 pub use archive::{
     AnalysisFile, AnalysisFileError, AnalysisFilePatch, AnalysisFileSpec, AnalysisFileUpdate,
@@ -34,6 +35,7 @@ pub use artifact::{
 /// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.
 pub use kithara_beat::{
     BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+    SCHEMA_VERSION as GRID_SCHEMA_VERSION,
 };
 pub use kithara_signal::BlobError;
 /// Frame-range coverage, re-exported from its owner so a consumer can name

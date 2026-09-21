@@ -25,7 +25,7 @@ use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
 
 use super::{
-    super::{analyzer::AnalyzerBuilder, producer::ring, worker::Job},
+    super::{AnalysisDemand, analyzer::AnalyzerBuilder, producer::ring, worker::Job},
     fixtures::{SR, spec},
     node::NodeHarness,
     track::Track,
@@ -69,6 +69,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
         reader: Box::new(track),
         cancel: CancelToken::root(),
         resume: None,
+        demand: AnalysisDemand::ALL,
     })
     .expect("node accepts the job");
 

@@ -27,6 +27,10 @@ where
     }
 }
 
+pub(crate) const fn empty_config() -> Config {
+    None
+}
+
 pub(crate) fn cache_tag(config: Config) -> Option<String> {
     config.map(|buckets| format!("wave:native:max{buckets}:v1"))
 }

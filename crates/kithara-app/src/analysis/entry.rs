@@ -1,11 +1,8 @@
 use std::num::NonZeroU32;
 
-use kithara::{
-    analysis::{AnalysisFingerprint, AnalysisProgress},
-    events::TrackId,
-    platform::tokio::sync::watch,
-};
+use kithara::{analysis::AnalysisProgress, events::TrackId, platform::tokio::sync::watch};
 
+use super::{artifacts::TrackArtifacts, supply::Prepared};
 use crate::{
     pools::{AppQueueControl, AppResourceConfig},
     wave_cache::AnalysisTarget,
@@ -20,7 +17,10 @@ pub(crate) struct Entry {
     queue: AppQueueControl,
     #[field(get)]
     config: AppResourceConfig,
-    tx: watch::Sender<Option<AnalysisProgress>>,
+    #[field(get)]
+    prepared: Prepared,
+    tx: watch::Sender<Option<TrackArtifacts>>,
+    held: Option<AnalysisProgress>,
     #[field(get, copy)]
     stage: Stage,
     #[field(get, copy)]
@@ -44,16 +44,21 @@ impl Entry {
     ) -> Self {
         Self {
             target,
+            prepared: Prepared::for_config(&config),
             config,
             queue,
             track_id,
             tx: watch::channel(None).0,
+            held: None,
             stage: Stage::Idle,
         }
     }
 
-    pub(crate) fn offer(&self, progress: AnalysisProgress) -> bool {
-        let same = self.tx.borrow().as_ref().is_some_and(|held| {
+    /// Publish what this track holds. A pass result is accepted only when it
+    /// outranks the one already published; a prepared artifact is republished
+    /// with it, so one publication carries both origins.
+    pub(crate) fn offer(&mut self, progress: AnalysisProgress) -> bool {
+        let same = self.held.as_ref().is_some_and(|held| {
             let held = held.analysis();
             let next = progress.analysis();
             held.token() == next.token() && held.revision() == next.revision()
@@ -61,8 +66,22 @@ impl Entry {
         if same {
             return false;
         }
-        self.tx.send_replace(Some(progress));
+        self.held = Some(progress);
+        self.republish();
         true
+    }
+
+    /// Publish the prepared artifacts alone, before or without a pass.
+    pub(crate) fn republish(&self) {
+        let analysis = self
+            .held
+            .as_ref()
+            .map(|progress| progress.analysis().clone());
+        if analysis.is_none() && self.prepared.is_empty() {
+            return;
+        }
+        self.tx
+            .send_replace(Some(TrackArtifacts::new(analysis, self.prepared.clone())));
     }
 
     pub(crate) fn point_at(
@@ -71,13 +90,15 @@ impl Entry {
         queue: AppQueueControl,
         track_id: TrackId,
     ) {
+        self.prepared = Prepared::for_config(&config);
         self.config = config;
         self.queue = queue;
         self.track_id = track_id;
     }
 
-    pub(crate) fn release(&self) {
+    pub(crate) fn release(&mut self) {
         if !self.is_held() {
+            self.held = None;
             self.tx.send_replace(None);
         }
     }
@@ -87,8 +108,7 @@ impl Entry {
     }
 
     pub(crate) fn value_for(&self, axis: NonZeroU32) -> Option<AnalysisProgress> {
-        self.tx
-            .borrow()
+        self.held
             .as_ref()
             .filter(|progress| progress.analysis().source_sample_rate() == axis)
             .cloned()
@@ -96,17 +116,10 @@ impl Entry {
 
     delegate::delegate! {
         to self.tx {
-            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<AnalysisProgress>>;
+            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<TrackArtifacts>>;
             #[call(receiver_count)]
             #[expr($ > 0)]
             pub(crate) fn is_held(&self) -> bool;
         }
     }
-}
-
-pub(crate) fn settled_for(progress: &AnalysisProgress, fingerprint: &AnalysisFingerprint) -> bool {
-    let analysis = progress.analysis();
-    let waveform = fingerprint.waveform().is_none() || analysis.waveform().is_some();
-    let beat = fingerprint.beat().is_none() || analysis.beat().is_some();
-    analysis.is_settled() && waveform && beat
 }

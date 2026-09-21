@@ -7,7 +7,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{BeatAnalysisConfig, Bucket},
+    analysis::{AnalysisDemand, BeatAnalysisConfig, Bucket},
     assets::StorageBackend,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
@@ -46,7 +46,14 @@ async fn run_analysis(
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut rx = runner.analyze(config, "waveform-track".into(), RATE, 0, drop);
+    let mut rx = runner.analyze(
+        config,
+        "waveform-track".into(),
+        RATE,
+        0,
+        AnalysisDemand::ALL,
+        drop,
+    );
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;

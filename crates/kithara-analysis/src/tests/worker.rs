@@ -8,6 +8,7 @@ use kithara_worker::{Worker, WorkerConfig};
 
 use super::{
     super::{
+        AnalysisDemand,
         analyzer::AnalyzerBuilder,
         worker::{AnalysisWorker, AnalysisWorkerConfig},
     },
@@ -37,6 +38,7 @@ async fn delivers_result_on_its_own_thread(analysis_pcm: &'static [f32]) {
         "test-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
     rx.changed().await.expect("worker sends a result");
     assert!(
@@ -57,6 +59,7 @@ async fn a_reader_on_another_axis_contributes_nothing(analysis_pcm: &'static [f3
         "test-track".into(),
         axis,
         0,
+        AnalysisDemand::ALL,
     );
 
     assert!(
@@ -72,8 +75,12 @@ async fn preempted_job_sends_nothing_and_next_job_runs(analysis_pcm: &'static [f
     let master = CancelToken::root();
     let worker = worker(pools.clone(), &master);
 
-    let (mut stale_rx, _stale_producer, stale_pass) =
-        worker.open("stale-track".into(), super::fixtures::spec().sample_rate, 0);
+    let (mut stale_rx, _stale_producer, stale_pass) = worker.open(
+        "stale-track".into(),
+        super::fixtures::spec().sample_rate,
+        0,
+        AnalysisDemand::ALL,
+    );
     stale_pass.cancel_token().cancel();
     worker.start(
         stale_pass,
@@ -85,6 +92,7 @@ async fn preempted_job_sends_nothing_and_next_job_runs(analysis_pcm: &'static [f
         "live-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
     live_rx.changed().await.expect("live job completes");
     assert!(live_rx.borrow().is_some());
@@ -106,12 +114,14 @@ async fn pending_job_does_not_block_an_independent_job(analysis_pcm: &'static [f
         "pending-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
     let (mut live_rx, _live_producer) = worker.analyze(
         Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
         "live-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
 
     kithara_platform::time::timeout(
@@ -129,8 +139,12 @@ async fn a_pass_publishes_above_the_revision_its_caller_holds(analysis_pcm: &'st
     let pools = pools();
     let master = CancelToken::root();
     let worker = worker(pools.clone(), &master);
-    let (mut rx, _producer, pass) =
-        worker.open("test-track".into(), super::fixtures::spec().sample_rate, 3);
+    let (mut rx, _producer, pass) = worker.open(
+        "test-track".into(),
+        super::fixtures::spec().sample_rate,
+        3,
+        AnalysisDemand::ALL,
+    );
     worker.start(
         pass,
         Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
@@ -156,6 +170,7 @@ async fn job_token_belongs_to_worker_scope() {
         "scoped-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
     let job = pass.cancel_token().clone();
 
@@ -182,6 +197,7 @@ fn shared_base_outlives_analysis_dispatcher_and_analysis_cancel_stays_local() {
         "scoped-track".into(),
         super::fixtures::spec().sample_rate,
         0,
+        AnalysisDemand::ALL,
     );
     let job = pass.cancel_token().clone();
 

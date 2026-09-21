@@ -8,7 +8,7 @@ use kithara_test_utils::kithara;
 use super::{AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate};
 use crate::{
     AnalysisProgress, AnalyzerBuilder,
-    analyzer::{Detector, Extent, Ingest, TrackAnalyzers},
+    analyzer::{AnalysisDemand, Detector, Extent, Ingest, TrackAnalyzers},
     beat::GridParams,
     test_pools::{Pools, TestPools, pools, sample_buffer},
     tests::fixtures::beat_detector,
@@ -118,7 +118,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
     let seed = [0, 2 * CHUNK_FRAMES];
     let (builder, mut detector) = configured(pools.clone());
     let mut partial = builder
-        .build(rate(), "resume-track".into(), 0)
+        .build(rate(), "resume-track".into(), 0, AnalysisDemand::ALL)
         .expect("analysis buffers fit the test region");
     for at in seed {
         fold(&pools, &mut partial, &mut detector, at, &archive_tone);
@@ -163,7 +163,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
 
     let (builder, mut detector) = configured(pools.clone());
     let mut uninterrupted = builder
-        .build(rate(), "resume-track".into(), 0)
+        .build(rate(), "resume-track".into(), 0, AnalysisDemand::ALL)
         .expect("analysis buffers fit the test region");
     for at in seed.into_iter().chain(requested) {
         fold(&pools, &mut uninterrupted, &mut detector, at, &archive_tone);

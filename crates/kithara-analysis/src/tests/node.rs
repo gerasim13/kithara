@@ -50,6 +50,7 @@ use super::fixtures::CH;
 use super::fixtures::shareable;
 use super::{
     super::{
+        AnalysisDemand,
         analyzer::AnalyzerBuilder,
         worker::{AnalysisNode, Job},
     },
@@ -196,6 +197,7 @@ fn enqueue(
 ) -> watch::Receiver<Option<AnalysisProgress>> {
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         ingest,
         reader,
@@ -245,6 +247,7 @@ fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         token: "test-track".into(),
         revision: 0,
@@ -273,6 +276,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         token: "test-track".into(),
         revision: 0,
@@ -306,6 +310,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
@@ -359,6 +364,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
+            demand: AnalysisDemand::ALL,
             tx,
             rate,
             ingest,
@@ -415,6 +421,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
@@ -464,6 +471,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
@@ -563,6 +571,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, F
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
@@ -678,6 +687,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
@@ -778,6 +788,7 @@ where
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         reader,
         tx,
         token: "test-track".into(),
@@ -1409,6 +1420,7 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
+        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,

@@ -1,7 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
-    analysis::AnalysisProgress,
     events::TrackId,
     platform::{
         CancelToken,
@@ -14,7 +13,8 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::{
-    entry::{Entry, Stage, settled_for},
+    TrackArtifacts,
+    entry::{Entry, Stage},
     handle::{AnalysisHandle, Request},
     run::Activity,
 };
@@ -218,7 +218,7 @@ impl Owner {
         let held = entry.is_held();
         if entry
             .value_for(axis)
-            .is_some_and(|progress| settled_for(&progress, fingerprint))
+            .is_some_and(|progress| entry.prepared().settled_for(&progress, fingerprint))
         {
             debug!(?track_id, held, "analysis: settled; nothing to schedule");
             return;
@@ -248,16 +248,21 @@ impl Owner {
         if entry.value_for(axis).is_some() {
             return;
         }
-        if let Some(progress) = self.cache.get(entry.target(), axis) {
-            debug!(
-                track_id = ?entry.track_id(),
-                revision = progress.analysis().revision(),
-                complete = progress.analysis().is_complete(),
-                resumable = progress.is_resumable(),
-                "analysis: cached snapshot served"
-            );
-            entry.offer(progress);
-        }
+        let cached = self.cache.get(entry.target(), axis);
+        let track_id = entry.track_id();
+        let entry = &mut self.entries[index];
+        let Some(progress) = cached else {
+            entry.republish();
+            return;
+        };
+        debug!(
+            ?track_id,
+            revision = progress.analysis().revision(),
+            complete = progress.analysis().is_complete(),
+            resumable = progress.is_resumable(),
+            "analysis: cached snapshot served"
+        );
+        entry.offer(progress);
     }
 
     pub(super) fn subscribe(
@@ -266,7 +271,7 @@ impl Owner {
         track_id: TrackId,
         source: AppTrackSource,
         axis: NonZeroU32,
-    ) -> watch::Receiver<Option<AnalysisProgress>> {
+    ) -> watch::Receiver<Option<TrackArtifacts>> {
         self.axis = Some(axis);
         let Some((index, config)) = self.entry_for(&queue, track_id, source) else {
             return watch::channel(None).1;

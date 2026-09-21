@@ -1,4 +1,5 @@
 mod config;
+mod demand;
 mod extent;
 mod session;
 mod set;
@@ -6,6 +7,7 @@ mod set;
 mod waveform;
 
 pub use config::{BeatAnalysisConfig, BeatAnalysisConfigPatch, BeatAnalysisConfigPatchError};
+pub use demand::AnalysisDemand;
 pub(crate) use extent::Extent;
 pub(crate) use session::{Ingest, TrackAnalyzers};
 pub use set::AnalyzerBuilder;

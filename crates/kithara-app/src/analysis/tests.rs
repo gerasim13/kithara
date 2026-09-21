@@ -17,15 +17,17 @@ use ::kithara::{
 use kithara_test_utils::{kithara, off_thread::OffThread};
 
 use super::{
-    AnalysisService,
-    entry::{Stage, settled_for},
+    AnalysisService, TrackArtifacts,
+    entry::Stage,
     fixtures::{
         analysis, app_config, axis, fingerprint, grid, long_wav, memory_store, other_axis,
         persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
-        rhythm_a_mp3, rhythm_b_mp3, short_wav, snapshot, test_pools, tone_mp3, track,
+        rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot, test_pools,
+        tone_mp3, track, track_prepared,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
+    supply::Prepared,
 };
 use crate::{
     pools::{AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource},
@@ -404,7 +406,7 @@ struct HeldRun {
     queue: AppQueueControl,
     source: AppTrackSource,
     owner: Owner,
-    rx: watch::Receiver<Option<AnalysisProgress>>,
+    rx: watch::Receiver<Option<TrackArtifacts>>,
     track_id: TrackId,
 }
 
@@ -480,12 +482,13 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, url).await;
-    let rx = owner.subscribe(queue, track_id, source, axis());
+    let target = target_of(&owner, &source);
+    let _rx = owner.subscribe(queue, track_id, source, axis());
     loop {
         time::timeout(Duration::from_secs(2), owner.drive())
             .await
             .expect("the pass progresses");
-        let held = rx.borrow().clone();
+        let held = owner.cache.get(&target, axis());
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
             host.close().await;
@@ -564,8 +567,11 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
     );
     settle(&mut owner).await;
     let held = rx.borrow().clone().expect("the deck holds the final value");
-    assert!(held.analysis().is_complete(), "which finishes the track");
-    assert!(held.analysis().revision() > checkpoint.analysis().revision());
+    assert!(
+        held.analysis().expect("a pass published").is_complete(),
+        "which finishes the track"
+    );
+    assert!(held.revision() > checkpoint.analysis().revision());
     cancel.cancel();
     host.close().await;
 }
@@ -705,11 +711,14 @@ async fn a_fresh_pass_publishes_above_the_seeded_revision(short_wav: String) {
     settle(&mut owner).await;
 
     let held = rx.borrow().clone().expect("the deck holds the final value");
-    assert!(held.analysis().is_complete(), "the pass finished the track");
     assert!(
-        held.analysis().revision() > 3,
-        "the final revision outranks the seeded one: {}",
-        held.analysis().revision()
+        held.analysis().expect("a pass published").is_complete(),
+        "the pass finished the track"
+    );
+    let revision = held.analysis().expect("a pass published").revision();
+    assert!(
+        revision > 3,
+        "the final revision outranks the seeded one: {revision}"
     );
     cancel.cancel();
     host.close().await;
@@ -769,7 +778,7 @@ async fn the_source_gave_everything_it_can(url: &str) {
     settle(&mut owner).await;
 
     let held = rx.borrow().clone().expect("the deck holds the final value");
-    let analysis = held.analysis();
+    let analysis = held.analysis().expect("a pass published");
     assert_eq!(
         analysis.extent(),
         Some(analysis.coverage().frontier()),
@@ -790,7 +799,13 @@ async fn the_source_gave_everything_it_can(url: &str) {
         "only the priming the decoder cannot deliver is missing: {missing:?}"
     );
     assert!(
-        settled_for(&held, owner.runner.fingerprint()),
+        Prepared::default().settled_for(
+            &owner
+                .cache
+                .get(&target_of(&owner, &source), axis())
+                .expect("the pass cached its final value"),
+            owner.runner.fingerprint(),
+        ),
         "nothing is left for another pass"
     );
     let _again = owner.subscribe(queue, track_id, source, axis());
@@ -804,3 +819,77 @@ async fn the_source_gave_everything_it_can(url: &str) {
 
 const MPEG_FRAME_SAMPLES: u64 = 1152;
 const HEAD_TOLERANCE_FRAMES: u64 = 2 * MPEG_FRAME_SAMPLES;
+
+#[kithara::test(native, tokio)]
+async fn a_track_opened_with_every_artifact_is_not_analysed(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(served_grid()),
+        Some(served_waveform()),
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "nothing the caller already handed over is analysed again"
+    );
+    let held = rx.borrow().clone().expect("the deck is served at once");
+    assert!(held.grid().is_some(), "the served grid reaches the deck");
+    assert!(held.waveform().is_some(), "and so does the served waveform");
+    assert!(
+        held.analysis().is_none(),
+        "with no local pass invented behind them"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+#[kithara::test(native, tokio, flash(false))]
+async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    assert!(
+        owner.runner.fingerprint().waveform().is_some(),
+        "fixture runtime analyses waveforms at all"
+    );
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        None,
+        Some(served_waveform()),
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    assert_eq!(
+        running_track(&owner),
+        Some(track_id),
+        "the beats are still missing, so a pass opens"
+    );
+    settle(&mut owner).await;
+
+    let held = rx.borrow().clone().expect("the deck holds the publication");
+    assert!(
+        held.waveform().is_some(),
+        "the served waveform is published beside the pass"
+    );
+    let analysis = held.analysis().expect("the pass published");
+    assert!(
+        analysis.waveform().is_none(),
+        "and the pass itself analysed no waveform"
+    );
+    assert!(analysis.beat().is_some(), "only the beats were analysed");
+    cancel.cancel();
+    host.close().await;
+}

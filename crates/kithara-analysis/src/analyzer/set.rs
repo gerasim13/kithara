@@ -4,12 +4,13 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
 use super::{
-    AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig, session::TrackAnalyzers,
+    AnalysisDemand, AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig,
+    session::TrackAnalyzers,
 };
 use crate::{
     AnalysisProgress, BlobError, Coverage,
     slots::{
-        beat::{self, Config},
+        beat::{self, Config, Slot},
         waveform,
     },
 };
@@ -52,14 +53,24 @@ where
         rate: NonZeroU32,
         token: AnalysisToken,
         revision: u64,
+        demand: AnalysisDemand,
     ) -> Result<TrackAnalyzers<B, S>, PoolError> {
+        let waveform = if demand.waveform() {
+            self.waveform
+        } else {
+            waveform::empty_config()
+        };
         Ok(TrackAnalyzers {
             revision,
             token,
-            beat: self.beat.build(rate, &self.pools),
-            waveform: waveform::Slot::try_from((&self.waveform, rate, &self.pools))?,
+            beat: if demand.beat() {
+                self.beat.build(rate, &self.pools)
+            } else {
+                Slot::default()
+            },
+            waveform: waveform::Slot::try_from((&waveform, rate, &self.pools))?,
             coverage: Coverage::default(),
-            fingerprint: self.fingerprint(),
+            fingerprint: self.fingerprint_for(demand),
             settled: false,
             source_sample_rate: rate,
             pools: self.pools.clone(),
@@ -71,12 +82,28 @@ where
     /// results.
     #[must_use]
     pub fn fingerprint(&self) -> AnalysisFingerprint {
+        self.fingerprint_for(AnalysisDemand::ALL)
+    }
+
+    /// What a pass opened for `demand` produces. A narrowed pass carries a
+    /// narrowed fingerprint, so its result is never read as a full one.
+    #[must_use]
+    pub fn fingerprint_for(&self, demand: AnalysisDemand) -> AnalysisFingerprint {
         AnalysisFingerprint::new(
-            self.beat_config
-                .as_ref()
-                .and_then(BeatAnalysisConfig::cache_tag)
+            demand
+                .beat()
+                .then(|| {
+                    self.beat_config
+                        .as_ref()
+                        .and_then(BeatAnalysisConfig::cache_tag)
+                })
+                .flatten()
                 .as_deref(),
-            waveform::cache_tag(self.waveform).as_deref(),
+            demand
+                .waveform()
+                .then(|| waveform::cache_tag(self.waveform))
+                .flatten()
+                .as_deref(),
         )
     }
 
@@ -100,6 +127,7 @@ where
                 analysis.source_sample_rate(),
                 analysis.token().clone(),
                 analysis.revision(),
+                AnalysisDemand::ALL,
             )
             .map_err(|_| BlobError::Corrupt)?;
         analyzers.restore(analysis, resume, chunk_frames)?;
@@ -188,6 +216,7 @@ mod tests {
 
     use super::{
         super::{
+            demand::AnalysisDemand,
             extent::Extent,
             session::{Ingest, TrackAnalyzers},
         },
@@ -238,7 +267,7 @@ mod tests {
     ) -> TrackAnalyzers<NoResamplerBackend, TestPools> {
         AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
             .with_waveform(buckets)
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region")
     }
 
@@ -265,7 +294,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -334,7 +363,7 @@ mod tests {
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(axis, "track-a".into(), 0)
+            .build(axis, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
 
         assert_eq!(
@@ -471,7 +500,7 @@ mod tests {
         let pools = pools();
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into(), 3)
+            .build(spec().sample_rate, "track-a".into(), 3, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -487,11 +516,11 @@ mod tests {
         let pools = pools();
         let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         let mut second = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-b".into(), 0)
+            .build(spec().sample_rate, "track-b".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         first.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -520,7 +549,7 @@ mod tests {
             AnalyzerBuilder::<RubatoBackend, _>::new(pools())
                 .with_waveform(buckets)
                 .with_beat()
-                .build(spec().sample_rate, "track-a".into(), 0)
+                .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
                 .expect("analysis buffers fit the test region")
                 .snapshot(None, false, None)
                 .fingerprint()
@@ -551,7 +580,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -623,7 +652,7 @@ mod tests {
             .with_beat_detector(steady_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         // Four seconds of source, so the markers the detector states all fall
         // inside what the pass has actually covered.

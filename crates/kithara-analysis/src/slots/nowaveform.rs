@@ -63,3 +63,7 @@ where
         Err(BlobError::Corrupt)
     }
 }
+
+pub(crate) const fn empty_config() -> Config {
+    Config
+}

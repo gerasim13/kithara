@@ -20,6 +20,7 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{
+        AnalysisDemand,
         analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis},
         producer::{AnalysisProducer, ring},
         worker::Job,
@@ -334,6 +335,7 @@ where
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
+            demand: AnalysisDemand::ALL,
             tx,
             rate,
             ingest,

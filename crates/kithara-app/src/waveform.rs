@@ -3,8 +3,9 @@ use std::num::NonZeroU32;
 pub use kithara::analysis::TrackAnalysis;
 use kithara::{
     analysis::{
-        AnalysisFileError, AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisProgress,
-        AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
+        AnalysisDemand, AnalysisFileError, AnalysisFingerprint, AnalysisPass, AnalysisProducer,
+        AnalysisProgress, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
+        BeatAnalysisConfig,
     },
     audio::AudioReader,
     platform::{
@@ -95,12 +96,16 @@ impl TrackAnalysisRunner {
     /// `deliver` receives the producer half synchronously, before the fallback
     /// reader is opened. The runner does not know what the handle is for;
     /// attaching it to the track's playback path is the caller's business.
+    /// `demand` names the artifacts this pass is opened for: a track that
+    /// already has one of them asks for the rest, and the pass reports the
+    /// fingerprint of what it actually produced.
     pub fn analyze<D>(
         &mut self,
         config: AppResourceConfig,
         token: AnalysisToken,
         rate: NonZeroU32,
         revision: u64,
+        demand: AnalysisDemand,
         deliver: D,
     ) -> watch::Receiver<Option<AnalysisProgress>>
     where
@@ -108,7 +113,7 @@ impl TrackAnalysisRunner {
     {
         self.clear();
 
-        let (rx, producer, pass) = self.worker.open(token, rate, revision);
+        let (rx, producer, pass) = self.worker.open(token, rate, revision, demand);
         let run = pass.cancel_token().clone();
         deliver(producer);
         let task = task::spawn(run_analysis(

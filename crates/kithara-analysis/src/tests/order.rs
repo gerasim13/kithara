@@ -6,7 +6,11 @@ use super::{
     super::analyzer::AnalyzerBuilder,
     fixtures::{Artifacts, CH, SR, artifacts, assert_agrees, beat_detector, chunk, sine, spec},
 };
-use crate::{analyzer::Extent, beat::GridParams, test_pools::pools};
+use crate::{
+    analyzer::{AnalysisDemand, Extent},
+    beat::GridParams,
+    test_pools::pools,
+};
 
 const BUCKETS: usize = 64;
 
@@ -18,7 +22,12 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
     let mut beat = builder.take_detector();
     let mut extent = Extent::default();
     let mut analyzers = builder
-        .build(spec().sample_rate, "order-harness".into(), 0)
+        .build(
+            spec().sample_rate,
+            "order-harness".into(),
+            0,
+            AnalysisDemand::ALL,
+        )
         .expect("analysis buffers fit the test region");
 
     for (at, from, to) in blocks {

@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use kithara::analysis::Coverage;
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
-    analysis::{AnalysisProgress, BeatGridModel, BeatSnapshot, FrameRange, RawBeatGrid},
+    analysis::{BeatGridModel, BeatSnapshot, FrameRange, RawBeatGrid, TrackAnalysis},
     events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
@@ -28,9 +28,8 @@ use num_traits::{ToPrimitive, cast::AsPrimitive};
 use tracing::warn;
 
 use crate::{
-    analysis::{AnalysisEvent, AnalysisHandle},
+    analysis::{AnalysisEvent, AnalysisHandle, TrackArtifacts},
     pools::AppQueueControl,
-    waveform::TrackAnalysis,
 };
 
 /// Timescale the deck stamps a beat position with: the grid states seconds,
@@ -47,7 +46,7 @@ pub struct UiState {
     pub downbeat_marks: Arc<[f32]>,
     pub unready_ranges: Arc<[[f32; 2]]>,
     pub engine_load: EngineLoadSnapshot,
-    pub analysis: Option<TrackAnalysis>,
+    pub(crate) analysis: Option<TrackArtifacts>,
     pub current_track_index: Option<usize>,
     pub current_variant: Option<usize>,
     pub selected_variant: Option<usize>,
@@ -122,9 +121,10 @@ impl UiState {
         }
     }
 
-    pub(crate) fn set_analysis(&mut self, analysis: Option<TrackAnalysis>) {
+    pub(crate) fn set_analysis(&mut self, analysis: Option<TrackArtifacts>) {
         let (beats, downbeats) = analysis
             .as_ref()
+            .and_then(TrackArtifacts::analysis)
             .and_then(|a| {
                 a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
@@ -136,7 +136,10 @@ impl UiState {
             .unwrap_or_else(|| (empty_marks(), empty_marks()));
         self.beat_marks = beats;
         self.downbeat_marks = downbeats;
-        self.unready_ranges = analysis.as_ref().map_or_else(Arc::default, unready_ranges);
+        self.unready_ranges = analysis
+            .as_ref()
+            .and_then(TrackArtifacts::analysis)
+            .map_or_else(Arc::default, unready_ranges);
         // State the grid once here, where the publication is stored: the per-frame
         // snapshots this state is cloned into then carry it instead of deriving
         // their own.
@@ -354,8 +357,13 @@ impl StateController {
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
         if beat_clock.published_track != Some(current_index)
-            && let Some(info) =
-                bpm_info_from_grid(grid, analysis.beat().and_then(BeatSnapshot::confidence))
+            && let Some(info) = bpm_info_from_grid(
+                grid,
+                analysis
+                    .analysis()
+                    .and_then(TrackAnalysis::beat)
+                    .and_then(BeatSnapshot::confidence),
+            )
         {
             self.queue
                 .bus()
@@ -458,7 +466,7 @@ pub(crate) async fn listen(
 struct HeldAnalysis {
     analysis: AnalysisHandle,
     queue: AppQueueControl,
-    rx: Option<watch::Receiver<Option<AnalysisProgress>>>,
+    rx: Option<watch::Receiver<Option<TrackArtifacts>>>,
 }
 
 impl HeldAnalysis {
@@ -497,10 +505,7 @@ impl HeldAnalysis {
     }
 
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
-        let next = self
-            .rx
-            .as_ref()
-            .and_then(|rx| rx.borrow().as_ref().map(|p| p.analysis().clone()));
+        let next = self.rx.as_ref().and_then(|rx| rx.borrow().clone());
         if !open {
             self.rx = None;
         }
@@ -518,11 +523,16 @@ impl HeldAnalysis {
     }
 }
 
-fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) -> bool {
+fn same_revision(shown: Option<&TrackArtifacts>, next: Option<&TrackArtifacts>) -> bool {
     match (shown, next) {
         (None, None) => true,
         (Some(shown), Some(next)) => {
-            shown.token() == next.token() && shown.revision() == next.revision()
+            let identity = |artifacts: &TrackArtifacts| {
+                artifacts
+                    .analysis()
+                    .map(|analysis| (analysis.token().clone(), analysis.revision()))
+            };
+            identity(shown) == identity(next)
         }
         _ => false,
     }
@@ -635,7 +645,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 #[cfg(test)]
 mod tests {
     use ::kithara::{
-        analysis::{AnalysisProgress, BeatArtifact, BeatGridState, BeatSnapshot, BeatState},
+        analysis::{BeatArtifact, BeatGridState, BeatSnapshot, BeatState},
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
@@ -654,7 +664,7 @@ mod tests {
     };
     use crate::{
         analysis::{
-            AnalysisHandle, Request,
+            AnalysisHandle, Request, TrackArtifacts,
             fixtures::{
                 answer_subscribe, next_subscribe, queue_off, tone_mp3, track, wait_for_revision,
             },
@@ -664,7 +674,7 @@ mod tests {
         waveform::TrackAnalysis,
     };
 
-    fn progress(revision: u64) -> AnalysisProgress {
+    fn progress(revision: u64) -> TrackArtifacts {
         let mut analysis = covered(&[(0, 1_000)], Some(1_000));
         analysis = TrackAnalysis::builder()
             .token(analysis.token().clone())
@@ -674,7 +684,7 @@ mod tests {
             .settled(true)
             .coverage(analysis.coverage().clone())
             .build();
-        AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
+        analysis.into()
     }
 
     fn deck(
@@ -958,11 +968,8 @@ mod tests {
         let mut events = queue.bus().subscribe::<DjEvent>();
 
         let first = [0, 22_050, 44_100];
-        tx.send(Some(
-            AnalysisProgress::try_from(publication(1, BeatState::Provisional, &first))
-                .expect("a settled publication is valid progress"),
-        ))
-        .expect("the pass publishes");
+        tx.send(Some(publication(1, BeatState::Provisional, &first).into()))
+            .expect("the pass publishes");
         wait_for_revision(&state, 1).await;
         controller.mutate(|st| st.position = 1.0);
         controller.publish_dj_events(&controller.snapshot());
@@ -975,7 +982,7 @@ mod tests {
             .lock()
             .analysis
             .as_ref()
-            .and_then(TrackAnalysis::grid)
+            .and_then(TrackArtifacts::grid)
             .expect("the publication states a grid")
             .as_raw()
             .bpm;
@@ -990,11 +997,8 @@ mod tests {
         );
 
         let then = [0, 22_050, 44_100, 66_150, 88_200];
-        tx.send(Some(
-            AnalysisProgress::try_from(publication(2, BeatState::Final, &then))
-                .expect("a settled publication is valid progress"),
-        ))
-        .expect("the pass publishes again");
+        tx.send(Some(publication(2, BeatState::Final, &then).into()))
+            .expect("the pass publishes again");
         wait_for_revision(&state, 2).await;
         controller.mutate(|st| st.position = 2.0);
         controller.publish_dj_events(&controller.snapshot());
@@ -1009,7 +1013,7 @@ mod tests {
                 .lock()
                 .analysis
                 .as_ref()
-                .and_then(TrackAnalysis::grid)
+                .and_then(TrackArtifacts::grid)
                 .expect("the later publication states a grid")
                 .as_raw()
                 .state,
@@ -1089,7 +1093,7 @@ mod tests {
         let mut previous: Option<Vec<[f32; 2]>> = None;
 
         for runs in revisions {
-            ui.set_analysis(Some(covered(runs, Some(1_000))));
+            ui.set_analysis(Some(covered(runs, Some(1_000)).into()));
             let unready = ui.unready_ranges.to_vec();
             if let Some(previous) = previous {
                 for range in &unready {

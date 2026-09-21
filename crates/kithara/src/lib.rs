@@ -235,7 +235,7 @@ pub mod prelude {
     pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
-        EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
+        ArtifactSource, EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
         PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
         ServiceClass, SourceType,
     };

@@ -1,13 +1,11 @@
 use std::collections::BTreeSet;
 
-use kithara::{
-    analysis::{AnalysisToken, Waveform},
-    ui::render::WaveBucket,
-};
+use kithara::{analysis::Waveform, ui::render::WaveBucket};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
 use crate::{
+    analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
     gui::{
         app::Decks,
@@ -15,7 +13,6 @@ use crate::{
         view::{playhead, track_subtitle},
     },
     state::UiState,
-    waveform::TrackAnalysis,
 };
 
 #[derive(Default, fieldwork::Fieldwork)]
@@ -185,7 +182,7 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
     pub(in crate::gui) wave_revision: u64,
-    wave_src: Option<(AnalysisToken, u64)>,
+    wave_src: Option<WaveformId>,
 }
 
 #[derive(Default)]
@@ -286,11 +283,9 @@ impl DeckCache {
         self.refresh_wave(deck.ui.analysis.as_ref());
     }
 
-    fn refresh_wave(&mut self, analysis: Option<&TrackAnalysis>) {
-        let wave = analysis.and_then(TrackAnalysis::waveform);
-        let src = analysis
-            .filter(|_| wave.is_some())
-            .map(|analysis| (analysis.token().clone(), analysis.revision()));
+    fn refresh_wave(&mut self, analysis: Option<&TrackArtifacts>) {
+        let wave = analysis.and_then(TrackArtifacts::waveform);
+        let src = analysis.and_then(TrackArtifacts::waveform_id);
         if src == self.wave_src {
             return;
         }
@@ -412,7 +407,7 @@ mod tests {
         let (host, queue) = fixtures::queue_off().await;
         let (track_id, source) = fixtures::track(&host, 1, "file:///tmp/track-1.mp3").await;
         let config = fixtures::app_config(&cancel, fixtures::memory_store());
-        let entry = fixtures::entry(&config, queue.clone(), track_id, source);
+        let mut entry = fixtures::entry(&config, queue.clone(), track_id, source);
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
         let (analysis, mut requests) = AnalysisHandle::channel();
         task::spawn(listen(
@@ -449,13 +444,14 @@ mod tests {
         Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid")
     }
 
-    fn revision(revision: u64, wave: Waveform) -> TrackAnalysis {
+    fn revision(revision: u64, wave: Waveform) -> TrackArtifacts {
         TrackAnalysis::builder()
             .token("fixture".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
             .waveform(wave)
             .build()
+            .into()
     }
 
     #[kithara::test]

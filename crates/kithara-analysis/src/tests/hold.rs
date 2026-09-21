@@ -14,6 +14,7 @@ use kithara_worker::TickResult;
 
 use super::{
     super::{
+        AnalysisDemand,
         analyzer::AnalyzerBuilder,
         producer::ring,
         worker::{AnalysisTask, AnalysisWorker, AnalysisWorkerConfig, Job},
@@ -99,6 +100,7 @@ fn run(
         token: "hold".into(),
         revision: 0,
         resume: None,
+        demand: AnalysisDemand::ALL,
     };
     let mut task = AnalysisTask::new(
         job,
