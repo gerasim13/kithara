@@ -1,7 +1,7 @@
 mod lifecycle;
 mod player;
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 
 use self::lifecycle::{CloseAdmission, PlayerLifecycle};
 pub use self::player::PlayerImpl;
-use super::state::{ItemQueue, PlayerParams, PlayerPhase};
+use super::state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid};
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
     bridge::PlayerCmd,
@@ -27,6 +27,17 @@ use crate::{
 };
 
 type EnqueuedItem = (TrackId, Arc<str>, f64);
+
+/// Decoded frames a load of `duration_seconds` covers on a `rate` axis.
+///
+/// A track that states no length has none: an end nobody established is no
+/// end of file, and the geometry stays uncovered past what the model reaches
+/// rather than being cut at a number this player invented.
+fn track_frames(duration_seconds: f64, rate: u32) -> Option<u64> {
+    (duration_seconds > 0.0)
+        .then(|| num_traits::cast(duration_seconds * f64::from(rate)))
+        .flatten()
+}
 
 /// Phase-neutral state shared across every player phase.
 ///
@@ -57,6 +68,8 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) warp: WarpConfig,
     /// Player-level underrun policy copied into every prepared resource.
     pub(crate) block_on_underrun: bool,
+    /// Geometry this player publishes for the track it holds.
+    pub(crate) track_grid: TrackGrid,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -115,6 +128,17 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         self.phase.lock().set_abr_handle(item.abr_handle);
+        // The geometry the player publishes now belongs to this load: its
+        // prepared grid, on the axis the engine decodes onto, over the length
+        // the load states.
+        let rate = self.core.engine.master_sample_rate();
+        if let Some(sample_rate) = NonZeroU32::new(rate) {
+            self.core.track_grid.load(
+                &item.beat_grid,
+                sample_rate,
+                track_frames(item.duration_seconds, rate),
+            );
+        }
         let src = Arc::clone(item.player_resource.src());
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             item_id: item.item_id,
@@ -144,6 +168,7 @@ impl<S> PlayerRuntime<S> {
         S: HasPool<f32>,
     {
         self.unarm_next();
+        self.core.track_grid.release();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);
         // The item the held start position belongs to is gone with the queue.
@@ -271,7 +296,9 @@ mod tests {
     use kithara_assets::AssetStore;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
+    use kithara_sync::SyncGroup;
     use kithara_test_utils::kithara;
+    use kithara_warp::{BeatGridState, MapAxis};
 
     use super::*;
     use crate::{
@@ -430,6 +457,37 @@ mod tests {
             lifecycle.begin_close(),
             Ok(CloseAdmission::AlreadyClosed)
         ));
+    }
+
+    /// The player's group carries its track geometry as a member from birth:
+    /// that is the publication a session reads, and it exists before any
+    /// track is loaded so no load has to change the topology.
+    #[kithara::test]
+    fn a_player_publishes_its_track_geometry_as_its_own_member() {
+        let player = player();
+
+        let topology = SyncGroup::topology(&player).expect("a fresh player has a topology");
+
+        let [member] = topology.members().as_ref() else {
+            panic!("a player owns exactly its own track grid");
+        };
+        assert!(
+            member.group_topology().is_none(),
+            "a track grid is an ordinary member, not a nested group"
+        );
+        assert_ne!(
+            member.grid().id(),
+            topology.group_grid().id(),
+            "the geometry a player holds is a grid of its own"
+        );
+        assert!(
+            matches!(member.grid().axis(), MapAxis::Asset(_)),
+            "a track grid is asset-native: it states the recording, not the session"
+        );
+        assert!(
+            matches!(member.grid().state(), BeatGridState::Unavailable(_)),
+            "a player holding no track states no geometry"
+        );
     }
 
     #[kithara::test]

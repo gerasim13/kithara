@@ -9,7 +9,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_signal::SessionEpoch;
-use kithara_sync::SyncMemberKind;
+use kithara_sync::SyncMember;
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
     player::{
         PlayerConfig, PlayerControl,
         protocol::PlayerSync,
-        state::{ItemQueue, PlayerParams, PlayerPhase},
+        state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
     },
     worker::EngineLoad,
 };
@@ -42,11 +42,18 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         let pools = config.worker.pools().clone();
-        let sync = PlayerSync::unavailable(
+        // The player's one member is its own track geometry: a grid it keeps
+        // for its whole life, so loading, replacing and releasing a track all
+        // state a later revision instead of changing the group's topology.
+        let track_grid = TrackGrid::new(config.track_grid_id, config.sample_rate);
+        let sync = PlayerSync::owning(
             config.grid_id,
             config.sample_rate,
             SessionEpoch::new(0),
-            SyncMemberKind::Grid,
+            SyncMember::Grid {
+                alignment: None,
+                grid: Box::new(track_grid.clone()),
+            },
         );
 
         let bus = config
@@ -92,6 +99,7 @@ impl<S> PlayerImpl<S> {
             status: Mutex::default(),
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),
+            track_grid,
         };
         Self {
             sync,

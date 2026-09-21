@@ -8,7 +8,7 @@ use kithara_audio::{
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration, tokio::task};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
@@ -16,12 +16,52 @@ use kithara_warp::{
 };
 use tracing::warn;
 
-use super::{ResourceConfig, SourceType};
+use super::{ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType};
 use crate::{
     PlayWorker, TrackConfig,
     effects::supports_playback_rate,
     worker::{ServiceClass, TrackPriority},
 };
+
+/// The prepared beat grid this load starts with, and the read that fills it
+/// in when the track named a source instead of handing one over.
+///
+/// The read is deliberately not awaited here. A track whose audio is ready
+/// becomes playable at once; its grid arrives when its own source answers,
+/// into the very slot this load handed out. A load that is over has dropped
+/// that slot, so a late answer reaches nobody.
+fn prepared_grid<S, B>(config: &ResourceConfig<S, B>) -> Arc<PreparedGrid>
+where
+    B: Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    match config.beat_grid() {
+        None => Arc::default(),
+        Some(ArtifactSource::Value(model)) => Arc::new(PreparedGrid::holding(Arc::clone(model))),
+        Some(source) => {
+            let slot = Arc::new(PreparedGrid::default());
+            let read = slot.clone();
+            let source = source.clone();
+            let audio = config.src.clone();
+            let downloader = config.downloader.clone();
+            let headers = config.headers.clone();
+            let cancel = config.cancel.clone();
+            drop(task::spawn(async move {
+                let fetch = ArtifactFetch::new(
+                    &audio,
+                    downloader.as_ref(),
+                    headers.as_ref(),
+                    cancel.as_ref(),
+                );
+                match source.load(&fetch).await {
+                    Ok(model) => read.put(model),
+                    Err(error) => warn!(%error, "resource: the prepared beat grid never arrived"),
+                }
+            }));
+            slot
+        }
+    }
+}
 
 /// Type-erased audio resource wrapping any `AudioReader`.
 ///
@@ -74,6 +114,10 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
+    /// The prepared beat grid of this load. Empty for a track opened without
+    /// one, and empty until the read answers for a track opened with a source.
+    #[field(get, deref = false)]
+    beat_grid: Arc<PreparedGrid>,
     reader: ReaderOwner,
 }
 
@@ -186,6 +230,7 @@ impl Resource {
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
+            beat_grid: Arc::default(),
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -250,6 +295,7 @@ impl Resource {
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let src: Arc<str> = Arc::from(config.src.to_string());
+        let beat_grid = prepared_grid(&config);
         let source_type = SourceType::detect(&config.src)?;
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
@@ -278,6 +324,7 @@ impl Resource {
             }
         };
         resource.reader.0 = CancelGuard(cancel);
+        resource.beat_grid = beat_grid;
         Ok(resource)
     }
 

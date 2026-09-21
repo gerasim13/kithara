@@ -8,6 +8,7 @@ mod source;
 
 pub use artifact::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,
+    PreparedGrid,
 };
 pub use config::ResourceConfig;
 pub use reader::Resource;

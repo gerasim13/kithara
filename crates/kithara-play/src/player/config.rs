@@ -114,6 +114,13 @@ pub struct PlayerConfig<S> {
     #[patch(skip)]
     #[debug(skip)]
     pub(crate) grid_id: BeatGridId,
+    /// Stable identity of the track grid this player publishes as its own
+    /// member. Distinct from [`Self::grid_id`]: the group and the geometry it
+    /// holds are two grids, and a member is found by an identity of its own.
+    #[builder(default = allocate_grid_id())]
+    #[patch(skip)]
+    #[debug(skip)]
+    pub(crate) track_grid_id: BeatGridId,
     /// Maximum accepted control-to-presented-audio response in output frames.
     #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
     #[field(get, copy)]
