@@ -1,12 +1,14 @@
-use std::{num::NonZeroU32, sync::OnceLock};
+use std::{num::NonZeroU32, ops::Range, sync::OnceLock};
 
 use bon::Builder;
 use kithara_beat::BeatGridModel;
 use kithara_platform::sync::Arc;
+use kithara_signal::FrameCoverage;
+use rangemap::RangeSet;
 use tracing::debug;
 
 use super::snapshot::BeatSnapshot;
-use crate::{Coverage, FrameRange, Waveform};
+use crate::Waveform;
 
 /// Opaque identity the caller opens a pass with, echoed on every snapshot and
 /// never interpreted here: track identity belongs to the caller.
@@ -74,7 +76,7 @@ pub struct TrackAnalysis {
     fingerprint: AnalysisFingerprint,
     token: AnalysisToken,
     #[builder(default)]
-    coverage: Coverage,
+    coverage: RangeSet<u64>,
     source_sample_rate: NonZeroU32,
     beat: Option<BeatSnapshot>,
     extent: Option<u64>,
@@ -114,7 +116,7 @@ impl TrackAnalysis {
     }
 
     #[must_use]
-    pub const fn coverage(&self) -> &Coverage {
+    pub const fn coverage(&self) -> &RangeSet<u64> {
         &self.coverage
     }
 
@@ -133,7 +135,7 @@ impl TrackAnalysis {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.extent
-            .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)))
+            .is_some_and(|extent| self.coverage.covers(&(0..extent)))
     }
 
     /// Whether the pass ran out of positions the source can deliver. A gap
@@ -149,9 +151,10 @@ impl TrackAnalysis {
     /// than recorded. The horizon is the extent when known and the covered
     /// frontier until then, as [`source_frames`](Self::source_frames) uses.
     #[must_use]
-    pub fn missing(&self) -> Vec<FrameRange> {
+    pub fn missing(&self) -> Vec<Range<u64>> {
         self.coverage
-            .gaps(self.extent.unwrap_or_else(|| self.coverage.frontier()))
+            .gaps(&(0..self.extent.unwrap_or_else(|| self.coverage.frontier())))
+            .collect()
     }
 
     #[must_use]

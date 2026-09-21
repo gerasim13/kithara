@@ -12,8 +12,8 @@ use criterion::{
 };
 use kithara::{
     analysis::{
-        AnalysisFile, AnalysisFileSpec, AnalysisProgress, AnalysisToken, AnalysisWorker,
-        AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
+        AnalysisDemand, AnalysisFile, AnalysisFileSpec, AnalysisProgress, AnalysisToken,
+        AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
@@ -236,8 +236,13 @@ async fn analyze_track(
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;
-    let (mut results, _producer) =
-        analysis_worker.analyze(Box::new(reader), token.clone(), rate, 0);
+    let (mut results, _producer) = analysis_worker.analyze(
+        Box::new(reader),
+        token.clone(),
+        rate,
+        0,
+        AnalysisDemand::ALL,
+    );
     while results.changed().await.is_ok() {}
 
     let progress = results.borrow().clone();

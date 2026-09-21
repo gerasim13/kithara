@@ -2,7 +2,6 @@
 
 //! Decoded-audio signal values and pure sample/time math.
 
-mod blob;
 mod chunk;
 mod coverage;
 mod error;
@@ -17,9 +16,8 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod time;
 mod units;
 
-pub use blob::{Blob, BlobError, MAX_PREALLOC, Reader, Writer, from_bytes, to_bytes, write_to};
 pub use chunk::{AudioChunk, AudioChunkInfo};
-pub use coverage::{Coverage, FrameRange};
+pub use coverage::{CoverageRead, CoverageWrite, FrameCoverage, FrameSpan};
 pub use error::SignalError;
 pub use fader::FaderValue;
 pub use interleaved::InterleavedView;

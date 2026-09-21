@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
@@ -30,6 +30,18 @@ pub struct AudioChunkInfo {
     pub render_revision: u64,
     /// Source bytes that produced this chunk, or zero when unknown.
     pub source_bytes: u64,
+}
+
+impl AudioChunkInfo {
+    /// The decoded source frames this chunk carries, `[start, end)`.
+    ///
+    /// Read off the chunk's own metadata: `frame_offset` is absolute from the
+    /// start of the track and a seek landing rewrites it to the landed frame,
+    /// so a span never depends on arrival order.
+    #[must_use]
+    pub const fn frame_range(&self) -> Range<u64> {
+        self.frame_offset..self.frame_offset.saturating_add(self.frames as u64)
+    }
 }
 
 impl Default for AudioChunkInfo {

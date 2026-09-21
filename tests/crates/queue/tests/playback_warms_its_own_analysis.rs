@@ -5,7 +5,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisDemand, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
+    analysis::{
+        AnalysisDemand, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, FrameCoverage,
+    },
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig},
     host::HostConfig,

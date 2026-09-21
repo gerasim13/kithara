@@ -1,4 +1,6 @@
-use kithara_signal::{BlobError, Coverage, Reader};
+use kithara_blob::{BlobError, Reader};
+use kithara_signal::CoverageRead;
+use rangemap::RangeSet;
 
 /// Analyzer state that lets a stopped waveform pass continue without decoding
 /// the source ranges it already reduced. This is a checkpoint of the algorithm,
@@ -12,7 +14,7 @@ pub struct WaveformResume {
 /// One window whose span is not yet inside a single covered run.
 pub struct WaveformPartialResume {
     pub(crate) samples: Box<[f32]>,
-    pub(crate) written: Coverage,
+    pub(crate) written: RangeSet<u64>,
     pub(crate) index: u64,
     pub(crate) seq: u64,
 }
@@ -77,7 +79,9 @@ impl WaveformResume {
             }
         }
         if self.partials.iter().any(|held| {
-            held.samples.is_empty() || held.written.runs().is_empty() || held.seq >= self.opened
+            held.samples.is_empty()
+                || held.written.iter().next().is_none()
+                || held.seq >= self.opened
         }) {
             return Err(BlobError::Corrupt);
         }

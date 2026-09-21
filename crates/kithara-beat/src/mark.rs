@@ -15,3 +15,19 @@ pub struct RawBeats {
     pub beats: Vec<BeatMark>,
     pub downbeats: Vec<BeatMark>,
 }
+
+impl BeatMark {
+    /// A mark at `at` seconds the detector was `confidence` sure of.
+    #[must_use]
+    pub const fn new(at: f32, confidence: f32) -> Self {
+        Self { at, confidence }
+    }
+}
+
+impl RawBeats {
+    /// Marks as a detector reports them: beats, and the downbeats among them.
+    #[must_use]
+    pub const fn new(beats: Vec<BeatMark>, downbeats: Vec<BeatMark>) -> Self {
+        Self { beats, downbeats }
+    }
+}

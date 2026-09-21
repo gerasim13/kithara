@@ -17,6 +17,7 @@ crates = ["kithara-platform"]
 index = 2
 name = "infra"
 crates = [
+  "kithara-blob",
   "kithara-bufpool",
   "kithara-drm",
   "kithara-events",

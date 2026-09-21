@@ -20,6 +20,7 @@ use kithara_platform::{
     tokio::sync::watch,
 };
 use kithara_resampler::rubato::RubatoBackend;
+use kithara_signal::{FrameCoverage, FrameSpan};
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;

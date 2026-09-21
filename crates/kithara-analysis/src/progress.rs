@@ -1,14 +1,16 @@
 use std::{collections::BTreeSet, num::NonZeroU64};
 
 use kithara_platform::sync::Arc;
+use kithara_signal::{CoverageRead, FrameCoverage};
 use kithara_waveform::WaveformResume;
+use rangemap::RangeSet;
 
 use crate::{
     BlobError, TrackAnalysis,
     blob::{MAX_PREALLOC, Reader, Writer},
 };
 
-const RESUME_VERSION: u32 = 0x4b41_5201;
+const RESUME_VERSION: u32 = 0x4b41_5202;
 
 /// One atomic analysis publication and the opaque state needed to continue it.
 #[derive(Clone, Debug)]
@@ -140,7 +142,7 @@ pub(crate) struct ResumeState {
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
     pub(crate) runs: Vec<BeatRunResume>,
-    pub(crate) taken: Vec<(u64, u64)>,
+    pub(crate) taken: RangeSet<u64>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
@@ -180,18 +182,7 @@ impl BeatResume {
             });
         }
 
-        let taken_count = reader.read_count(16)?;
-        let mut taken: Vec<(u64, u64)> = Vec::with_capacity(taken_count.min(MAX_PREALLOC));
-        let mut previous_to = None;
-        for _ in 0..taken_count {
-            let from = reader.read_u64()?;
-            let to = reader.read_u64()?;
-            if from >= to || previous_to.is_some_and(|previous| previous >= from) {
-                return Err(BlobError::Corrupt);
-            }
-            previous_to = Some(to);
-            taken.push((from, to));
-        }
+        let taken = reader.read_coverage()?;
 
         let window_count = reader.read_count(24)?;
         let mut windows: Vec<(usize, RawBeatsResume)> =
@@ -231,12 +222,10 @@ impl BeatResume {
 
     fn validate(&self) -> Result<(), BlobError> {
         if self.runs.iter().any(|run| run.mono.is_empty())
-            || self.runs.iter().any(|run| {
-                !self
-                    .taken
-                    .iter()
-                    .any(|(from, to)| *from <= run.start && run.end <= *to)
-            })
+            || self
+                .runs
+                .iter()
+                .any(|run| !self.taken.covers(&(run.start..run.end)))
             || self.short.iter().any(|index| {
                 self.windows
                     .binary_search_by_key(index, |(at, _)| *at)

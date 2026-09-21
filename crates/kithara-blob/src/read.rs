@@ -1,7 +1,6 @@
 use std::str;
 
 use super::{BlobError, MAX_PREALLOC};
-use crate::coverage::{Coverage, FrameRange};
 
 /// Little-endian cursor reader over a byte slice.
 pub struct Reader<'a> {
@@ -159,33 +158,6 @@ impl<'a> Reader<'a> {
     pub fn read_samples(&mut self) -> Result<Box<[f32]>, BlobError> {
         let count = self.read_count(size_of::<f32>())?;
         (0..count).map(|_| self.read_f32()).collect()
-    }
-
-    /// Read a length-prefixed run list back into a [`Coverage`], rejecting an
-    /// empty, out-of-order, or overflowing run.
-    ///
-    /// # Errors
-    ///
-    /// Errors if the blob ends early or a run is empty, out of order, or
-    /// overflowing.
-    pub fn read_coverage(&mut self) -> Result<Coverage, BlobError> {
-        let count = self.read_count(16)?;
-        let mut coverage = Coverage::default();
-        let mut previous_end = None;
-        for _ in 0..count {
-            let start = self.read_u64()?;
-            let frames = self.read_u64()?;
-            let range = FrameRange::new(start, frames);
-            if frames == 0
-                || range.frames() != frames
-                || previous_end.is_some_and(|end| end >= start)
-            {
-                return Err(BlobError::Corrupt);
-            }
-            previous_end = Some(range.end());
-            coverage.insert(range);
-        }
-        Ok(coverage)
     }
 
     /// Read a `u64` that must be strictly greater than the previous one.

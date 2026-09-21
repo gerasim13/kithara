@@ -6,8 +6,8 @@ use std::{
 use kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
-        BeatGridState, BeatSnapshot, BeatState, Bucket, Coverage, FrameRange, GRID_SCHEMA_VERSION,
-        GridBeat, RawBeatGrid, Waveform,
+        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
+        RawBeatGrid, Waveform,
     },
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
@@ -95,8 +95,8 @@ pub(crate) fn snapshot(
     fingerprint: AnalysisFingerprint,
     beat: Option<BeatSnapshot>,
 ) -> TrackAnalysis {
-    let mut coverage = Coverage::default();
-    coverage.insert(FrameRange::new(0, covered));
+    let mut coverage = RangeSet::new();
+    coverage.insert(0..covered);
     TrackAnalysis::builder()
         .token(token)
         .revision(revision)
@@ -119,7 +119,10 @@ pub(crate) fn revision_of(revision: u64) -> TrackAnalysis {
 }
 
 pub(crate) fn revision_held(rx: &watch::Receiver<Option<TrackArtifacts>>) -> Option<u64> {
-    rx.borrow().as_ref().map(TrackArtifacts::revision)
+    rx.borrow()
+        .as_ref()
+        .and_then(TrackArtifacts::analysis)
+        .map(TrackAnalysis::revision)
 }
 
 pub(crate) fn queue() -> (AppHost, AppQueueControl) {
@@ -340,7 +343,14 @@ pub(crate) async fn answer_subscribe(
 
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
     for _ in 0..2_000 {
-        if state.lock().analysis.as_ref().map(TrackArtifacts::revision) == Some(revision) {
+        if state
+            .lock()
+            .analysis
+            .as_ref()
+            .and_then(TrackArtifacts::analysis)
+            .map(TrackAnalysis::revision)
+            == Some(revision)
+        {
             return;
         }
         task::yield_now().await;

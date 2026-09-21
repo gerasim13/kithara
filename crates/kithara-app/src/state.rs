@@ -1,10 +1,8 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
-#[cfg(test)]
-use kithara::analysis::Coverage;
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
-    analysis::{BeatGridModel, BeatSnapshot, FrameRange, RawBeatGrid, TrackAnalysis},
+    analysis::{BeatGridModel, BeatSnapshot, RawBeatGrid, TrackAnalysis},
     events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
@@ -168,7 +166,7 @@ fn empty_marks() -> Arc<[f32]> {
     Arc::default()
 }
 
-fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
+fn ranges_to_fractions(ranges: &[Range<u64>], total: u64) -> Arc<[[f32; 2]]> {
     if ranges.is_empty() || total == 0 {
         return Arc::default();
     }
@@ -177,20 +175,18 @@ fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
         ranges
             .iter()
             .filter(|range| !range.is_empty())
-            .map(|range| {
-                [
-                    fraction(range.start(), total_f),
-                    fraction(range.end(), total_f),
-                ]
-            }),
+            .map(|range| [fraction(range.start, total_f), fraction(range.end, total_f)]),
     )
 }
 
 #[cfg(test)]
+use kithara::analysis::RangeSet;
+
+#[cfg(test)]
 pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis {
-    let mut coverage = Coverage::default();
+    let mut coverage = RangeSet::new();
     for &(start, end) in runs {
-        coverage.insert(FrameRange::new(start, end - start));
+        coverage.insert(start..end);
     }
     TrackAnalysis::builder()
         .token("track".into())
@@ -658,9 +654,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        BpmInfo, Coverage, EventReceiver, FrameRange, MEDIA_TIMESCALE, MediaTime, NonZeroU32,
-        StretchControls, UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions,
-        listen, unready_ranges,
+        BpmInfo, EventReceiver, MEDIA_TIMESCALE, MediaTime, NonZeroU32, RangeSet, StretchControls,
+        UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions, listen,
+        unready_ranges,
     };
     use crate::{
         analysis::{
@@ -904,8 +900,8 @@ mod tests {
     }
 
     fn publication(revision: u64, state: BeatState, beats: &[u64]) -> TrackAnalysis {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, 220_500));
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..220_500);
         TrackAnalysis::builder()
             .token("deck-track".into())
             .revision(revision)

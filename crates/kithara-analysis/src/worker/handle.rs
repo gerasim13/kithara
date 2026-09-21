@@ -248,11 +248,7 @@ impl AnalysisWorker {
             || analysis.fingerprint() != &self.fingerprint
             || chunk_frames != expected_chunk
             || shape != self.resume_shape
-            || analysis
-                .coverage()
-                .runs()
-                .iter()
-                .any(|range| range.end() > extent)
+            || analysis.coverage().iter().any(|range| range.end > extent)
         {
             return Err(AnalysisFileError::Config);
         }

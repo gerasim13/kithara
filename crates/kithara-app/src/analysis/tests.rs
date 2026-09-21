@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use ::kithara::{
-    analysis::{AnalysisFile, AnalysisProgress},
+    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis},
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
     },
@@ -571,7 +571,7 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
         held.analysis().expect("a pass published").is_complete(),
         "which finishes the track"
     );
-    assert!(held.revision() > checkpoint.analysis().revision());
+    assert!(held.analysis().map(TrackAnalysis::revision) > Some(checkpoint.analysis().revision()));
     cancel.cancel();
     host.close().await;
 }
@@ -791,7 +791,7 @@ async fn the_source_gave_everything_it_can(url: &str) {
     let missing = analysis.missing();
     let only_the_head = match missing.as_slice() {
         [] => true,
-        [head] => head.start() == 0 && head.frames() <= HEAD_TOLERANCE_FRAMES,
+        [head] => head.start == 0 && head.frames() <= HEAD_TOLERANCE_FRAMES,
         _ => false,
     };
     assert!(

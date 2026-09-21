@@ -2,13 +2,14 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_resampler::ResamplerBackend;
+use rangemap::RangeSet;
 
 use super::{
     AnalysisDemand, AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig,
     session::TrackAnalyzers,
 };
 use crate::{
-    AnalysisProgress, BlobError, Coverage,
+    AnalysisProgress, BlobError,
     slots::{
         beat::{self, Config, Slot},
         waveform,
@@ -69,7 +70,7 @@ where
                 Slot::default()
             },
             waveform: waveform::Slot::try_from((&waveform, rate, &self.pools))?,
-            coverage: Coverage::default(),
+            coverage: RangeSet::new(),
             fingerprint: self.fingerprint_for(demand),
             settled: false,
             source_sample_rate: rate,
@@ -208,7 +209,7 @@ mod tests {
 
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
-    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCoverage};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
@@ -223,7 +224,7 @@ mod tests {
         AnalyzerBuilder,
     };
     use crate::{
-        BeatGridModel, BeatGridState, BeatState, FrameRange,
+        BeatGridModel, BeatGridState, BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
         test_pools::{Pools, TestPools, pools, sample_buffer},
     };
@@ -249,10 +250,12 @@ mod tests {
     }
 
     fn beat_detector() -> Box<dyn BeatDetector> {
-        let raw = RawBeats {
-            beats: Vec::<BeatMark>::new(),
-            downbeats: (0..9u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
-        };
+        let raw = RawBeats::new(
+            Vec::<BeatMark>::new(),
+            (0..9u8)
+                .map(|n| BeatMark::new(f32::from(n) * 2.0, 0.9))
+                .collect(),
+        );
         let mock = Unimock::new(
             BeatDetectorMock
                 .next_call(matching!(_))
@@ -407,7 +410,7 @@ mod tests {
 
         assert_eq!(
             analyzers.snapshot(None, false, None).missing(),
-            vec![FrameRange::new(8192, 8192)],
+            vec![8192..8192 + 8192],
             "the hole is known to exist because something landed past it"
         );
 
@@ -443,9 +446,8 @@ mod tests {
         assert!(
             snapshot
                 .coverage()
-                .runs()
                 .iter()
-                .all(|run| run.end() <= snapshot.source_frames()),
+                .all(|run| run.end <= snapshot.source_frames()),
             "no covered frame may sit past the denominator it is divided by"
         );
     }
@@ -627,10 +629,14 @@ mod tests {
     /// A detector that hears a beat every half second, whatever it is handed:
     /// the pass, not the hearing, is what this test is about.
     fn steady_detector() -> Box<dyn BeatDetector> {
-        let raw = RawBeats {
-            beats: (0..8u8).map(|n| BeatMark::at(f32::from(n) * 0.5)).collect(),
-            downbeats: (0..2u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
-        };
+        let raw = RawBeats::new(
+            (0..8u8)
+                .map(|n| BeatMark::new(f32::from(n) * 0.5, 0.9))
+                .collect(),
+            (0..2u8)
+                .map(|n| BeatMark::new(f32::from(n) * 2.0, 0.9))
+                .collect(),
+        );
         Box::new(Unimock::new(
             BeatDetectorMock
                 .each_call(matching!(_))

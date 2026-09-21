@@ -1,8 +1,9 @@
 use std::{array, collections::btree_map::Entry};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_signal::{Coverage, FrameRange};
+use kithara_signal::FrameCoverage;
 use num_traits::cast::ToPrimitive;
+use rangemap::RangeSet;
 use realfft::num_complex::Complex;
 use tracing::debug;
 
@@ -58,11 +59,12 @@ impl WaveformAnalyzer {
         if self.bands.contains_key(&index) {
             return;
         }
-        let span = FrameRange::new(index.saturating_mul(self.hop()), self.size());
+        let start = index.saturating_mul(self.hop());
+        let span = start..start.saturating_add(self.size());
         if !self
             .partial
             .get(&index)
-            .is_some_and(|partial| partial.written.contains(span))
+            .is_some_and(|partial| partial.written.covers(&span))
         {
             return;
         }
@@ -138,7 +140,7 @@ impl WaveformAnalyzer {
                 self.opened = opened.saturating_add(1);
                 entry.insert(Partial {
                     samples: pools.get_with_len::<f32>(window_size)?,
-                    written: Coverage::default(),
+                    written: RangeSet::new(),
                     seq: opened,
                 })
             }
@@ -150,7 +152,7 @@ impl WaveformAnalyzer {
             return Ok(());
         };
         dst.copy_from_slice(src);
-        partial.written.insert(FrameRange::new(from, to - from));
+        partial.written.insert(from..to);
         Ok(())
     }
 

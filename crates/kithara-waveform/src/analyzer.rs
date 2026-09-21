@@ -2,10 +2,12 @@ mod ops;
 
 use std::{array, collections::BTreeMap};
 
+use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
-use kithara_signal::{BlobError, Coverage, FrameRange, Writer};
+use kithara_signal::CoverageWrite;
 use num_traits::cast::ToPrimitive;
+use rangemap::RangeSet;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use crate::{
@@ -26,7 +28,7 @@ impl Consts {
 }
 
 struct Partial {
-    written: Coverage,
+    written: RangeSet<u64>,
     samples: SampleBuffer,
     seq: u64,
 }
@@ -211,12 +213,12 @@ impl WaveformAnalyzer {
             {
                 return Err(BlobError::Corrupt);
             }
-            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
+            let start = held.index.saturating_mul(self.hop());
+            let span = start..start.saturating_add(self.size());
             if held
                 .written
-                .runs()
                 .iter()
-                .any(|range| range.start() < span.start() || range.end() > span.end())
+                .any(|run| run.start < span.start || run.end > span.end)
             {
                 return Err(BlobError::Corrupt);
             }
@@ -354,12 +356,13 @@ fn normalize_bands(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_signal::{BlobError, Coverage, FrameRange};
+    use kithara_blob::BlobError;
     use kithara_test_fixtures::analysis_fixtures::{
         analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,
         waveform_opposed, waveform_square, waveform_tiny, waveform_tone,
     };
     use kithara_test_utils::kithara;
+    use rangemap::RangeSet;
 
     use super::{WaveformAnalyzer, hann_window, normalize_bands};
     use crate::{
@@ -503,7 +506,7 @@ mod tests {
             resume.partials = (0..count)
                 .map(|slot| WaveformPartialResume {
                     samples: held.samples.clone(),
-                    written: Coverage::default(),
+                    written: RangeSet::new(),
                     index: u64::try_from(slot).unwrap_or(0) + u64::from(u32::MAX),
                     seq: 0,
                 })
@@ -537,7 +540,8 @@ mod tests {
         let stopped = interrupted_pass(&waveform_tone);
         let mut resume = stopped.resume();
         let held = resume.partials.first_mut().expect("a held window");
-        let span = FrameRange::new(held.index * stopped.analyzer.hop(), stopped.analyzer.size());
+        let start = held.index * stopped.analyzer.hop();
+        let span = start..start + stopped.analyzer.size();
         match flaw {
             "a window whose samples do not fill it" => {
                 let mut samples = held.samples.to_vec();
@@ -552,13 +556,13 @@ mod tests {
                 resume.bands.push((index, [0.0; Band::COUNT]));
             }
             "coverage reaching before the window starts" => {
-                let mut written = Coverage::default();
-                written.insert(FrameRange::new(span.start().saturating_sub(1), 2));
+                let mut written = RangeSet::new();
+                written.insert(span.start.saturating_sub(1)..span.start + 1);
                 held.written = written;
             }
             _ => {
-                let mut written = Coverage::default();
-                written.insert(FrameRange::new(span.end(), 1));
+                let mut written = RangeSet::new();
+                written.insert(span.end..span.end + 1);
                 held.written = written;
             }
         }
@@ -574,11 +578,12 @@ mod tests {
         let stopped = interrupted_pass(&waveform_tone);
         let mut resume = stopped.resume();
         let held = resume.partials.first_mut().expect("a held window");
-        let span = FrameRange::new(held.index * stopped.analyzer.hop(), stopped.analyzer.size());
-        let mut written = Coverage::default();
+        let start = held.index * stopped.analyzer.hop();
+        let span = start..start + stopped.analyzer.size();
+        let mut written = RangeSet::new();
         // The window's last frame is inside the window: coverage that ends
         // exactly where the window ends is a held window, not a corrupt one.
-        written.insert(FrameRange::new(span.end().saturating_sub(1), 1));
+        written.insert(span.end.saturating_sub(1)..span.end);
         held.written = written;
 
         assert!(

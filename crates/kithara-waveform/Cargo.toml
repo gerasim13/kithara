@@ -15,6 +15,7 @@ default = []
 dsp = ["dep:realfft"]
 
 [dependencies]
+kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
 kithara-platform = { workspace = true }
@@ -24,6 +25,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
+rangemap = { workspace = true }
 realfft = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

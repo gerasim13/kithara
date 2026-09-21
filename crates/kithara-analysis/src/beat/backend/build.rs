@@ -1,9 +1,7 @@
+use kithara_beat::{BeatDetectError, BeatDetector};
 use kithara_bufpool::{HasPool, PoolRegion};
 
-use super::{
-    super::detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
-    BeatDetectorKind,
-};
+use super::BeatDetectorKind;
 use crate::BeatAnalysisConfig;
 
 pub(crate) fn build_detector<B, S>(
@@ -19,16 +17,5 @@ where
         BeatDetectorKind::NnBeatThis => Ok(Box::new(super::nn::detector(config, pools)?)),
         #[cfg(feature = "beat-dsp")]
         BeatDetectorKind::DspSpectral => Ok(Box::new(super::dsp::detector(config, pools)?)),
-    }
-}
-
-pub(super) fn marks(raw: kithara_beat::RawBeats) -> RawBeats {
-    let mark = |mark: kithara_beat::BeatMark| BeatMark {
-        at: mark.at,
-        confidence: mark.confidence,
-    };
-    RawBeats {
-        beats: raw.beats.into_iter().map(mark).collect(),
-        downbeats: raw.downbeats.into_iter().map(mark).collect(),
     }
 }

@@ -188,8 +188,8 @@ mod tests {
     /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
-            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,
-            FrameRange, TrackAnalysis, Waveform,
+            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState,
+            FrameCoverage, RangeSet, TrackAnalysis, Waveform,
         },
         assets::{
             AcquisitionResult, AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource,
@@ -261,8 +261,10 @@ mod tests {
         waveform: Option<Waveform>,
         extent: u64,
     ) -> TrackAnalysis {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, extent));
+        let mut coverage = RangeSet::new();
+        if extent > 0 {
+            coverage.insert(0..extent);
+        }
         TrackAnalysis::builder()
             .token("assets/track.analysis".into())
             .revision(7)
@@ -272,9 +274,9 @@ mod tests {
             .coverage(coverage)
             .fingerprint(fp())
             .maybe_waveform(waveform)
-            .maybe_beat(beat.map(|grid| {
-                BeatSnapshot::new(grid, BeatState::Provisional, vec![FrameRange::new(100, 50)])
-            }))
+            .maybe_beat(
+                beat.map(|grid| BeatSnapshot::new(grid, BeatState::Provisional, vec![100..150])),
+            )
             .build()
     }
 
@@ -614,8 +616,8 @@ mod tests {
 
     #[kithara::test]
     fn an_unsettled_snapshot_without_resume_state_is_rejected() {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, 500));
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..500);
         let partial = TrackAnalysis::builder()
             .token("assets/track.analysis".into())
             .revision(3)
@@ -641,8 +643,8 @@ mod tests {
 
         // Encoder priming: the source cannot deliver its first frames, so the
         // pass ended with them uncovered and nothing left to try.
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(20, 980));
+        let mut coverage = RangeSet::new();
+        coverage.insert(20..1000);
         let settled = TrackAnalysis::builder()
             .token("assets/track.analysis".into())
             .revision(3)

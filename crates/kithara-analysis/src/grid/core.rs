@@ -1,4 +1,5 @@
 use bon::Builder;
+use kithara_beat::{BeatMark, RawBeats};
 #[cfg(test)]
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_bufpool::{PoolError, SampleBuffer};
@@ -12,11 +13,7 @@ use super::{
     fit::{GridFitCtx, build_segments},
     scratch::{GridBuffers, fill, retain},
 };
-use crate::{
-    BeatArtifact,
-    artifact::MarkedBeat,
-    beat::detector::{BeatMark, RawBeats},
-};
+use crate::{BeatArtifact, artifact::MarkedBeat};
 
 #[cfg(feature = "beat-backend")]
 pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
@@ -279,14 +276,11 @@ mod tests {
     }
 
     fn marks(times: Vec<f32>) -> Vec<BeatMark> {
-        times.into_iter().map(BeatMark::at).collect()
+        times.into_iter().map(|at| BeatMark::new(at, 0.9)).collect()
     }
 
     fn raw(downbeats: Vec<f32>) -> RawBeats {
-        RawBeats {
-            downbeats: marks(downbeats),
-            beats: Vec::new(),
-        }
+        RawBeats::new(Vec::new(), marks(downbeats))
     }
 
     #[kithara::test(native, flash(false))]
@@ -296,24 +290,15 @@ mod tests {
         let mut beats: Vec<BeatMark> = (0..13u8)
             .map(|n| {
                 let t = f32::from(n) * 0.5;
-                BeatMark {
-                    at: t,
-                    confidence: 0.2 + f32::from(n) * 0.05,
-                }
+                BeatMark::new(t, 0.2 + f32::from(n) * 0.05)
             })
             .collect();
-        beats.push(BeatMark {
-            at: 1.9,
-            confidence: 0.99,
-        });
+        beats.push(BeatMark::new(1.9, 0.99));
         beats.sort_by(|a, b| a.at.total_cmp(&b.at));
         let detected = beats.clone();
 
         let grid = build_grid(
-            &RawBeats {
-                beats,
-                downbeats: marks(vec![0.0, 2.0, 4.0, 6.0]),
-            },
+            &RawBeats::new(beats, marks(vec![0.0, 2.0, 4.0, 6.0])),
             100,
             &GridParams::default(),
         );
@@ -345,10 +330,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn injected_region_reuses_grid_buffers() {
         let pools = pools();
-        let raw = RawBeats {
-            beats: marks(steady(0.0, 0.5, 128)),
-            downbeats: marks(steady(0.0, 2.0, 64)),
-        };
+        let raw = RawBeats::new(marks(steady(0.0, 0.5, 128)), marks(steady(0.0, 2.0, 64)));
 
         super::build_grid(&raw, Consts::SR, &GridParams::default(), &pools)
             .expect("first grid fits the PCM pool budget");
@@ -369,10 +351,7 @@ mod tests {
         beats.sort_by(f32::total_cmp);
 
         let grid = build_grid(
-            &RawBeats {
-                downbeats: marks(steady(0.0, 2.0, 16)),
-                beats: marks(beats),
-            },
+            &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
             Consts::SR,
             &GridParams::default(),
         );
@@ -393,10 +372,7 @@ mod tests {
         downbeats[0] = beat * 0.1;
 
         let grid = build_grid(
-            &RawBeats {
-                beats: marks(beats),
-                downbeats: marks(downbeats),
-            },
+            &RawBeats::new(marks(beats), marks(downbeats)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -417,10 +393,7 @@ mod tests {
         beats.sort_by(f32::total_cmp);
 
         let grid = build_grid(
-            &RawBeats {
-                beats: marks(beats),
-                downbeats: marks(vec![0.0, 2.0, 4.0, 6.0]),
-            },
+            &RawBeats::new(marks(beats), marks(vec![0.0, 2.0, 4.0, 6.0])),
             100,
             &GridParams::default(),
         );
@@ -432,10 +405,10 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn unmatched_downbeat_is_omitted_from_a_map_capable_grid() {
         let grid = build_grid(
-            &RawBeats {
-                beats: marks(steady(0.0, 0.5, 12)),
-                downbeats: marks(vec![0.0, 2.25, 4.0, 6.0]),
-            },
+            &RawBeats::new(
+                marks(steady(0.0, 0.5, 12)),
+                marks(vec![0.0, 2.25, 4.0, 6.0]),
+            ),
             100,
             &GridParams::default(),
         );
@@ -452,10 +425,7 @@ mod tests {
     fn an_evenly_spaced_beat_track_survives_the_filter_whole() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
         let grid = build_grid(
-            &RawBeats {
-                downbeats: marks(steady(0.0, 2.0, 16)),
-                beats: marks(beats),
-            },
+            &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
             Consts::SR,
             &GridParams::default(),
         );
@@ -475,10 +445,7 @@ mod tests {
         }
 
         let grid = build_grid(
-            &RawBeats {
-                downbeats: Vec::new(),
-                beats: marks(beats),
-            },
+            &RawBeats::new(marks(beats), Vec::new()),
             Consts::SR,
             &GridParams::default(),
         );
@@ -503,10 +470,7 @@ mod tests {
             .collect();
 
         let grid = build_grid(
-            &RawBeats {
-                downbeats: Vec::new(),
-                beats: marks(beats),
-            },
+            &RawBeats::new(marks(beats), Vec::new()),
             Consts::SR,
             &GridParams::default(),
         );
@@ -528,10 +492,7 @@ mod tests {
     fn marks_out_vote_downbeats_that_strike_every_beat() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
         let grid = build_grid(
-            &RawBeats {
-                downbeats: marks(beats.clone()),
-                beats: marks(beats),
-            },
+            &RawBeats::new(marks(beats.clone()), marks(beats)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -699,10 +660,7 @@ mod tests {
     fn short_track_yields_tempo_without_segments() {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
-            &RawBeats {
-                beats: marks(beats),
-                downbeats: marks(steady(1.0, 2.0, 8)),
-            },
+            &RawBeats::new(marks(beats), marks(steady(1.0, 2.0, 8))),
             Consts::SR,
             &GridParams::default(),
         );

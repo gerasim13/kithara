@@ -1,5 +1,4 @@
 use super::BlobError;
-use crate::coverage::Coverage;
 
 /// Little-endian append-only writer over a byte buffer.
 pub struct Writer<'a>(&'a mut Vec<u8>);
@@ -46,15 +45,6 @@ impl<'a> Writer<'a> {
         let len = u64::try_from(self.0.len() - section_offset).map_err(|_| BlobError::TooLarge)?;
         self.0[len_offset..section_offset].copy_from_slice(&len.to_le_bytes());
         Ok(())
-    }
-
-    /// Write a run list the matching `Reader::read_coverage` reads back.
-    pub fn write_coverage(&mut self, coverage: &Coverage) {
-        self.write_len(coverage.runs().len());
-        for range in coverage.runs() {
-            self.write_u64(range.start());
-            self.write_u64(range.frames());
-        }
     }
 
     /// Write a length-prefixed `f32` series.

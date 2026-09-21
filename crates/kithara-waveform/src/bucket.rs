@@ -1,7 +1,7 @@
 use std::mem::size_of;
 
+use kithara_blob::{Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 use kithara_platform::sync::Arc;
-use kithara_signal::{Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 
 use crate::Band;
 
@@ -87,7 +87,7 @@ impl Waveform {
 
     /// Append the versioned waveform encoding to caller-owned storage.
     pub fn write_to(&self, out: &mut Vec<u8>) {
-        kithara_signal::write_to(self, out);
+        kithara_blob::write_to(self, out);
     }
 
     delegate::delegate! {
@@ -136,7 +136,7 @@ impl TryFrom<&[u8]> for Waveform {
     type Error = BlobError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
-        kithara_signal::from_bytes(bytes)
+        kithara_blob::from_bytes(bytes)
     }
 }
 
@@ -218,7 +218,7 @@ mod value_tests {
 
 #[cfg(test)]
 mod bytes_tests {
-    use kithara_signal::{BlobError, to_bytes};
+    use kithara_blob::{BlobError, to_bytes};
     use kithara_test_utils::kithara;
 
     use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform};

@@ -10,14 +10,12 @@ mod runs;
 pub(crate) use analyzer::{BeatPassConfig, DetectOutput, DetectRequest};
 #[cfg(feature = "beat-backend")]
 pub(crate) use backend::{BeatDetectorKind, SELECTED_DETECTOR, build_detector};
-#[cfg(all(test, feature = "analysis-waveform"))]
-pub(crate) use detector::BeatDetectError;
-pub(crate) use detector::BeatDetector;
-#[cfg(test)]
-pub(crate) use detector::{BeatDetectorMock, BeatMark, RawBeats};
 #[cfg(feature = "beat-backend")]
 pub(crate) use grid::GRID_SEMANTICS_TAG;
 pub(crate) use grid::GridParams;
+pub(crate) use kithara_beat::BeatDetector;
+#[cfg(test)]
+pub(crate) use kithara_beat::{BeatDetectorMock, BeatMark, RawBeats};
 pub(crate) use pass::BeatPass;
 #[cfg(feature = "beat-backend")]
 pub(crate) use runs::DETECTOR_AUDIO_TAG;

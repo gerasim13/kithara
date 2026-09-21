@@ -7,7 +7,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::NoResamplerBackend;
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, FrameSpan};
 use kithara_test_fixtures::analysis_fixtures::analysis_silence;
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
@@ -23,7 +23,7 @@ use super::{
     track::Track,
 };
 use crate::{
-    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, FrameRange, TrackAnalysis,
+    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
     beat::GridParams,
     slots::beat::detect,
     test_pools::{Pools, TestPools, pools},
@@ -350,7 +350,7 @@ fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid(analysis_s
     assert!(analysis.is_settled(), "nothing reachable is left");
     assert_eq!(
         analysis.missing(),
-        vec![FrameRange::new(0, PRIMING)],
+        vec![0..0 + PRIMING],
         "the head the source cannot deliver is the only gap"
     );
     assert_eq!(

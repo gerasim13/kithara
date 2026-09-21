@@ -133,9 +133,8 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
         file.latest()
             .analysis()
             .coverage()
-            .runs()
             .iter()
-            .map(|range| range.start())
+            .map(|range| range.start)
             .collect::<Vec<_>>(),
         seed
     );
@@ -147,9 +146,9 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
         .expect("active analyzer config restores the opaque state");
     let requested: Vec<u64> = resumed
         .coverage()
-        .gaps(EXTENT)
+        .gaps(&(0..EXTENT))
         .into_iter()
-        .map(|range| range.start())
+        .map(|range| range.start)
         .collect();
     assert_eq!(requested, [CHUNK_FRAMES, 3 * CHUNK_FRAMES]);
     assert!(

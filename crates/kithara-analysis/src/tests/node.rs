@@ -1,4 +1,7 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
+};
 
 #[cfg(feature = "analysis-waveform")]
 use kithara_audio::AudioObserveError;
@@ -25,7 +28,7 @@ use kithara_resampler::ResamplerBackend;
 #[cfg(feature = "analysis-beat")]
 use kithara_resampler::rubato::RubatoBackend;
 #[cfg(feature = "analysis-waveform")]
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, FrameCoverage};
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
@@ -59,7 +62,6 @@ use super::{
 #[cfg(feature = "analysis-beat")]
 use crate::BeatState;
 #[cfg(feature = "analysis-waveform")]
-use crate::FrameRange;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
@@ -181,10 +183,7 @@ fn beat_waveform(
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 fn raw_beat(at: f32) -> RawBeats {
-    RawBeats {
-        beats: vec![BeatMark::at(at)],
-        downbeats: vec![BeatMark::at(at)],
-    }
+    RawBeats::new(vec![BeatMark::new(at, 0.9)], vec![BeatMark::new(at, 0.9)])
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -345,8 +344,8 @@ fn offered_ranges_land_where_they_were_offered(analysis_pcm: &'static [f32]) {
     let analysis = offered(analysis_pcm, &[(0, 1024), (4096, 1024)]).expect("the pass publishes");
 
     assert_eq!(
-        analysis.coverage().runs(),
-        &[FrameRange::new(0, 1024), FrameRange::new(4096, 1024)],
+        analysis.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..1024), &(4096..4096 + 1024)],
         "coverage is what was offered, at the positions it was offered at"
     );
     assert!(
@@ -398,8 +397,8 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
     let fed = latest_analysis(&fed_results).expect("the fed pass publishes");
     assert_eq!(fed.token().as_str(), "track-a");
     assert_eq!(
-        fed.coverage().runs(),
-        &[FrameRange::new(0, 1024)],
+        fed.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..1024)],
         "the pass the handle names covers what it was offered"
     );
     assert!(
@@ -452,8 +451,8 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     }
     let analysis = latest_analysis(&results).expect("the pass publishes");
     assert_eq!(
-        analysis.coverage().runs(),
-        &[FrameRange::new(0, 1024)],
+        analysis.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..1024)],
         "only the range on the pass's own axis is covered"
     );
 }
@@ -547,8 +546,8 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
         );
     }
     assert_eq!(
-        last.coverage().runs(),
-        &[FrameRange::new(0, BLOCKS * BLOCK)],
+        last.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..BLOCKS * BLOCK)],
         "everything offered is covered by the end: publications={}, revisions={:?}, missing={:?}",
         published.len(),
         published
@@ -560,7 +559,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
 }
 
 #[cfg(feature = "analysis-waveform")]
-fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
+fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, Range<u64>, u64) {
     const BLOCK: u64 = 8192;
     const PAST: u64 = 40;
     const STALLS: usize = 200;
@@ -589,7 +588,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, F
     let refused = loop {
         match producer.offer(&pcm, super::fixtures::spec(), at) {
             Ok(()) => at = at.saturating_add(BLOCK),
-            Err(AudioObserveError::Full) => break FrameRange::new(at, BLOCK),
+            Err(AudioObserveError::Full) => break at..at + BLOCK,
             Err(other) => panic!("a range on the pass axis is taken or refused, got {other:?}"),
         }
     };
@@ -599,11 +598,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, F
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(
-                &pcm,
-                super::fixtures::spec(),
-                refused.start() + block * BLOCK
-            ),
+            producer.offer(&pcm, super::fixtures::spec(), refused.start + block * BLOCK),
             Ok(()),
             "a drained transport takes the next range"
         );
@@ -613,7 +608,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, F
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), refused.start()),
+            producer.offer(&pcm, super::fixtures::spec(), refused.start),
             Ok(()),
             "the transport has room for the range it refused"
         );
@@ -623,7 +618,8 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, F
     }
 
     let analysis = latest_analysis(&results).expect("the pass publishes");
-    (analysis, refused, refused.start() + PAST * BLOCK)
+    let reached = refused.start + PAST * BLOCK;
+    (analysis, refused, reached)
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -637,15 +633,12 @@ fn a_range_the_transport_refused_is_reported_missing(analysis_pcm: &'static [f32
         analysis.missing()
     );
     assert!(
-        !analysis.coverage().contains(refused),
+        !analysis.coverage().covers(&refused),
         "a refused range is not covered"
     );
     assert_eq!(
-        analysis.coverage().runs(),
-        &[
-            FrameRange::new(0, refused.start()),
-            FrameRange::new(refused.end(), reached - refused.end()),
-        ],
+        analysis.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..refused.start), &(refused.end..reached)],
         "the hole splits the coverage in two"
     );
 }
@@ -661,12 +654,12 @@ fn a_refused_range_offered_again_leaves_the_missing_set(analysis_pcm: &'static [
         analysis.missing()
     );
     assert!(
-        analysis.coverage().contains(refused),
+        analysis.coverage().covers(&refused),
         "and it is covered now"
     );
     assert_eq!(
-        analysis.coverage().runs(),
-        &[FrameRange::new(0, reached)],
+        analysis.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..reached)],
         "entering the coverage once leaves one contiguous run"
     );
 }
@@ -744,14 +737,14 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     assert!(
         published.first().is_some_and(|first| first
             .coverage()
-            .runs()
-            .first()
-            .is_some_and(|run| run.start() > 0)),
+            .iter()
+            .next()
+            .is_some_and(|run| run.start > 0)),
         "the seek reached the pass: the first publication does not start at zero"
     );
     assert_eq!(
-        last.coverage().runs(),
-        &[FrameRange::new(0, BLOCKS * BLOCK)],
+        last.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..BLOCKS * BLOCK)],
         "coverage is the union of everything offered"
     );
 }
@@ -765,8 +758,8 @@ fn offers_out_of_order_cover_their_union(analysis_pcm: &'static [f32]) {
     let ascending = ascending.expect("the ascending pass publishes");
     let shuffled = shuffled.expect("the shuffled pass publishes");
     assert_eq!(
-        ascending.coverage().runs(),
-        &[FrameRange::new(0, 3072)],
+        ascending.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..3072)],
         "three touching ranges are one run"
     );
     assert_eq!(
@@ -976,14 +969,14 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         snapshot
             .analysis()
             .coverage()
-            .contains(FrameRange::new(u64::from(SR), u64::from(SR))),
+            .covers(&(u64::from(SR)..2 * u64::from(SR))),
         "the decoder reached its second chunk"
     );
     assert!(
         snapshot
             .analysis()
             .coverage()
-            .contains(FrameRange::new(offered_at, u64::from(SR))),
+            .covers(&(offered_at..offered_at + u64::from(SR))),
         "the playback ring was drained"
     );
 
@@ -1280,8 +1273,8 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
             .clone()
             .expect("each drained source second is published");
         assert_eq!(
-            snapshot.analysis().coverage().runs(),
-            &[FrameRange::new(0, expected * u64::from(SR))],
+            snapshot.analysis().coverage().iter().collect::<Vec<_>>(),
+            &[&(0..expected * u64::from(SR))],
             "one tick drains exactly one descriptor"
         );
     }
@@ -1290,10 +1283,12 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
 #[cfg(feature = "analysis-beat")]
 #[kithara::test]
 async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
-    let raw = RawBeats {
-        beats: Vec::new(),
-        downbeats: (0..9u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
-    };
+    let raw = RawBeats::new(
+        Vec::new(),
+        (0..9u8)
+            .map(|n| BeatMark::new(f32::from(n) * 2.0, 0.9))
+            .collect(),
+    );
     let mock = Unimock::new(
         BeatDetectorMock
             .next_call(matching!(_))
@@ -1443,8 +1438,8 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
 
     let analysis = latest_analysis(&results).expect("a pass with no detector still publishes");
     assert_eq!(
-        analysis.coverage().runs(),
-        &[FrameRange::new(0, 1024)],
+        analysis.coverage().iter().collect::<Vec<_>>(),
+        &[&(0..1024)],
         "coverage is recorded whether or not a detector ran"
     );
     assert!(

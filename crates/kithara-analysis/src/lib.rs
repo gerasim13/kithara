@@ -37,10 +37,11 @@ pub use kithara_beat::{
     BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
     SCHEMA_VERSION as GRID_SCHEMA_VERSION,
 };
-pub use kithara_signal::BlobError;
-/// Frame-range coverage, re-exported from its owner so a consumer can name
-/// what a publication reports without depending on the analyzer.
-pub use kithara_signal::{Coverage, FrameRange};
+pub use kithara_blob::BlobError;
+/// Frame-range coverage, re-exported from its owners so a consumer can name
+/// what a publication reports without depending on the analyzer: the set it is
+/// kept in, and the frame reading of it.
+pub use kithara_signal::{FrameCoverage, FrameSpan};
 #[cfg(feature = "analysis-waveform")]
 pub use kithara_waveform::WaveformAnalyzer;
 /// The waveform result and its tunables, re-exported from their owner: a
@@ -48,4 +49,5 @@ pub use kithara_waveform::WaveformAnalyzer;
 pub use kithara_waveform::{AnalysisParams, Bucket, Waveform};
 pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
+pub use rangemap::RangeSet;
 pub use worker::{AnalysisOpen, AnalysisPass, AnalysisWorker, AnalysisWorkerConfig};

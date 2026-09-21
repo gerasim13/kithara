@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_analysis::{
     AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate, AnalysisFingerprint, AnalysisProgress,
-    AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange, TrackAnalysis,
+    AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, RangeSet, TrackAnalysis,
 };
 use kithara_test_macros as kithara;
 
@@ -368,8 +368,8 @@ pub(in crate::defs) fn analysis_file(artifact: BeatArtifact, frames: u64) -> Vec
     const FINGERPRINT: &str = "rhythm-fixture:v1";
 
     let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
-    let mut coverage = Coverage::default();
-    coverage.insert(FrameRange::new(0, frames));
+    let mut coverage = RangeSet::new();
+    coverage.insert(0..frames);
     let analysis = TrackAnalysis::builder()
         .token(AnalysisToken::from("rhythm-fixture"))
         .revision(1)

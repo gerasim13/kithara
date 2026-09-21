@@ -4419,6 +4419,7 @@ dependencies = [
  "kithara-analysis",
  "kithara-assets",
  "kithara-audio",
+ "kithara-beat",
  "kithara-broadcast",
  "kithara-bufpool",
  "kithara-decode",
@@ -4503,6 +4504,7 @@ dependencies = [
  "fieldwork",
  "kithara-audio",
  "kithara-beat",
+ "kithara-blob",
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
@@ -4517,6 +4519,7 @@ dependencies = [
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
+ "rangemap",
  "ringbuf 0.5.0",
  "serde",
  "serde_json",
@@ -4749,6 +4752,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-fixtures",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4760,6 +4764,18 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "smallvec",
+ "thiserror 2.0.18",
+ "unimock",
+]
+
+[[package]]
+name = "kithara-blob"
+version = "0.0.1-alpha4"
+dependencies = [
+ "delegate",
+ "kithara-bufpool",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
  "thiserror 2.0.18",
 ]
 
@@ -5674,12 +5690,14 @@ dependencies = [
  "derive_more",
  "fast-interleave",
  "fieldwork",
+ "kithara-blob",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "rangemap",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -5971,6 +5989,7 @@ dependencies = [
  "bon",
  "delegate",
  "fieldwork",
+ "kithara-blob",
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
@@ -5979,6 +5998,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "rangemap",
  "realfft",
  "thiserror 2.0.18",
  "tracing",

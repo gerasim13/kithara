@@ -1,3 +1,4 @@
+mod detector;
 #[cfg(feature = "dsp")]
 mod dsp;
 mod grid;
@@ -5,6 +6,9 @@ mod mark;
 #[cfg(feature = "nn")]
 mod nn;
 
+#[cfg(feature = "mock")]
+pub use detector::BeatDetectorMock;
+pub use detector::{BeatDetectError, BeatDetector};
 #[cfg(feature = "dsp")]
 pub use dsp::{SpectralBeats, Tempo, TempoError, TempoPatch, TempoPatchError};
 pub use grid::{
