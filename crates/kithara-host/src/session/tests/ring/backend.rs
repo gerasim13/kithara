@@ -200,10 +200,9 @@ impl RingBackend {
         let channels = self.layout.channels();
         let process_info = BackendProcessInfo {
             frames: self.block_frames_usize,
-            // Firewheel types this field as `std::time::Instant`, so the
+            // Firewheel stamps a block with its own clock type, so the
             // platform clock cannot be handed over here.
-            // ast-grep-ignore: arch.no-direct-time
-            process_timestamp: Some(std::time::Instant::now()),
+            process_timestamp: Some(bevy_platform::time::Instant::now()),
             duration_since_stream_start: Duration::from_secs_f64(
                 clock_samples as f64 / f64::from(self.session_rate.get()),
             ),

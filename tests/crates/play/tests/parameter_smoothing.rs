@@ -2,7 +2,9 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel::dsp::filter::smoothing_filter::DEFAULT_SMOOTH_SECONDS;
+use firewheel::dsp::filter::smoothing_filter::{
+    DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothingFilterCoeff,
+};
 use kithara::{
     assets::AssetStore,
     host::HostConfig,
@@ -30,6 +32,7 @@ impl Consts {
     const AUDIBLE_PEAK: f32 = 0.1;
     const BLOCK_FRAMES: usize = 480;
     const CHANNELS: usize = 2;
+    const EQ_SETTLE_RATIO: f32 = MIN_SETTLE_RATIO;
     const EQ_SMOOTH_SECONDS: f32 = 0.01;
     const FOUR_BAND: &[(f32, FilterKind, f32)] = &[
         (120.0, FilterKind::LowShelf, 0.0),
@@ -79,8 +82,18 @@ pub(super) fn max_sample_jump(pcm: &[f32], channels: usize) -> f32 {
         .fold(0.0_f32, f32::max)
 }
 
-pub(super) fn ramp_bound(amplitude_delta: f32, smooth_seconds: f32, sample_rate: u32) -> f32 {
-    amplitude_delta / (smooth_seconds * sample_rate as f32)
+/// The largest single sample a smoothed move of `amplitude_delta` may step by.
+///
+/// The smoothing filter is exponential, not linear: `smooth_seconds` is the
+/// time it takes to come within `settle_ratio` of the target, so its first —
+/// and steepest — step is the filter's own coefficient times the move.
+pub(super) fn ramp_bound(
+    amplitude_delta: f32,
+    smooth_seconds: f32,
+    settle_ratio: f32,
+    sample_rate: NonZeroU32,
+) -> f32 {
+    amplitude_delta * SmoothingFilterCoeff::new(sample_rate, smooth_seconds, settle_ratio).a0
 }
 
 fn peak(pcm: &[f32]) -> f32 {
@@ -205,15 +218,17 @@ fn assert_step_is_ramped(
     after: &[f32],
     amplitude_delta: f32,
     smooth_seconds: f32,
+    settle_ratio: f32,
 ) {
+    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let baseline = max_sample_jump(before, Consts::CHANNELS);
     let bound = baseline * (1.0 + 2f32.powi(-8))
-        + ramp_bound(amplitude_delta, smooth_seconds, Consts::SAMPLE_RATE);
+        + ramp_bound(amplitude_delta, smooth_seconds, settle_ratio, sample_rate);
     let observed = max_sample_jump(&across(before, after), Consts::CHANNELS);
     assert!(
         observed <= bound,
         "{label}: a step reached DSP unsmoothed: max jump {observed} > bound {bound} (baseline \
-         {baseline}, amplitude delta {amplitude_delta}, smooth {smooth_seconds}s)"
+         {baseline}, amplitude delta {amplitude_delta}, smooth {smooth_seconds}s, settle {settle_ratio})"
     );
 }
 
@@ -260,6 +275,7 @@ async fn deck_volume_step_is_ramped() {
         &after,
         peak(&before),
         DEFAULT_SMOOTH_SECONDS,
+        DEFAULT_SETTLE_RATIO,
     );
     harness.close().await;
 }
@@ -289,6 +305,7 @@ async fn eq_gain_step_is_ramped() {
         &after,
         before_peak,
         Consts::EQ_SMOOTH_SECONDS,
+        Consts::EQ_SETTLE_RATIO,
     );
     harness.close().await;
 }
@@ -318,6 +335,7 @@ async fn eq_layout_switch_is_crossed_over() {
         &after,
         before_peak,
         Consts::EQ_SMOOTH_SECONDS,
+        Consts::EQ_SETTLE_RATIO,
     );
     harness.close().await;
 }
@@ -349,6 +367,7 @@ async fn eq_layout_change_during_crossover_stays_continuous() {
         &after,
         peak(&before),
         Consts::EQ_SMOOTH_SECONDS,
+        Consts::EQ_SETTLE_RATIO,
     );
     harness.close().await;
 }

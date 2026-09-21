@@ -681,6 +681,7 @@ dependencies = [
  "spin",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
  "windows-sys 0.61.2",
 ]
 
@@ -5218,6 +5219,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
  "audioadapter-buffers",
+ "bevy_platform",
  "bon",
  "delegate",
  "derive-where",
@@ -5628,7 +5630,6 @@ dependencies = [
  "kithara-workspace-hack",
  "rangemap",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]

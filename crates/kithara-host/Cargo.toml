@@ -51,6 +51,7 @@ kithara-worker = { workspace = true, optional = true }
 
 arc-swap = { workspace = true }
 audioadapter-buffers = { workspace = true }
+bevy_platform = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
@@ -67,6 +68,9 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 # The browser realtime backend arrives with the target, the way `firewheel`'s
 # `std` feature brings the native one.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# `web` binds every `bevy_platform::time::Instant` in the build — firewheel's
+# own included — to `web-time` instead of the panicking `std` fallback.
+bevy_platform = { workspace = true, features = ["web"] }
 firewheel = { workspace = true, features = ["wasm-bindgen"] }
 firewheel-web-audio = { workspace = true }
 

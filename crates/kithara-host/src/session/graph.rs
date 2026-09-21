@@ -762,10 +762,9 @@ mod tests {
                 &mut output,
                 BackendProcessInfo {
                     frames: BLOCK_FRAMES,
-                    // Firewheel types this field as `std::time::Instant`, so the
+                    // Firewheel stamps a block with its own clock type, so the
                     // platform clock cannot be handed over here.
-                    // ast-grep-ignore: arch.no-direct-time
-                    process_timestamp: Some(std::time::Instant::now()),
+                    process_timestamp: Some(bevy_platform::time::Instant::now()),
                     duration_since_stream_start: Duration::ZERO,
                     input_stream_status: StreamStatus::empty(),
                     output_stream_status: StreamStatus::empty(),

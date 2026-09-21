@@ -88,16 +88,23 @@ fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String
     let selection = store::Refresh::requested();
     let mut names: HashSet<String> = resolved
         .iter()
-        .filter(|(name, _, _)| selection.selects(name))
+        .filter(|(name, _, def)| selection.selects(def.func, name))
         .map(|(name, _, _)| name.clone())
         .collect();
+    // A name this build does not register is reported, not fatal: the asset set
+    // is gated by the enabled families, so one selection is read by builds that
+    // register different halves of it.
     if let store::Refresh::Named(requested) = &selection {
-        for name in requested {
-            assert!(
-                names.contains(name),
-                "kithara-test-fixtures: {} names `{name}`, which no asset case registers",
-                store::REFRESH_ENV,
-            );
+        for requested in requested {
+            if !resolved
+                .iter()
+                .any(|(name, _, def)| name == requested || def.func == requested)
+            {
+                println!(
+                    "cargo:warning={} names `{requested}`, which no enabled family registers",
+                    store::REFRESH_ENV,
+                );
+            }
         }
     }
     // Dependencies are acyclic, so one pass per level suffices; the graph is

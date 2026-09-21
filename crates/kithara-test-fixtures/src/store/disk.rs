@@ -33,7 +33,8 @@ pub enum Refresh {
     Nothing,
     /// Rebuild the whole revision.
     Everything,
-    /// Rebuild these accessor names, by `{func}_{case}`.
+    /// Rebuild these names: an accessor `{func}_{case}`, or a producing
+    /// function `{func}`, which stands for every case it registers.
     Named(Vec<String>),
 }
 
@@ -41,7 +42,8 @@ impl Refresh {
     /// The selection [`REFRESH_ENV`] asks this build for.
     ///
     /// An unset or blank parameter reuses everything, `all` rebuilds the whole
-    /// revision, and anything else is a comma-separated list of accessor names.
+    /// revision, and anything else is a comma-separated list of accessor names
+    /// and producing function names.
     #[must_use]
     pub fn requested() -> Self {
         let raw = std::env::var(REFRESH_ENV).unwrap_or_default();
@@ -66,13 +68,19 @@ impl Refresh {
         )
     }
 
-    /// Whether the entry behind `name` must be produced again.
+    /// Whether the entry `func` registers as `name` must be produced again.
+    ///
+    /// A producing function names its whole family: a format its assets are
+    /// written in has one version for all of them, so its cases go stale
+    /// together.
     #[must_use]
-    pub fn selects(&self, name: &str) -> bool {
+    pub fn selects(&self, func: &str, name: &str) -> bool {
         match self {
             Self::Nothing => false,
             Self::Everything => true,
-            Self::Named(names) => names.iter().any(|selected| selected == name),
+            Self::Named(names) => names
+                .iter()
+                .any(|selected| selected == name || selected == func),
         }
     }
 }
@@ -341,13 +349,13 @@ mod tests {
     fn a_blank_refresh_reuses_every_prepared_entry() {
         assert_eq!(Refresh::parse(""), Refresh::Nothing);
         assert_eq!(Refresh::parse("   "), Refresh::Nothing);
-        assert!(!Refresh::parse("").selects("sine_wav_a440_6s"));
+        assert!(!Refresh::parse("").selects("sine_wav", "sine_wav_a440_6s"));
     }
 
     #[kithara::test(native, flash(false))]
     fn refresh_selects_all_or_the_named_accessors() {
         assert_eq!(Refresh::parse("ALL"), Refresh::Everything);
-        assert!(Refresh::parse("all").selects("anything_at_all"));
+        assert!(Refresh::parse("all").selects("anything", "anything_at_all"));
 
         let named = Refresh::parse(" sine_wav_a440_6s , rhythm_wav_steady ,");
         assert_eq!(
@@ -357,8 +365,13 @@ mod tests {
                 String::from("rhythm_wav_steady"),
             ])
         );
-        assert!(named.selects("rhythm_wav_steady"));
-        assert!(!named.selects("sine_wav_a440_2s"));
+        assert!(named.selects("rhythm_wav", "rhythm_wav_steady"));
+        assert!(!named.selects("sine_wav", "sine_wav_a440_2s"));
+
+        let family = Refresh::parse("sine_wav");
+        assert!(family.selects("sine_wav", "sine_wav_a440_6s"));
+        assert!(family.selects("sine_wav", "sine_wav_a440_2s"));
+        assert!(!family.selects("sine_mp3", "sine_mp3_a440_6s"));
     }
 
     #[kithara::test(native, flash(false))]

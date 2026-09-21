@@ -326,6 +326,9 @@ audioadapter-buffers = { version = "5.0", default-features = false, features = [
 axum = "0.8.9"
 backtrace = "0.3"
 base64 = "0.22.1"
+
+# performance monitoring
+bevy_platform = { version = "0.19", default-features = false, features = ["std"] }
 biquad = "0.6.0"
 
 # delegation
@@ -353,8 +356,6 @@ cpu-time = "1"
 
 # crypto/obfuscation
 crabtime = "1.1.4"
-
-# performance monitoring
 criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"

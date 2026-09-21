@@ -11,7 +11,9 @@ categories = ["multimedia::audio"]
 exclude = ["tests/**"]
 
 [package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
+# `unimock` is reached only through `kithara_test_macros::mock`, whose
+# expansion names it; no source line in this crate spells the crate out.
+ignored = ["kithara-workspace-hack", "unimock"]
 
 [features]
 default = []

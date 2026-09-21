@@ -72,10 +72,9 @@ impl OfflineStream {
             u32::try_from(position % rate).map_err(|_| OfflineSessionError::TimelineOverflow)?;
         let process_info = BackendProcessInfo {
             frames,
-            // Firewheel types this field as `std::time::Instant`, so the
+            // Firewheel stamps a block with its own clock type, so the
             // platform clock cannot be handed over here.
-            // ast-grep-ignore: arch.no-direct-time
-            process_timestamp: Some(std::time::Instant::now()),
+            process_timestamp: Some(bevy_platform::time::Instant::now()),
             duration_since_stream_start: Duration::from_secs(whole_seconds)
                 + Duration::from_secs_f64(f64::from(remainder) / f64::from(self.sample_rate.get())),
             input_stream_status: StreamStatus::empty(),
