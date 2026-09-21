@@ -5,29 +5,22 @@ use kithara_waveform::WaveformResume;
 
 use crate::{BlobError, Waveform};
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Config;
-
 #[derive(Default)]
 pub(crate) struct Slot;
 
-impl<S> TryFrom<(&Config, NonZeroU32, &PoolRegion<S>)> for Slot
+impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
     type Error = PoolError;
 
-    fn try_from(_: (&Config, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
+    fn try_from(_: (usize, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
         Ok(Self)
     }
 }
 
-pub(crate) const fn cache_tag(_config: Config) -> Option<String> {
+pub(crate) const fn cache_tag(_buckets: Option<usize>) -> Option<String> {
     None
-}
-
-pub(crate) const fn config_is_empty(_config: Config) -> bool {
-    true
 }
 
 pub(crate) fn push<S>(
@@ -62,8 +55,4 @@ where
     } else {
         Err(BlobError::Corrupt)
     }
-}
-
-pub(crate) const fn empty_config() -> Config {
-    Config
 }

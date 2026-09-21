@@ -87,10 +87,16 @@ impl Prepared {
     /// all, minus what the track already carries. A checkpoint does not narrow
     /// this — a resumed pass continues the very artifacts it was opened for.
     pub(crate) fn demand(&self, fingerprint: &AnalysisFingerprint) -> AnalysisDemand {
-        AnalysisDemand::new(
+        let mut demand = AnalysisDemand::empty();
+        demand.set(
+            AnalysisDemand::BEAT,
             fingerprint.beat().is_some() && self.beat_grid.is_missing(),
+        );
+        demand.set(
+            AnalysisDemand::WAVEFORM,
             fingerprint.waveform().is_some() && self.waveform.is_missing(),
-        )
+        );
+        demand
     }
 
     /// Whether the track needs nothing further: the pass ran its course and

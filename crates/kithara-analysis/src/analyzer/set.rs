@@ -24,7 +24,9 @@ where
     B: ResamplerBackend,
 {
     beat: Config<B>,
-    waveform: waveform::Config,
+    /// The bucket ceiling a waveform is asked to fill, when one is wanted at
+    /// all. No waveform configured means no waveform slot is ever built.
+    waveform: Option<usize>,
     beat_config: Option<BeatAnalysisConfig<B>>,
     #[field(get, vis = "pub(crate)")]
     pools: PoolRegion<S>,
@@ -41,10 +43,7 @@ where
         Self {
             pools,
             beat: Config::default(),
-            #[cfg(feature = "analysis-waveform")]
-            waveform: waveform::Config::default(),
-            #[cfg(not(feature = "analysis-waveform"))]
-            waveform: waveform::Config,
+            waveform: None,
             beat_config: None,
         }
     }
@@ -56,11 +55,6 @@ where
         revision: u64,
         demand: AnalysisDemand,
     ) -> Result<TrackAnalyzers<B, S>, PoolError> {
-        let waveform = if demand.waveform() {
-            self.waveform
-        } else {
-            waveform::empty_config()
-        };
         Ok(TrackAnalyzers {
             revision,
             token,
@@ -69,7 +63,10 @@ where
             } else {
                 Slot::default()
             },
-            waveform: waveform::Slot::try_from((&waveform, rate, &self.pools))?,
+            waveform: match self.waveform.filter(|_| demand.waveform()) {
+                Some(buckets) => waveform::Slot::try_from((buckets, rate, &self.pools))?,
+                None => waveform::Slot::default(),
+            },
             coverage: RangeSet::new(),
             fingerprint: self.fingerprint_for(demand),
             settled: false,
@@ -110,7 +107,7 @@ where
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        waveform::config_is_empty(self.waveform) && self.beat.is_empty()
+        self.waveform.is_none() && self.beat.is_empty()
     }
 
     pub(crate) fn restore(
@@ -136,10 +133,7 @@ where
     }
 
     pub(crate) fn resume_shape(&self) -> (bool, bool) {
-        (
-            !waveform::config_is_empty(self.waveform),
-            !self.beat.is_empty(),
-        )
+        (self.waveform.is_some(), !self.beat.is_empty())
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
@@ -193,7 +187,7 @@ where
     #[cfg(feature = "analysis-waveform")]
     pub const fn with_waveform(self, buckets: usize) -> Self {
         let mut builder = self;
-        waveform::with_buckets(&mut builder.waveform, buckets);
+        builder.waveform = Some(buckets);
         builder
     }
 }
