@@ -894,6 +894,85 @@ async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     host.close().await;
 }
 
+/// A revision the deck already holds is not a new publication. The run may
+/// state it again — a checkpoint, a resumed pass, a repeated send — and the
+/// entry answers that nothing moved.
+#[kithara::test(native, tokio)]
+async fn a_repeated_revision_is_published_once(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+    let mut rx = owner.subscribe(queue, track_id, source, axis());
+    let tx = take_over_run(&mut owner, None);
+
+    tx.send(Some(progress(revision_of(3))))
+        .expect("run publishes");
+    owner.publish();
+    assert_eq!(revision_held(&rx), Some(3));
+    drop(rx.borrow_and_update());
+
+    tx.send(Some(progress(revision_of(3))))
+        .expect("run publishes the same revision again");
+    owner.publish();
+
+    assert!(
+        !rx.has_changed().expect("the sender is alive"),
+        "the same revision twice is one publication, not two"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+/// A cache hit is a pass result like any other, and a pass result never
+/// outranks what the caller handed over. The cached grid was analysed for
+/// this very track, and it is still the supplied one the deck reads.
+#[kithara::test(native, tokio)]
+async fn a_cached_pass_never_replaces_the_grid_the_caller_supplied(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_prepared(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(served_grid()),
+        Some(served_waveform()),
+    )
+    .await;
+    let cached = snapshot(
+        "test-track".into(),
+        5,
+        1_000,
+        owner.runner.fingerprint().clone(),
+        Some(grid()),
+    );
+    owner
+        .cache
+        .put(target_of(&owner, &source), progress(cached));
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    let held = rx.borrow().clone().expect("the deck is served at once");
+    assert_eq!(
+        revision_held(&rx),
+        Some(5),
+        "the cached pass is published, as a pass result"
+    );
+    assert_eq!(
+        held.grid().expect("a grid is published").as_raw().model_id,
+        served_grid().as_raw().model_id,
+        "but the grid the deck reads is the one the caller handed over"
+    );
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "and nothing reopens to reconcile the two"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
 /// The mirror of the served-waveform case: one publication carries a grid the
 /// caller handed over and a waveform this build analysed, and neither origin
 /// is visible to the consumer that reads them.
