@@ -20,9 +20,12 @@ const WARMUP_BLOCKS: usize = 8;
 /// callback is no longer invoked, so the RT processor cannot observe the
 /// interruption, cannot report it, and leaves every value it publishes frozen
 /// at whatever it wrote last. Rendering nothing here is the whole point — it is
-/// what an interrupted output does.
+/// what an interrupted output does, and the first render afterwards is the
+/// output coming back.
 #[kithara::test(tokio)]
-async fn a_suspended_output_reports_silence_without_the_rt_processor(constant_half: &'static [u8]) {
+async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
+    constant_half: &'static [u8],
+) {
     let harness = loaded_harness(constant_half).await;
     assert_eq!(harness.player().rate(), 1.0);
     assert!(harness.player().is_playing());
@@ -40,6 +43,9 @@ async fn a_suspended_output_reports_silence_without_the_rt_processor(constant_ha
         "playback cannot be playing while the platform holds the output"
     );
 
+    // Ending the interruption is not the output coming back: the system hands
+    // it over, the stream rebuild takes it, and until the processor runs the
+    // last thing it published still describes an output that is gone.
     harness
         .player()
         .notify_interruption(InterruptionKind::Ended {
@@ -47,8 +53,15 @@ async fn a_suspended_output_reports_silence_without_the_rt_processor(constant_ha
         });
     assert_eq!(
         harness.player().rate(),
+        0.0,
+        "an interruption that has ended does not by itself drive the output"
+    );
+
+    let _ = harness.render(BLOCK_FRAMES).await;
+    assert_eq!(
+        harness.player().rate(),
         1.0,
-        "releasing the output restores what the RT processor last published"
+        "one audio block past the interruption the processor speaks for itself"
     );
 
     harness.close().await;

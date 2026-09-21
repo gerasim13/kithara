@@ -45,9 +45,17 @@ impl<S> PlayerRuntime<S> {
     /// Handing the output back is the route-invalidation path, which is what
     /// rebuilds the stream.
     pub fn notify_interruption(&self, kind: InterruptionKind) {
-        self.core
-            .engine
-            .set_output_suspended(matches!(kind, InterruptionKind::Began));
+        if matches!(kind, InterruptionKind::Began) {
+            let tick = self
+                .slot()
+                .and_then(|slot| self.core.engine.slot_playback(slot))
+                .map_or(0, |shared| {
+                    shared
+                        .process_count
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                });
+            self.core.engine.suspend_output(tick);
+        }
         self.core
             .engine
             .bus()

@@ -199,14 +199,15 @@ impl<S> EngineImpl<S> {
         self.session.set_session_ducking(mode)
     }
 
-    /// The platform suspended, or handed back, this session's audio output.
-    pub fn set_output_suspended(&self, suspended: bool) {
-        self.session.set_output_suspended(suspended);
+    /// The platform suspended this session's audio output at `tick`.
+    pub fn suspend_output(&self, tick: u64) {
+        self.session.suspend_output(tick);
     }
 
-    /// Whether the platform currently holds this session's audio output.
-    pub fn output_suspended(&self) -> bool {
-        self.session.output_suspended()
+    /// The audio-thread tick this session's output was suspended at, while the
+    /// platform still holds it.
+    pub fn suspended_at(&self) -> Option<u64> {
+        self.session.suspended_at()
     }
 
     pub fn is_running(&self) -> bool {

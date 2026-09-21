@@ -52,8 +52,15 @@ impl<S> PlayerRuntime<S> {
     /// thin derivations of this snapshot — one shared read primitive.
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
-        let snapshot = self.core.engine.slot_playback(slot_id)?.snapshot();
-        Some(if self.core.engine.output_suspended() {
+        let shared = self.core.engine.slot_playback(slot_id)?;
+        let snapshot = shared.snapshot();
+        let stalled = self.core.engine.suspended_at().is_some_and(|tick| {
+            shared
+                .process_count
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == tick
+        });
+        Some(if stalled {
             snapshot.silenced()
         } else {
             snapshot
