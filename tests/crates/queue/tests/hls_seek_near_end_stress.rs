@@ -87,13 +87,19 @@ impl Consts {
     /// phase it was in, because this deadline cannot know which wait it
     /// interrupted.
     const ITER_DEADLINE: Duration = Duration::from_secs(10);
-    /// The whole test's budget. Every iteration is already bounded by
-    /// [`Self::ITER_DEADLINE`], which names the phase it interrupted; a test
-    /// timeout below the sum of those deadlines would preempt that report and
-    /// leave a stall unattributed, so it covers all of them.
-    const TEST_TIMEOUT: Duration =
-        Duration::from_secs(Self::ITER_DEADLINE.as_secs() * Self::FRESH_ITERATIONS as u64);
+    /// The whole test's budget; see [`TEST_TIMEOUT_SECONDS`].
+    const TEST_TIMEOUT: Duration = Duration::from_secs(TEST_TIMEOUT_SECONDS);
 }
+
+/// The whole test's budget. Every iteration is already bounded by
+/// [`Consts::ITER_DEADLINE`], which names the phase it interrupted; a test
+/// timeout below the sum of those deadlines would preempt that report and
+/// leave a stall unattributed, so it covers all of them.
+///
+/// It is a plain module constant because the stress backstop audit reads the
+/// timeout attribute from the source, and understands a literal or a constant
+/// named at this level — not an associated one.
+const TEST_TIMEOUT_SECONDS: u64 = 300;
 
 #[derive(Debug)]
 enum IterOutcome {
@@ -538,7 +544,11 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Consts::TEST_TIMEOUT))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(TEST_TIMEOUT_SECONDS))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
 #[cfg_attr(
