@@ -4,6 +4,11 @@ use kithara_platform::time::Duration;
 use kithara_stream::SegmentDescriptor;
 use re_mp4::Mp4;
 
+mod cursor;
+
+pub(crate) use cursor::ReadAt;
+use cursor::ReadAtCursor;
+
 /// Pre-computed fragmented-mp4 layout for a fully cached file.
 #[derive(Clone, Debug)]
 pub(crate) struct FileSegmentIndex {
@@ -40,15 +45,17 @@ impl FileSegmentIndex {
         })
     }
 
-    /// Try to derive a fragmented-mp4 index from the given file bytes.
+    /// Try to derive a fragmented-mp4 index by walking the box headers of
+    /// the `total`-byte file behind `source`. Payload boxes are seeked over,
+    /// so peak memory tracks the index, not the track length.
     ///
     /// Returns `None` when:
     /// - the bytes do not parse as mp4,
     /// - the mp4 has no `moof` boxes (classic mp4 file),
     /// - the audio track's timescale is unavailable,
     /// - any moof is malformed (zero or unknown duration).
-    pub(crate) fn try_build(bytes: &[u8]) -> Option<Self> {
-        let mp4 = Mp4::read_bytes(bytes).ok()?;
+    pub(crate) fn try_build<R: ReadAt>(source: &R, total: u64) -> Option<Self> {
+        let mp4 = Mp4::read(ReadAtCursor::new(source, total), total).ok()?;
         if mp4.moofs.is_empty() {
             return None;
         }
@@ -64,7 +71,6 @@ impl FileSegmentIndex {
         }
         let init_range = 0..first_moof_start;
 
-        let total = u64::try_from(bytes.len()).ok()?;
         let mut segments: Vec<SegmentDescriptor> = Vec::with_capacity(mp4.moofs.len());
         let mut cumulative_decode_time: Option<u64> = None;
 
@@ -182,3 +188,6 @@ fn ticks_to_duration(ticks: u64, timescale: u32) -> Duration {
     let nanos_u32 = u32::try_from(nanos).unwrap_or(NANOS_PER_SEC_MINUS_ONE);
     Duration::new(secs, nanos_u32)
 }
+
+#[cfg(test)]
+mod tests;
