@@ -232,6 +232,19 @@ pub(crate) struct SessionState<T, S> {
     pub(super) sample_rate_hint: u32,
 }
 
+/// The stream outlives nothing: it is dropped before the context.
+///
+/// Firewheel hands the stream its processor and waits, on its own drop, for
+/// that processor to come back. Declaration order would drop the context
+/// first, leaving it to wait out its whole deactivation timeout for a
+/// processor this state still owns.
+impl<T, S> Drop for SessionState<T, S> {
+    fn drop(&mut self) {
+        self.stream.take();
+        self.ctx.take();
+    }
+}
+
 impl<T, S> SessionState<T, S> {
     #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
