@@ -5366,6 +5366,7 @@ dependencies = [
 name = "kithara-mp4"
 version = "0.0.1-alpha4"
 dependencies = [
+ "derive_more",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "re_mp4",

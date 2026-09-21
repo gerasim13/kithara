@@ -10,6 +10,7 @@ keywords = ["audio", "mp4", "fmp4", "container", "streaming"]
 categories = ["multimedia::audio"]
 
 [dependencies]
+derive_more = { workspace = true }
 re_mp4 = { workspace = true }
 tracing = { workspace = true }
 

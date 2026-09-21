@@ -1,10 +1,11 @@
-use std::fmt;
-
 /// Why a box walk could not deliver what was asked of it.
 ///
 /// The detail is a fixed phrase, not a formatted message: a caller wraps it
 /// in its own error type and keeps its own vocabulary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
+#[display("{detail}")]
+#[derive(derive_more::Error)]
+#[error(ignore)]
 pub struct Mp4Error {
     detail: &'static str,
 }
@@ -20,11 +21,3 @@ impl Mp4Error {
         self.detail
     }
 }
-
-impl fmt::Display for Mp4Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.detail)
-    }
-}
-
-impl std::error::Error for Mp4Error {}
