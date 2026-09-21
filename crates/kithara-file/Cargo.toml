@@ -52,6 +52,7 @@ kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
+kithara-mp4 = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -64,7 +65,6 @@ derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 humantime-serde = { workspace = true }
-re_mp4 = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

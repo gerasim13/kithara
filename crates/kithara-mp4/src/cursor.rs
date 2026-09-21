@@ -7,7 +7,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 const WALK_WINDOW_BYTES: usize = 16 * 1024;
 
 /// Random-access byte source the index walk pulls box headers from.
-pub(crate) trait ReadAt {
+pub trait ReadAt {
     /// Read into `buf` starting at `offset` and report how many bytes landed.
     ///
     /// # Errors
@@ -21,7 +21,7 @@ pub(crate) trait ReadAt {
 /// The mp4 walk skips a box it does not need by seeking past it, so the
 /// `mdat` payload - every byte of the track - is never transferred, and the
 /// window is refilled only when the walk lands outside it.
-pub(super) struct ReadAtCursor<'a, R: ReadAt> {
+pub(crate) struct ReadAtCursor<'a, R: ReadAt> {
     source: &'a R,
     total: u64,
     pos: u64,
@@ -33,7 +33,7 @@ pub(super) struct ReadAtCursor<'a, R: ReadAt> {
 }
 
 impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
-    pub(super) fn new(source: &'a R, total: u64) -> Self {
+    pub(crate) fn new(source: &'a R, total: u64) -> Self {
         Self {
             source,
             total,

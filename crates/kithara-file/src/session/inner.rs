@@ -10,6 +10,7 @@ use std::{
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
+use kithara_mp4::ReadAt;
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
@@ -19,7 +20,7 @@ use kithara_storage::ResourceStatus;
 use kithara_stream::{AudioCodec, MediaInfo, WorkerWake};
 use url::Url;
 
-use super::segments::{FileSegmentIndex, ReadAt};
+use super::segments::FileSegmentIndex;
 use crate::{FileError, FileEvent, TotalBytesSource, coord::FileCoord};
 
 const CODEC_SNIFF_BYTES: usize = 16;
