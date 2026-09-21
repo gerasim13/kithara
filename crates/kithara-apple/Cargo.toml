@@ -40,6 +40,10 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSObject",
     "NSString",
     "NSArray",
+    # `NSArray::iter`. Cargo used to hand this over through cpal, which the
+    # audio graph no longer pulls in; the iteration this crate does is its own
+    # requirement and says so here.
+    "NSEnumerator",
     "NSURL",
     "NSURLAuthenticationChallenge",
     "NSURLCredential",
