@@ -361,7 +361,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
                 .keys()
                 .map(|name| name.as_str().expect("input name is a string"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["required_lanes"])
+            BTreeSet::from(["fixture-refresh", "required_lanes"])
         );
         let required_lanes = mapping_field(inputs, "required_lanes")
             .as_mapping()
