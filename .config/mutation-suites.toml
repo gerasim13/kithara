@@ -95,16 +95,16 @@ timeout_seconds = 120
 
 # Waveform windows: sample counts, bucket edges and the peak reduction. Every
 # mutation-friendly shape at once, and the output is a picture nobody diffs.
-# The module is behind `analysis-waveform`, which is not a default feature:
-# without it the analyzer is not compiled, the filter selects nothing, and
-# every mutant survives a suite that ran no test at all.
+# The module is behind `dsp`, which is not a default feature: without it the
+# analyzer is not compiled, the filter selects nothing, and every mutant
+# survives a suite that ran no test at all.
 [[suite]]
 name = "waveform-analyzer"
 group = "analysis"
-package = "kithara-analysis"
-files = ["crates/kithara-analysis/src/waveform/analyzer.rs"]
-features = ["analysis-waveform"]
-test_filters = ["test(/waveform::analyzer::tests::/)"]
+package = "kithara-waveform"
+files = ["crates/kithara-waveform/src/analyzer.rs"]
+features = ["dsp"]
+test_filters = ["test(/analyzer::tests::/)"]
 timeout_seconds = 180
 
 # Layout arithmetic. A constraint solved one pixel wrong lays out, renders, and
