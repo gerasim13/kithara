@@ -4,6 +4,18 @@ xtask = "run --package xtask --"
 [env]
 RUST_TEST_THREADS = "4"
 
+# Cargo's built-in git client walks a large history far slower than the system
+# git does, and a submodule of a git dependency is where that becomes an
+# outage rather than a delay: `btls-sys` carries `boringssl`, and fetching it
+# was measured at 25.6 minutes on the Apple host (GitLab job 9811155), with a
+# second job stalled 20.8 minutes behind the package-cache lock the fetch
+# holds. This is the fallback path, not the fast one - a lane whose source
+# layer was restored fetches nothing at all - but a branch that adds a
+# dependency finds no restored layer under its `Cargo.lock`, and this decides
+# whether that branch pays minutes or most of an hour.
+[net]
+git-fetch-with-cli = true
+
 [target.wasm32-unknown-unknown]
 runner = [
   "cargo",

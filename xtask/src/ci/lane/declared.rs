@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
@@ -67,6 +67,9 @@ pub(crate) fn run(
             })
             .transpose()?
     };
+    if !process.is_recording() {
+        restore_source_layer(process, tools);
+    }
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
         let mut command = if role == SELF_PROGRAM {
@@ -83,6 +86,9 @@ pub(crate) fn run(
         }
         process.run_command(&mut command, &step.label)?;
     }
+    if !process.is_recording() {
+        publish_source_layer(process, tools, &kind);
+    }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
         let mc = process.resolve_program(tools.program("mc"))?;
         if let Err(error) = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc) {
@@ -94,6 +100,45 @@ pub(crate) fn run(
 
 fn kind_name(kind: PipelineKind) -> String {
     kind.name().to_owned()
+}
+
+/// Put the dependency sources in place before the lane's first Cargo command.
+///
+/// Every failure here is a warning, never a stop: the layer is an accelerator,
+/// and a lane that cannot reach the cache must still be able to fetch and run.
+fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
+    let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
+        return;
+    };
+    if let Err(error) = snapshot::restore_sources(process.root(), &cargo_home, &mc) {
+        warn!(%error, "could not restore the dependency sources");
+    }
+}
+
+/// Record what the lane ended up with, once its steps have fetched whatever
+/// the restored layer did not carry. The default branch is the only publisher
+/// because the trusted scope is the only one the bucket policy lets write.
+fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) {
+    if kind != PipelineKind::Main.name() {
+        return;
+    }
+    let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
+        return;
+    };
+    if let Err(error) = snapshot::publish_sources(process.root(), &cargo_home, &mc) {
+        warn!(%error, "could not publish the dependency sources");
+    }
+}
+
+fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
+    let cargo_home = process.environment_path("CARGO_HOME")?;
+    match process.resolve_program(tools.program("mc")) {
+        Ok(mc) => Some((cargo_home, mc)),
+        Err(error) => {
+            warn!(%error, "no cache client; the lane carries its own sources");
+            None
+        }
+    }
 }
 
 /// Fill in the things a lane cannot spell for itself: where the checkout is,

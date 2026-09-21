@@ -5,6 +5,27 @@ sccache := `command -v sccache 2>/dev/null || true`
 
 export RUSTC_WRAPPER := sccache
 
+# A compiler cache key includes the absolute path rustc was given, so the same
+# crate built in two worktrees hashes twice and neither ever reads the other's
+# entry. Measured on this host: two identical crates differing only in their
+# directory produced two compile requests and zero hits; with the base
+# directory declared, the second was a hit. Across 142 worktrees that is the
+# difference between one shared artifact layer and 142 private ones, and it is
+# why a 60 GiB cache sat full at a 42% Rust hit rate. Each checkout names only
+# its own root: the prefix is then stripped from every path, and what is left
+# is the same workspace-relative path everywhere, so the keys coincide.
+# `--fix`-style tools and diagnostics are unaffected; this rewrites the cache
+# key, not what rustc is asked to compile.
+export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
+
+# The cache was found sitting at exactly its ceiling - 60 GiB stored against a
+# 60 GiB limit - which means it had been evicting entries it would be asked for
+# again. A ceiling belongs with the rest of the build's configuration rather
+# than in whichever shell happened to start the server, so it is named here.
+# The server reads this once, when it starts, so a machine whose server is
+# already up keeps its old limit until `sccache --stop-server`.
+export SCCACHE_CACHE_SIZE := if sccache == "" { "" } else { "200G" }
+
 # Where this machine keeps the FFmpeg line the workspace binds to. `ffmpeg-next`
 # generates its bindings from the headers pkg-config finds, so a host whose
 # unversioned FFmpeg has moved on has to reach the keg-only formula
