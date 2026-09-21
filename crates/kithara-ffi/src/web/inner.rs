@@ -213,6 +213,8 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
+    pub(crate) fn notify_interruption(&self, _kind: kithara::play::InterruptionKind) {}
+
     pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
         Ok(())
     }

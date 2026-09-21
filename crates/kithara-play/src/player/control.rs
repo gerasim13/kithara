@@ -7,8 +7,8 @@ use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
-    EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
+    EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
+    Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -53,6 +53,11 @@ where
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.invalidate_audio_route(reason))
+    }
+
+    /// Record that the platform interrupted, or released, the audio output.
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        self.command(|runtime| runtime.notify_interruption(kind));
     }
 
     /// Lower or restore the whole session output under a competing sound.

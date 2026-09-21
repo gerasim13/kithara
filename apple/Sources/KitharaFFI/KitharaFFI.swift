@@ -910,6 +910,19 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func notifyAudioRouteChanged(reason: String) throws
 
     /**
+     * Notify the native player that the platform interrupted, or released,
+     * the audio output.
+     *
+     * An interruption stops the output below the engine: the audio callback
+     * is no longer invoked, so playback can neither observe the interruption
+     * nor report it, and every value the audio thread publishes freezes where
+     * it stood. Reporting it here is what keeps the observable playback state
+     * honest while nothing is audible. Getting the output back is
+     * [`notify_audio_route_changed`](Self::notify_audio_route_changed).
+     */
+    func notifyInterruption(kind: FfiInterruptionKind)
+
+    /**
      * Lower or restore the whole session output under a competing sound,
      * such as a call or a navigation prompt.
      *
@@ -1527,6 +1540,25 @@ open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError
     uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(reason),$0
+    )
+}
+}
+
+    /**
+     * Notify the native player that the platform interrupted, or released,
+     * the audio output.
+     *
+     * An interruption stops the output below the engine: the audio callback
+     * is no longer invoked, so playback can neither observe the interruption
+     * nor report it, and every value the audio thread publishes freezes where
+     * it stood. Reporting it here is what keeps the observable playback state
+     * honest while nothing is audible. Getting the output back is
+     * [`notify_audio_route_changed`](Self::notify_audio_route_changed).
+     */
+open func notifyInterruption(kind: FfiInterruptionKind)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_notify_interruption(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiInterruptionKind_lower(kind),$0
     )
 }
 }
@@ -6269,6 +6301,85 @@ public func FfiConverterTypeFfiFrameDomain_lower(_ value: FfiFrameDomain) -> Rus
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * What one platform audio-interruption notification reports.
+ */
+
+public enum FfiInterruptionKind: Equatable, Hashable {
+
+    /**
+     * The system took the output away.
+     */
+    case began
+    /**
+     * The system released the output, telling whether playback may resume.
+     */
+    case ended(shouldResume: Bool
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiInterruptionKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiInterruptionKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiInterruptionKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiInterruptionKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .began
+
+        case 2: return .ended(shouldResume: try FfiConverterBool.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiInterruptionKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .began:
+            writeInt(&buf, Int32(1))
+
+
+        case let .ended(shouldResume):
+            writeInt(&buf, Int32(2))
+            FfiConverterBool.write(shouldResume, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiInterruptionKind_lift(_ buf: RustBuffer) throws -> FfiInterruptionKind {
+    return try FfiConverterTypeFfiInterruptionKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiInterruptionKind_lower(_ value: FfiInterruptionKind) -> RustBuffer {
+    return FfiConverterTypeFfiInterruptionKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
  */
 
@@ -9354,6 +9465,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 39618) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 53086) {

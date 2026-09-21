@@ -31,6 +31,23 @@ pub struct PlaybackSnapshot {
     pub(crate) sample_rate: u32,
 }
 
+impl PlaybackSnapshot {
+    /// The same read with nothing audible in it.
+    ///
+    /// The RT processor publishes `playing` and `rate` as it runs. An output
+    /// the platform has suspended never schedules it, so both fields keep the
+    /// value they held when the audio stopped; this is what they mean once
+    /// nothing reaches the speakers.
+    #[must_use]
+    pub(crate) const fn silenced(self) -> Self {
+        Self {
+            playing: false,
+            rate: 0.0,
+            ..self
+        }
+    }
+}
+
 /// Atomic playback state written by the RT processor and read by control code.
 #[derive(Default)]
 #[non_exhaustive]

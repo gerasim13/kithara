@@ -15,7 +15,7 @@ use kithara::{
         sync::{Arc, Mutex},
     },
     play::{
-        PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        InterruptionKind, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
@@ -613,6 +613,7 @@ impl NativeInner {
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
             pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn notify_interruption(&self, kind: InterruptionKind);
             pub(crate) fn pause(&self);
             pub(crate) fn play(&self);
             #[call(default_rate)]

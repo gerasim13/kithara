@@ -3,7 +3,10 @@ use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent, SlotId},
+    api::{
+        InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
+        SlotId,
+    },
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -31,6 +34,24 @@ impl<S> PlayerRuntime<S> {
             previous_route: RouteDescription::default(),
         });
         Ok(())
+    }
+
+    /// Notify the player that the platform interrupted, or released, the audio
+    /// output.
+    ///
+    /// An interruption stops the output below us — the RT processor is no
+    /// longer scheduled, so it can neither observe the interruption nor report
+    /// it. The fact enters here and playback state reads it from the session.
+    /// Handing the output back is the route-invalidation path, which is what
+    /// rebuilds the stream.
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        self.core
+            .engine
+            .set_output_suspended(matches!(kind, InterruptionKind::Began));
+        self.core
+            .engine
+            .bus()
+            .publish(SessionEvent::Interruption { kind });
     }
 
     /// Reset EQ gains to 0 dB for all bands.

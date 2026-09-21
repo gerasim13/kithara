@@ -199,6 +199,16 @@ impl<S> EngineImpl<S> {
         self.session.set_session_ducking(mode)
     }
 
+    /// The platform suspended, or handed back, this session's audio output.
+    pub fn set_output_suspended(&self, suspended: bool) {
+        self.session.set_output_suspended(suspended);
+    }
+
+    /// Whether the platform currently holds this session's audio output.
+    pub fn output_suspended(&self) -> bool {
+        self.session.output_suspended()
+    }
+
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }

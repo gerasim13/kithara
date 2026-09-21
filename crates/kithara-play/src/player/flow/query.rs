@@ -52,7 +52,12 @@ impl<S> PlayerRuntime<S> {
     /// thin derivations of this snapshot — one shared read primitive.
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
-        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
+        let snapshot = self.core.engine.slot_playback(slot_id)?.snapshot();
+        Some(if self.core.engine.output_suspended() {
+            snapshot.silenced()
+        } else {
+            snapshot
+        })
     }
 
     /// Current playback position in seconds.

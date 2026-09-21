@@ -1,5 +1,5 @@
 use super::AudioPlayer;
-use crate::types::{FfiDuckingMode, FfiError};
+use crate::types::{FfiDuckingMode, FfiError, FfiInterruptionKind};
 
 /// Platform audio-session signals: route changes and competing sounds.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -16,6 +16,19 @@ impl AudioPlayer {
     /// route invalidation.
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
         self.inner.notify_audio_route_changed(reason)
+    }
+
+    /// Notify the native player that the platform interrupted, or released,
+    /// the audio output.
+    ///
+    /// An interruption stops the output below the engine: the audio callback
+    /// is no longer invoked, so playback can neither observe the interruption
+    /// nor report it, and every value the audio thread publishes freezes where
+    /// it stood. Reporting it here is what keeps the observable playback state
+    /// honest while nothing is audible. Getting the output back is
+    /// [`notify_audio_route_changed`](Self::notify_audio_route_changed).
+    pub fn notify_interruption(&self, kind: FfiInterruptionKind) {
+        self.inner.notify_interruption(kind.into());
     }
 
     /// Lower or restore the whole session output under a competing sound,

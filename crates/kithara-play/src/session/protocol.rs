@@ -227,7 +227,10 @@ mod wire {
 }
 
 mod handle {
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::{
+        num::{NonZeroU32, NonZeroUsize},
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
@@ -325,6 +328,7 @@ mod handle {
 
     struct SessionSlot<S> {
         binding: Mutex<Option<SessionBinding<S>>>,
+        output_suspended: AtomicBool,
     }
 
     #[derive_where::derive_where(Clone)]
@@ -335,6 +339,7 @@ mod handle {
         pub fn new(binding: SessionBinding<S>) -> Self {
             Self(Arc::new(SessionSlot {
                 binding: Mutex::new(Some(binding)),
+                output_suspended: AtomicBool::new(false),
             }))
         }
 
@@ -389,10 +394,32 @@ mod handle {
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::InvalidateAudioRoute {
-                reason: reason.to_owned(),
-            })
-            .map(|_| ())
+            let restarted = self
+                .exec_ok(Cmd::InvalidateAudioRoute {
+                    reason: reason.to_owned(),
+                })
+                .map(|_| ());
+            // A rebuilt output drives the RT processor again, whatever stopped
+            // the previous one.
+            if restarted.is_ok() {
+                self.set_output_suspended(false);
+            }
+            restarted
+        }
+
+        /// Whether the platform has taken the audio output away.
+        ///
+        /// A suspended output leaves the RT processor unscheduled, so every
+        /// value it publishes stays at whatever it last wrote. Readers of
+        /// playback state consult this before trusting that.
+        #[must_use]
+        pub fn output_suspended(&self) -> bool {
+            self.0.output_suspended.load(Ordering::Acquire)
+        }
+
+        /// Record that the platform suspended, or handed back, the output.
+        pub fn set_output_suspended(&self, suspended: bool) {
+            self.0.output_suspended.store(suspended, Ordering::Release);
         }
 
         pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
@@ -403,6 +430,7 @@ mod handle {
         pub(crate) fn pending() -> Self {
             Self(Arc::new(SessionSlot {
                 binding: Mutex::default(),
+                output_suspended: AtomicBool::new(false),
             }))
         }
 
