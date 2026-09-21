@@ -6,7 +6,9 @@ mod reader;
 mod resampler;
 mod source;
 
-pub use artifact::ArtifactSource;
+pub use artifact::{
+    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,
+};
 pub use config::ResourceConfig;
 pub use reader::Resource;
 pub use resampler::PlaybackResamplerBackend;

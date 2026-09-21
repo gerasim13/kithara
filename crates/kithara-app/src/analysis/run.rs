@@ -4,13 +4,14 @@ use kithara::{
     analysis::{AnalysisProducer, AnalysisProgress},
     events::TrackId,
     platform::tokio::{
+        self,
         sync::watch,
-        task::{self, JoinHandle},
+        task::{self, JoinError, JoinHandle},
     },
 };
 use tracing::{debug, warn};
 
-use super::{entry::Stage, service::Owner};
+use super::{entry::Stage, load::LoadReply, service::Owner};
 use crate::{
     pools::AppQueueControl,
     wave_cache::{AnalysisPersistenceError, token_for},
@@ -28,19 +29,30 @@ pub(super) struct Run {
     pub(super) entry: usize,
 }
 
+/// What woke the owner's one loop.
+enum Woke {
+    /// An artifact its own source answered for.
+    Load(LoadReply),
+    /// The pass in flight published a revision.
+    Progress,
+    /// The pass in flight is over.
+    Finished,
+    /// The final checkpoint commit returned.
+    Committed(Result<Result<(), AnalysisPersistenceError>, JoinError>),
+}
+
 impl Owner {
     pub(super) async fn drive(&mut self) {
-        match &mut self.active {
-            Some(Activity::Running(run)) => {
-                if run.rx.changed().await.is_err() {
-                    self.finish_run();
-                    self.pump();
-                } else {
-                    self.publish();
-                }
+        let woke = self.wake().await;
+        match woke {
+            Woke::Load(reply) => self.take_load(reply),
+            Woke::Progress => self.publish(),
+            Woke::Finished => {
+                self.finish_run();
+                self.pump();
             }
-            Some(Activity::Committing(task)) => {
-                match task.await {
+            Woke::Committed(result) => {
+                match result {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => warn!(%error, "analysis: final checkpoint commit failed"),
                     Err(error) => warn!(%error, "analysis: final checkpoint task failed"),
@@ -48,7 +60,35 @@ impl Owner {
                 self.active = None;
                 self.pump();
             }
-            None => std::future::pending().await,
+        }
+    }
+
+    /// Wait for whichever of the owner's two sources speaks first: an artifact
+    /// read, or the pass in flight. Artifact reads are taken first, because a
+    /// prepared artifact can only ever remove work the pass would do.
+    async fn wake(&mut self) -> Woke {
+        let Self {
+            active, replies, ..
+        } = self;
+        match active {
+            Some(Activity::Running(run)) => tokio::select! {
+                biased;
+                Some(reply) = replies.recv() => Woke::Load(reply),
+                changed = run.rx.changed() => if changed.is_err() {
+                    Woke::Finished
+                } else {
+                    Woke::Progress
+                },
+            },
+            Some(Activity::Committing(task)) => tokio::select! {
+                biased;
+                Some(reply) = replies.recv() => Woke::Load(reply),
+                result = task => Woke::Committed(result),
+            },
+            None => match replies.recv().await {
+                Some(reply) => Woke::Load(reply),
+                None => std::future::pending().await,
+            },
         }
     }
 

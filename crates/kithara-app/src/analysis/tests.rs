@@ -20,10 +20,10 @@ use super::{
     AnalysisService, TrackArtifacts,
     entry::Stage,
     fixtures::{
-        analysis, app_config, axis, fingerprint, grid, long_wav, memory_store, other_axis,
-        persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
+        analysis, app_config, axis, document, fingerprint, grid, long_wav, memory_store,
+        other_axis, persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
         rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot, test_pools,
-        tone_mp3, track, track_prepared,
+        tone_mp3, track, track_prepared, track_sourced,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -890,6 +890,122 @@ async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
         "and the pass itself analysed no waveform"
     );
     assert!(analysis.beat().is_some(), "only the beats were analysed");
+    cancel.cancel();
+    host.close().await;
+}
+
+/// Wait until the entry holds the artifact its source answers with. The owner
+/// is driven by hand here, the way every other test in this file drives it.
+async fn read_artifacts(owner: &mut Owner, reads: usize) {
+    for _ in 0..reads {
+        time::timeout(Duration::from_secs(5), owner.drive())
+            .await
+            .expect("the artifact read answers");
+    }
+}
+
+#[kithara::test(native, tokio, flash(false))]
+async fn a_grid_read_from_a_source_reaches_the_deck_unanalysed(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let bytes = serde_json::to_vec(served_grid().as_raw()).expect("the grid serializes");
+    let (track_id, source) = track_sourced(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(document("grid.json", &bytes).into()),
+        Some(Arc::new(served_waveform()).into()),
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "an artifact still being read is not a reason to analyse one"
+    );
+    read_artifacts(&mut owner, 1).await;
+
+    let held = rx.borrow().clone().expect("the deck is served");
+    assert_eq!(
+        held.grid().map(|grid| grid.as_raw().model_id.clone()),
+        Some("served".to_owned()),
+        "the grid the source served reaches the deck"
+    );
+    assert!(
+        held.analysis().is_none(),
+        "with no local pass invented behind it"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+/// A source the caller named is a request for that artifact. Bytes that are
+/// not a grid are reported as such and leave the track without one — they
+/// never turn into a local pass nobody asked for.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_grid_source_that_does_not_parse_never_becomes_local_work(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track_sourced(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(document("broken.json", b"{}").into()),
+        Some(Arc::new(served_waveform()).into()),
+    )
+    .await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    read_artifacts(&mut owner, 1).await;
+
+    let held = rx.borrow().clone().expect("the deck is served");
+    assert!(held.grid().is_none(), "no grid was served");
+    assert!(
+        held.waveform().is_some(),
+        "and the waveform beside it is unharmed"
+    );
+    assert!(
+        owner.active.is_none() && owner.pending.is_empty(),
+        "a grid the caller asked a source for is not analysed instead"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+/// An artifact answering for a load that is over belongs to no track: the
+/// entry has been re-pointed and must keep what it holds now.
+#[kithara::test(native, tokio, flash(false))]
+async fn an_artifact_answering_a_closed_load_is_dropped(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let bytes = serde_json::to_vec(served_grid().as_raw()).expect("the grid serializes");
+    let (first, source) = track_sourced(
+        &host,
+        1,
+        &tone_mp3,
+        &owner.config.clone(),
+        Some(document("late.json", &bytes).into()),
+        None,
+    )
+    .await;
+    let rx = owner.subscribe(queue.clone(), first, source, axis());
+    // The same resource re-pointed at another track: one entry, a new load.
+    let (second, plain) = track(&host, 2, &tone_mp3).await;
+    let _ = owner.subscribe(queue, second, plain, axis());
+
+    read_artifacts(&mut owner, 1).await;
+
+    assert!(
+        rx.borrow()
+            .as_ref()
+            .is_none_or(|held| held.grid().is_none()),
+        "the entry moved on, so the late grid is dropped"
+    );
     cancel.cancel();
     host.close().await;
 }

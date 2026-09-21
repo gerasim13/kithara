@@ -51,7 +51,8 @@ pub use player::{
     SelectTransition,
 };
 pub use resource::{
-    ArtifactSource, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
+    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
 pub use rt::{PlayerNode, StreamShape};
 pub use worker::{

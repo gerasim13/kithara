@@ -120,31 +120,41 @@ impl UiState {
     }
 
     pub(crate) fn set_analysis(&mut self, analysis: Option<TrackArtifacts>) {
-        let (beats, downbeats) = analysis
+        let marks = analysis
             .as_ref()
-            .and_then(TrackArtifacts::analysis)
-            .and_then(|a| {
-                a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
-                    (
-                        frames_to_fractions(grid.artifact().beats(), a.source_frames()),
-                        frames_to_fractions(grid.artifact().downbeats(), a.source_frames()),
-                    )
-                })
-            })
-            .unwrap_or_else(|| (empty_marks(), empty_marks()));
-        self.beat_marks = beats;
-        self.downbeat_marks = downbeats;
+            .and_then(|artifacts| self.marks(artifacts))
+            .unwrap_or_default();
+        self.beat_marks = marks.beats;
+        self.downbeat_marks = marks.downbeats;
         self.unready_ranges = analysis
             .as_ref()
             .and_then(TrackArtifacts::analysis)
             .map_or_else(Arc::default, unready_ranges);
-        // State the grid once here, where the publication is stored: the per-frame
-        // snapshots this state is cloned into then carry it instead of deriving
-        // their own.
-        if let Some(analysis) = analysis.as_ref() {
-            let _ = analysis.grid();
-        }
         self.analysis = analysis;
+    }
+
+    /// Where the published grid puts its beats, as fractions of the track.
+    ///
+    /// The grid is read the way it states itself — in media seconds — so a
+    /// grid the track was opened with paints exactly like one this build
+    /// analysed, and neither is read against the host's output rate. A
+    /// publication that carries no grid at all falls back to the pass's own
+    /// frame positions, which is all a pass mid-flight has stated yet.
+    fn marks(&self, artifacts: &TrackArtifacts) -> Option<Marks> {
+        if let Some(grid) = artifacts.grid() {
+            let raw = grid.as_raw();
+            let seconds = raw.duration.unwrap_or(self.duration);
+            return Some(Marks {
+                beats: seconds_to_fractions(raw.beats.iter().map(|beat| beat.at), seconds),
+                downbeats: seconds_to_fractions(raw.downbeats.iter().map(|beat| beat.at), seconds),
+            });
+        }
+        let analysis = artifacts.analysis()?;
+        let frames = analysis.source_frames();
+        analysis.beat().filter(|_| frames > 0).map(|grid| Marks {
+            beats: frames_to_fractions(grid.artifact().beats(), frames),
+            downbeats: frames_to_fractions(grid.artifact().downbeats(), frames),
+        })
     }
 }
 
@@ -160,6 +170,25 @@ fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
     }
     let total_f: f64 = total.as_();
     Arc::from_iter(frames.iter().map(|&frame| fraction(frame, total_f)))
+}
+
+/// Where a deck paints its beat and bar lines, as fractions of the track.
+#[derive(Default)]
+struct Marks {
+    beats: Arc<[f32]>,
+    downbeats: Arc<[f32]>,
+}
+
+/// Media-second positions as fractions of a track that runs `total` seconds.
+/// A track of unknown length has no fraction to place anything at.
+fn seconds_to_fractions<I: Iterator<Item = f64>>(seconds: I, total: f64) -> Arc<[f32]> {
+    if !(total.is_finite() && total > 0.0) {
+        return empty_marks();
+    }
+    Arc::from_iter(seconds.map(|at| {
+        let fraction: f32 = (at / total).clamp(0.0, 1.0).as_();
+        fraction
+    }))
 }
 
 fn empty_marks() -> Arc<[f32]> {

@@ -214,6 +214,27 @@ pub(crate) async fn track_prepared(
     beat_grid: Option<BeatGridModel>,
     waveform: Option<Waveform>,
 ) -> (TrackId, AppTrackSource) {
+    track_sourced(
+        host,
+        id,
+        url,
+        app,
+        beat_grid.map(|grid| ArtifactSource::from(Arc::new(grid))),
+        waveform.map(|wave| ArtifactSource::from(Arc::new(wave))),
+    )
+    .await
+}
+
+/// Append a track the caller opened with artifacts however it holds them: a
+/// structure in hand, or a source their bytes are read from.
+pub(crate) async fn track_sourced(
+    host: &OffThread<(AppHost, AppQueueControl)>,
+    id: u64,
+    url: &str,
+    app: &AppConfig,
+    beat_grid: Option<ArtifactSource<BeatGridModel>>,
+    waveform: Option<ArtifactSource<Waveform>>,
+) -> (TrackId, AppTrackSource) {
     let track_id = TrackId::from(id);
     let src = ResourceSrc::parse(url).expect("fixture url parses");
     let config = AppResourceConfig::for_src(src)
@@ -223,8 +244,8 @@ pub(crate) async fn track_prepared(
         .audio(app.audio.clone())
         .hls(app.hls.clone())
         .file(app.file.clone())
-        .maybe_beat_grid(beat_grid.map(|grid| ArtifactSource::from(Arc::new(grid))))
-        .maybe_waveform(waveform.map(|wave| ArtifactSource::from(Arc::new(wave))))
+        .maybe_beat_grid(beat_grid)
+        .maybe_waveform(waveform)
         .build();
     host.call(move |(_, queue)| {
         queue
@@ -234,6 +255,14 @@ pub(crate) async fn track_prepared(
         (track_id, source)
     })
     .await
+}
+
+/// Write one artifact document into the scratch directory and point a source
+/// at it, so a test exercises the very path a caller configures a URL on.
+pub(crate) fn document(name: &str, bytes: &[u8]) -> ResourceSrc {
+    let path = std::env::temp_dir().join(format!("kithara-app-artifact-{name}"));
+    std::fs::write(&path, bytes).expect("fixture document is written");
+    ResourceSrc::Path(path)
 }
 
 pub(crate) fn memory_store() -> AppStore {

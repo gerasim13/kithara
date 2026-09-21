@@ -4582,6 +4582,7 @@ dependencies = [
  "obfstr",
  "rand 0.10.2",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
@@ -5503,6 +5504,7 @@ name = "kithara-play"
 version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
+ "axum",
  "biquad",
  "bon",
  "bytes",
@@ -5546,6 +5548,7 @@ dependencies = [
  "portable-atomic",
  "ringbuf 0.5.0",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "sha2 0.11.0",
  "smallvec",

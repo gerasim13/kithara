@@ -123,6 +123,7 @@ portable-atomic = { workspace = true }
 # Async & channels
 ringbuf = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -150,7 +151,10 @@ bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+
+axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

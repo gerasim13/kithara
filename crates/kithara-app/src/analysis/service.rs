@@ -16,6 +16,7 @@ use super::{
     TrackArtifacts,
     entry::{Entry, Stage},
     handle::{AnalysisHandle, Request},
+    load::LoadReply,
     run::Activity,
 };
 use crate::{
@@ -25,6 +26,11 @@ use crate::{
     wave_cache::{AnalysisPersistence, AnalysisTarget, TrackAnalysisCache},
     waveform::TrackAnalysisRunner,
 };
+
+/// How many artifact answers may queue before a reading task waits. One track
+/// answers at most twice, so this only ever bounds a burst of re-pointed
+/// entries.
+const LOAD_REPLIES: usize = 16;
 
 pub(crate) struct AnalysisService {
     pub(super) owner: Owner,
@@ -41,6 +47,10 @@ pub(super) struct Owner {
     pub(super) runner: TrackAnalysisRunner,
     pub(super) entries: Vec<Entry>,
     pub(super) pending: VecDeque<usize>,
+    /// Where an artifact read hands its answer back to the one task that owns
+    /// the entries, and where that task takes it.
+    pub(super) loads: mpsc::Sender<LoadReply>,
+    pub(super) replies: mpsc::Receiver<LoadReply>,
 }
 
 impl AnalysisService {
@@ -63,7 +73,10 @@ impl AnalysisService {
             config.worker.pools(),
             config.analysis_chunk_seconds,
         );
+        let (loads, replies) = mpsc::channel(LOAD_REPLIES);
         let owner = Owner {
+            loads,
+            replies,
             runner,
             cache,
             persistence,
@@ -277,6 +290,7 @@ impl Owner {
             return watch::channel(None).1;
         };
         self.entries[index].point_at(config, queue, track_id);
+        self.start_loads(index);
         self.seed(index, axis);
         let rx = self.entries[index].subscribe();
         self.schedule(index, axis);
@@ -300,6 +314,7 @@ impl Owner {
             };
             if !self.entries[index].is_held() {
                 self.entries[index].point_at(config, queue.clone(), track_id);
+                self.start_loads(index);
             }
             self.schedule(index, axis);
         }

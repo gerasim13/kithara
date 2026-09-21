@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara::{analysis::AnalysisProgress, events::TrackId, platform::tokio::sync::watch};
 
-use super::{artifacts::TrackArtifacts, supply::Prepared};
+use super::{artifacts::TrackArtifacts, load::Loaded, supply::Prepared};
 use crate::{
     pools::{AppQueueControl, AppResourceConfig},
     wave_cache::AnalysisTarget,
@@ -25,6 +25,11 @@ pub(crate) struct Entry {
     stage: Stage,
     #[field(get, copy)]
     track_id: TrackId,
+    /// Which load this entry is on. Every artifact read is tagged with it, so
+    /// an answer that arrives after the entry was re-pointed is dropped
+    /// instead of overwriting the track that holds it now.
+    #[field(get, copy)]
+    epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +56,7 @@ impl Entry {
             tx: watch::channel(None).0,
             held: None,
             stage: Stage::Idle,
+            epoch: 0,
         }
     }
 
@@ -90,10 +96,21 @@ impl Entry {
         queue: AppQueueControl,
         track_id: TrackId,
     ) {
+        self.epoch = self.epoch.wrapping_add(1);
         self.prepared = Prepared::for_config(&config);
         self.config = config;
         self.queue = queue;
         self.track_id = track_id;
+    }
+
+    /// Take in an artifact its own source answered with, and republish: one
+    /// publication carries every origin the track has.
+    pub(crate) fn accept(&mut self, loaded: Loaded) {
+        match loaded {
+            Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
+            Loaded::Waveform(result) => self.prepared.waveform = result.into(),
+        }
+        self.republish();
     }
 
     pub(crate) fn release(&mut self) {

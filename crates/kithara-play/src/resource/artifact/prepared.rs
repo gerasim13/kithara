@@ -1,6 +1,7 @@
 use kithara_platform::sync::Arc;
 
-use super::ResourceSrc;
+use super::{ArtifactDocument, ArtifactFetch, ArtifactLoadError};
+use crate::resource::ResourceSrc;
 
 /// How a prepared artifact reaches a resource: a structure the caller already
 /// holds, or an external source this resource loads it from.
@@ -33,5 +34,25 @@ impl<T> From<Arc<T>> for ArtifactSource<T> {
 impl<T> From<ResourceSrc> for ArtifactSource<T> {
     fn from(src: ResourceSrc) -> Self {
         Self::Source(src)
+    }
+}
+
+impl<T: ArtifactDocument> ArtifactSource<T> {
+    /// The artifact itself, reading it from its source first when that is how
+    /// the track was opened.
+    ///
+    /// A value costs nothing and performs no I/O; a source rides `fetch`, so
+    /// it is cancelled with the load it belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns why an external artifact never arrived or did not parse. There
+    /// is no fall back to local analysis: a track opened with an explicit
+    /// source asked for that artifact.
+    pub async fn load(&self, fetch: &ArtifactFetch<'_>) -> Result<Arc<T>, ArtifactLoadError> {
+        match self {
+            Self::Value(value) => Ok(Arc::clone(value)),
+            Self::Source(src) => fetch.load(src).await,
+        }
     }
 }

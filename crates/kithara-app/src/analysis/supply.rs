@@ -1,17 +1,28 @@
 use kithara::{
     analysis::{AnalysisDemand, AnalysisFingerprint, AnalysisProgress, BeatGridModel},
     platform::sync::Arc,
-    prelude::ArtifactSource,
+    play::{ArtifactLoadError, ArtifactSource},
     waveform::Waveform,
 };
 
 use crate::pools::AppResourceConfig;
 
 /// What a track already holds for one artifact, before any analysis runs.
+///
+/// Only [`Self::Missing`] is analysis's to produce. A track opened with an
+/// explicit source asked for that artifact from there: while it loads the
+/// artifact is [`Self::Pending`], and a load that fails leaves it
+/// [`Self::Failed`] — neither silently becomes local work.
 #[derive(Clone, Debug, Default)]
 pub(crate) enum Supply<T> {
     /// A value the caller handed over, ready to publish.
     Ready(Arc<T>),
+    /// An external source is being read; the artifact is neither here yet nor
+    /// anyone else's to produce.
+    Pending,
+    /// The external source did not yield a usable artifact. The track stays
+    /// without it and says so.
+    Failed,
     /// Nothing prepared: this artifact is analysis's to produce.
     #[default]
     Missing,
@@ -23,10 +34,15 @@ impl<T> Supply<T> {
         matches!(self, Self::Missing)
     }
 
+    /// Whether an external source is still being read for this artifact.
+    pub(crate) const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
     pub(crate) const fn value(&self) -> Option<&Arc<T>> {
         match self {
             Self::Ready(value) => Some(value),
-            Self::Missing => None,
+            Self::Pending | Self::Failed | Self::Missing => None,
         }
     }
 }
@@ -35,8 +51,15 @@ impl<T> From<Option<&ArtifactSource<T>>> for Supply<T> {
     fn from(source: Option<&ArtifactSource<T>>) -> Self {
         match source {
             Some(ArtifactSource::Value(value)) => Self::Ready(Arc::clone(value)),
+            Some(ArtifactSource::Source(_)) => Self::Pending,
             _ => Self::Missing,
         }
+    }
+}
+
+impl<T> From<Result<Arc<T>, ArtifactLoadError>> for Supply<T> {
+    fn from(loaded: Result<Arc<T>, ArtifactLoadError>) -> Self {
+        loaded.map_or(Self::Failed, Self::Ready)
     }
 }
 

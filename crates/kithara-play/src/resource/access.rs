@@ -10,7 +10,7 @@ use kithara_hls::Hls;
 use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
 
-use super::{ArtifactSource, ResourceConfig, ResourceSrc, SourceType};
+use super::{ArtifactFetch, ArtifactSource, ResourceConfig, ResourceSrc, SourceType};
 
 impl<S, B: Default> ResourceConfig<S, B>
 where
@@ -57,6 +57,20 @@ where
     #[must_use]
     pub const fn waveform(&self) -> Option<&ArtifactSource<Waveform>> {
         self.waveform.as_ref()
+    }
+
+    /// The I/O a prepared artifact of this track is read over: the same
+    /// downloader, the same headers policy, and the same cancel epoch as the
+    /// audio. Loading an artifact through this is what keeps a `remove` or a
+    /// reload from publishing a stale document.
+    #[must_use]
+    pub const fn artifact_fetch(&self) -> ArtifactFetch<'_> {
+        ArtifactFetch::new(
+            &self.src,
+            self.downloader.as_ref(),
+            self.headers.as_ref(),
+            self.cancel.as_ref(),
+        )
     }
 
     /// Per-track parent cancel token, when one was configured.
