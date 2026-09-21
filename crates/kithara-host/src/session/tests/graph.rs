@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelCtx, backend::AudioBackend};
+use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
@@ -28,17 +28,16 @@ use super::super::{
 ///
 /// The production Host surface never exposes its raw session state. This
 /// probe keeps existing deterministic backend tests on the same graph code.
-pub(crate) struct GraphSession<B: AudioBackend, S> {
-    state: SessionState<B, S>,
+pub(crate) struct GraphSession<T, S> {
+    state: SessionState<T, S>,
 }
 
-impl<B, S> GraphSession<B, S>
+impl<T, S> GraphSession<T, S>
 where
-    B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 =
-        match NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE) {
+        match NonZeroU32::new(SessionState::<T, S>::DEFAULT_SAMPLE_RATE) {
             Some(sample_rate) => sample_rate,
             None => unreachable!(),
         };
@@ -46,13 +45,17 @@ where
     #[must_use]
     pub(crate) fn new<F>(start_stream_fn: F) -> Self
     where
-        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
     }
 
-    pub(crate) fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
+    pub(crate) fn ctx_mut(&mut self) -> Option<&mut FirewheelContext> {
         self.state.ctx.as_mut()
+    }
+
+    pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
+        self.state.stream.as_mut()
     }
 
     #[must_use]
@@ -68,7 +71,7 @@ where
     #[must_use]
     fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
     where
-        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         Self {
             state: state_for(sample_rate, start_stream_fn),
@@ -94,21 +97,19 @@ impl<S> SessionDispatcher<S> for FixtureSession {
 }
 
 #[cfg(test)]
-pub(crate) fn state<B, F>(start_stream_fn: F) -> SessionState<B, TestPools>
+pub(crate) fn state<T, F>(start_stream_fn: F) -> SessionState<T, TestPools>
 where
-    B: AudioBackend,
-    F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
     state_for(
-        GraphSession::<B, TestPools>::DEFAULT_SAMPLE_RATE,
+        GraphSession::<T, TestPools>::DEFAULT_SAMPLE_RATE,
         start_stream_fn,
     )
 }
 
-fn state_for<B, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<B, S>
+fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
 where
-    B: AudioBackend,
-    F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
     let grid_id = BeatGridId::allocate().expect("fixture host grid id");
     let root = GroupState::unavailable(
@@ -123,24 +124,24 @@ where
         root_view,
         sample_rate,
         None,
+        None,
         LimiterConfig::default(),
         start_stream_fn,
     )
 }
 
 #[cfg(test)]
-pub(crate) fn attach_player<B: AudioBackend>(state: &mut SessionState<B, TestPools>) -> BeatGridId {
+pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGridId {
     let grid_id = BeatGridId::allocate().expect("fixture player grid id");
     attach_player_with_id(state, grid_id, pools());
     grid_id
 }
 
-fn attach_player_with_id<B, S>(
-    state: &mut SessionState<B, S>,
+fn attach_player_with_id<T, S>(
+    state: &mut SessionState<T, S>,
     grid_id: BeatGridId,
     pools: PoolRegion<S>,
 ) where
-    B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());

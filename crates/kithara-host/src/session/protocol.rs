@@ -1,4 +1,4 @@
-use firewheel::FirewheelCtx;
+use firewheel::FirewheelContext;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 pub(crate) use kithara_play::{
@@ -13,8 +13,11 @@ use kithara_sync::{
 
 use crate::api::HostLevel;
 
-pub(crate) type StartStreamFn<B> =
-    Box<dyn FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static>;
+/// Opens the audio stream a session runs on and hands back the object that
+/// owns it. Firewheel no longer holds the backend, so the session keeps the
+/// returned stream alive for as long as its context.
+pub(crate) type StartStreamFn<T> =
+    Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),

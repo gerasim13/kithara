@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -25,9 +25,8 @@ use super::{
 };
 use crate::api::HostLevel;
 
-pub(crate) fn run_host_cmd<B, S>(state: &mut SessionState<B, S>, cmd: HostCmd<S>) -> HostReply
+pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
-    B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
@@ -42,7 +41,7 @@ where
     }
 }
 
-fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd) -> HostReply {
+fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply {
     let operation = match cmd {
         SyncCmd::Transact(operation) => operation,
         SyncCmd::TransactCurrent(operations) => {
@@ -70,8 +69,8 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
     HostReply::Admission(result)
 }
 
-fn transact_root<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn transact_root<T, S>(
+    state: &mut SessionState<T, S>,
     operation: SyncOperation<PlayerMember>,
 ) -> Result<kithara_sync::SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
@@ -85,8 +84,8 @@ fn transact_root<B: AudioBackend, S>(
     state.root.transact(operation)
 }
 
-fn topology_conflicts_with_graph<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
+fn topology_conflicts_with_graph<T, S>(
+    state: &SessionState<T, S>,
     operation: &SyncOperation<PlayerMember>,
 ) -> bool {
     let SyncOperation::Topology { operations, .. } = operation else {
@@ -105,9 +104,8 @@ fn topology_conflicts_with_graph<B: AudioBackend, S>(
     })
 }
 
-pub(crate) fn run_cmd<B, S>(state: &mut SessionState<B, S>, cmd: Cmd<S>) -> Reply
+pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd<S>) -> Reply
 where
-    B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
@@ -234,20 +232,27 @@ where
     }
 }
 
-fn measured_stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
+/// The shape of the stream the session is actually running on, if it is
+/// running on one. Firewheel keeps a deactivated context's stream description
+/// until the processor comes back, so a session awaiting a restart would
+/// otherwise keep reporting the route it has already disowned as measured.
+fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
+    if state.stream_needs_restart {
+        return None;
+    }
     state
         .ctx
         .as_ref()
-        .and_then(FirewheelCtx::stream_info)
+        .and_then(FirewheelContext::stream_info)
         .map(|info| StreamShape::new(info.max_block_frames, info.sample_rate))
 }
 
-pub(super) fn sample_rate<B: AudioBackend, S>(state: &SessionState<B, S>) -> SessionSampleRate {
+pub(super) fn sample_rate<T, S>(state: &SessionState<T, S>) -> SessionSampleRate {
     let measured = measured_stream_shape(state).map(|shape| shape.sample_rate.get());
     SessionSampleRate::new(measured, state.sample_rate_hint)
 }
 
-pub(super) fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
+pub(super) fn stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
     measured_stream_shape(state).or_else(|| {
         Some(StreamShape::new(
             state.requested_max_block_frames?,
@@ -256,7 +261,7 @@ pub(super) fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Op
     })
 }
 
-pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Reply {
+pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if state.stream_needs_restart {
         match restart_stream(state, state.sample_rate_hint) {
             Ok(()) => {}
@@ -273,20 +278,22 @@ pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -
         }
     }
 
-    let update = state.ctx.as_mut().map(FirewheelCtx::update);
+    let update = state.ctx.as_mut().map(FirewheelContext::update);
     if let Some(Err(err)) = update {
-        return handle_update_error(state, err);
+        return handle_update_error(state, &err);
+    }
+    if stream_died(state) {
+        return restart_dead_stream(state);
     }
     Reply::Ok
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-pub(super) fn drain_host_channel<B, S>(
-    state: &mut SessionState<B, S>,
+pub(super) fn drain_host_channel<T, S>(
+    state: &mut SessionState<T, S>,
     rx: &mpsc::Receiver<HostCmdMsg<S>>,
     mut observe: impl FnMut(&HostReply),
 ) where
-    B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     for msg in rx.try_iter() {
@@ -300,8 +307,8 @@ pub(super) fn drain_host_channel<B, S>(
     }
 }
 
-fn unregister_player<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn unregister_player<T, S>(
+    state: &mut SessionState<T, S>,
     player_id: PlayerId,
 ) -> Result<(), SessionError> {
     debug!(player_id, "[KITHARA-ROUTE] unregistering player");
@@ -328,10 +335,7 @@ fn unregister_player<B: AudioBackend, S>(
     Ok(())
 }
 
-fn apply_mix<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    levels: &[HostLevel],
-) -> Result<(), PlayError> {
+fn apply_mix<T, S>(state: &mut SessionState<T, S>, levels: &[HostLevel]) -> Result<(), PlayError> {
     let mut projected: Vec<PlayerLevel> = Vec::with_capacity(levels.len());
     for (index, &HostLevel { grid_id, level }) in levels.iter().enumerate() {
         if !level.is_finite() || !(0.0..=1.0).contains(&level) {
@@ -368,42 +372,40 @@ fn apply_mix<B: AudioBackend, S>(
     Ok(())
 }
 
-pub(super) fn handle_update_error<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    err: UpdateError<B::StreamError>,
+pub(super) fn handle_update_error<T, S>(
+    _state: &mut SessionState<T, S>,
+    err: &UpdateError,
 ) -> Reply {
-    match err {
-        UpdateError::StreamStoppedUnexpectedly(reason) => {
-            state.stream_needs_restart = true;
-            state.publish_root();
-            warn!(
-                ?reason,
-                "session stream stopped unexpectedly; restarting audio stream"
-            );
-            trace!(
-                ?reason,
-                sample_rate_hint = state.sample_rate_hint,
-                "[KITHARA-ROUTE] firewheel update reported stopped stream"
-            );
-            match restart_stream(state, state.sample_rate_hint) {
-                Ok(()) => Reply::Ok,
-                Err(restart_err) => Reply::Err(SessionError::RestartFailed {
-                    reason: format!("{reason:?}"),
-                    r#source: restart_err.to_string(),
-                }),
-            }
-        }
-        other => {
-            warn!(?other, "[KITHARA-ROUTE] firewheel update failed");
-            Reply::Err(SessionError::Graph(format!("{other:?}")))
-        }
+    warn!(?err, "[KITHARA-ROUTE] firewheel update failed");
+    Reply::Err(SessionError::Graph(format!("{err:?}")))
+}
+
+/// A context that went inactive under a session that believes its stream is
+/// running lost that stream: Firewheel hands the processor back when it stops,
+/// and since 0.14 that is the only place the death shows up — it is no longer
+/// reported as an update error.
+pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
+    !state.stream_needs_restart && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
+}
+
+fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
+    state.stream_needs_restart = true;
+    state.publish_root();
+    warn!("session stream stopped unexpectedly; restarting audio stream");
+    trace!(
+        sample_rate_hint = state.sample_rate_hint,
+        "[KITHARA-ROUTE] firewheel context went inactive under a live stream"
+    );
+    match restart_stream(state, state.sample_rate_hint) {
+        Ok(()) => Reply::Ok,
+        Err(restart_err) => Reply::Err(SessionError::RestartFailed {
+            reason: "audio stream stopped".to_owned(),
+            r#source: restart_err.to_string(),
+        }),
     }
 }
 
-pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    reason: &str,
-) -> Reply {
+pub(super) fn invalidate_audio_route<T, S>(state: &mut SessionState<T, S>, reason: &str) -> Reply {
     debug!(
         reason,
         ctx_ready = state.ctx.is_some(),
@@ -424,16 +426,13 @@ pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
 }
 
 /// Moves the output to `sample_rate` through the same restart a route change takes.
-fn set_sample_rate<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    sample_rate: NonZeroU32,
-) -> Reply {
+fn set_sample_rate<T, S>(state: &mut SessionState<T, S>, sample_rate: NonZeroU32) -> Reply {
     state.sample_rate_hint = sample_rate.get();
     invalidate_audio_route(state, "sample rate change")
 }
 
-pub(super) fn restart_stream<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(super) fn restart_stream<T, S>(
+    state: &mut SessionState<T, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     if state.ctx.is_none() {
@@ -445,7 +444,8 @@ pub(super) fn restart_stream<B: AudioBackend, S>(
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    let stream = (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    state.stream = Some(stream);
     state.reserved_session_grid = None;
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
@@ -458,19 +458,14 @@ pub(super) fn restart_stream<B: AudioBackend, S>(
     Ok(())
 }
 
-pub(super) fn trace_stream_info<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
-    context: &'static str,
-) {
-    if let Some(info) = state.ctx.as_ref().and_then(FirewheelCtx::stream_info) {
+pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'static str) {
+    if let Some(info) = state.ctx.as_ref().and_then(FirewheelContext::stream_info) {
         trace!(
             context,
             sample_rate = info.sample_rate.get(),
             prev_sample_rate = info.prev_sample_rate.get(),
             max_block_frames = info.max_block_frames.get(),
             out_channels = info.num_stream_out_channels,
-            output_device_id = %info.output_device_id,
-            input_device_id = ?info.input_device_id.as_deref(),
             stream_needs_restart = state.stream_needs_restart,
             "[KITHARA-ROUTE] session stream-info"
         );
@@ -492,7 +487,7 @@ mod tests {
         sync::atomic::AtomicBool,
     };
 
-    use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
+    use firewheel::{ActivateInfo, processor::FirewheelProcessor};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::sync::{
@@ -520,7 +515,6 @@ mod tests {
 
     #[derive(Default)]
     struct RouteLossProbe {
-        fail_next_poll: AtomicBool,
         fail_next_start: AtomicBool,
         start_count: AtomicUsize,
     }
@@ -528,7 +522,6 @@ mod tests {
     impl RouteLossProbe {
         fn reset(&self) {
             self.start_count.store(0, Ordering::SeqCst);
-            self.fail_next_poll.store(false, Ordering::SeqCst);
             self.fail_next_start.store(false, Ordering::SeqCst);
         }
     }
@@ -541,92 +534,45 @@ mod tests {
         ROUTE_LOSS.with(f)
     }
 
-    struct RouteLossBackend {
-        _processor: Option<FirewheelProcessor<Self>>,
+    /// The fixture stream. Holding the processor is the whole of it: dropping
+    /// this is what a lost audio stream looks like to the context, so a test
+    /// simulates the loss by dropping `state.stream`.
+    struct RouteLossStream {
+        _processor: FirewheelProcessor,
     }
 
-    type TestState = SessionState<RouteLossBackend, TestPools>;
-
-    #[derive(Clone)]
-    struct RouteLossConfig {
-        sample_rate: u32,
-    }
-
-    impl Default for RouteLossConfig {
-        fn default() -> Self {
-            Self {
-                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-            }
-        }
-    }
+    type TestState = SessionState<RouteLossStream, TestPools>;
 
     #[derive(Debug, thiserror::Error)]
     #[error("route lost")]
     struct RouteLossError;
 
-    impl AudioBackend for RouteLossBackend {
-        type Config = RouteLossConfig;
-        type Enumerator = ();
-        type Instant = kithara_platform::time::Instant;
-        type StartStreamError = RouteLossError;
-        type StreamError = RouteLossError;
-
-        fn delay_from_last_process(
-            &self,
-            _process_timestamp: Self::Instant,
-        ) -> Option<kithara_platform::time::Duration> {
-            None
+    fn start_route_loss_stream(
+        ctx: &mut FirewheelContext,
+        sample_rate: u32,
+    ) -> Result<RouteLossStream, String> {
+        route_loss(|probe| probe.start_count.fetch_add(1, Ordering::SeqCst));
+        if route_loss(|probe| probe.fail_next_start.swap(false, Ordering::SeqCst)) {
+            return Err(RouteLossError.to_string());
         }
-
-        fn enumerator() -> Self::Enumerator {}
-
-        fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-            if route_loss(|probe| probe.fail_next_poll.swap(false, Ordering::SeqCst)) {
-                Err(RouteLossError)
-            } else {
-                Ok(())
-            }
-        }
-
-        fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
-            self._processor = Some(processor);
-        }
-
-        fn start_stream(
-            config: Self::Config,
-        ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
-            route_loss(|probe| probe.start_count.fetch_add(1, Ordering::SeqCst));
-            if route_loss(|probe| probe.fail_next_start.swap(false, Ordering::SeqCst)) {
-                return Err(RouteLossError);
-            }
-
-            let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
-                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
-                    .expect("invariant: fixture default sample rate is non-zero"),
-            );
-            let max_block_frames = NonZeroU32::new(512).ok_or(RouteLossError)?;
-            let stream_info = StreamInfo {
+        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(
+            NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
+                .expect("invariant: fixture default sample rate is non-zero"),
+        );
+        let max_block_frames =
+            NonZeroU32::new(512).expect("invariant: fixture block size is non-zero");
+        let processor = ctx
+            .activate(ActivateInfo {
                 sample_rate,
-                sample_rate_recip: 1.0 / f64::from(sample_rate.get()),
-                prev_sample_rate: sample_rate,
                 max_block_frames,
                 num_stream_in_channels: 0,
                 num_stream_out_channels: 2,
                 input_to_output_latency_seconds: 0.0,
-                declick_frames: max_block_frames,
-                output_device_id: String::from("route-loss-test"),
-                input_device_id: None,
-            };
-            Ok((Self { _processor: None }, stream_info))
-        }
-    }
-
-    fn start_route_loss_stream(
-        ctx: &mut FirewheelCtx<RouteLossBackend>,
-        sample_rate: u32,
-    ) -> Result<(), String> {
-        ctx.start_stream(RouteLossConfig { sample_rate })
-            .map_err(|err| err.to_string())
+            })
+            .map_err(|err| err.to_string())?;
+        Ok(RouteLossStream {
+            _processor: processor,
+        })
     }
 
     fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
@@ -1149,7 +1095,7 @@ mod tests {
         assert_eq!(deck(&state, 0).slots.len(), 1);
         let before_route = host_grid(&state);
 
-        route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
+        state.stream = None;
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
 
         assert_eq!(
@@ -1205,7 +1151,7 @@ mod tests {
 
         let (_tx, rx) = mpsc::channel::<HostCmdMsg<TestPools>>();
 
-        route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
+        state.stream = None;
         drain_host_channel(&mut state, &rx, |_| {});
 
         assert_eq!(
@@ -1233,10 +1179,8 @@ mod tests {
         );
         let before_route = host_grid(&state);
 
-        route_loss(|probe| {
-            probe.fail_next_poll.store(true, Ordering::SeqCst);
-            probe.fail_next_start.store(true, Ordering::SeqCst);
-        });
+        state.stream = None;
+        route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
         match run_cmd(&mut state, Cmd::Tick) {
             Reply::Err(err) => assert!(
                 matches!(err, SessionError::RestartFailed { .. }),

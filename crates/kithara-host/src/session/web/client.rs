@@ -132,6 +132,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root_view.clone(),
         sample_rate,
         None,
+        None,
         limiter,
         start_stream_web_audio,
     ))));

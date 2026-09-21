@@ -1,9 +1,8 @@
 use std::num::NonZeroU32;
 
 use firewheel::{
-    FirewheelCtx,
-    backend::AudioBackend,
-    cpal::{CpalBackend, CpalConfig},
+    FirewheelContext,
+    cpal::{CpalConfig, CpalStream},
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
@@ -81,9 +80,9 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     }
 }
 
-fn complete_shutdown<B: AudioBackend, S>(
+fn complete_shutdown<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
-    state: SessionState<B, S>,
+    state: SessionState<T, S>,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
     // Disconnect queued callers before PlayerRuntime::drop takes its
@@ -95,22 +94,23 @@ fn complete_shutdown<B: AudioBackend, S>(
     }
 }
 
-fn engine_thread<B: AudioBackend, S>(
+fn engine_thread<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
     limiter: LimiterConfig,
-    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = SessionState::<B, S>::new(
+    let mut state = SessionState::<T, S>::new(
         root,
         root_view,
         sample_rate,
         requested_max_block_frames,
+        None,
         limiter,
         start_stream_fn,
     );
@@ -129,23 +129,22 @@ fn engine_thread<B: AudioBackend, S>(
     debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
-fn spawn_session_client<B, S>(
+fn spawn_session_client<T, S>(
     thread_name: &'static str,
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
     limiter: LimiterConfig,
-    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
-    B: AudioBackend + Send + 'static,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
     let client_view = root_view.clone();
     spawn_named(thread_name, move || {
-        engine_thread::<B, S>(
+        engine_thread::<T, S>(
             cmd_rx,
             root,
             root_view,
@@ -162,16 +161,16 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelCtx<CpalBackend>,
+    ctx: &mut FirewheelContext,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
-) -> Result<(), String> {
+) -> Result<CpalStream, String> {
     debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
     let config = cpal_config(sample_rate, output_block_frames);
-    match ctx.start_stream(config) {
-        Ok(()) => {
+    match CpalStream::new(ctx, config) {
+        Ok(stream) => {
             debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
-            Ok(())
+            Ok(stream)
         }
         Err(err) => {
             warn!(
@@ -200,7 +199,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     output_block_frames: Option<NonZeroU32>,
     limiter: LimiterConfig,
 ) -> Arc<dyn HostDispatcher<S>> {
-    spawn_session_client::<CpalBackend, S>(
+    spawn_session_client::<CpalStream, S>(
         "kithara-engine",
         root,
         root_view,

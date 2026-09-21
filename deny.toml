@@ -76,6 +76,7 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
   # symphonia dev branch until 0.6 is released on crates.io
   "https://github.com/pdeljanov/Symphonia.git",
-  # patched firewheel-web-audio fork
-  "https://github.com/gerasim13/firewheel-web-audio",
+  # bevy_seedling fork carrying firewheel-web-audio: a worklet thread stack size
+  # and the firewheel 0.14 port, neither of which is released upstream
+  "https://github.com/gerasim13/bevy_seedling",
 ]

@@ -149,8 +149,8 @@ mod runs {
 
     use kithara::{
         analysis::{
-            AnalysisProgress, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
-            BeatAnalysisConfig,
+            AnalysisDemand, AnalysisProgress, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig,
+            AnalyzerBuilder, BeatAnalysisConfig,
         },
         audio::AudioReader,
         platform::{
@@ -263,9 +263,12 @@ mod runs {
             };
             self.cancel(id);
 
-            let (rx, producer, pass) =
-                self.worker
-                    .open(token, rate, Consts::CALLER_HOLDS_NO_REVISION);
+            let (rx, producer, pass) = self.worker.open(
+                token,
+                rate,
+                Consts::CALLER_HOLDS_NO_REVISION,
+                AnalysisDemand::ALL,
+            );
             let cancel = pass.cancel_token().clone();
             self.live.borrow_mut().insert(id, cancel.clone());
 

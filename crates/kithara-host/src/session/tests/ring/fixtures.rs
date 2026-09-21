@@ -4,17 +4,14 @@ use std::{
 };
 
 use firewheel::{
-    FirewheelCtx, StreamInfo,
+    StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    event::ProcEvents,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_platform::sync::Arc;
-
-use super::RingBackend;
 
 #[derive(Clone, Default)]
 pub(crate) struct CountingProbe {
@@ -75,18 +72,18 @@ where
         &self,
         _configuration: &Self::Configuration,
         cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
         self.state.construct(cx.stream_info);
-        FixtureProcessor(self.state.clone())
+        Ok(FixtureProcessor(self.state.clone()))
     }
 
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _configuration: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name(S::DEBUG_NAME)
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
-            })
+            }))
     }
 }
 
@@ -104,7 +101,6 @@ where
         &mut self,
         info: &ProcInfo,
         buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.0.process(info, buffers)
@@ -153,13 +149,15 @@ impl FixtureState for () {
 }
 
 pub(crate) fn install_stereo_source<N>(
-    ctx: &mut FirewheelCtx<RingBackend>,
+    ctx: &mut firewheel::FirewheelContext,
     node: N,
 ) -> Result<NodeID, String>
 where
     N: AudioNode<Configuration = EmptyConfig> + 'static,
 {
-    let node_id = ctx.add_node(node, None);
+    let node_id = ctx
+        .add_node(node, None)
+        .map_err(|error| format!("audio graph rejected the ring fixture node: {error}"))?;
     let graph_out = ctx.graph_out_node_id();
     ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
         .map_err(|error| format!("connect ring fixture to graph output failed: {error}"))?;

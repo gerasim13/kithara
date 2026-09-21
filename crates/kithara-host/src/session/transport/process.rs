@@ -37,6 +37,18 @@ pub(crate) struct TransportCommitState {
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
     session_grid: SessionGridGeneration,
+    staged: StagedCommitEvents,
+}
+
+/// The commit events of one process block, collapsed to the at most one of
+/// each kind the state acts on. Firewheel delivers events ahead of the block
+/// they belong to, while the state may only act on them once the block's
+/// anchor is current, so they wait here in between.
+#[derive(Debug, Default, Clone, Copy)]
+struct StagedCommitEvents {
+    abort: Option<TransportRevision>,
+    apply: Option<TransportRevision>,
+    stage: Option<TransportCommitStamp>,
 }
 
 #[derive(Debug)]
@@ -54,15 +66,24 @@ impl TransportObservationInput {
     }
 }
 
+pub(super) fn stage_transport_events(
+    events: &mut ProcEvents,
+    store: &mut ProcStore,
+) -> Result<(), TransportProcessError> {
+    store
+        .try_get_mut::<TransportCommitState>()
+        .ok_or(TransportProcessError::MissingState)?
+        .stage_events(events)
+}
+
 pub(super) fn process_transport(
     info: &ProcInfo,
-    events: &mut ProcEvents,
     store: &mut ProcStore,
 ) -> Result<TransportFrame, TransportProcessError> {
     let result = store
         .try_get_mut::<TransportCommitState>()
         .ok_or(TransportProcessError::MissingState)?
-        .process(info, events);
+        .process(info);
     if let Err(error) = result {
         store
             .try_get_mut::<TransportCommitState>()
@@ -122,6 +143,11 @@ impl TransportCommitState {
             pending: None,
             reanchor_beat: None,
             snapshot: None,
+            staged: StagedCommitEvents {
+                abort: None,
+                apply: None,
+                stage: None,
+            },
         }
     }
 
@@ -207,14 +233,7 @@ impl TransportCommitState {
         Ok(())
     }
 
-    fn apply_events(
-        &mut self,
-        info: &ProcInfo,
-        events: &mut ProcEvents,
-    ) -> Result<(), TransportProcessError> {
-        let mut abort = None;
-        let mut apply = None;
-        let mut stage = None;
+    fn stage_events(&mut self, events: &mut ProcEvents) -> Result<(), TransportProcessError> {
         for event in events.drain() {
             let event = event
                 .downcast_ref::<TransportCommitEvent>()
@@ -222,16 +241,25 @@ impl TransportCommitState {
                 .ok_or(TransportProcessError::UnexpectedEvent)?;
             match event {
                 TransportCommitEvent::Abort(revision) => {
-                    Self::set_once(&mut abort, revision)?;
+                    Self::set_once(&mut self.staged.abort, revision)?;
                 }
                 TransportCommitEvent::Apply(revision) => {
-                    Self::set_once(&mut apply, revision)?;
+                    Self::set_once(&mut self.staged.apply, revision)?;
                 }
                 TransportCommitEvent::Stage(stamp) => {
-                    Self::set_once(&mut stage, stamp)?;
+                    Self::set_once(&mut self.staged.stage, stamp)?;
                 }
             }
         }
+        Ok(())
+    }
+
+    fn apply_events(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
+        let StagedCommitEvents {
+            abort,
+            apply,
+            stage,
+        } = core::mem::take(&mut self.staged);
         if let Some(revision) = abort {
             self.apply_abort(revision)?;
         }
@@ -357,14 +385,10 @@ impl TransportCommitState {
         )))
     }
 
-    fn process(
-        &mut self,
-        info: &ProcInfo,
-        events: &mut ProcEvents,
-    ) -> Result<TransportFrame, TransportProcessError> {
+    fn process(&mut self, info: &ProcInfo) -> Result<TransportFrame, TransportProcessError> {
         self.reanchor(info)?;
         self.validate_frame(info)?;
-        self.apply_events(info, events)?;
+        self.apply_events(info)?;
         let session_beats = self.session_beats(info)?;
         self.boundary = Self::next_boundary(info, self.active, self.boundary)?;
         self.snapshot = self.next_snapshot(session_beats.as_ref())?;

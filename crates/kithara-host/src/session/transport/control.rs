@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
-    session::{SessionError, state::SessionState},
+    session::{SessionError, dispatch::stream_died, state::SessionState},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,8 +88,8 @@ impl SessionTransportState {
     }
 }
 
-pub(crate) fn set_tempo<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(crate) fn set_tempo<T, S>(
+    state: &mut SessionState<T, S>,
     tempo: Tempo,
 ) -> Result<(), SessionError> {
     let _ = refresh_observation(state)?;
@@ -110,8 +110,8 @@ pub(crate) fn set_tempo<B: AudioBackend, S>(
     schedule_commit(state, next, stamp)
 }
 
-pub(crate) fn set_playing<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(crate) fn set_playing<T, S>(
+    state: &mut SessionState<T, S>,
     playing: bool,
 ) -> Result<(), SessionError> {
     let _ = refresh_observation(state)?;
@@ -131,8 +131,8 @@ pub(crate) fn set_playing<B: AudioBackend, S>(
     schedule_commit(state, next, stamp)
 }
 
-pub(crate) fn seek<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(crate) fn seek<T, S>(
+    state: &mut SessionState<T, S>,
     target: SessionBeat,
 ) -> Result<(), SessionError> {
     let _ = refresh_observation(state)?;
@@ -150,8 +150,8 @@ pub(crate) fn seek<B: AudioBackend, S>(
     schedule_commit(state, next, stamp)
 }
 
-pub(crate) fn snapshot<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(crate) fn snapshot<T, S>(
+    state: &mut SessionState<T, S>,
 ) -> Result<SessionTransportSnapshot, SessionError> {
     refresh_observation(state)?
         .snapshot()
@@ -164,15 +164,15 @@ pub(crate) enum RouteRestartStatus {
     Ready,
 }
 
-pub(crate) fn prepare_route_restart<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(crate) fn prepare_route_restart<T, S>(
+    state: &mut SessionState<T, S>,
     sample_rate: u32,
 ) -> Result<RouteRestartStatus, SessionError> {
     let was_running = state
         .ctx
         .as_ref()
         .ok_or(SessionError::NoContext)?
-        .is_audio_stream_running();
+        .is_active();
     let current = state.root.snapshot();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
@@ -229,14 +229,15 @@ pub(crate) fn prepare_route_restart<B: AudioBackend, S>(
             .ctx
             .as_mut()
             .ok_or(SessionError::NoContext)?
-            .stop_stream();
+            .request_deactivate();
+        state.stream = None;
     }
     state.publish_root();
     finish_route_restart(state, target)
 }
 
-fn finish_route_restart<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn finish_route_restart<T, S>(
+    state: &mut SessionState<T, S>,
     target: SessionGridGeneration,
 ) -> Result<RouteRestartStatus, SessionError> {
     let Some(store) = state
@@ -284,18 +285,14 @@ fn finish_route_restart<B: AudioBackend, S>(
     Ok(RouteRestartStatus::Ready)
 }
 
-fn ensure_no_pending_commit<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
-) -> Result<(), SessionError> {
+fn ensure_no_pending_commit<T, S>(state: &SessionState<T, S>) -> Result<(), SessionError> {
     if state.transport.pending_revision().is_some() {
         return Err(SessionError::TransportNotProcessed);
     }
     Ok(())
 }
 
-fn next_revision<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
-) -> Result<TransportRevision, SessionError> {
+fn next_revision<T, S>(state: &SessionState<T, S>) -> Result<TransportRevision, SessionError> {
     state
         .transport
         .ledger()
@@ -307,8 +304,8 @@ fn next_revision<B: AudioBackend, S>(
         })
 }
 
-fn schedule_commit<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn schedule_commit<T, S>(
+    state: &mut SessionState<T, S>,
     next: SessionTransportCommit,
     stamp: TransportCommitStamp,
 ) -> Result<(), SessionError> {
@@ -331,8 +328,8 @@ fn schedule_commit<B: AudioBackend, S>(
     Ok(())
 }
 
-fn commit_boundary<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
+fn commit_boundary<T, S>(
+    state: &SessionState<T, S>,
 ) -> Result<(SessionFrame, NonZeroU32), SessionError> {
     let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
@@ -349,8 +346,8 @@ fn commit_boundary<B: AudioBackend, S>(
     Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
 }
 
-fn queue_stamp<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn queue_stamp<T, S>(
+    state: &mut SessionState<T, S>,
     stamp: TransportCommitStamp,
 ) -> Result<(), SessionError> {
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
@@ -362,19 +359,19 @@ fn queue_stamp<B: AudioBackend, S>(
     Ok(())
 }
 
-fn update_context<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Result<(), SessionError> {
+fn update_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     let Err(error) = state.ctx.as_mut().ok_or(SessionError::NoContext)?.update() else {
         return Ok(());
     };
     // WHY: The session owns stream restarts; swallowing this into a message would strand the transport behind a stream nobody rearms.
-    if matches!(error, UpdateError::StreamStoppedUnexpectedly(_)) {
+    if stream_died(state) {
         state.stream_needs_restart = true;
     }
     Err(SessionError::TransportSync(sync_error_reason(error)))
 }
 
-fn abort_commit<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn abort_commit<T, S>(
+    state: &mut SessionState<T, S>,
     revision: TransportRevision,
 ) -> Result<(), SessionError> {
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
@@ -392,15 +389,11 @@ fn abort_commit<B: AudioBackend, S>(
     deliver_abort(state)
 }
 
-fn deliver_abort<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Result<(), SessionError> {
+fn deliver_abort<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     update_context(state)?;
     // WHY: Firewheel only flushes queued events while a stream runs, so an update that succeeds on a stopped stream has delivered
     // nothing; leaving the abort `Pending` is what makes the next refresh retry it.
-    if !state
-        .ctx
-        .as_ref()
-        .is_some_and(FirewheelCtx::is_audio_stream_running)
-    {
+    if !state.ctx.as_ref().is_some_and(FirewheelContext::is_active) {
         return Ok(());
     }
     if let TransportPhase::Aborting { delivery, .. } = &mut state.transport.phase
@@ -411,26 +404,17 @@ fn deliver_abort<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Result<(
     Ok(())
 }
 
-fn sync_error_reason<E>(error: UpdateError<E>) -> String
-where
-    E: std::error::Error,
-{
+fn sync_error_reason(error: UpdateError) -> String {
     match error {
         UpdateError::MsgChannelFull => "message channel is full".to_owned(),
         UpdateError::GraphCompileError(error) => {
             format!("audio graph compilation failed: {error}")
         }
-        UpdateError::StreamStoppedUnexpectedly(Some(error)) => {
-            format!("audio stream stopped unexpectedly: {error}")
-        }
-        UpdateError::StreamStoppedUnexpectedly(None) => {
-            "audio stream stopped unexpectedly".to_owned()
-        }
     }
 }
 
-fn refresh_observation<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn refresh_observation<T, S>(
+    state: &mut SessionState<T, S>,
 ) -> Result<TransportObservation, SessionError> {
     if state.reserved_session_grid.is_some() {
         return Err(SessionError::TransportNotProcessed);
@@ -464,10 +448,7 @@ fn refresh_observation<B: AudioBackend, S>(
     Ok(observation)
 }
 
-fn apply_completion<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    completion: TransportCommitResult,
-) {
+fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportCommitResult) {
     let revision = completion.revision();
     if state
         .transport
@@ -518,8 +499,8 @@ fn apply_completion<B: AudioBackend, S>(
     }
 }
 
-fn publish_transport_commit<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
+fn publish_transport_commit<T, S>(
+    state: &SessionState<T, S>,
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
 ) {
@@ -555,7 +536,7 @@ fn transport_events(
     [tempo, play_state, seek]
 }
 
-fn publish_transport_event<B: AudioBackend, S>(state: &SessionState<B, S>, event: &TransportEvent) {
+fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
     for deck in state.graph.decks() {
         deck.bus.publish(event.clone());
     }

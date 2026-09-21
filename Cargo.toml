@@ -320,6 +320,9 @@ assert_no_alloc = "1.1"
 
 # async traits
 async-trait = "0.1.89"
+
+# fast interleave/deinterleave
+audioadapter-buffers = { version = "5.0", default-features = false, features = ["std"] }
 axum = "0.8.9"
 backtrace = "0.3"
 base64 = "0.22.1"
@@ -358,16 +361,14 @@ dashmap = "6.2.1"
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
-
-# fast interleave/deinterleave
 fast-interleave = "0.1"
 fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
-firewheel = { version = "0.10.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
-firewheel-core = { version = "0.10.1", default-features = false, features = ["std", "serde"] }
-firewheel-web-audio = { version = "0.4.0", default-features = false }
+firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
+firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
+firewheel-web-audio = { version = "0.6.0", default-features = false }
 fs4 = "1.1.0"
 futures = "0.3.32"
 
@@ -692,5 +693,5 @@ lto = "fat"
 codegen-units = 1
 
 [patch.crates-io]
+firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "18bbf168523175735d7ece9fb293cdf3de66b273" }
 btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
-firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }

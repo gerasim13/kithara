@@ -20,7 +20,7 @@ use super::{
 mod backend;
 mod client;
 
-use backend::{BackendConfig, OfflineBackend};
+use backend::{BackendConfig, OfflineStream};
 pub(crate) use client::OfflineSessionClient;
 use kithara_platform::sync::mpsc::TryRecvError;
 
@@ -43,7 +43,7 @@ struct OfflineSessionTask<S> {
     max_block_frames: NonZeroU32,
     pools: PoolRegion<S>,
     position: u64,
-    state: Option<SessionState<OfflineBackend, S>>,
+    state: Option<SessionState<OfflineStream, S>>,
 }
 
 pub(crate) struct OfflineTaskConfig<S> {
@@ -193,17 +193,15 @@ where
     ));
     let task = pending
         .start_local(move |_| {
-            let start_stream = move |ctx: &mut firewheel::FirewheelCtx<OfflineBackend>,
-                                     rate: u32| {
+            let start_stream = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
                 let rate = NonZeroU32::new(rate)
                     .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
                 let config = BackendConfig::builder()
                     .block_frames(max_block_frames)
-                    .declick_frames(declick_frames)
                     .declared_latency(declared_latency)
                     .sample_rate(rate)
                     .build();
-                ctx.start_stream(config).map_err(|error| error.to_string())
+                OfflineStream::start(ctx, config).map_err(|error| error.to_string())
             };
             OfflineSessionTask {
                 cmd_rx: Some(cmd_rx),
@@ -215,6 +213,7 @@ where
                     root_view,
                     sample_rate,
                     Some(max_block_frames),
+                    Some(declick_frames),
                     limiter,
                     start_stream,
                 )),
@@ -225,7 +224,7 @@ where
 }
 
 fn render_block<S>(
-    state: &mut SessionState<OfflineBackend, S>,
+    state: &mut SessionState<OfflineStream, S>,
     frames: u32,
     position: u64,
     pools: &PoolRegion<S>,
@@ -244,13 +243,15 @@ where
     let mut output = pools
         .get_with_len::<f32>(total_samples)
         .map_err(OfflineSessionError::Pool)?;
-    let ctx = state
+    state
         .ctx
         .as_mut()
-        .ok_or(OfflineSessionError::GraphUnavailable)?;
-    ctx.update()
+        .ok_or(OfflineSessionError::GraphUnavailable)?
+        .update()
         .map_err(|error| OfflineSessionError::Graph(format!("{error:?}")))?;
-    ctx.active_backend_mut()
+    state
+        .stream
+        .as_mut()
         .ok_or(OfflineSessionError::BackendUnavailable)?
         .render(
             position,
@@ -274,8 +275,6 @@ pub(crate) enum OfflineSessionError {
     GraphUnavailable,
     #[error("offline block requests {requested} frames, maximum is {maximum}")]
     InvalidBlockFrames { requested: u32, maximum: u32 },
-    #[error("offline processor is unavailable")]
-    ProcessorUnavailable,
     #[error("offline output pool failed: {0}")]
     Pool(kithara_bufpool::PoolError),
     #[error("offline sample count overflow")]

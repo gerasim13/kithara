@@ -6,7 +6,6 @@ use std::{
 
 use firewheel::{
     StreamInfo,
-    event::ProcEvents,
     node::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
         ProcessStatus,
@@ -406,7 +405,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         &mut self,
         info: &ProcInfo,
         mut buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
@@ -494,7 +492,10 @@ mod tests {
             out_constant_mask: ConstantMask::default(),
             in_connected_mask: ConnectedMask::default(),
             out_connected_mask: ConnectedMask::default(),
-            prev_output_was_silent: true,
+            total_cpu_seconds_recip: 1.0,
+            process_to_playback_delay: None,
+            did_just_unbypass: false,
+            last_marker_instant: InstantSamples(0),
             sample_rate_recip: f64::from(44_100).recip(),
             clock_samples: InstantSamples(0),
             duration_since_stream_start: Duration::ZERO,

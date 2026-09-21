@@ -15,7 +15,7 @@ use firewheel::{
     mask::MaskType,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_bufpool::{HasPool, PoolError};
@@ -152,17 +152,17 @@ where
         &self,
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        MasterEqProcessor::new(self.clone(), cx.stream_info)
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
+        Ok(MasterEqProcessor::new(self.clone(), cx.stream_info))
     }
 
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("master_eq")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::STEREO,
-            })
+            }))
     }
 }
 
@@ -300,15 +300,7 @@ where
     }
 
     #[kithara::rtsan_forbid_blocking]
-    fn process(
-        &mut self,
-        info: &ProcInfo,
-        buffers: ProcBuffers,
-        events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
-    ) -> ProcessStatus {
-        /// Minimum stereo channel count for processing.
-        const MIN_STEREO: usize = 2;
+    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, _extra: &mut ProcExtra) {
         let mut dirty = false;
         for mut event in events.drain() {
             if let Some(layout) = event.downcast_mut::<MasterEqLayout>() {
@@ -323,6 +315,17 @@ where
         if dirty {
             self.sync_gains();
         }
+    }
+
+    #[kithara::rtsan_forbid_blocking]
+    fn process(
+        &mut self,
+        info: &ProcInfo,
+        buffers: ProcBuffers,
+        _extra: &mut ProcExtra,
+    ) -> ProcessStatus {
+        /// Minimum stereo channel count for processing.
+        const MIN_STEREO: usize = 2;
         self.advance_layout();
 
         if buffers.inputs.len() < MIN_STEREO || buffers.outputs.len() < MIN_STEREO {

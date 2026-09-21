@@ -5,7 +5,7 @@ use std::{
 
 use firewheel::{
     clock::InstantSamples,
-    dsp::{buffer::ChannelBuffer, declick::DeclickValues},
+    dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     event::{NodeEvent, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
     log::{RealtimeLoggerConfig, realtime_logger},
     mask::{ConnectedMask, ConstantMask, SilenceMask},
@@ -214,7 +214,10 @@ fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
         out_constant_mask: ConstantMask::default(),
         in_connected_mask: ConnectedMask::default(),
         out_connected_mask: ConnectedMask::default(),
-        prev_output_was_silent: false,
+        total_cpu_seconds_recip: 1.0,
+        process_to_playback_delay: None,
+        did_just_unbypass: false,
+        last_marker_instant: InstantSamples(0),
         sample_rate_recip: f64::from(Consts::SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(0),
         duration_since_stream_start: Duration::ZERO,
@@ -233,7 +236,8 @@ fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
     let mut scheduled: [Option<ScheduledEventEntry>; 0] = [];
     let mut indices: Vec<ProcEventsIndex> = Vec::new();
     let mut events = ProcEvents::new(&mut immediate, &mut scheduled, &mut indices);
-    let _ = processor.process(&info, buffers, &mut events, extra);
+    processor.events(&info, &mut events, extra);
+    let _ = processor.process(&info, buffers, extra);
 }
 
 fn rate_notifications(control: &mut crate::bridge::SlotControl) -> Vec<f32> {
@@ -287,7 +291,9 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     let mut extra = ProcExtra {
         logger,
         store: ProcStore::with_capacity(0),
-        scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(Consts::BLOCK_FRAMES),
+        scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(
+            Consts::BLOCK_FRAMES,
+        ),
         declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
     };
     let first: Arc<str> = Arc::from("first");

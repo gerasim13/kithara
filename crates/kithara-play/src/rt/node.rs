@@ -5,7 +5,10 @@ use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
     event::ParamData,
-    node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
+    node::{
+        AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
+        NodeError,
+    },
     param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
@@ -95,7 +98,7 @@ where
         &self,
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
         let sample_rate = cx.stream_info.sample_rate;
         let max_block_frames = cx.stream_info.max_block_frames;
         let shape = StreamShape {
@@ -107,22 +110,22 @@ where
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::with_context_requirement(
+        Ok(PlayerNodeProcessor::with_context_requirement(
             inputs,
             shape,
             &self.pools,
             self.gate_smoothing,
             self.context_requirement,
-        )
+        ))
     }
 
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("Player")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
-            })
+            }))
     }
 }
 

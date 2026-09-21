@@ -1,6 +1,6 @@
 use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 
-use firewheel::FirewheelCtx;
+use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, mpsc};
 
@@ -38,6 +38,15 @@ pub(crate) fn tick_and_poll_remote<S>(
     let Some(state) = state.as_mut() else {
         return;
     };
+
+    // Firewheel no longer owns the backend, so nothing polls the web stream on
+    // the session's behalf: this tick is where its clock timestamps are fed and
+    // a terminated worklet is noticed.
+    if let Some(stream) = state.stream.as_mut()
+        && stream.poll().is_err()
+    {
+        state.stream = None;
+    }
 
     drain_host_channel(state, rx, |reply| {
         if let HostReply::Play(Reply::SlotAllocated(allocated)) = reply {
@@ -112,12 +121,12 @@ pub(crate) fn warm_up_audio<S>(
 }
 
 pub(super) fn start_stream_web_audio(
-    ctx: &mut FirewheelCtx<firewheel_web_audio::WebAudioBackend>,
+    ctx: &mut FirewheelContext,
     sample_rate: u32,
-) -> Result<(), String> {
+) -> Result<firewheel_web_audio::WebAudioBackend, String> {
     let config = firewheel_web_audio::WebAudioConfig {
         sample_rate: NonZeroU32::new(sample_rate),
         request_input: false,
     };
-    ctx.start_stream(config).map_err(|err| err.to_string())
+    firewheel_web_audio::WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
 }

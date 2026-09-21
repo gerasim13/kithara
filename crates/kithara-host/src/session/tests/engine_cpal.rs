@@ -1,7 +1,7 @@
 //! The lifecycle contract runs through the same Host graph with a cpal backend.
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
-use firewheel::{FirewheelCtx, cpal::CpalBackend};
+use firewheel::{FirewheelContext, cpal::CpalStream};
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
@@ -35,7 +35,7 @@ impl CpalGraphSession {
     fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CpalMessage>();
         let worker = spawn_named("kithara-engine-cpal-contract", move || {
-            let mut graph = GraphSession::<CpalBackend, TestPools>::new(start_stream);
+            let mut graph = GraphSession::<CpalStream, TestPools>::new(start_stream);
             while let Ok(message) = cmd_rx.recv() {
                 match message {
                     CpalMessage::Command { cmd, reply_tx } => {
@@ -80,27 +80,27 @@ impl SessionDispatcher<TestPools> for CpalGraphSession {
     }
 }
 
-fn start_stream(ctx: &mut FirewheelCtx<CpalBackend>, sample_rate: u32) -> Result<(), String> {
-    ctx.start_stream(firewheel::cpal::CpalConfig {
+fn start_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<CpalStream, String> {
+    let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
             ..Default::default()
         },
         ..Default::default()
-    })
-    .map_err(|error| error.to_string())
+    };
+    CpalStream::new(ctx, config).map_err(|error| error.to_string())
 }
 
 fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>)) {
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(GraphSession::<CpalBackend, TestPools>::DEFAULT_SAMPLE_RATE)
+            .sample_rate(GraphSession::<CpalStream, TestPools>::DEFAULT_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(SessionBinding::new(
                 session,
-                GraphSession::<CpalBackend, TestPools>::DEFAULT_SAMPLE_RATE,
+                GraphSession::<CpalStream, TestPools>::DEFAULT_SAMPLE_RATE,
             ))
             .build(),
     );

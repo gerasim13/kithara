@@ -2,13 +2,13 @@ use std::num::NonZeroU32;
 
 use arc_swap::ArcSwap;
 use firewheel::{
-    FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
-    node::NodeID, nodes::volume::VolumeNode, param::smoother::SmootherConfig,
+    FirewheelConfig, FirewheelContext, channel_config::ChannelCount, diff::Memo, node::NodeID,
+    nodes::volume::VolumeNode, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{
     SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
     session::RegisteredPlayer,
@@ -207,12 +207,16 @@ impl RootView {
     }
 }
 
-pub(crate) struct SessionState<B: AudioBackend, S> {
+pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
-    pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) ctx: Option<FirewheelContext>,
+    pub(super) stream: Option<T>,
     pub(super) mix_tap: Option<MixTap>,
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
+    /// The pause/resume fade length the session asks Firewheel for, in frames.
+    /// `None` leaves Firewheel's own default in place.
+    pub(super) requested_declick_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) limiter: LimiterConfig,
     pub(super) session_limiter_node_id: Option<NodeID>,
@@ -223,12 +227,12 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
     pub(super) transport: SessionTransportState,
-    pub(super) start_stream_fn: StartStreamFn<B>,
+    pub(super) start_stream_fn: StartStreamFn<T>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
 }
 
-impl<B: AudioBackend, S> SessionState<B, S> {
+impl<T, S> SessionState<T, S> {
     #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
@@ -239,22 +243,25 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         root_view: RootView,
         sample_rate: NonZeroU32,
         requested_max_block_frames: Option<NonZeroU32>,
+        requested_declick_frames: Option<NonZeroU32>,
         limiter: LimiterConfig,
         start_stream_fn: F,
     ) -> Self
     where
-        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
             requested_max_block_frames,
+            requested_declick_frames,
             limiter,
             root,
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            stream: None,
             transport_control: None,
             mix_tap: None,
             next_player_id: 1,
@@ -278,8 +285,19 @@ impl<B: AudioBackend, S> SessionState<B, S> {
     }
 }
 
-pub(super) fn register_player<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+/// Adds a node to the graph, turning the rejection Firewheel now reports into
+/// the session's own graph error. A node the graph refuses is a wiring bug, not
+/// a runtime condition the session can route around.
+pub(super) fn add_graph_node<N: firewheel::node::AudioNode + 'static>(
+    ctx: &mut FirewheelContext,
+    node: N,
+) -> Result<NodeID, SessionError> {
+    ctx.add_node(node, None)
+        .map_err(|err| SessionError::Graph(format!("audio graph rejected a node: {err}")))
+}
+
+pub(super) fn register_player<T, S>(
+    state: &mut SessionState<T, S>,
     grid_id: BeatGridId,
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
@@ -329,16 +347,16 @@ pub(super) fn register_player<B: AudioBackend, S>(
     Ok(registration)
 }
 
-pub(super) fn ensure_ctx<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+pub(super) fn ensure_ctx<T, S>(
+    state: &mut SessionState<T, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     ensure_stream_ready(state, sample_rate)?;
     ensure_session_output(state)
 }
 
-fn ensure_stream_ready<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn ensure_stream_ready<T, S>(
+    state: &mut SessionState<T, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     if state.ctx.is_none() {
@@ -356,16 +374,23 @@ fn ensure_stream_ready<B: AudioBackend, S>(
     Ok(())
 }
 
-fn create_firewheel_context<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
+fn create_firewheel_context<T, S>(
+    state: &mut SessionState<T, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
-    let config = FirewheelConfig {
+    let mut config = FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
         ..FirewheelConfig::default()
     };
-    let mut ctx = FirewheelCtx::<B>::new(config);
+    if let Some(declick_frames) = state.requested_declick_frames {
+        // Firewheel takes the fade as seconds; the frame count is the session's
+        // own unit. Duration carries the division so neither side is cast.
+        config.declick_seconds =
+            Duration::from_secs_f64(f64::from(declick_frames.get()) / f64::from(sample_rate))
+                .as_secs_f32();
+    }
+    let mut ctx = FirewheelContext::new(config);
     let session_grid = state
         .reserved_session_grid
         .take()
@@ -377,11 +402,15 @@ fn create_firewheel_context<B: AudioBackend, S>(
             return Err(SessionError::Graph(error.into()));
         }
     };
-    if let Err(error) = (state.start_stream_fn)(&mut ctx, sample_rate) {
-        state.reserved_session_grid = Some(session_grid);
-        return Err(SessionError::StreamStart(error));
-    }
+    let stream = match (state.start_stream_fn)(&mut ctx, sample_rate) {
+        Ok(stream) => stream,
+        Err(error) => {
+            state.reserved_session_grid = Some(session_grid);
+            return Err(SessionError::StreamStart(error));
+        }
+    };
     state.ctx = Some(ctx);
+    state.stream = Some(stream);
     state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
@@ -391,9 +420,7 @@ fn create_firewheel_context<B: AudioBackend, S>(
     Ok(())
 }
 
-fn ensure_session_output<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-) -> Result<(), SessionError> {
+fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.session_output_node_id.is_none() {
         return create_session_output(state);
     }
@@ -401,9 +428,7 @@ fn ensure_session_output<B: AudioBackend, S>(
     Ok(())
 }
 
-fn create_session_output<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-) -> Result<(), SessionError> {
+fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
     let limiter = LimiterNode::new(state.limiter);
     let Some(ref mut fw_ctx) = state.ctx else {
@@ -411,8 +436,8 @@ fn create_session_output<B: AudioBackend, S>(
     };
     let session_node = VolumeNode::from_linear(state.session_ducking.gain());
     let session_memo = Memo::new(session_node);
-    let session_id = fw_ctx.add_node(session_node, None);
-    let limiter_id = fw_ctx.add_node(limiter, None);
+    let session_id = add_graph_node(fw_ctx, session_node)?;
+    let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)

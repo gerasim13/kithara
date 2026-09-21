@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 
 use firewheel::{
-    FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
-    dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
+    FirewheelContext, Volume, diff::Memo, dsp::volume::amp_to_linear_volume_clamped, node::NodeID,
+    nodes::volume::VolumeNode,
 };
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
@@ -12,7 +12,10 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
-    state::{Deck, GraphRegistry, MixTap, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
+    state::{
+        Deck, GraphRegistry, MixTap, SessionState, SlotNodes, add_graph_node, ensure_ctx,
+        prepare_eq_layout,
+    },
     transport::SessionTransportState,
 };
 use crate::{
@@ -26,8 +29,8 @@ use crate::{
 pub(super) fn master_gain(level: f32) -> Volume {
     Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
 }
-pub(super) fn player_index<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
+pub(super) fn player_index<T, S>(
+    state: &SessionState<T, S>,
     player_id: PlayerId,
 ) -> Result<usize, SessionError> {
     state
@@ -39,10 +42,7 @@ fn graph_state(message: &'static str) -> SessionError {
     SessionError::Graph(message.into())
 }
 
-fn deck_at<B: AudioBackend, S>(
-    state: &SessionState<B, S>,
-    index: usize,
-) -> Result<&Deck<S>, SessionError> {
+fn deck_at<T, S>(state: &SessionState<T, S>, index: usize) -> Result<&Deck<S>, SessionError> {
     state
         .graph
         .deck(index)
@@ -57,8 +57,8 @@ fn deck_at_mut<S>(
         .deck_mut(index)
         .ok_or_else(|| graph_state("player index out of range"))
 }
-fn connect_stereo<B: AudioBackend>(
-    fw_ctx: &mut FirewheelCtx<B>,
+fn connect_stereo(
+    fw_ctx: &mut FirewheelContext,
     from: NodeID,
     to: NodeID,
     label: &'static str,
@@ -72,8 +72,8 @@ fn connect_stereo<B: AudioBackend>(
 pub(super) mod tap {
     use super::*;
 
-    pub(in crate::session) fn enable<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn enable<T, S>(
+        state: &mut SessionState<T, S>,
         outputs: OutputGroup,
     ) -> Result<(), SessionError> {
         if state.mix_tap.is_some() {
@@ -86,7 +86,7 @@ pub(super) mod tap {
         install(state, limiter_id, outputs)
     }
 
-    pub(in crate::session) fn disable<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
+    pub(in crate::session) fn disable<T, S>(state: &mut SessionState<T, S>) {
         let Some(MixTap::Installed(tap_id)) = state.mix_tap.take() else {
             return;
         };
@@ -101,8 +101,8 @@ pub(super) mod tap {
         }
     }
 
-    pub(in crate::session) fn install_requested<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn install_requested<T, S>(
+        state: &mut SessionState<T, S>,
         limiter_id: NodeID,
     ) -> Result<(), SessionError> {
         let Some(MixTap::Requested(outputs)) = state.mix_tap.take() else {
@@ -111,13 +111,13 @@ pub(super) mod tap {
         install(state, limiter_id, outputs)
     }
 
-    fn install<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    fn install<T, S>(
+        state: &mut SessionState<T, S>,
         limiter_id: NodeID,
         outputs: OutputGroup,
     ) -> Result<(), SessionError> {
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let tap_id = fw_ctx.add_node(TapNode::new(outputs), None);
+        let tap_id = add_graph_node(fw_ctx, TapNode::new(outputs))?;
         if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
             if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
                 warn!(?remove_err, "failed to remove the unconnected mix tap node");
@@ -136,8 +136,8 @@ pub(super) mod tap {
 pub(super) mod lifecycle {
     use super::*;
 
-    pub(in crate::session) fn start_player<B, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn start_player<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
         sample_rate: u32,
         master_volume: f32,
@@ -145,7 +145,6 @@ pub(super) mod lifecycle {
         response_budget_frames: NonZeroUsize,
     ) -> Result<(), SessionError>
     where
-        B: AudioBackend,
         S: HasPool<f32> + Send + Sync + 'static,
     {
         debug!(
@@ -170,13 +169,13 @@ pub(super) mod lifecycle {
             master_eq.set_gain(band, GainDb::from(gain));
         }
         let master_eq_memo = Memo::new(master_eq.clone());
-        let master_eq_id = fw_ctx.add_node(master_eq, None);
+        let master_eq_id = add_graph_node(fw_ctx, master_eq)?;
         let master_volume = VolumeNode {
             volume: master_gain(player.master_volume),
             ..VolumeNode::default()
         };
         let master_volume_memo = Memo::new(master_volume);
-        let master_volume_id = fw_ctx.add_node(master_volume, None);
+        let master_volume_id = add_graph_node(fw_ctx, master_volume)?;
         let eq_to_volume = "connect player master_eq->master_vol";
         connect_stereo(fw_ctx, master_eq_id, master_volume_id, eq_to_volume)?;
         let volume_to_output = "connect player master_vol->session_output";
@@ -203,8 +202,8 @@ pub(super) mod lifecycle {
         Ok(())
     }
 
-    fn validate_response_geometry<B: AudioBackend, S>(
-        state: &SessionState<B, S>,
+    fn validate_response_geometry<T, S>(
+        state: &SessionState<T, S>,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: NonZeroUsize,
     ) -> Result<(), SessionError> {
@@ -214,22 +213,22 @@ pub(super) mod lifecycle {
         let info = state
             .ctx
             .as_ref()
-            .and_then(FirewheelCtx::stream_info)
+            .and_then(FirewheelContext::stream_info)
             .ok_or(SessionError::NoContext)?;
         kithara_play::StreamShape::new(info.max_block_frames, info.sample_rate)
             .playback_buffers(render_quantum_frames, response_budget_frames)?;
         Ok(())
     }
-    pub(in crate::session) fn stop_player<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn stop_player<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
     ) -> Result<(), SessionError> {
         debug!(player_id, "[KITHARA-ROUTE] stopping player");
         let idx = player_index(state, player_id)?;
         stop_player_idx(state, idx)
     }
-    fn stop_player_idx<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    fn stop_player_idx<T, S>(
+        state: &mut SessionState<T, S>,
         idx: usize,
     ) -> Result<(), SessionError> {
         {
@@ -258,8 +257,8 @@ pub(super) mod lifecycle {
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
-    pub(in crate::session) fn shutdown_if_idle<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn shutdown_if_idle<T, S>(
+        state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {
         let idle = state.graph.decks().all(|deck| !deck.started);
         if idle {
@@ -309,7 +308,8 @@ pub(super) mod lifecycle {
                 .ctx
                 .as_mut()
                 .ok_or(SessionError::NoContext)?
-                .stop_stream();
+                .request_deactivate();
+            state.stream = None;
             state.ctx = None;
             state.publish_root();
             state.transport_control = None;
@@ -321,10 +321,7 @@ pub(super) mod lifecycle {
         }
         Ok(())
     }
-    pub(super) fn remove_player_graph<B: AudioBackend, S>(
-        fw_ctx: &mut FirewheelCtx<B>,
-        player: &mut Deck<S>,
-    ) {
+    pub(super) fn remove_player_graph<S>(fw_ctx: &mut FirewheelContext, player: &mut Deck<S>) {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
             if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
@@ -355,12 +352,11 @@ pub(super) mod lifecycle {
 pub(super) mod slots {
     use super::*;
 
-    pub(in crate::session) fn allocate_slot<B, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn allocate_slot<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
     ) -> Result<Reply, SessionError>
     where
-        B: AudioBackend,
         S: HasPool<f32> + Send + Sync + 'static,
     {
         debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
@@ -381,10 +377,10 @@ pub(super) mod slots {
         let (inputs, control) = slot_channels(shared_eq);
         let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
             .with_session_context();
-        let player_node_id = fw_ctx.add_node(player_node, None);
+        let player_node_id = add_graph_node(fw_ctx, player_node)?;
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
-        let slot_volume_id = fw_ctx.add_node(slot_volume, None);
+        let slot_volume_id = add_graph_node(fw_ctx, slot_volume)?;
         let player_to_slot = "connect player->slot_volume";
         connect_stereo(fw_ctx, player_node_id, slot_volume_id, player_to_slot)?;
         let slot_to_master = "connect slot_volume->player_master_eq";
@@ -413,8 +409,8 @@ pub(super) mod slots {
         let reply = Reply::SlotAllocated(AllocatedSlot::new(control, slot_id));
         Ok(reply)
     }
-    pub(in crate::session) fn release_slot<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn release_slot<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
         slot: SlotId,
     ) -> Result<(), SessionError> {
@@ -445,8 +441,8 @@ pub(super) mod slots {
         };
         Ok(player.slots.remove(slot_idx))
     }
-    pub(super) fn remove_slot_graph<B: AudioBackend>(
-        fw_ctx: &mut FirewheelCtx<B>,
+    pub(super) fn remove_slot_graph(
+        fw_ctx: &mut FirewheelContext,
         player_id: PlayerId,
         slot: &SlotNodes,
     ) {
@@ -465,8 +461,8 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn set_session_ducking<T, S>(
+        state: &mut SessionState<T, S>,
         mode: SessionDuckingMode,
     ) {
         state.session_ducking = mode;
@@ -483,8 +479,8 @@ pub(super) mod controls {
 
     /// Validates the whole request before mutating anything, so an invalid
     /// entry leaves the batch untouched. Omitted players are unchanged.
-    pub(in crate::session) fn set_player_master_volumes<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn set_player_master_volumes<T, S>(
+        state: &mut SessionState<T, S>,
         levels: &[PlayerLevel],
     ) -> Result<(), SessionError> {
         let mut resolved: Vec<(usize, f32)> = Vec::with_capacity(levels.len());
@@ -517,8 +513,8 @@ pub(super) mod controls {
         Ok(())
     }
 
-    fn apply_master_volume<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    fn apply_master_volume<T, S>(
+        state: &mut SessionState<T, S>,
         idx: usize,
         volume: f32,
     ) -> Result<(), SessionError> {
@@ -536,8 +532,8 @@ pub(super) mod controls {
         }
         Ok(())
     }
-    pub(in crate::session) fn set_player_slot_volume<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn set_player_slot_volume<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
         slot: SlotId,
         volume: FaderValue,
@@ -560,8 +556,8 @@ pub(super) mod controls {
         slot_nodes.volume_memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::session) fn set_player_eq_gain<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn set_player_eq_gain<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
         band: usize,
         gain_db: f32,
@@ -604,13 +600,12 @@ pub(super) mod controls {
         memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::session) fn set_player_eq_layout<B, S>(
-        state: &mut SessionState<B, S>,
+    pub(in crate::session) fn set_player_eq_layout<T, S>(
+        state: &mut SessionState<T, S>,
         player_id: PlayerId,
         eq_layout: Vec<EqBandConfig>,
     ) -> Result<(), SessionError>
     where
-        B: AudioBackend,
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let idx = player_index(state, player_id)?;
@@ -652,11 +647,13 @@ pub(super) mod controls {
 mod tests {
     use std::{cell::RefCell, num::NonZeroU32};
 
+    use audioadapter_buffers::direct::InterleavedSlice;
     use firewheel::{
-        StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
+        ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
+        processor::FirewheelProcessor,
     };
     use kithara_events::EventBus;
-    use kithara_platform::time::{Duration, Instant};
+    use kithara_platform::time::Duration;
     use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -683,8 +680,8 @@ mod tests {
     /// The process-wide output device, held by whichever stream owns it.
     #[derive(Default)]
     struct AudioDevice {
-        processor: Option<FirewheelProcessor<TestBackend>>,
-        retired_processors: Vec<FirewheelProcessor<TestBackend>>,
+        processor: Option<FirewheelProcessor>,
+        retired_processors: Vec<FirewheelProcessor>,
         defer_processor_drop: bool,
         next_stream: u64,
         owner: u64,
@@ -698,13 +695,15 @@ mod tests {
         DEVICE.with(|cell| f(&mut cell.borrow_mut()))
     }
 
-    struct TestBackend {
+    /// A fixture stream. It owns nothing but its identity: the processor lives
+    /// in the thread-local device, and dropping the stream is what retires it.
+    struct TestStream {
         stream: u64,
     }
 
-    type TestState = SessionState<TestBackend, TestPools>;
+    type TestState = SessionState<TestStream, TestPools>;
 
-    impl Drop for TestBackend {
+    impl Drop for TestStream {
         fn drop(&mut self) {
             device(|dev| {
                 if dev.owner == self.stream {
@@ -717,81 +716,34 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct TestConfig {
+    fn start_test_stream(
+        ctx: &mut FirewheelContext,
         sample_rate: u32,
-    }
-
-    impl Default for TestConfig {
-        fn default() -> Self {
-            Self {
-                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-            }
-        }
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("test backend stream error")]
-    struct TestBackendError;
-
-    impl AudioBackend for TestBackend {
-        type Config = TestConfig;
-        type Enumerator = ();
-        type Instant = Instant;
-        type StartStreamError = TestBackendError;
-        type StreamError = TestBackendError;
-
-        fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
-            None
-        }
-
-        fn enumerator() -> Self::Enumerator {}
-
-        fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-            Ok(())
-        }
-
-        fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
-            device(|dev| {
-                dev.owner = self.stream;
-                dev.processor = Some(processor);
-            });
-        }
-
-        fn start_stream(
-            config: Self::Config,
-        ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
-            let stream = device(|dev| {
-                dev.next_stream += 1;
-                dev.next_stream
-            });
-            let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
-                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
-                    .expect("invariant: fixture default sample rate is non-zero"),
-            );
-            let max_block_frames = NonZeroU32::new(512).ok_or(TestBackendError)?;
-            let stream_info = StreamInfo {
+    ) -> Result<TestStream, String> {
+        let stream = device(|dev| {
+            dev.next_stream += 1;
+            dev.next_stream
+        });
+        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(
+            NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
+                .expect("invariant: fixture default sample rate is non-zero"),
+        );
+        let max_block_frames =
+            NonZeroU32::new(512).expect("invariant: fixture block size is non-zero");
+        let processor = ctx
+            .activate(ActivateInfo {
                 sample_rate,
-                sample_rate_recip: 1.0 / f64::from(sample_rate.get()),
-                prev_sample_rate: sample_rate,
                 max_block_frames,
                 num_stream_in_channels: 0,
                 num_stream_out_channels: 2,
                 input_to_output_latency_seconds: 0.0,
-                declick_frames: max_block_frames,
-                output_device_id: String::from("test-output-device"),
-                input_device_id: None,
-            };
-            Ok((Self { stream }, stream_info))
-        }
-    }
-
-    fn start_test_stream(
-        ctx: &mut FirewheelCtx<TestBackend>,
-        sample_rate: u32,
-    ) -> Result<(), String> {
-        ctx.start_stream(TestConfig { sample_rate })
-            .map_err(|err| err.to_string())
+            })
+            .map_err(|err| err.to_string())?;
+        device(|dev| {
+            dev.owner = stream;
+            dev.processor = Some(processor);
+        });
+        Ok(TestStream { stream })
     }
 
     /// `false` means no stream owns the device, which is what silence looks like.
@@ -801,18 +753,24 @@ mod tests {
                 return false;
             };
             let mut output = [0.0_f32; BLOCK_FRAMES * 2];
-            processor.process_interleaved(
-                &[],
+            let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
+                .expect("invariant: an empty input adapter is well formed");
+            let mut output = InterleavedSlice::new_mut(&mut output, 2, BLOCK_FRAMES)
+                .expect("invariant: the fixture output block is stereo");
+            processor.process(
+                &input,
                 &mut output,
                 BackendProcessInfo {
-                    num_in_channels: 0,
-                    num_out_channels: 2,
                     frames: BLOCK_FRAMES,
-                    process_timestamp: Instant::now(),
+                    // Firewheel types this field as `std::time::Instant`, so the
+                    // platform clock cannot be handed over here.
+                    // ast-grep-ignore: arch.no-direct-time
+                    process_timestamp: Some(std::time::Instant::now()),
                     duration_since_stream_start: Duration::ZERO,
                     input_stream_status: StreamStatus::empty(),
                     output_stream_status: StreamStatus::empty(),
                     dropped_frames: 0,
+                    process_to_playback_delay: None,
                 },
             );
             true

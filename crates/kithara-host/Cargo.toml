@@ -50,6 +50,7 @@ kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 
 arc-swap = { workspace = true }
+audioadapter-buffers = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }

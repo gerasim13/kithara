@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use firewheel::FirewheelCtx;
+use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -22,9 +22,8 @@ use super::{
     RingLayout, RingReader, RingRenderError,
 };
 
-type RingSetup = Box<
-    dyn FnOnce(&mut FirewheelCtx<RingBackend>) -> Result<(), RingSessionError> + Send + 'static,
->;
+type RingSetup =
+    Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -135,7 +134,7 @@ impl ManualRingSession {
         setup: F,
     ) -> Result<Self, RingSessionError>
     where
-        F: FnOnce(&mut FirewheelCtx<RingBackend>) -> Result<(), RingSessionError> + Send + 'static,
+        F: FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static,
     {
         let (writer, reader) = MasterRing::open(config.block_frames, config.capacity_blocks);
         let probe = RingBackendProbe::default();
@@ -346,11 +345,7 @@ fn ring_session_thread(
         let config = backend_config
             .take()
             .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
-        ctx.start_stream(config)
-            .map_err(|error| error.to_string())?;
-        let backend = ctx
-            .active_backend_mut()
-            .ok_or_else(|| String::from("ring backend missing after stream start"))?;
+        let mut backend = RingBackend::start(ctx, config).map_err(|error| error.to_string())?;
         match backend.render_block(0) {
             Err(RingRenderError::NotArmed) => {
                 probe.record_pre_arm_error(RingRenderError::NotArmed);
@@ -359,7 +354,7 @@ fn ring_session_thread(
             Ok(()) => return Err(String::from("pre-arm ring render was accepted")),
         }
         backend.arm();
-        Ok(())
+        Ok(backend)
     });
     let ready = bootstrap(&mut state, session_rate, setup).and_then(|()| snapshot(&mut state));
     let is_ready = ready.is_ok();
@@ -448,32 +443,29 @@ fn credit_blocks(state: &mut GraphSession<RingBackend, TestPools>, blocks: usize
 fn render_transaction(
     state: &mut GraphSession<RingBackend, TestPools>,
 ) -> Result<RingSnapshot, RingSessionError> {
-    let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
-    ctx.update()
-        .map_err(|error| RingSessionError::Update(format!("{error:?}")))?;
-    let raw_clock = ctx.audio_clock().samples.0;
+    let raw_clock = {
+        let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
+        ctx.update()
+            .map_err(|error| RingSessionError::Update(format!("{error:?}")))?;
+        ctx.audio_clock().samples.0
+    };
     let clock_samples =
         u64::try_from(raw_clock).map_err(|_| RingSessionError::NegativeClock(raw_clock))?;
-    ctx.active_backend_mut()
+    state
+        .stream_mut()
         .ok_or(RingSessionError::NotStarted)?
         .render_block(clock_samples)?;
-    snapshot_from_ctx(ctx)
+    snapshot(state)
 }
 
 fn snapshot(
     state: &mut GraphSession<RingBackend, TestPools>,
 ) -> Result<RingSnapshot, RingSessionError> {
-    let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
-    snapshot_from_ctx(ctx)
-}
-
-fn snapshot_from_ctx(
-    ctx: &mut FirewheelCtx<RingBackend>,
-) -> Result<RingSnapshot, RingSessionError> {
-    let committed_frames = ctx
-        .active_backend_mut()
+    let committed_frames = state
+        .stream_mut()
         .ok_or(RingSessionError::NotStarted)?
         .committed_frames();
+    let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     let raw_clock = ctx.audio_clock().samples.0;
     let clock_samples =
         u64::try_from(raw_clock).map_err(|_| RingSessionError::NegativeClock(raw_clock))?;
