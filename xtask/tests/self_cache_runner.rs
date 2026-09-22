@@ -48,7 +48,7 @@ impl Fixture {
         let bootstrap_cargo = temp.path().join("bootstrap-cargo");
         let justfile = root.join("justfile");
         fs::create_dir_all(root.join(".config"))?;
-        fs::create_dir_all(root.join(".git"))?;
+        fs::create_dir_all(root.join(".git/xtask-cache"))?;
         fs::create_dir_all(root.join("xtask/src"))?;
         fs::create_dir_all(&fake_bin)?;
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -143,7 +143,7 @@ exit 98
     }
 
     fn active_generation(&self) -> Result<PathBuf> {
-        let body = fs::read_to_string(self.root.join("xtask/.xtask-cache"))?;
+        let body = fs::read_to_string(locator(&self.root)?)?;
         Ok(PathBuf::from(body.trim()))
     }
 
@@ -289,10 +289,7 @@ case "${1-}" in
 esac
 "#,
         )?;
-        fs::write(
-            self.root.join("xtask/.xtask-cache"),
-            format!("{}\n", generation.display()),
-        )?;
+        fs::write(locator(&self.root)?, format!("{}\n", generation.display()))?;
         Ok(())
     }
 
@@ -332,7 +329,7 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
     }
 
     fn use_linked_git_dir(&self, git_dir: &Path) -> Result<()> {
-        fs::remove_dir(self.root.join(".git"))?;
+        fs::remove_dir_all(self.root.join(".git"))?;
         fs::create_dir_all(git_dir)?;
         fs::write(
             self.root.join(".git"),
@@ -564,10 +561,7 @@ fn drive_rooted_windows_transport_uses_the_executable_suffix() -> Result<()> {
     let generation = fixture.root.join(r"C:\cache\generation-fake");
     fs::rename(original, &generation)?;
     fs::rename(generation.join("xtask"), generation.join("xtask.exe"))?;
-    fs::write(
-        fixture.root.join("xtask/.xtask-cache"),
-        "C:\\cache\\generation-fake\n",
-    )?;
+    fs::write(locator(&fixture.root)?, "C:\\cache\\generation-fake\n")?;
 
     let output = fixture.transport(&fixture.root)?;
 
@@ -770,14 +764,14 @@ fn corrupt_and_cross_worktree_locators_are_rejected() -> Result<()> {
     assert_success(&first.bootstrap()?);
     assert_success(&second.bootstrap()?);
     fs::write(
-        second.root.join("xtask/.xtask-cache"),
+        locator(&second.root)?,
         format!("{}\n", first.active_generation()?.display()),
     )?;
 
     let cross_worktree = second.transport(&second.root)?;
     assert!(!cross_worktree.status.success());
 
-    fs::write(second.root.join("xtask/.xtask-cache"), "relative\n")?;
+    fs::write(locator(&second.root)?, "relative\n")?;
     let corrupt = second.transport(&second.root)?;
     assert!(!corrupt.status.success());
     first.assert_no_tool_process();
@@ -806,7 +800,7 @@ fn corrupt_executable_is_repaired_by_public_just_runner() -> Result<()> {
 fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    let locator = fixture.root.join("xtask/.xtask-cache");
+    let locator = locator(&fixture.root)?;
     let before = fs::read(&locator)?;
 
     let refresh = fixture.cached(&["self-cache", "refresh", "--force"])?;
@@ -893,7 +887,7 @@ fn concurrent_cold_bootstraps_publish_one_generation() -> Result<()> {
 fn killed_refresh_parent_does_not_leave_builder_descendants() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    let before = fs::read(fixture.root.join("xtask/.xtask-cache"))?;
+    let before = fs::read(locator(&fixture.root)?)?;
     let cargo_pid = fixture.root.join("cargo.pid");
     let descendant_pid = fixture.root.join("descendant.pid");
     let worker_pid = fixture.root.join("worker.pid");
@@ -942,8 +936,29 @@ wait "$descendant"
     wait_for_exit(cargo)?;
     wait_for_exit(descendant)?;
     wait_for_exit(worker)?;
-    assert_eq!(fs::read(fixture.root.join("xtask/.xtask-cache"))?, before);
+    assert_eq!(fs::read(locator(&fixture.root)?)?, before);
     Ok(())
+}
+
+/// The Git directory a checkout uses, spelled as a directory or, for a linked
+/// worktree, named by the `.git` file.
+fn git_dir(root: &Path) -> Result<PathBuf> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Ok(dot_git);
+    }
+    let body = fs::read_to_string(&dot_git)?;
+    let named = body
+        .trim()
+        .strip_prefix("gitdir: ")
+        .context("fixture .git file has no gitdir")?;
+    Ok(PathBuf::from(named))
+}
+
+/// Where the pointer to the active generation lives, beside the generations
+/// themselves rather than in the working tree the runner cleans.
+fn locator(root: &Path) -> Result<PathBuf> {
+    Ok(git_dir(root)?.join("xtask-cache/active"))
 }
 
 fn write_config(root: &Path, with_route: bool) -> Result<()> {

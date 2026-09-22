@@ -14,7 +14,7 @@ pub(super) const BINARY: &str = if cfg!(windows) { "xtask.exe" } else { "xtask" 
 pub(super) const CACHE_DIRECTORY: &str = "xtask-cache";
 pub(super) const GENERATION_PREFIX: &str = "generation-";
 pub(super) const LEASE_FILE: &str = "lease.lock";
-pub(super) const LOCATOR: &str = "xtask/.xtask-cache";
+pub(super) const LOCATOR_FILE: &str = "active";
 pub(super) const MANIFEST_FILE: &str = "manifest.json";
 pub(super) const REFRESH_LOCK: &str = "refresh.lock";
 pub(super) const STAMP_FILE: &str = "stamp";
@@ -80,8 +80,20 @@ pub(super) fn target_dir(root: &Path) -> PathBuf {
         .map_or_else(|| root.join("target/xtask-self-cache"), PathBuf::from)
 }
 
-pub(super) fn locator(root: &Path) -> PathBuf {
-    root.join(LOCATOR)
+/// Where the pointer to the active generation lives.
+///
+/// Beside the generations it names, inside the Git directory, rather than in
+/// the working tree. A CI runner cleans the working tree before every job -
+/// the log reads `Removing xtask/.xtask-cache` - which left the generations
+/// intact and unreachable, so every job rebuilt `xtask` from source. The Git
+/// directory survives that clean, so the pointer now survives with the thing
+/// it points at.
+///
+/// # Errors
+///
+/// Returns an error if the Git directory cannot be resolved.
+pub(super) fn locator(root: &Path) -> Result<PathBuf> {
+    Ok(cache_dir(root)?.join(LOCATOR_FILE))
 }
 
 pub(super) fn active(root: &Path) -> Result<Generation> {
@@ -90,7 +102,7 @@ pub(super) fn active(root: &Path) -> Result<Generation> {
 }
 
 pub(super) fn locator_snapshot(root: &Path) -> Result<Option<Vec<u8>>> {
-    match read_bounded(&locator(root), "self-cache locator", CONTROL_FILE_LIMIT) {
+    match read_bounded(&locator(root)?, "self-cache locator", CONTROL_FILE_LIMIT) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error)
             if error
@@ -234,7 +246,7 @@ pub(super) fn read_bounded(path: &Path, label: &str, limit: usize) -> Result<Vec
 }
 
 fn read_locator(root: &Path) -> Result<PathBuf> {
-    let locator = locator(root);
+    let locator = locator(root)?;
     let metadata = fs::symlink_metadata(&locator)
         .with_context(|| format!("read self-cache locator {}", locator.display()))?;
     ensure!(

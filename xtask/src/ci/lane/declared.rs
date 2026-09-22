@@ -1,9 +1,9 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
 use toml::Value;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
@@ -47,24 +47,7 @@ pub(crate) fn run(
     } else {
         lane.target_snapshot
             .as_deref()
-            .map(|key| {
-                let mc = process.resolve_program(tools.program("mc"))?;
-                let cargo_home = process
-                    .environment_path("CARGO_HOME")
-                    .or_else(|| {
-                        process
-                            .environment_path("HOME")
-                            .map(|home| home.join(".cargo"))
-                    })
-                    .context("prepared CI environment has no CARGO_HOME")?;
-                snapshot::restore_for_lane(
-                    key,
-                    &process.target_dir(),
-                    process.root(),
-                    &cargo_home,
-                    &mc,
-                )
-            })
+            .map(|key| restore_target_layer(process, tools, key))
             .transpose()?
     };
     if !process.is_recording() {
@@ -91,11 +74,68 @@ pub(crate) fn run(
     }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
         let mc = process.resolve_program(tools.program("mc"))?;
-        if let Err(error) = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc) {
-            warn!(%error, %fingerprint, "could not publish optional target snapshot");
+        let started = Instant::now();
+        let published = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc);
+        let took = format!("{:.1} s", started.elapsed().as_secs_f64());
+        match published {
+            Ok(()) => process.note_cache(
+                "target snapshot",
+                "published",
+                format!("{fingerprint} in {took}"),
+            ),
+            Err(error) => {
+                process.note_cache("target snapshot", "publish failed", format!("{error}"));
+                warn!(%error, %fingerprint, "could not publish optional target snapshot");
+            }
         }
     }
     Ok(())
+}
+
+/// Put the lane's compiled artifacts in place, and say what that cost.
+///
+/// A fingerprint comes back when nothing was restored: that is the lane which
+/// has to publish its own artifacts once the steps pass.
+fn restore_target_layer(
+    process: &Process,
+    tools: &ToolsConfig,
+    key: &str,
+) -> Result<Option<String>> {
+    let mc = process.resolve_program(tools.program("mc"))?;
+    let cargo_home = process
+        .environment_path("CARGO_HOME")
+        .or_else(|| {
+            process
+                .environment_path("HOME")
+                .map(|home| home.join(".cargo"))
+        })
+        .context("prepared CI environment has no CARGO_HOME")?;
+    let started = Instant::now();
+    let outcome =
+        snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &cargo_home, &mc);
+    let took = format!("{:.1} s", started.elapsed().as_secs_f64());
+    match &outcome {
+        Ok(None) => {
+            process.note_cache(
+                "target snapshot",
+                "restored",
+                format!("{key} unpacked in {took}"),
+            );
+        }
+        Ok(Some(fingerprint)) => {
+            process.note_cache(
+                "target snapshot",
+                "miss",
+                format!(
+                    "no object for {fingerprint}; this lane will publish one (asked in {took})"
+                ),
+            );
+        }
+        Err(error) => {
+            process.note_cache("target snapshot", "unavailable", format!("{error}"));
+        }
+    }
+    outcome
 }
 
 fn kind_name(kind: PipelineKind) -> String {
@@ -113,17 +153,35 @@ fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
     let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
         return;
     };
-    match snapshot::restore_sources(process.root(), &cargo_home, &mc) {
+    let started = Instant::now();
+    let outcome = snapshot::restore_sources(process.root(), &cargo_home, &mc);
+    let took = format!("{:.1} s", started.elapsed().as_secs_f64());
+    match outcome {
         Ok(snapshot::Restored::AlreadyPresent) => {
-            info!("the dependency sources for this lock file are already in place");
+            process.note_cache(
+                "dependency sources",
+                "reused",
+                format!("already in place for this lock file, checked in {took}"),
+            );
         }
         Ok(snapshot::Restored::Absent) => {
-            info!("no dependency source layer for this lock file yet; the lane will fetch");
+            process.note_cache(
+                "dependency sources",
+                "miss",
+                format!("no layer for this lock file yet; the lane will fetch (asked in {took})"),
+            );
         }
         Ok(snapshot::Restored::Layer(object)) => {
-            info!(%object, "restored the dependency sources");
+            process.note_cache(
+                "dependency sources",
+                "restored",
+                format!("{object} in {took}"),
+            );
         }
-        Err(error) => warn!(%error, "could not restore the dependency sources"),
+        Err(error) => {
+            process.note_cache("dependency sources", "unavailable", format!("{error}"));
+            warn!(%error, "could not restore the dependency sources");
+        }
     }
 }
 
@@ -141,8 +199,19 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
     let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
         return Ok(());
     };
-    snapshot::publish_sources(process.root(), &cargo_home, &mc)
-        .context("publish the dependency sources")
+    let started = Instant::now();
+    let published = snapshot::publish_sources(process.root(), &cargo_home, &mc)
+        .context("publish the dependency sources");
+    let took = format!("{:.1} s", started.elapsed().as_secs_f64());
+    match &published {
+        Ok(()) => {
+            process.note_cache("dependency sources", "published", format!("in {took}"));
+        }
+        Err(error) => {
+            process.note_cache("dependency sources", "publish failed", format!("{error}"));
+        }
+    }
+    published
 }
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
