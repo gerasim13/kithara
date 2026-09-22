@@ -208,11 +208,11 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::default(None, 32)]
-    #[case::explicit(Some(64), 64)]
+    #[case::default(None, None)]
+    #[case::explicit(Some(64), Some(64))]
     fn unbound_preparation_preserves_audio_settings_and_resolves_player_quantum(
         #[case] configured: Option<usize>,
-        #[case] expected: usize,
+        #[case] expected: Option<usize>,
     ) {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -231,7 +231,7 @@ mod tests {
         let prepared = player.prepare_config(config).expect("unbound preparation");
         assert_eq!(
             prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
-            Some(expected)
+            expected
         );
         assert_eq!(
             prepared.audio.preload_chunks.map(NonZeroUsize::get),
