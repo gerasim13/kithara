@@ -7,12 +7,12 @@ use firewheel::dsp::filter::smoothing_filter::{
 };
 use kithara::{
     assets::AssetStore,
+    effects::{GainDb, eq::FilterKind},
     host::HostConfig,
     platform::time::{self, Duration},
     play::{
         EqBandConfig, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         ResourceConfig, ResourceSrc, SessionError,
-        effects::eq::{FilterKind, GainDb},
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     sync::SyncGroup,

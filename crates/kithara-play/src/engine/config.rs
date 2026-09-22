@@ -5,13 +5,11 @@ use firewheel::{
     dsp::filter::smoothing_filter::DEFAULT_SETTLE_RATIO, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
+use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_platform::CancelToken;
 use kithara_warp::BeatGridId;
 
-use crate::{
-    effects::eq::{EqBandConfig, generate_log_spaced_bands},
-    session::SessionBinding,
-};
+use crate::session::SessionBinding;
 
 pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.005,

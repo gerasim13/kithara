@@ -1,7 +1,7 @@
 use bon::Builder;
 use num_traits::cast::AsPrimitive;
 
-use super::GainDb;
+use crate::GainDb;
 
 struct Consts;
 

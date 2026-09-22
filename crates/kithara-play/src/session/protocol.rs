@@ -3,6 +3,7 @@ mod wire {
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
+    use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
     use kithara_sync::SyncError;
@@ -11,7 +12,6 @@ mod wire {
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SharedEq, SlotControl},
-        effects::eq::EqBandConfig,
         rt::StreamShape,
     };
 
@@ -235,6 +235,7 @@ mod handle {
     use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
+    use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_platform::{
         maybe_send::{MaybeSend, MaybeSync},
@@ -247,7 +248,6 @@ mod handle {
     };
     use crate::{
         api::{SessionDuckingMode, SlotId},
-        effects::eq::EqBandConfig,
         error::PlayError,
         rt::StreamShape,
     };

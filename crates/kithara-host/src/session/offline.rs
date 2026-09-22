@@ -1,11 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_effects::LimiterConfig;
 use kithara_platform::{
     sync::{Arc, mpsc},
     time::Duration,
 };
-use kithara_play::{PlayError, effects::LimiterConfig, player::PlayerMember};
+use kithara_play::{PlayError, player::PlayerMember};
 use kithara_sync::GroupState;
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;

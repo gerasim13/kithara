@@ -34,11 +34,12 @@ resample-glide = ["kithara-play/resample-glide"]
 resample-rubato = ["kithara-play/resample-rubato"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
-usdt = ["kithara-play/usdt", "kithara-sync/usdt"]
+usdt = ["kithara-effects/usdt", "kithara-play/usdt", "kithara-sync/usdt"]
 
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }

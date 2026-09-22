@@ -17,15 +17,14 @@ use kithara::{
     abr::{AbrHandle, AbrMode},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
+    effects::LimiterConfig,
     events::{EventBus, EventReceiver},
     host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc, effects::LimiterConfig,
-    },
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{

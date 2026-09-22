@@ -5,6 +5,7 @@ use kithara_audio::{
     Audio, AudioConfig, AudioEvent, AudioRead, AudioSource, ChunkOutcome, Fetch,
     NoResamplerBackend, PreloadGate, SourceEnd, TrackStep, WaitingReason, mock::AudioSourceMock,
 };
+use kithara_effects::EffectDrain;
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -22,7 +23,6 @@ use unimock::{MockFn, Unimock, matching};
 
 use super::*;
 use crate::{
-    effects::EffectDrain,
     test_pools::{Pools, pools, sample_buffer},
     worker::{EngineLoad, WarpSource},
 };

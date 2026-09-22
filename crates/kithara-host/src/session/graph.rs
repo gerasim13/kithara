@@ -5,6 +5,10 @@ use firewheel::{
     nodes::volume::VolumeNode,
 };
 use kithara_bufpool::HasPool;
+use kithara_effects::{
+    GainDb,
+    eq::{EqBandConfig, EqConfig},
+};
 use kithara_output::OutputGroup;
 use kithara_signal::FaderValue;
 use kithara_warp::{BeatGrid, MapAxis};
@@ -21,7 +25,6 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
-    effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
 /// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
@@ -652,6 +655,7 @@ mod tests {
         ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
         processor::FirewheelProcessor,
     };
+    use kithara_effects::eq::generate_log_spaced_bands;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_signal::{SessionEpoch, SessionFrame};
@@ -667,7 +671,6 @@ mod tests {
     use super::*;
     use crate::{
         api::{SessionTransportSnapshot, Tempo},
-        effects::eq::generate_log_spaced_bands,
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,

@@ -13,13 +13,13 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
     PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+    supports_playback_rate,
 };
 use tracing::warn;
 
 use super::{ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType};
 use crate::{
     PlayWorker, TrackConfig,
-    effects::supports_playback_rate,
     worker::{ServiceClass, TrackPriority},
 };
 

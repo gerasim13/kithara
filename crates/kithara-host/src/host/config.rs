@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
-use kithara_play::effects::LimiterConfig;
+use kithara_effects::LimiterConfig;
 #[cfg(feature = "offline")]
 use {
     kithara_bufpool::PoolRegion,

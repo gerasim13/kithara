@@ -6,6 +6,7 @@ use kithara::{
     abr::AbrMode,
     download::{Downloader, DownloaderConfig},
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
+    effects::eq::generate_log_spaced_bands,
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     host::HostOwned,
@@ -16,7 +17,6 @@ use kithara::{
     },
     play::{
         InterruptionKind, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
-        effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, QueueError, RepeatMode, Transition},

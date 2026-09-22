@@ -19,10 +19,12 @@ use firewheel::{
     },
 };
 use kithara_bufpool::{HasPool, PoolError};
+use kithara_effects::{
+    GainDb,
+    eq::{EqBandConfig, EqConfig, IsolatorEq},
+};
 use kithara_test_utils::kithara;
 use tracing::warn;
-
-use crate::effects::eq::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {

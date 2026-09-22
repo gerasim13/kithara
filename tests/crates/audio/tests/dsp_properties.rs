@@ -4,9 +4,9 @@ use std::{
 };
 
 use kithara::{
-    play::effects::{
-        AudioEffect, LimiterConfig, PeakLimiter,
-        eq::{EqConfig, EqEffect, GainDb, generate_log_spaced_bands},
+    effects::{
+        AudioEffect, GainDb, LimiterConfig, PeakLimiter,
+        eq::{EqConfig, EqEffect, generate_log_spaced_bands},
     },
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,

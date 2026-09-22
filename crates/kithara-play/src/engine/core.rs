@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
+use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
@@ -21,7 +22,6 @@ use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
-    effects::eq::EqBandConfig,
     error::PlayError,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},

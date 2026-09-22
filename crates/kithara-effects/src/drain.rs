@@ -1,7 +1,7 @@
 use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
 use kithara_signal::AudioChunk;
 
-use super::AudioEffect;
+use crate::AudioEffect;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -11,19 +11,25 @@ enum StageState {
     Exhausted,
 }
 
-pub(crate) enum EffectDrainStep {
+pub enum EffectDrainStep {
     Produced(AudioChunk),
     Progress,
     Exhausted,
 }
 
-pub(crate) struct EffectDrain {
+pub struct EffectDrain {
     exhausted: ByteBuffer,
     active: bool,
 }
 
 impl EffectDrain {
-    pub(crate) fn new<S>(effect_count: usize, pools: &PoolRegion<S>) -> Result<Self, PoolError>
+    /// Allocate a drain able to track `effect_count` stages.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when the region cannot hand out the
+    /// one-byte-per-stage buffer this drain keeps its exhaustion flags in.
+    pub fn new<S>(effect_count: usize, pools: &PoolRegion<S>) -> Result<Self, PoolError>
     where
         S: HasPool<u8>,
     {
@@ -33,11 +39,11 @@ impl EffectDrain {
         })
     }
 
-    pub(crate) const fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.active = false;
     }
 
-    pub(crate) fn step(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> EffectDrainStep {
+    pub fn step(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> EffectDrainStep {
         if effects.is_empty() {
             return EffectDrainStep::Exhausted;
         }

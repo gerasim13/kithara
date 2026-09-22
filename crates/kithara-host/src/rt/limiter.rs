@@ -9,9 +9,8 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_effects::{LimiterConfig, PeakLimiter};
 use kithara_test_utils::kithara;
-
-use crate::effects::{LimiterConfig, PeakLimiter};
 
 /// Firewheel adapter around the shared [`PeakLimiter`]: the only site that sees
 /// Firewheel buffers.

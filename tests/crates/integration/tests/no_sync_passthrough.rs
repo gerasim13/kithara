@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
+    effects::AudioEffect,
     host::HostConfig,
     platform::{
         CancelToken,
@@ -14,7 +15,7 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
     stream::Stream,

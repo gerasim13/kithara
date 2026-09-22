@@ -3,6 +3,7 @@ use std::{num::NonZeroU32, ops::Range};
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
     analysis::{BeatGridModel, BeatSnapshot, RawBeatGrid, TrackAnalysis},
+    effects::GainDb,
     events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
@@ -14,10 +15,7 @@ use kithara::{
             task,
         },
     },
-    play::{
-        BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent, StretchControls,
-        effects::eq::GainDb,
-    },
+    play::{BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent, StretchControls},
     prelude::EngineLoadSnapshot,
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,

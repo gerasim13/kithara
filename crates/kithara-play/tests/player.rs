@@ -2,12 +2,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::SeekOutcome;
 use kithara_decode::GaplessMode;
+use kithara_effects::eq::generate_log_spaced_bands;
 use kithara_events::{Envelope, EventBus, TryRecvError};
 use kithara_platform::time::Duration;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
-    SelectTransition, StretchControls, effects::eq::generate_log_spaced_bands, mock,
-    player::PlayerControlSource,
+    SelectTransition, StretchControls, mock, player::PlayerControlSource,
 };
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
