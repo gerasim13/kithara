@@ -30,4 +30,5 @@ mod sections;
 // carries the gallery modules the checks are written against. Under this
 // directory cargo leaves it alone and only this binary claims it.
 #[path = "ui_memory/checks.rs"]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod checks;

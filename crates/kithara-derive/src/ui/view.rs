@@ -8,6 +8,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
     quote! {
+        #[cfg(feature = "iced")]
         impl #impl_generics crate::render::tree::mount::ViewControl for #name #type_generics #where_clause {
             fn view<'view>(
                 &self,

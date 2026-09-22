@@ -637,14 +637,36 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     Some(anchor),
                 );
                 #[cfg(feature = "playback")]
-                kithara_integration_tests::audio_artifact::write_audio_artifact(
-                    &format!("projected-ramp-{backend}-{target_bps}-{keylock}-{quantum}"),
-                    SR,
-                    u16::try_from(CH).expect("channel count"),
-                    &[("output", output.as_slice())],
-                    &serde_json::json!({"backend": backend.to_string(), "target_bps": target_bps, "keylock": keylock, "quantum": quantum}),
-                )
-                .expect("ramp artifact saved before PCM assertions");
+                if let Some(mut tap) =
+                    kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
+                        &format!("projected-ramp-{backend}-{target_bps}-{keylock}-{quantum}"),
+                        SR,
+                        u16::try_from(CH).expect("channel count"),
+                    )
+                    .expect("ramp artifact")
+                {
+                    tap.push(&output);
+                    for beat in 0..=BARS {
+                        let frame = anchor
+                            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
+                            .expect("Host beat frame");
+                        tap.host_beat(
+                            u64::try_from(i64::from(frame)).expect("positive Host frame"),
+                            beat.is_multiple_of(4),
+                        );
+                    }
+                    tap.evidence(
+                        "projection",
+                        serde_json::json!({
+                            "backend": backend.to_string(),
+                            "target_bps": target_bps,
+                            "keylock": keylock,
+                            "quantum": quantum,
+                            "source_attack_phase_beats": f64_of(source_clicks[0]) / f64_of(NOMINAL),
+                        }),
+                    );
+                    assert_eq!(tap.metronome_mix().1, 0, "listening mix has headroom");
+                }
                 let clicks = click_positions(&mono(&output));
                 assert_eq!(
                     clicks.len(),
