@@ -249,7 +249,7 @@ fn zero_source_advance_commits_a_render_interval() {
     let revision = crate::WarpMapRevision::first();
     let source = 41;
     let output = SessionFrame::new(1_000);
-    let context = RenderContext::new(
+    let context = RenderContext::new_linear(
         OutputContext::new(
             output..SessionFrame::new(2_000),
             spec().sample_rate,
@@ -295,7 +295,7 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
     let output_map = crate::WarpMapRevision::first();
     let callback_map = output_map.checked_next().expect("fixture map advances");
     controls.set_speed(2.0);
-    let callback_context = RenderContext::new(
+    let callback_context = RenderContext::new_linear(
         OutputContext::new(
             SessionFrame::new(1_000)..SessionFrame::new(2_000),
             spec().sample_rate,
@@ -342,7 +342,7 @@ fn planned_renderer_with_publisher(
         Some(kithara_signal::TransportRevision::first()),
     )
     .expect("fixture output context");
-    let context = RenderContext::new(
+    let context = RenderContext::new_linear(
         output,
         Some(
             crate::SessionBeat::new(0.0).expect("beat")

@@ -168,5 +168,5 @@ fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
         transport.session_epoch,
         transport.transport_revision,
     )?;
-    RenderContext::try_from((output, transport.trajectory)).ok()
+    RenderContext::new(output, transport.trajectory)
 }

@@ -535,7 +535,7 @@ mod tests {
             .expect("invariant: fixture installs one context slot");
         super::super::publish_render_context(
             &mut store,
-            RenderContext::new(
+            RenderContext::new_linear(
                 OutputContext::new(
                     SessionFrame::new(0)..SessionFrame::new(512),
                     NonZeroU32::new(44_100).expect("static sample rate"),

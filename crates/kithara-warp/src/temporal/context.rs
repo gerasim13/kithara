@@ -22,10 +22,31 @@ pub struct RenderContext {
 }
 
 impl RenderContext {
-    /// Creates a context with a linear musical span.
-    /// Use [`TryFrom`] with an anchor for a committed tempo trajectory.
+    /// Creates a context from the exact committed session-clock relation.
     #[must_use]
-    pub fn new(output: OutputContext, session_beats: Option<Range<SessionBeat>>) -> Option<Self> {
+    pub fn new(output: OutputContext, trajectory: Option<SessionAnchor>) -> Option<Self> {
+        let session_beats = match trajectory {
+            Some(anchor) => {
+                if anchor.sample_rate() != output.sample_rate() {
+                    return None;
+                }
+                let frames = output.output_frames();
+                Some(anchor.beat_at(frames.start).ok()?..anchor.beat_at(frames.end).ok()?)
+            }
+            None => None,
+        };
+        let mut context = Self::new_linear(output, session_beats)?;
+        context.trajectory = trajectory;
+        Some(context)
+    }
+
+    /// Creates a context with an explicitly linear musical span.
+    /// Use [`Self::new`] when the transport supplies an exact trajectory.
+    #[must_use]
+    pub fn new_linear(
+        output: OutputContext,
+        session_beats: Option<Range<SessionBeat>>,
+    ) -> Option<Self> {
         let beats_are_ordered = session_beats
             .as_ref()
             .is_none_or(|beats| beats.start <= beats.end);
@@ -44,39 +65,13 @@ impl RenderContext {
         let total_frames = self.output.frame_count()?;
         let output = self.output.for_output_range(range.clone())?;
         if self.trajectory.is_some() {
-            return Self::try_from((output, self.trajectory)).ok();
+            return Self::new(output, self.trajectory);
         }
         let session_beats = match self.session_beats.as_ref() {
             Some(beats) => Some(beat_subrange(beats, range, total_frames)?),
             None => None,
         };
-        Self::new(output, session_beats)
-    }
-}
-
-impl TryFrom<(OutputContext, Option<SessionAnchor>)> for RenderContext {
-    type Error = ();
-
-    /// Creates a context from the exact committed session-clock relation.
-    fn try_from(
-        (output, trajectory): (OutputContext, Option<SessionAnchor>),
-    ) -> Result<Self, Self::Error> {
-        let session_beats = match trajectory {
-            Some(anchor) => {
-                if anchor.sample_rate() != output.sample_rate() {
-                    return Err(());
-                }
-                let frames = output.output_frames();
-                Some(
-                    anchor.beat_at(frames.start).map_err(|_| ())?
-                        ..anchor.beat_at(frames.end).map_err(|_| ())?,
-                )
-            }
-            None => None,
-        };
-        let mut context = Self::new(output, session_beats).ok_or(())?;
-        context.trajectory = trajectory;
-        Ok(context)
+        Self::new_linear(output, session_beats)
     }
 }
 
@@ -126,7 +121,7 @@ mod tests {
     }
 
     fn context() -> RenderContext {
-        RenderContext::new(
+        RenderContext::new_linear(
             output(Some(TransportRevision::first())),
             Some(beat(0.0)..beat(0.02)),
         )
@@ -135,13 +130,13 @@ mod tests {
 
     #[kithara::test]
     fn rejects_beats_without_a_transport_revision() {
-        assert!(RenderContext::new(output(None), Some(beat(0.0)..beat(0.02))).is_none());
+        assert!(RenderContext::new_linear(output(None), Some(beat(0.0)..beat(0.02))).is_none());
     }
 
     #[kithara::test]
     fn rejects_unordered_beat_ranges() {
         assert!(
-            RenderContext::new(
+            RenderContext::new_linear(
                 output(Some(TransportRevision::first())),
                 Some(beat(1.0)..beat(0.0)),
             )
@@ -176,9 +171,8 @@ mod tests {
             .expect("fixture anchor is valid")
             .retarget(SessionFrame::new(0), 3.0, 0.005)
             .expect("fixture ramp is valid");
-        let context =
-            RenderContext::try_from((output(Some(TransportRevision::first())), Some(anchor)))
-                .expect("fixture context is valid");
+        let context = RenderContext::new(output(Some(TransportRevision::first())), Some(anchor))
+            .expect("fixture context is valid");
         for split in [1, 17, 128, 240, 479] {
             let suffix = context
                 .for_output_range(split..BLOCK_FRAMES)

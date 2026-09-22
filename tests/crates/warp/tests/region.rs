@@ -401,7 +401,7 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
         Some(TransportRevision::first()),
     )
     .expect("fixture output");
-    let context = RenderContext::try_from((output, Some(anchor))).expect("fixture context");
+    let context = RenderContext::new(output, Some(anchor)).expect("fixture context");
     let beats = context.session_beats().expect("playing context");
     assert!((f64::from(beats.start) - 7.999_979_166_666_667).abs() < 1e-12);
     assert!((f64::from(beats.end) - 8.005_845_833_333_334).abs() < 1e-12);
@@ -471,9 +471,9 @@ fn render_configured_grid(
     )
     .expect("fixture output");
     let context = if let Some(anchor) = trajectory {
-        RenderContext::try_from((output, Some(anchor))).expect("fixture trajectory context")
+        RenderContext::new(output, Some(anchor)).expect("fixture trajectory context")
     } else {
-        RenderContext::new(
+        RenderContext::new_linear(
             output,
             Some(SessionBeat::default()..SessionBeat::new(session_beats).expect("beat")),
         )

@@ -190,9 +190,9 @@ impl RawSnapshot {
                 f64::from_bits(self.anchor_smoothing),
             )
             .ok()?;
-            RenderContext::try_from((output, Some(anchor))).ok()?
+            RenderContext::new(output, Some(anchor))?
         } else {
-            RenderContext::new(output, session_beats)?
+            RenderContext::new_linear(output, session_beats)?
         };
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
@@ -352,7 +352,7 @@ mod tests {
             Some(TransportRevision::first()),
         )
         .expect("fixture output range is ordered");
-        RenderContext::new(
+        RenderContext::new_linear(
             output,
             Some(
                 SessionBeat::new(1.0).expect("fixture beat is finite")
@@ -410,7 +410,7 @@ mod tests {
         .expect("valid anchor")
         .retarget(SessionFrame::new(950), 3.0, 0.005)
         .expect("valid ramp");
-        let expected = RenderContext::try_from((output, Some(anchor))).expect("valid context");
+        let expected = RenderContext::new(output, Some(anchor)).expect("valid context");
         publisher.publish(&expected, frontier(8_000, 1_128));
         let actual = publisher.reader().load().expect("published snapshot");
         assert_eq!(actual.context(), &expected);
