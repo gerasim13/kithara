@@ -570,7 +570,7 @@ fn render_configured_grid(
 }
 
 #[cfg(feature = "playback")]
-fn record_tunnel_preview() {
+fn record_tunnel_previews() {
     use std::io::Cursor;
 
     use kithara_integration_tests::kithara::{
@@ -583,18 +583,11 @@ fn record_tunnel_preview() {
     };
     use num_traits::ToPrimitive;
 
-    const HOST_BPM: f64 = 124.0;
-    const CAPTURE_SECONDS: usize = 15;
     const FINGERPRINT: &str = "rhythm-fixture:v1";
 
-    let Some(mut tap) = kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
-        "projected-richie-hawtin-the-tunnel-124",
-        SR,
-        u16::try_from(CH).expect("channel count"),
-    )
-    .expect("Tunnel listening artifact") else {
+    if std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_none() {
         return;
-    };
+    }
     let file = AnalysisFile::parse(
         library_mp3_analysis_zvuk_27390231().bytes(),
         &AnalysisFingerprint::new(Some(FINGERPRINT), None),
@@ -611,8 +604,7 @@ fn record_tunnel_preview() {
         .to_usize()
         .expect("Tunnel cue fits usize");
     let sample_rate = usize::try_from(SR).expect("sample rate fits usize");
-    let source_frames = sample_rate * (CAPTURE_SECONDS + 5);
-    let decode_end = source_start + source_frames;
+    let decode_end = source_start + sample_rate * 50;
     let config = DecoderConfig::<NoResamplerBackend, crate::test_pools::TestPools>::builder()
         .pools(pools())
         .build();
@@ -637,60 +629,112 @@ fn record_tunnel_preview() {
     }
     assert!(decoded.len() / CH >= decode_end, "Tunnel covers preview");
 
-    let anchor = crate::SessionAnchor::new(
-        SessionFrame::new(0),
-        SessionBeat::default(),
-        HOST_BPM / 60.0,
-        spec().sample_rate,
-    )
-    .expect("Host anchor");
-    let target = crate::BeatGridSnapshot::session(
-        crate::BeatGridId::allocate().expect("grid id"),
-        crate::BeatGridRevision::first(),
-        SessionEpoch::new(0),
-        anchor,
-        None,
-    );
     let beat_frames = f64::from(SR) * 60.0 / raw.bpm;
-    let source = asset_grid_over(&[(0.0, beat_frames, 64)], None, spec().sample_rate);
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(StretchKind::Signalsmith);
-    let rendered = render_configured_grid(
-        WarpConfig::builder()
-            .stretch(controls)
-            .render_quantum_frames(NonZero::new(64).expect("quantum"))
-            .build(),
-        Some(plan_over(source, target)),
-        &decoded[source_start * CH..decode_end * CH],
-        HOST_BPM / 60.0 * f64_of(CAPTURE_SECONDS),
-        None,
-        Some(anchor),
-    );
-    let capture_samples = (sample_rate * CAPTURE_SECONDS * CH).min(rendered.len());
-    tap.push(&rendered[..capture_samples]);
-    for beat in 0..32 {
-        let frame = anchor
-            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
-            .expect("Host beat frame");
-        let frame = u64::try_from(i64::from(frame)).expect("positive Host frame");
-        if frame >= u64_of(capture_samples / CH) {
-            break;
+    let render_segment = |source_beat: usize,
+                          start_bpm: f64,
+                          target_bpm: f64,
+                          seconds: usize,
+                          smooth_seconds: f64| {
+        let base = source_start
+            + (f64_of(source_beat) * beat_frames)
+                .round()
+                .to_usize()
+                .expect("source beat fits usize");
+        let source_seconds = (f64_of(seconds) * start_bpm.max(target_bpm) / raw.bpm).ceil();
+        let source_frames = ((source_seconds + 2.0) * f64::from(SR))
+            .to_usize()
+            .expect("source preview fits usize");
+        let end = (base + source_frames).min(decoded.len() / CH);
+        let anchor = crate::SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::default(),
+            start_bpm / 60.0,
+            spec().sample_rate,
+        )
+        .and_then(|anchor| anchor.retarget(SessionFrame::new(0), target_bpm / 60.0, smooth_seconds))
+        .expect("Host trajectory");
+        let target = crate::BeatGridSnapshot::session(
+            crate::BeatGridId::allocate().expect("grid id"),
+            crate::BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            anchor,
+            None,
+        );
+        let source = asset_grid_over(&[(0.0, beat_frames, 256)], None, spec().sample_rate);
+        let controls = StretchControls::new(1.0);
+        controls.set_keylock(true);
+        controls.set_backend(StretchKind::Signalsmith);
+        let rendered = render_configured_grid(
+            WarpConfig::builder()
+                .stretch(controls)
+                .render_quantum_frames(NonZero::new(64).expect("quantum"))
+                .build(),
+            Some(plan_over(source, target)),
+            &decoded[base * CH..end * CH],
+            target_bpm / 60.0 * f64_of(seconds),
+            None,
+            Some(anchor),
+        );
+        let samples = (sample_rate * seconds * CH).min(rendered.len());
+        (rendered[..samples].to_vec(), anchor)
+    };
+
+    let cases: &[(&str, &[(usize, f64, f64, usize, f64)])] = &[
+        ("fixed-96", &[(0, 96.0, 96.0, 10, 0.0)]),
+        ("fixed-160", &[(24, 160.0, 160.0, 10, 0.0)]),
+        ("rise-96-to-150", &[(0, 96.0, 150.0, 12, 3.0)]),
+        ("fall-150-to-96", &[(32, 150.0, 96.0, 12, 3.0)]),
+        (
+            "ride-96-150-110-160-100",
+            &[
+                (0, 96.0, 150.0, 8, 2.5),
+                (24, 150.0, 110.0, 8, 2.5),
+                (48, 110.0, 160.0, 8, 2.5),
+                (72, 160.0, 100.0, 8, 2.5),
+            ],
+        ),
+    ];
+    for (name, segments) in cases {
+        let Some(mut tap) = kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
+            &format!("projected-richie-hawtin-the-tunnel-{name}"),
+            SR,
+            u16::try_from(CH).expect("channel count"),
+        )
+        .expect("Tunnel listening artifact") else {
+            return;
+        };
+        let mut output_frame = 0_u64;
+        for &(source_beat, start_bpm, target_bpm, seconds, smooth_seconds) in *segments {
+            let (rendered, anchor) =
+                render_segment(source_beat, start_bpm, target_bpm, seconds, smooth_seconds);
+            let frames = rendered.len() / CH;
+            tap.push(&rendered);
+            let mut beat = 0;
+            loop {
+                let frame = anchor
+                    .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
+                    .expect("Host beat frame");
+                let frame = u64::try_from(i64::from(frame)).expect("positive Host frame");
+                if frame >= u64_of(frames) {
+                    break;
+                }
+                tap.host_beat(output_frame + frame, beat.is_multiple_of(4));
+                beat += 1;
+            }
+            output_frame += u64_of(frames);
         }
-        tap.host_beat(frame, beat.is_multiple_of(4));
+        tap.evidence(
+            "projection",
+            serde_json::json!({
+                "artist": "Richie Hawtin",
+                "title": "The Tunnel (Original Mix)",
+                "source_bpm": raw.bpm,
+                "source_beat_zero_frame": source_start,
+                "segments": segments,
+            }),
+        );
+        assert_eq!(tap.metronome_mix().1, 0, "Tunnel mix has headroom");
     }
-    tap.evidence(
-        "projection",
-        serde_json::json!({
-            "artist": "Richie Hawtin",
-            "title": "The Tunnel (Original Mix)",
-            "source_bpm": raw.bpm,
-            "host_bpm": HOST_BPM,
-            "source_beat_zero_frame": source_start,
-            "capture_seconds": CAPTURE_SECONDS,
-        }),
-    );
-    assert_eq!(tap.metronome_mix().1, 0, "Tunnel mix has headroom");
 }
 
 #[kithara::test]
@@ -714,7 +758,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
     #[cfg(feature = "playback")]
     if matches!(backend, StretchKind::Signalsmith) {
-        record_tunnel_preview();
+        record_tunnel_previews();
     }
     assert_eq!(
         source_clicks.len(),
