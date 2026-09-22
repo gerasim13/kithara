@@ -5,143 +5,231 @@ import Kithara
 import Testing
 
 extension IntegrationRegressionsIOS {
-    @Test("Playback resumes after connectivity returns")
-    func playbackResumesAfterConnectivityReturns() async throws {
-        try await TestServerFixture.setNetwork(online: true)
-        defer {
-            Task {
-                _ = try? await TestServerFixture.setNetwork(online: true)
+    @Test("Transient HTTP 503 does not fail the current item and playback resumes")
+    func transient503DoesNotFailCurrentItemAndPlaybackResumes() async throws {
+        try await withRestoredFixtureNetwork {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback)
+            try audioSession.setActive(true)
+            defer {
+                try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            }
+
+            let cacheURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "connectivity-resume-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            try FileManager.default.createDirectory(
+                at: cacheURL,
+                withIntermediateDirectories: true
+            )
+            defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+            let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+            let item = KitharaPlayerItem(
+                url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
+            )
+            let observation = ConnectivityRecoveryObservation()
+            let itemEvents = item.eventPublisher.sink { observation.record($0) }
+            let playerEvents = player.eventPublisher.sink { observation.record($0) }
+            defer {
+                itemEvents.cancel()
+                playerEvents.cancel()
+                player.stop()
+            }
+
+            try player.insert(item)
+            player.play()
+            try await waitForConnectivityFact("paced HLS playback before the outage") {
+                player.currentAudioItem === item
+                    && player.currentRate > 0
+                    && player.currentTime > 1
+                    && (player.duration ?? 0) >= 180
+            }
+
+            try await TestServerFixture.setNetwork(.unavailable)
+            try await waitForConnectivityFact("public HTTP 503 retry exhaustion") {
+                observation.sawRetryExhausted503
+                    || observation.terminalFailure != nil
+            }
+            try #require(
+                observation.sawRetryExhausted503,
+                "the outage never reached the public HTTP 503 retry-exhausted path"
+            )
+            try #require(
+                observation.terminalFailure == nil,
+                "transient HTTP 503 became terminal: \(observation.terminalFailure ?? "none")"
+            )
+
+            try await waitForConnectivityFact("an active underrun after HTTP 503") {
+                observation.activeUnderrun != nil
+                    || observation.terminalFailure != nil
+            }
+            let underrun = try #require(
+                observation.activeUnderrun,
+                "playback never entered an active underrun after HTTP 503"
+            )
+            try #require(
+                observation.terminalFailure == nil,
+                "the current item failed before connectivity returned"
+            )
+            try #require(
+                player.currentAudioItem === item && player.currentRate > 0,
+                "the current item or play intent changed during the outage"
+            )
+
+            try await TestServerFixture.setNetwork(.online)
+            let resumeTarget = underrun.position + 1
+            try await waitForConnectivityFact(
+                "the same item to recover after connectivity returned",
+                timeout: .seconds(45)
+            ) {
+                observation.terminalFailure != nil
+                    || (
+                        observation.didEndUnderrun(epoch: underrun.epoch)
+                            && player.currentAudioItem === item
+                            && player.currentRate > 0
+                            && player.currentTime >= resumeTarget
+                    )
+            }
+
+            #expect(
+                observation.terminalFailure == nil,
+                "connectivity recovery published a terminal failure"
+            )
+            #expect(
+                observation.didEndUnderrun(epoch: underrun.epoch),
+                "the active underrun did not end after connectivity returned"
+            )
+            #expect(player.currentAudioItem === item, "recovery replaced the current item")
+            #expect(player.currentRate > 0, "recovery lost play intent")
+            #expect(
+                player.currentTime >= resumeTarget,
+                "the same item did not advance by one second after recovery"
+            )
+            if case .failed = player.status {
+                Issue.record("player status became failed after transient HTTP 503")
             }
         }
-
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playback)
-        try audioSession.setActive(true)
-
-        let cacheURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("connectivity-resume-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: cacheURL,
-            withIntermediateDirectories: true
-        )
-
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
-        let item = KitharaPlayerItem(
-            url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
-        )
-        let signals = ResumeSignals()
-        let stallCancellable = item.didStall.sink {
-            signals.recordStall()
-        }
-        defer {
-            player.stop()
-            try? FileManager.default.removeItem(at: cacheURL)
-            _ = stallCancellable
-        }
-
-        try player.insert(item)
-        player.play()
-        try await waitForResumeFact("HLS playback to advance before the outage") {
-            player.currentTime > 1
-        }
-        try await waitForResumeFact("the long HLS duration to settle") {
-            (player.duration ?? 0) >= 180
-        }
-
-        let outageBeganAt = player.currentTime
-        try await TestServerFixture.setNetwork(online: false)
-        let starvation = await observeStarvation(player)
-        try await TestServerFixture.setNetwork(online: true)
-
-        let starvedAt = try #require(
-            starvation,
-            """
-            precondition: playback never stopped advancing while the \
-            server was offline; outage began at \(outageBeganAt)s, \
-            didStall=\(signals.didStall)
-            """
-        )
-        let resumeTarget = starvedAt + 1
-        let resumed = await reachedResumeFact(deadline: .seconds(45)) {
-            player.currentTime >= resumeTarget
-        }
-        #expect(
-            resumed,
-            """
-            connectivity returned after playback starved at \
-            \(starvedAt)s, but media time never reached \(resumeTarget)s; \
-            current=\(player.currentTime)s
-            """
-        )
     }
 
-    private func observeStarvation(_ player: KitharaPlayer) async -> TimeInterval? {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(75))
-        var lastPosition = player.currentTime
-        var stableSince = clock.now
-
-        while clock.now < deadline {
-            let position = player.currentTime
-            if position > lastPosition + 0.02 {
-                lastPosition = position
-                stableSince = clock.now
-            } else if stableSince.duration(to: clock.now) >= .seconds(2) {
-                return position
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    private func withRestoredFixtureNetwork(
+        _ operation: () async throws -> Void
+    ) async throws {
+        try await TestServerFixture.setNetwork(.online)
+        do {
+            try await operation()
+        } catch {
+            let operationError = error
+            try await TestServerFixture.setNetwork(.online)
+            throw operationError
         }
-        return nil
+        try await TestServerFixture.setNetwork(.online)
     }
 
-    private func reachedResumeFact(
-        deadline duration: Duration,
-        condition: () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: duration)
-        while clock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        return condition()
-    }
-
-    private func waitForResumeFact(
+    private func waitForConnectivityFact(
         _ description: String,
+        timeout: Duration = .seconds(75),
         condition: () -> Bool
     ) async throws {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(45))
-        while !condition() {
+        let deadline = clock.now.advanced(by: timeout)
+        while true {
+            try Task.checkCancellation()
+            if condition() {
+                return
+            }
             guard clock.now < deadline else {
-                throw ResumeFactTimeout(description)
+                throw ConnectivityFactTimeout(description)
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 }
 
-private final class ResumeSignals: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stalled = false
+private struct ActiveConnectivityUnderrun: Sendable {
+    let position: TimeInterval
+    let epoch: UInt64
+}
 
-    var didStall: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return stalled
+private final class ConnectivityRecoveryObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var retryExhausted503 = false
+    private var currentUnderrun: ActiveConnectivityUnderrun?
+    private var endedUnderrunEpochs: Set<UInt64> = []
+    private var failure: String?
+
+    var sawRetryExhausted503: Bool {
+        lock.withLock { retryExhausted503 }
     }
 
-    func recordStall() {
-        lock.lock()
-        defer { lock.unlock() }
-        stalled = true
+    var activeUnderrun: ActiveConnectivityUnderrun? {
+        lock.withLock { currentUnderrun }
+    }
+
+    var terminalFailure: String? {
+        lock.withLock { failure }
+    }
+
+    func didEndUnderrun(epoch: UInt64) -> Bool {
+        lock.withLock { endedUnderrunEpochs.contains(epoch) }
+    }
+
+    func record(_ event: ItemEvent) {
+        lock.withLock {
+            switch event {
+            case let .downloadRetryExhausted(_, _, _, error):
+                if error.contains("503") {
+                    retryExhausted503 = true
+                }
+            case let .underrunStarted(positionMs, epoch):
+                currentUnderrun = ActiveConnectivityUnderrun(
+                    position: TimeInterval(positionMs) / 1_000,
+                    epoch: epoch
+                )
+            case let .underrunEnded(_, epoch):
+                endedUnderrunEpochs.insert(epoch)
+                if currentUnderrun?.epoch == epoch {
+                    currentUnderrun = nil
+                }
+            case .statusChanged(status: .failed):
+                recordFailure("item status failed")
+            case .didFail:
+                recordFailure("item failed")
+            case let .trackFailed(reason, epoch):
+                recordFailure("track failed at epoch \(epoch): \(reason)")
+            default:
+                break
+            }
+        }
+    }
+
+    func record(_ event: PlayerEvent) {
+        lock.withLock {
+            switch event {
+            case .statusChanged(status: .failed):
+                recordFailure("player status failed")
+            case let .itemDidFail(itemId):
+                recordFailure(
+                    itemId.map { "item \($0) failed" } ?? "item failed"
+                )
+            case let .trackStatusChanged(itemId, status: .failed(reason)):
+                recordFailure("item \(itemId) failed: \(reason)")
+            default:
+                break
+            }
+        }
+    }
+
+    private func recordFailure(_ description: String) {
+        if failure == nil {
+            failure = description
+        }
     }
 }
 
-private struct ResumeFactTimeout: Error, CustomStringConvertible {
+private struct ConnectivityFactTimeout: Error, CustomStringConvertible {
     let description: String
 
     init(_ description: String) {

@@ -9,9 +9,10 @@
 //! `ItemRole::Leading` may advance the queue.
 
 use kithara::{
+    audio::DecodeErrorKind,
     events::{EventReceiver, SlotId, TrackId},
     platform::sync::Arc,
-    play::{ItemRole, PlayerEvent, TrackRef},
+    play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef},
     queue::{AdvanceReason, QueueControl, QueueEvent, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
@@ -106,7 +107,10 @@ fn publish_completion(
     };
     let event = match completion {
         Completion::Eof => PlayerEvent::ItemDidPlayToEnd { item },
-        Completion::Failure => PlayerEvent::ItemDidFail { item },
+        Completion::Failure => PlayerEvent::ItemDidFail {
+            item,
+            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+        },
     };
     harness.player().bus().publish(TestEvent::Player(event));
 }

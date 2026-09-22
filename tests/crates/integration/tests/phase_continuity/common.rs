@@ -183,10 +183,9 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// the same budget.
 ///
 /// A pending read waits for the producer to announce progress, not for a pause
-/// to expire. The ring publishes [`AudioEvent::OutputAvailable`] the moment it
-/// goes from empty to non-empty, and this scan runs its consumer in
-/// `ImmediateOffRt`, where that event reaches the bus inline — so the retry
-/// costs one wake and nothing else.
+/// to expire. Each producer pass that publishes output also delivers a
+/// coalesced [`AudioEvent::OutputAvailable`] wake from the scheduler shell,
+/// so the retry costs one wake and nothing else.
 ///
 /// Pacing the retry instead measures the host, not the pipeline: a bare yield
 /// registers neither a deadline nor a pause, so a starved decoder burns the

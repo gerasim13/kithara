@@ -328,7 +328,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let TestEvent::Player(pe) = ev {
                 match pe {
-                    PlayerEvent::ItemDidFail { ref item } if item.track().src == target_src => {
+                    PlayerEvent::ItemDidFail { ref item, .. } if item.track().src == target_src => {
                         trigger = Trigger::DidFail;
                     }
                     PlayerEvent::ItemDidPlayToEnd { ref item }

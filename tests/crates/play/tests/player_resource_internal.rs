@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara::{
     self,
-    audio::{AudioControl, AudioRead, AudioSession, DecodeError, ReadOutcome, SeekOutcome},
+    audio::{
+        AudioControl, AudioRead, AudioSession, DecodeError, DecodeErrorKind, ReadOutcome,
+        SeekOutcome,
+    },
     decode::TrackMetadata,
     events::EventBus,
     platform::{sync::Arc, time::Duration},
@@ -386,9 +389,10 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
 /// `eof_seen=true`, which made the next `read()` return `Partial(0)`
 /// or `Eof`. The Player then emitted `PlaybackStopped { Eof }` and
 /// the Queue auto-advanced — even though the track did NOT actually
-/// reach its natural end. After the fix, `Err` sets `failed=true`
-/// and `read()` returns the new `Failed` variant, so callers can
-/// distinguish "track aborted mid-stream" from "track played out".
+/// reach its natural end. After the fix, `Err` records the decoder's
+/// error kind and `read()` returns it on the `Failed` variant, so callers
+/// distinguish "track aborted mid-stream" from "track played out" and can
+/// say which fault ended it rather than only that one did.
 #[kithara::test(tokio)]
 async fn read_returns_failed_not_eof_on_decoder_error() {
     let reader = MockReader::faulty(Consts::AUDIO_SPEC, Fault::DecodeError);
@@ -402,7 +406,11 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
     let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
 
     match result {
-        BlockReadOutcome::Failed => {}
+        BlockReadOutcome::Failed(kind) => assert_eq!(
+            kind,
+            DecodeErrorKind::Io,
+            "the decoder's own error kind must survive the read that returned it"
+        ),
         BlockReadOutcome::Eof | BlockReadOutcome::Partial { .. } => panic!(
             "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
              this is the false-EOF bug from app.log"

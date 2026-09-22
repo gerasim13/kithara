@@ -11,7 +11,7 @@ use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSi
 use kithara_bufpool::HasPool;
 use kithara_download::{OnCompleteFn, WriterFn};
 use kithara_events::EventBus;
-use kithara_net::{NetError, Retryability};
+use kithara_net::NetError;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use tracing::{debug, error};
@@ -26,35 +26,22 @@ use crate::{
 /// Whether a fetch error is terminal for the slot — whether this segment is
 /// unobtainable, not whether this download failed.
 ///
-/// `Cancelled` stays recoverable: a cancel marks an epoch rebuild, which owns
-/// the re-dispatch. `RetryExhausted` is unwrapped to the cause underneath it.
 /// The net layer spends its budget on one download in well under a second,
-/// while the slot it parks may not be read for another half a minute — so
-/// treating "the network was briefly away" as a permanent verdict strands a
-/// segment that would fetch fine by the time anyone wants it. A transient
-/// cause therefore returns the slot to the pool and the next dispatch asks
-/// again; a fatal one (a missing resource, a body that will not decode) parks
-/// it, because asking again cannot change the answer.
+/// while the slot it parks may not be read for another half a minute, so the
+/// question is [`NetError::can_answer_later`]: a host that refused or was not
+/// there returns the slot to the pool and the next dispatch asks again, which
+/// is what carries playback through an outage.
+///
+/// Everything else parks the slot, and a stalled transfer deliberately among
+/// them: this is where give-up authority lives for every blocking read above
+/// (`impl Read for Stream` waits on the source precisely because this layer can
+/// tell a slow-but-live transfer from one that stopped), so a segment whose body
+/// never arrives has to end here rather than wait forever.
+///
+/// `Cancelled` is the exception in the other direction: a cancel marks an epoch
+/// rebuild, which owns the re-dispatch.
 fn is_terminal_fetch_error(e: &NetError) -> bool {
-    match e {
-        NetError::Cancelled => false,
-        // The budget is spent on one download in well under a second, while
-        // the slot it parks may not be read for another half a minute — so
-        // what matters is whether the segment is obtainable later, not
-        // whether this attempt failed. A reachable server that answered
-        // "not now" (503, 429, 408) says nothing about later, and an outage
-        // of a few seconds must not cost the track every segment that
-        // happened to be in flight. Anything else that burnt the budget —
-        // a body that stopped arriving, a socket that never answered — the
-        // resilient body already re-fetched and gave up on; parking it is
-        // right, and a reader waiting on it gets a terminal error rather
-        // than a retry loop with nothing behind it.
-        NetError::RetryExhausted { source, .. } => match source.as_ref() {
-            status @ NetError::Status { .. } => status.retryability() != Retryability::Transient,
-            _ => true,
-        },
-        other => other.retryability() == Retryability::Fatal,
-    }
+    !matches!(e, NetError::Cancelled) && !e.can_answer_later()
 }
 
 /// Phantom-typed handle to a segment / init slot. `S` is one of
@@ -520,4 +507,50 @@ where
     }
     let variant_idx = variant.variant_index_u32()?;
     Some((variant_idx, segment_index))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU16;
+
+    use kithara_net::NetError;
+    use kithara_test_utils::kithara;
+
+    use super::is_terminal_fetch_error;
+
+    fn status(code: u16) -> NetError {
+        NetError::Status {
+            status: NonZeroU16::new(code).expect("non-zero status"),
+            url: None,
+            body: None,
+        }
+    }
+
+    /// Whether a segment is obtainable later is the cause's own retryability,
+    /// not the shape the outage arrived in. A transport that died and a server
+    /// that said "not now" are both answerable once the network is back, so
+    /// both keep the slot; only an answer that cannot change parks it.
+    #[kithara::test]
+    #[case::transport_gone(NetError::Network("connection closed".to_string()), false)]
+    // A body that stopped arriving ends here: the blocking read above this layer
+    // has no other bound, which `audio_new_bounded_failure_when_first_segment_withheld`
+    // pins.
+    #[case::body_stopped_arriving(NetError::Timeout, true)]
+    #[case::server_busy(status(503), false)]
+    #[case::too_many_requests(status(429), false)]
+    #[case::missing_segment(status(404), true)]
+    #[case::undecodable_body(NetError::Decode("bad box".to_string()), true)]
+    fn exhausted_budget_defers_to_its_cause(#[case] cause: NetError, #[case] terminal: bool) {
+        let exhausted = NetError::RetryExhausted {
+            max_retries: 3,
+            source: Box::new(cause),
+        };
+        assert_eq!(is_terminal_fetch_error(&exhausted), terminal);
+    }
+
+    /// A cancel marks an epoch rebuild, which owns the re-dispatch.
+    #[kithara::test]
+    fn cancel_keeps_the_slot() {
+        assert!(!is_terminal_fetch_error(&NetError::Cancelled));
+    }
 }

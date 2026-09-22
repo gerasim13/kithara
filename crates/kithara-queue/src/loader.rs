@@ -1,21 +1,25 @@
-use std::num::NonZeroUsize;
+use std::{error::Error as StdError, io, num::NonZeroUsize};
 
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
 use kithara_download::DownloaderEvent;
 use kithara_events::{Envelope, EventBus, RecvError, ScopeLabel, TrackId};
+use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
+    time::Duration,
     tokio,
     tokio::{
+        runtime::Handle as RuntimeHandle,
         sync::Semaphore,
-        task::{JoinHandle, spawn},
+        task::{JoinHandle, spawn, spawn_on},
     },
 };
 use kithara_play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl};
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use crate::{
     attempts::{LoadClass, Ticket},
@@ -40,14 +44,19 @@ where
     store: AssetStore<S>,
     cancel: CancelToken,
     player: PlayerControl<S>,
+    runtime: Option<RuntimeHandle>,
 }
 
 impl<S> Loader<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Repeated asks with nothing to show for them: the downloader's own budget.
+    const HANG_TIMEOUT: Duration = Duration::from_secs(60);
+
     pub(crate) fn new(
         player: PlayerControl<S>,
+        runtime: Option<RuntimeHandle>,
         store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks<S>>,
@@ -56,6 +65,7 @@ where
         Self {
             cancel,
             player,
+            runtime,
             tracks,
             store,
             interactive_lane: Arc::new(Semaphore::new(1)),
@@ -120,20 +130,42 @@ where
     /// Load a [`Resource`] from a prepared config, attaching the observer
     /// left for this track when there is one. Caller is responsible
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
+    ///
+    /// A load that failed on something the network can answer later is not a
+    /// verdict on the track: while the selection wants it the ask repeats, so a
+    /// track chosen during an outage plays when connectivity returns instead of
+    /// waiting to be chosen a second time. An HLS segment already gets exactly
+    /// this — a transient failure returns its slot to the pool and the next
+    /// dispatch asks again.
+    ///
+    /// Nothing here polls for the network's state: each ask spends the
+    /// downloader's own retry budget before returning, which is what paces the
+    /// repeat, and the per-track cancel ends it the moment the selection moves
+    /// on. An attempt nobody selected gives up instead, so it never holds its
+    /// lane permit against a network that is not answering.
+    #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn load(&self, id: TrackId, config: ResourceConfig<S>) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
-        let observer = self.tracks.observer_relay(id);
-        let resource_fut = async {
-            Resource::new_observed(config, Box::new(observer))
-                .await
-                .map_err(|e| QueueError::Resource(format!("{e}")))
-        };
         tokio::pin!(slow_watcher);
-        tokio::select! {
-            biased;
-            result = resource_fut => result,
-            never = &mut slow_watcher => match never {},
+        loop {
+            let observer = self.tracks.observer_relay(id);
+            let attempt =
+                async { Resource::new_observed(config.clone(), Box::new(observer)).await };
+            let result = tokio::select! {
+                biased;
+                result = attempt => result,
+                never = &mut slow_watcher => match never {},
+            };
+            let err = match result {
+                Ok(resource) => return Ok(resource),
+                Err(err) => err,
+            };
+            if !can_answer_later(&err, self.tracks.attempt_selected(id)) {
+                return Err(QueueError::Resource(format!("{err}")));
+            }
+            hang_tick!();
+            debug!(?id, error = %err, "load failed on a cause a later ask can answer; asking again");
         }
     }
 
@@ -162,8 +194,9 @@ where
         track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
+        let runtime = self.runtime.clone();
         let this = Arc::clone(self);
-        spawn(async move {
+        let future = async move {
             let id = ticket.id;
             let cancel = CancelGroup::new(vec![track_cancel.clone(), this.cancel.clone()]);
             let lane = match class {
@@ -199,7 +232,11 @@ where
             };
             this.tracks.finish_attempt(&ticket, failure);
             result
-        })
+        };
+        match runtime {
+            Some(runtime) => spawn_on(&runtime, future),
+            None => spawn(future),
+        }
     }
 
     /// Spawn a fresh async load in the given lane. `None` when a live
@@ -218,7 +255,9 @@ where
                 return None;
             }
         };
-        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
+        let ticket =
+            self.tracks
+                .begin_attempt(id, cancel.clone(), class == LoadClass::Interactive)?;
         Some(self.spawn_attempt(ticket, config, cancel, class))
     }
 
@@ -261,11 +300,61 @@ where
     }
 }
 
+/// Whether a failed load is worth asking for again as it stands.
+///
+/// Two conditions, both required.
+///
+/// Someone must be waiting: `selected` comes from the attempt record, not
+/// from the lane the attempt was spawned into. Selecting a track whose
+/// background prefetch is already running does not move that attempt to
+/// another lane, so the lane says nothing about who is waiting.
+///
+/// And the failure must be one a later ask can answer, which is
+/// [`NetError::can_answer_later`]'s question — the same one an HLS segment
+/// slot asks about its own re-dispatch. It is read off the typed `NetError`
+/// the load carries down its source chain: never a message match, and never a
+/// verdict read back off the bus, which another task publishes and so is not
+/// there yet when the load returns. A failure with no network cause at all
+/// (an unparseable container, a codec the build does not carry) is never
+/// asked again — connectivity does not change that answer — and neither is a
+/// transfer that stopped delivering, which is the verdict
+/// `stalled_master_playlist_fails_load` pins.
+fn can_answer_later(error: &(dyn StdError + 'static), selected: bool) -> bool {
+    if !selected {
+        return false;
+    }
+    net_cause(error).is_some_and(NetError::can_answer_later)
+}
+
+/// The network failure behind a load error, if the load failed on the network at
+/// all.
+///
+/// [`io::Error`] hides its payload from [`StdError::source`] — it reports the
+/// payload's *own* source instead — so a plain chain walk steps straight over a
+/// wrapped `NetError`. This looks inside one explicitly.
+fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
+    let mut current = Some(error);
+    while let Some(err) = current {
+        if let Some(net) = err.downcast_ref::<NetError>() {
+            return Some(net);
+        }
+        if let Some(net) = err
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::get_ref)
+            .and_then(|payload| net_cause(payload))
+        {
+            return Some(net);
+        }
+        current = err.source();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         future::{self, Future},
-        num::{NonZeroU32, NonZeroU64},
+        num::{NonZeroU16, NonZeroU32, NonZeroU64},
         pin::pin,
         sync::atomic::{AtomicUsize, Ordering},
         task::{Context, Waker},
@@ -300,6 +389,70 @@ mod tests {
             self.state
                 .store(usize::from(self.cancel.is_cancelled()), Ordering::SeqCst);
         }
+    }
+
+    /// A spent budget over a refusal keeps the resource askable: the load is
+    /// repeated while the selection wants it, which is how a track chosen during
+    /// an outage starts once connectivity returns.
+    #[kithara::test]
+    fn a_refused_host_can_answer_later() {
+        let refused = NetError::RetryExhausted {
+            max_retries: 3,
+            source: Box::new(NetError::Status {
+                status: NonZeroU16::new(503).expect("503 is not zero"),
+                url: None,
+                body: Some("network offline".to_string()),
+            }),
+        };
+        // `io::Error` hides its payload from the source chain; the classifier looks inside.
+        assert!(can_answer_later(&io::Error::other(refused), true));
+    }
+
+    /// A vanished transport is the same answer: nothing was reached, so the whole
+    /// load is worth asking for again.
+    #[kithara::test]
+    fn a_vanished_host_can_answer_later() {
+        let gone = NetError::Network("connection closed".to_string());
+        assert!(can_answer_later(&io::Error::other(gone), true));
+    }
+
+    /// A transfer that established and then stopped delivering is the net layer's
+    /// own verdict: repeating it would spin instead of telling the user, the
+    /// contract `stalled_master_playlist_fails_load` pins.
+    #[kithara::test]
+    fn a_stalled_transfer_is_not_asked_again() {
+        let stalled = NetError::RetryExhausted {
+            max_retries: 1,
+            source: Box::new(NetError::Timeout),
+        };
+        assert!(!can_answer_later(&io::Error::other(stalled), true));
+    }
+
+    /// A missing resource answers the same however long one waits.
+    #[kithara::test]
+    fn a_missing_resource_is_not_asked_again() {
+        let missing = NetError::Status {
+            status: NonZeroU16::new(404).expect("404 is not zero"),
+            url: None,
+            body: None,
+        };
+        assert!(!can_answer_later(&io::Error::other(missing), true));
+    }
+
+    /// A failure the network had no part in — an unparseable container, a codec
+    /// the build does not carry — is not a connectivity question.
+    #[kithara::test]
+    fn a_failure_with_no_network_cause_is_not_asked_again() {
+        let local = io::Error::other("unsupported container");
+        assert!(!can_answer_later(&local, true));
+    }
+
+    /// Nobody is waiting for an unselected attempt, so it gives up rather than
+    /// hold its lane permit against a network that is not answering.
+    #[kithara::test]
+    fn an_unselected_attempt_is_not_asked_again() {
+        let refused = NetError::Network("connection refused".to_string());
+        assert!(!can_answer_later(&io::Error::other(refused), false));
     }
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
@@ -466,6 +619,7 @@ mod tests {
             let store = AssetStore::builder(player.pools().clone()).build();
             let loader = Arc::new(Loader::new(
                 player.control(),
+                player.runtime().cloned(),
                 store,
                 self.cap,
                 Arc::clone(&tracks),
@@ -677,6 +831,7 @@ mod tests {
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             player.control(),
+            None,
             AssetStore::builder(player.pools().clone()).build(),
             NonZeroUsize::MIN,
             Arc::clone(&tracks),

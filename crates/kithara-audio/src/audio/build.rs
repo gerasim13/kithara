@@ -471,10 +471,11 @@ async fn create_stream_with_probe<T>(stream_config: T::Config) -> Result<Stream<
 where
     T: StreamType,
 {
+    // Payload, not text: callers classify the transport failure behind a failed open.
     let stream = Stream::<T>::new(stream_config)
         .await
         .map_err(|error| DecodeError::Io {
-            source: IoError::other(error.to_string()),
+            source: IoError::other(error),
         })?;
     probe(stream).await
 }

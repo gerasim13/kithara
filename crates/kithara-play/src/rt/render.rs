@@ -282,7 +282,7 @@ impl RenderPass {
 const fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
     match read_outcome {
         TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset: 0 }),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => Some(Handover { offset: 0 }),
         TrackReadOutcome::Full { .. } => None,
     }
 }
@@ -293,7 +293,7 @@ const fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option
         TrackReadOutcome::Partial { frames, .. } => Some(Handover {
             offset: offset.saturating_add(*frames),
         }),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset }),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => Some(Handover { offset }),
     }
 }
 
@@ -303,7 +303,7 @@ const fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f
             position, duration, ..
         } => Some((position, duration)),
         TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => None,
     }
 }
 

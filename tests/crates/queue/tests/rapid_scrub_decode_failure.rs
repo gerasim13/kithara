@@ -131,7 +131,7 @@ async fn observe_scrub_outcome(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(TestEvent::Player(PlayerEvent::ItemDidFail { item })))
+            Ok(Ok(TestEvent::Player(PlayerEvent::ItemDidFail { item, .. })))
                 if item.track().src.as_ref() == target_src =>
             {
                 return ScrubOutcome::ItemDidFail {

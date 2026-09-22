@@ -176,6 +176,9 @@ jni = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+kithara-apple = { workspace = true, features = ["foundation"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "offline", "signal"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }

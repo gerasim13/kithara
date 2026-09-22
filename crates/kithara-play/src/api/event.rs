@@ -6,6 +6,8 @@ use kithara_events::{Event, SlotId, TrackId};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
+use crate::bridge::PlaybackFault;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PlayerStatus {
     #[default]
@@ -393,13 +395,15 @@ pub enum PlayerEvent {
         item: ItemRole,
     },
     /// A track aborted mid-stream because the underlying decoder /
-    /// source reported a non-recoverable error. Distinct from
+    /// source reported a non-recoverable error, or because the render
+    /// context could not serve it. Distinct from
     /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd): the track did
     /// NOT reach its natural end and queue consumers must treat this
     /// as a track-failure signal (skip-and-flag) rather than a
-    /// normal auto-advance.
+    /// normal auto-advance. `fault` names which defect ended it.
     ItemDidFail {
         item: ItemRole,
+        fault: PlaybackFault,
     },
     /// Leading track entered the prefetch window — arm the next slot.
     PrefetchRequested,

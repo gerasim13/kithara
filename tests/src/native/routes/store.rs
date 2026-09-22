@@ -83,7 +83,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn store_route_stays_reachable_while_the_network_is_offline() {
         let state = TestServerState::new();
-        state.set_network_online(false);
+        state.set_network_mode(crate::test_server_state::NetworkMode::Unavailable);
         let server = TestHttpServer::new(crate::test_server::router(Arc::clone(&state))).await;
         let asset = assets::sine_wav_a440_6s();
         let response = reqwest::get(server.url(&format!("/store/{}", asset.entry().path)))

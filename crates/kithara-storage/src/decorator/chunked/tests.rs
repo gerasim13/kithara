@@ -23,10 +23,20 @@ fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBu
     (res, canonical, tmp)
 }
 
+/// Open the way the shipped path opens.
+///
+/// The claim protocol asserted here reads the same under either barrier, but
+/// `open` puts a `sync_data` in front of every rename and this module is its
+/// only caller in the workspace: `kithara-assets` opens the disk backend
+/// deferred. So a test that commits twice buys two medium-speed durability
+/// waits that nothing here asserts, and on a contended disk that is what
+/// carries it past a budget its ten siblings share. The barrier keeps its
+/// coverage where it is actually reachable: the concurrent-claim sibling
+/// still opens through `open`, and never commits.
 fn open_chunked_result(dir: &TempDir, name: &str) -> StorageResult<AtomicChunked<MmapDriver>> {
     let canonical = dir.path().join(name);
     let cancel = CancelToken::never();
-    AtomicChunked::<MmapDriver>::open(canonical, move |target, intent| {
+    AtomicChunked::<MmapDriver>::open_deferred(canonical, move |target, intent| {
         let mode = match intent {
             OpenIntent::Fresh => OpenMode::ReadWrite,
             OpenIntent::Reopen => OpenMode::ReadOnly,

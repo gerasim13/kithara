@@ -10,6 +10,7 @@ use kithara::platform::{
     sync::{Arc, Notify},
     tokio::sync::watch,
 };
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -45,6 +46,27 @@ pub enum Delivery {
         chunk: usize,
         delay_ms: u64,
     },
+}
+
+/// How every data route answers while the server-wide outage switch is thrown.
+///
+/// The modes differ in the *error class* the client observes, and that class —
+/// not the outage itself — is what a recovery contract turns on: a reachable
+/// server answering `503` says "not now", while a dead transport says nothing
+/// at all. A fixture that can only produce the former cannot exercise the
+/// latter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    Online,
+    /// A reachable server refusing to serve: every data route answers `503`.
+    Unavailable,
+    /// An unreachable network, the shape a device sees in airplane mode: the
+    /// response body ends before its declared length, so the client observes a
+    /// transport failure instead of an HTTP status. The listener stays bound
+    /// because this middleware runs after `accept`; the error class on the
+    /// client is what is being modelled, not the kernel-level refusal.
+    TransportFailure,
 }
 
 #[derive(Clone)]
@@ -282,11 +304,11 @@ pub(crate) struct TestServerState {
     /// `PlayWorker::open` versus the lazy per-segment resolve that probes only
     /// the active prefix.
     size_probes: RwLock<HashMap<String, AtomicU64>>,
-    /// Server-wide reachability switch. While `false`, every data route returns
-    /// `503`, modeling a total network outage rather than one failed URL.
-    /// Because it covers the whole server, only a server private to one test
-    /// may be taken offline — see `PrivateTestServer`.
-    network_online: AtomicBool,
+    /// Server-wide reachability switch. Anything other than
+    /// [`NetworkMode::Online`] models a total network outage rather than one
+    /// failed URL. Because it covers the whole server, only a server private to
+    /// one test may be taken offline — see `PrivateTestServer`.
+    network_mode: RwLock<NetworkMode>,
 }
 
 impl TestServerState {
@@ -300,7 +322,7 @@ impl TestServerState {
             init_gates: GateMap::default(),
             delay_gates: GateMap::default(),
             size_probes: RwLock::new(HashMap::new()),
-            network_online: AtomicBool::new(true),
+            network_mode: RwLock::new(NetworkMode::Online),
         })
     }
 
@@ -335,12 +357,12 @@ impl TestServerState {
         map.get(token).map(|e| e.hits.load(Ordering::Relaxed))
     }
 
-    pub(crate) fn network_online(&self) -> bool {
-        self.network_online.load(Ordering::Relaxed)
+    pub(crate) fn network_mode(&self) -> NetworkMode {
+        *self.network_mode.read().expect("network mode poisoned")
     }
 
-    pub(crate) fn set_network_online(&self, online: bool) {
-        self.network_online.store(online, Ordering::Relaxed);
+    pub(crate) fn set_network_mode(&self, mode: NetworkMode) {
+        *self.network_mode.write().expect("network mode poisoned") = mode;
     }
 
     /// Register a withhold gate for one `(hls token, variant, segment)` and
