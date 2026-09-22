@@ -79,7 +79,7 @@ impl Default for LimiterConfig {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct PeakLimiter {
-    ceiling: f32,
+    config: LimiterConfig,
     envelope: f32,
     release_coeff: f32,
     channels: usize,
@@ -138,7 +138,6 @@ impl PeakLimiter {
         channels: NonZeroUsize,
         config: LimiterConfig,
     ) -> Result<Self, LimiterError> {
-        let ceiling = config.ceiling();
         let release_ms = config.release_ms();
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
@@ -162,7 +161,7 @@ impl PeakLimiter {
         }
 
         Ok(Self {
-            ceiling,
+            config,
             release_coeff,
             envelope: 1.0,
             channels: channels.get(),
@@ -213,6 +212,12 @@ impl PeakLimiter {
         self.history = [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS];
         self.shared_peak = [0.0; Self::DETECTOR_CHANNELS];
         self.shared_valid = false;
+    }
+
+    /// Configuration used to prepare this limiter.
+    #[must_use]
+    pub const fn config(&self) -> LimiterConfig {
+        self.config
     }
 
     /// Peak of both reconstructed intervals touching `frame`. The one behind it is bounded
@@ -279,11 +284,8 @@ impl PeakLimiter {
 
     #[inline]
     fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.ceiling {
-            self.ceiling / peak
-        } else {
-            1.0
-        };
+        let ceiling = self.config.ceiling();
+        let required = if peak > ceiling { ceiling / peak } else { 1.0 };
         // WHY: Release before the clamp: the reverse order lets the recovered gain overshoot the ceiling for one frame.
         self.envelope = (1.0 - self.envelope).mul_add(-self.release_coeff, 1.0);
         if required < self.envelope {
@@ -689,6 +691,13 @@ mod tests {
         let values = config.values();
         assert_eq!(values.ceiling, 0.5);
         assert_eq!(values.release_ms, 75.0);
+        let limiter = PeakLimiter::new(
+            NonZeroU32::new(44_100).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            config,
+        )
+        .unwrap();
+        assert_eq!(limiter.config(), config);
     }
 
     #[kithara::test(native, flash(false))]
