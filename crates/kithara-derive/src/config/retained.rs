@@ -186,10 +186,12 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
     {
         item.attrs.push(parse_quote!(#[fieldwork(opt_in, get)]));
     }
-    item.attrs.insert(
-        0,
-        parse_quote!(#[derive(::kithara_config::__private::Fieldwork)]),
-    );
+    if !has_derive(&item.attrs, "Fieldwork")? {
+        item.attrs.insert(
+            0,
+            parse_quote!(#[derive(::kithara_config::__private::Fieldwork)]),
+        );
+    }
     Ok(quote! { #item #snapshot #runtime })
 }
 

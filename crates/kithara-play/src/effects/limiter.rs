@@ -28,13 +28,16 @@ pub enum LimiterError {
 }
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct LimiterConfig {
     /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
+    #[config(value)]
     ceiling: f32,
     /// Milliseconds the gain takes to recover toward unity.
+    #[config(value)]
     release_ms: f32,
 }
 
@@ -672,6 +675,20 @@ mod tests {
         assert!(config(Level::CEILING, 0.0).is_err());
         assert!(config(Level::CEILING, -5.0).is_err());
         assert!(config(Level::CEILING, f32::INFINITY).is_err());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn validated_limiter_exposes_its_retained_values() {
+        use kithara_config::Config as _;
+
+        let config = LimiterConfig::builder()
+            .ceiling(0.5)
+            .release_ms(75.0)
+            .build()
+            .unwrap();
+        let values = config.values();
+        assert_eq!(values.ceiling, 0.5);
+        assert_eq!(values.release_ms, 75.0);
     }
 
     #[kithara::test(native, flash(false))]
