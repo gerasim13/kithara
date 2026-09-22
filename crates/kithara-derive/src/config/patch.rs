@@ -459,11 +459,22 @@ fn named_fields(input: &DeriveInput) -> Result<&Punctuated<Field, Token![,]>> {
 /// so a gated fallible field is simply absent here, and inferring the
 /// signature from what is left would move it from build to build.
 fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
+    refusal_from_attributes(&input.attrs, input.ident.span())
+}
+
+pub(crate) fn is_fallible(attributes: &[Attribute], span: proc_macro2::Span) -> Result<bool> {
+    refusal_from_attributes(attributes, span).map(|refusal| refusal.is_some())
+}
+
+fn refusal_from_attributes(
+    attributes: &[Attribute],
+    span: proc_macro2::Span,
+) -> Result<Option<Refusal>> {
     let mut fallible = false;
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
 
-    for attribute in input.attrs.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in attributes.iter().filter(|a| a.path().is_ident("patch")) {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("fallible") {
                 fallible = true;
@@ -487,11 +498,11 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
         (None, None) if fallible => Ok(Some(Refusal { validate: None })),
         (None, None) => Ok(None),
         (Some(_), None) => Err(Error::new(
-            input.ident.span(),
+            span,
             "`validate` needs `error = <type>`: the generated patch error carries what the check refused with",
         )),
         (None, Some(_)) => Err(Error::new(
-            input.ident.span(),
+            span,
             "`error` needs `validate = <path>`: without a check nothing in the merge can refuse",
         )),
     }

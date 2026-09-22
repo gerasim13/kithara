@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     Expr, Field, GenericParam, Generics, LitStr, Result, Type, parenthesized, visit::Visit as _,
 };
@@ -11,11 +11,25 @@ enum Role {
     Skip,
 }
 
+pub(super) struct Expanded {
+    pub(super) declaration: TokenStream,
+    pub(super) read: TokenStream,
+    pub(super) update: Option<Update>,
+}
+
+pub(super) struct Update {
+    pub(super) declaration: TokenStream,
+    pub(super) field: TokenStream,
+    pub(super) lower: TokenStream,
+}
+
 pub(super) fn expand(
     field: &mut Field,
     generics: &Generics,
-) -> Result<Option<(TokenStream, TokenStream)>> {
+    owner: &syn::Ident,
+) -> Result<Option<Expanded>> {
     let mut role = None;
+    let mut update = false;
     let mut preserved: Vec<syn::Attribute> = Vec::new();
     for attr in &field.attrs {
         if !attr.path().is_ident("config") {
@@ -23,6 +37,13 @@ pub(super) fn expand(
             continue;
         }
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("update") {
+                if update {
+                    return Err(meta.error("duplicate config field option"));
+                }
+                update = true;
+                return Ok(());
+            }
             if role.is_some() {
                 return Err(meta.error("select exactly one config field role"));
             }
@@ -49,9 +70,9 @@ pub(super) fn expand(
                 }
                 Role::Skip
             } else {
-                return Err(
-                    meta.error("expected value, value(Type, expression), nested, or skip = reason")
-                );
+                return Err(meta.error(
+                    "expected value, value(Type, expression), nested, skip = reason, or update",
+                ));
             });
             Ok(())
         })?;
@@ -68,6 +89,12 @@ pub(super) fn expand(
         .as_ref()
         .ok_or_else(|| syn::Error::new_spanned(&*field, "config requires named fields"))?;
     let original_type = &field.ty;
+    if update && !matches!(role, Role::Value) {
+        return Err(syn::Error::new_spanned(
+            &*field,
+            "runtime update currently requires a retained value field",
+        ));
+    }
     let (ty, expression): (Type, Expr) = match role {
         Role::Skip => return Ok(None),
         Role::Value => (
@@ -93,10 +120,122 @@ pub(super) fn expand(
     }
     let gates = super::attributes(&field.attrs, false)?;
     let surface = super::attributes(&field.attrs, true)?;
-    Ok(Some((
-        quote! { #(#surface)* pub #name: #ty },
-        quote! { #(#gates)* #name: #expression },
-    )))
+    let update = update
+        .then(|| update_tokens(field, owner, name, original_type, &surface, &gates))
+        .transpose()?;
+    Ok(Some(Expanded {
+        declaration: quote! { #(#surface)* pub #name: #ty },
+        read: quote! { #(#gates)* #name: #expression },
+        update,
+    }))
+}
+
+fn update_tokens(
+    field: &Field,
+    owner: &syn::Ident,
+    name: &syn::Ident,
+    ty: &Type,
+    surface: &[syn::Attribute],
+    gates: &[syn::Attribute],
+) -> Result<Update> {
+    let enum_name = format_ident!("{}{}Update", owner, upper_camel(name));
+    let optional = option_inner(ty);
+    let payload = optional.unwrap_or(ty);
+    let default = builder_default(field)?;
+    let clear = optional.map(|_| quote! { Clear, });
+    let reset = default.as_ref().map(|_| quote! { Reset, });
+    let set = if optional.is_some() {
+        quote! { patch.#name = ::core::option::Option::Some(::core::option::Option::Some(value)); }
+    } else {
+        quote! { patch.#name = ::core::option::Option::Some(value); }
+    };
+    let clear_lower = optional.map(|_| {
+        quote! { #enum_name::Clear => { patch.#name = ::core::option::Option::Some(::core::option::Option::None); } }
+    });
+    let reset_lower = default.map(|default| {
+        quote! { #enum_name::Reset => { patch.#name = ::core::option::Option::Some(#default); } }
+    });
+    Ok(Update {
+        declaration: quote! {
+            #(#surface)*
+            #[derive(::core::default::Default)]
+            #[non_exhaustive]
+            pub enum #enum_name {
+                #[default]
+                Unchanged,
+                Set { value: #payload },
+                #clear
+                #reset
+            }
+        },
+        field: quote! { #(#surface)* pub #name: #enum_name },
+        lower: quote! {
+            #(#gates)*
+            match update.#name {
+                #enum_name::Unchanged => {}
+                #enum_name::Set { value } => { #set }
+                #clear_lower
+                #reset_lower
+            }
+        },
+    })
+}
+
+fn builder_default(field: &Field) -> Result<Option<Expr>> {
+    let mut default = None;
+    for attribute in field
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("builder"))
+    {
+        attribute.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("default") {
+                return Ok(());
+            }
+            if default.is_some() {
+                return Err(meta.error("duplicate builder default"));
+            }
+            default = Some(if meta.input.peek(syn::Token![=]) {
+                meta.value()?.parse()?
+            } else {
+                syn::parse_quote!(::core::default::Default::default())
+            });
+            Ok(())
+        })?;
+    }
+    Ok(default)
+}
+
+fn option_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+fn upper_camel(ident: &syn::Ident) -> String {
+    ident
+        .to_string()
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .map(char::to_uppercase)
+                .into_iter()
+                .flatten()
+                .chain(chars)
+                .collect::<String>()
+        })
+        .collect()
 }
 
 struct GenericUse<'a> {

@@ -1,6 +1,7 @@
 //! Owned snapshots of retained settings, with builders and accessors.
 
-/// Composes builders and accessors while requiring explicit field roles.
+pub use kithara_derive::Patch;
+/// Composes builders, accessors, snapshots and explicitly selected runtime updates.
 ///
 /// ```compile_fail
 /// #[kithara_config::config]

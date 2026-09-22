@@ -23,6 +23,7 @@ wasm-bindgen-futures = { workspace = true }
 [dev-dependencies]
 kithara-config = { workspace = true }
 kithara-test-utils = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

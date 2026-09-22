@@ -4800,6 +4800,7 @@ dependencies = [
  "futures",
  "kithara-config",
  "kithara-test-utils",
+ "serde",
  "thiserror 2.0.18",
  "uniffi",
  "wasm-bindgen-futures",

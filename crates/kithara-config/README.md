@@ -23,6 +23,15 @@ field into an owned public value. `#[config(default)]` derives a default through
 the builder. Existing `#[builder]`, `#[fieldwork]`, and `#[field]` options remain
 available. On a function or impl, `#[config]` wraps the corresponding bon builder.
 
+`#[config(update)]` opts a retained configuration into typed runtime changes;
+each writable field also uses `#[config(value, update)]`. The macro emits a
+concrete update enum per property and a `<Name>Update` record. Optional values
+distinguish `Set`, `Clear`, and `Unchanged`; `Reset` is emitted only when the
+same field declares a bon builder default. `apply_update` lowers through the
+existing generated `Patch::apply`, so its staged validation remains the only
+commit gate. Prepared engines and delegated live owners keep their own explicit
+operations.
+
 The attribute emits `<Name>Values` with public snapshot fields, preserving field
 documentation and configuration gates. Resource generics stay on the original
 owner; snapshot types must not depend on them. Domain constructors and methods

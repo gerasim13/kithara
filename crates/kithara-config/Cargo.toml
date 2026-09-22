@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Retained configuration values and composed configuration macros."
 
 [dependencies]
-kithara-derive = { workspace = true, features = ["config", "built-default"] }
+kithara-derive = { workspace = true, features = ["config", "built-default", "patch"] }
 
 bon = { workspace = true }
 fieldwork = { workspace = true }
