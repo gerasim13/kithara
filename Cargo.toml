@@ -18,6 +18,7 @@ members = [
     "crates/kithara-devtools",
     "crates/kithara-download",
     "crates/kithara-drm",
+    "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
     "crates/kithara-ffi",
@@ -84,6 +85,7 @@ default-members = [
     "crates/kithara-bufpool",
     "crates/kithara-decode",
     "crates/kithara-drm",
+    "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
     "crates/kithara-file",
@@ -274,6 +276,7 @@ kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4", def
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha4", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
+kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha4", default-features = false }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4", default-features = false }
 kithara-ffi = { path = "crates/kithara-ffi", default-features = false }

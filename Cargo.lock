@@ -4933,6 +4933,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-effects"
+version = "0.0.1-alpha4"
+dependencies = [
+ "biquad",
+ "bon",
+ "derive-where",
+ "firewheel",
+ "firewheel-core",
+ "kithara-bufpool",
+ "kithara-derive",
+ "kithara-signal",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "thiserror 2.0.18",
+ "tracing",
+ "unimock",
+]
+
+[[package]]
 name = "kithara-encode"
 version = "0.0.1-alpha4"
 dependencies = [
