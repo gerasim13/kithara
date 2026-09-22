@@ -1,3 +1,5 @@
+mod browser;
+
 use std::{env, fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
@@ -9,6 +11,8 @@ use crate::config::{KitharaExt, WasmConfig};
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {
+    /// Check a generated `UniFFI` SDK fixture in an isolated, bounded browser.
+    SdkTest(browser::Args),
     /// Build WASM demo app via Trunk.
     Build {
         /// Build profile.
@@ -33,6 +37,7 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     let tools = &ctx.config.tools;
     match cmd {
+        WasmCommand::SdkTest(args) => browser::run(args, ctx),
         WasmCommand::Build { profile } => run_build(profile, tools),
         WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
         WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),

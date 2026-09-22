@@ -1,5 +1,7 @@
 //! Owned process groups, cancellation, and deadlines for control commands.
 
+mod memory;
+
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::{
@@ -102,16 +104,28 @@ pub(crate) fn supervise(
     cancel: Option<&Cancel>,
     timeout: Option<Duration>,
 ) -> Result<ExitStatus> {
+    supervise_inner(child, cancel, timeout, None)
+}
+
+fn supervise_inner(
+    child: &mut Child,
+    cancel: Option<&Cancel>,
+    timeout: Option<Duration>,
+    mut memory: Option<&mut memory::Budget>,
+) -> Result<ExitStatus> {
     let started = Instant::now();
     loop {
         let proceeding = check(cancel).and_then(|()| {
             if timeout.is_some_and(|limit| started.elapsed() >= limit) {
                 bail!("owned command exceeded its deadline");
             }
+            if let Some(budget) = memory.as_deref_mut() {
+                budget.check(child.id())?;
+            }
             Ok(())
         });
         if let Err(error) = proceeding {
-            let stopped = stop(child, "cancelled or timed-out command");
+            let stopped = stop(child, "command exceeding its execution budget");
             return Err(match stopped {
                 Ok(_) => error,
                 Err(stop_error) => error.context(stop_error),
@@ -131,6 +145,29 @@ pub(crate) fn supervise(
             }
         }
     }
+}
+
+/// Supervise the entire owned group with a sampled RSS ceiling and a deadline.
+pub(crate) fn run_bounded(
+    command: &mut Command,
+    cancel: Option<&Cancel>,
+    timeout: Duration,
+    kib: u64,
+) -> Result<ExitStatus> {
+    let mut budget = memory::Budget::new(kib)?;
+    check(cancel)?;
+    let result = supervise_inner(
+        &mut spawn(command)?,
+        cancel,
+        Some(timeout),
+        Some(&mut budget),
+    );
+    tracing::info!(
+        peak_rss_kib = budget.peak,
+        limit_kib = kib,
+        "owned command memory"
+    );
+    result
 }
 
 pub(crate) fn run(command: &mut Command, cancel: Option<&Cancel>) -> Result<ExitStatus> {
@@ -226,7 +263,7 @@ impl Drop for Cancel {
 mod tests {
     use super::*;
 
-    fn shell(script: &str) -> Child {
+    pub(super) fn shell(script: &str) -> Child {
         spawn(
             Command::new("sh")
                 .args(["-c", script])

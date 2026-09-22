@@ -481,3 +481,8 @@ rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe
 rtsan-file FILTER="phase_continuity::file": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
 
 rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
+
+# Generated UniFFI SDK contract; browser and workers share a 1 GiB RSS budget.
+[positional-arguments]
+sdk-web *ARGS:
+    just _xtask wasm sdk-test "$@"
