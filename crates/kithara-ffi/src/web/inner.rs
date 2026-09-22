@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
-    play::EqBandConfig,
+    play::{EqBandConfig, GainDb},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
@@ -306,10 +306,11 @@ impl WasmInner {
     }
 
     pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::ResetEq)?;
         for gain in self.eq_gains.lock().iter_mut() {
             *gain = 0.0;
         }
-        self.try_send(WorkerCmd::ResetEq)
+        Ok(())
     }
 
     pub(crate) fn seek(
@@ -377,10 +378,16 @@ impl WasmInner {
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
-        if let Some(slot) = self.eq_gains.lock().get_mut(band as usize) {
-            *slot = gain_db;
-        }
-        self.try_send(WorkerCmd::SetEqGain { band, gain_db })
+        let gain_db = f32::from(GainDb::from(gain_db));
+        let mut gains = self.eq_gains.lock();
+        let slot = gains
+            .get_mut(band as usize)
+            .ok_or_else(|| FfiError::InvalidArgument {
+                reason: format!("EQ band {band} is out of range"),
+            })?;
+        self.try_send(WorkerCmd::SetEqGain { band, gain_db })?;
+        *slot = gain_db;
+        Ok(())
     }
 
     pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {

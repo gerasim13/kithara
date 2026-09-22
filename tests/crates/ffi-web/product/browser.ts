@@ -2,7 +2,7 @@ import api, { defaultHostConfig, FfiError, initializeHost } from "./generated/ki
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
-  const { default: init } = await import(new URL("./generated/wasm-bindgen/index.js", import.meta.url).href);
+  const { default: init, AudioPlayer } = await import(new URL("./generated/wasm-bindgen/index.js", import.meta.url).href);
   await init({ module_or_path: "/generated/wasm-bindgen/index_bg.wasm", memory });
   api.initialize();
 
@@ -33,8 +33,21 @@ async function main() {
     repeated = FfiError.AlreadyInitialized.instanceOf(error);
   }
   if (!repeated) throw new Error("repeated host initialization was accepted");
+  const player = new AudioPlayer();
+  let rejectedBand = false;
+  try {
+    player.setEqGain(player.eqBandCount(), 3);
+  } catch (_) {
+    rejectedBand = true;
+  }
+  if (!rejectedBand || player.eqGain(0) !== 0) throw new Error("invalid EQ band changed readback");
+  player.setEqGain(0, 9);
+  if (player.eqGain(0) !== 6) throw new Error("EQ readback did not match clamped owner value");
+  player.resetEq();
+  if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
+  player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ mutation; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });
