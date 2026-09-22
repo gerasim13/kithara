@@ -48,7 +48,7 @@ kithara-stretch = { workspace = true, default-features = false, features = ["str
 kithara-warp = { workspace = true, features = ["stretch-bungee"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["library", "native-fixtures"] }
 
 [lints]
 workspace = true

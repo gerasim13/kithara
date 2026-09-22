@@ -569,6 +569,130 @@ fn render_configured_grid(
     out
 }
 
+#[cfg(feature = "playback")]
+fn record_tunnel_preview() {
+    use std::io::Cursor;
+
+    use kithara_integration_tests::kithara::{
+        analysis::{AnalysisFile, AnalysisFingerprint, BeatGridModel},
+        decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+        resampler::NoResamplerBackend,
+    };
+    use kithara_test_fixtures::assets::{
+        library_mp3_analysis_zvuk_27390231, library_mp3_zvuk_27390231,
+    };
+    use num_traits::ToPrimitive;
+
+    const HOST_BPM: f64 = 124.0;
+    const CAPTURE_SECONDS: usize = 15;
+    const FINGERPRINT: &str = "rhythm-fixture:v1";
+
+    let Some(mut tap) = kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
+        "projected-richie-hawtin-the-tunnel-124",
+        SR,
+        u16::try_from(CH).expect("channel count"),
+    )
+    .expect("Tunnel listening artifact") else {
+        return;
+    };
+    let file = AnalysisFile::parse(
+        library_mp3_analysis_zvuk_27390231().bytes(),
+        &AnalysisFingerprint::new(Some(FINGERPRINT), None),
+    )
+    .expect("parse Tunnel beat analysis");
+    let model = BeatGridModel::try_from(file.latest().analysis()).expect("Tunnel beat grid");
+    let raw = model.as_raw();
+    let first_beat = raw
+        .beats
+        .first()
+        .expect("Tunnel analysis carries beat phase");
+    let source_start = (first_beat.at * f64::from(SR))
+        .round()
+        .to_usize()
+        .expect("Tunnel cue fits usize");
+    let sample_rate = usize::try_from(SR).expect("sample rate fits usize");
+    let source_frames = sample_rate * (CAPTURE_SECONDS + 5);
+    let decode_end = source_start + source_frames;
+    let config = DecoderConfig::<NoResamplerBackend, crate::test_pools::TestPools>::builder()
+        .pools(pools())
+        .build();
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(library_mp3_zvuk_27390231().bytes().to_vec()),
+        Some("mp3"),
+        config,
+    )
+    .expect("decode Richie Hawtin - The Tunnel");
+    assert_eq!(
+        decoder.spec(),
+        spec(),
+        "Tunnel fixture keeps its native shape"
+    );
+    let mut decoded = Vec::new();
+    while decoded.len() / CH < decode_end {
+        match decoder.next_chunk().expect("decode Tunnel PCM") {
+            DecoderChunkOutcome::Chunk(chunk) => decoded.extend_from_slice(&chunk.samples),
+            DecoderChunkOutcome::Pending(reason) => panic!("Tunnel decode pending: {reason:?}"),
+            DecoderChunkOutcome::Eof => break,
+        }
+    }
+    assert!(decoded.len() / CH >= decode_end, "Tunnel covers preview");
+
+    let anchor = crate::SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        HOST_BPM / 60.0,
+        spec().sample_rate,
+    )
+    .expect("Host anchor");
+    let target = crate::BeatGridSnapshot::session(
+        crate::BeatGridId::allocate().expect("grid id"),
+        crate::BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        anchor,
+        None,
+    );
+    let beat_frames = f64::from(SR) * 60.0 / raw.bpm;
+    let source = asset_grid_over(&[(0.0, beat_frames, 64)], None, spec().sample_rate);
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
+    controls.set_backend(StretchKind::Signalsmith);
+    let rendered = render_configured_grid(
+        WarpConfig::builder()
+            .stretch(controls)
+            .render_quantum_frames(NonZero::new(64).expect("quantum"))
+            .build(),
+        Some(plan_over(source, target)),
+        &decoded[source_start * CH..decode_end * CH],
+        HOST_BPM / 60.0 * f64_of(CAPTURE_SECONDS),
+        None,
+        Some(anchor),
+    );
+    let capture_samples = (sample_rate * CAPTURE_SECONDS * CH).min(rendered.len());
+    tap.push(&rendered[..capture_samples]);
+    for beat in 0..32 {
+        let frame = anchor
+            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
+            .expect("Host beat frame");
+        let frame = u64::try_from(i64::from(frame)).expect("positive Host frame");
+        if frame >= u64_of(capture_samples / CH) {
+            break;
+        }
+        tap.host_beat(frame, beat.is_multiple_of(4));
+    }
+    tap.evidence(
+        "projection",
+        serde_json::json!({
+            "artist": "Richie Hawtin",
+            "title": "The Tunnel (Original Mix)",
+            "source_bpm": raw.bpm,
+            "host_bpm": HOST_BPM,
+            "source_beat_zero_frame": source_start,
+            "capture_seconds": CAPTURE_SECONDS,
+        }),
+    );
+    assert_eq!(tap.metronome_mix().1, 0, "Tunnel mix has headroom");
+}
+
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -588,6 +712,10 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     use crate::{BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor};
 
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
+    #[cfg(feature = "playback")]
+    if matches!(backend, StretchKind::Signalsmith) {
+        record_tunnel_preview();
+    }
     assert_eq!(
         source_clicks.len(),
         BARS,
