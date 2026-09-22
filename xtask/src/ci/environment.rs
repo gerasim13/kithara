@@ -260,7 +260,7 @@ pub(crate) struct CiEnvironment {
     pub(crate) cache_root: PathBuf,
     pub(crate) swiftpm_cache: PathBuf,
     pub(crate) temp: PathBuf,
-    lease: PathBuf,
+    leases: [PathBuf; 2],
     sccache: Option<PreparedSccache>,
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
@@ -307,10 +307,10 @@ impl CiEnvironment {
 
         let sccache =
             PreparedSccache::for_environment(&shared_root, &cache_root, config, cache_group)?;
-        let lease = cache_lease(&cache_root)?;
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
         let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
+        let leases = [cache_lease(&cache_root)?, cache_lease(&fixture_cache)?];
         let npm_cache = cache_root.join("npm");
         let swiftpm_cache = cache_root.join("swiftpm");
         let temp = scratch_root().join(trust.as_str());
@@ -335,11 +335,13 @@ impl CiEnvironment {
                 )
             })?;
         }
-        let lease_root = lease
-            .parent()
-            .context("CI cache lease must have a parent directory")?;
-        fs::create_dir_all(lease_root)
-            .with_context(|| format!("creating CI lease directory {}", lease_root.display()))?;
+        for lease in &leases {
+            let lease_root = lease
+                .parent()
+                .context("CI cache lease must have a parent directory")?;
+            fs::create_dir_all(lease_root)
+                .with_context(|| format!("creating CI lease directory {}", lease_root.display()))?;
+        }
         if let Some(socket_root) = sccache
             .as_ref()
             .and_then(|sccache| sccache.paths.server_uds.as_deref())
@@ -430,15 +432,17 @@ impl CiEnvironment {
             }
         }
 
-        fs::write(&lease, format!("pid={}\n", std::process::id()))
-            .with_context(|| format!("creating CI cache lease {}", lease.display()))?;
+        for lease in &leases {
+            fs::write(lease, format!("pid={}\n", std::process::id()))
+                .with_context(|| format!("creating CI cache lease {}", lease.display()))?;
+        }
 
         Ok(Self {
             shared_root,
             cache_root,
             swiftpm_cache,
             temp,
-            lease,
+            leases,
             sccache,
             _target: target_lease,
             lane_build,
@@ -464,7 +468,9 @@ impl CiEnvironment {
 
 impl Drop for CiEnvironment {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.lease);
+        for lease in &self.leases {
+            let _ = fs::remove_file(lease);
+        }
     }
 }
 
@@ -1071,6 +1077,11 @@ mod tests {
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
+            let fixture_lease = root.join("review/fixtures/.kithara-ci-leases/job-29");
+            assert!(
+                fixture_lease.is_file(),
+                "fixture readers must outlive host cleanup"
+            );
             let lock_path = root.join(".kithara-ci-sccache-slots/slot-0.lock");
             let contend = || {
                 let file = OpenOptions::new()
@@ -1083,6 +1094,7 @@ mod tests {
             assert!(matches!(contend(), Err(TryLockError::WouldBlock)));
             drop(environment);
             assert!(!lease.exists());
+            assert!(!fixture_lease.exists());
             contend().expect("the slot a finished job held must be free");
             return;
         }
