@@ -29,7 +29,6 @@ delegate = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
-serial_test = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }

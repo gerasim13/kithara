@@ -5491,11 +5491,8 @@ name = "kithara-play-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "cochlea-features",
- "delegate",
  "derive_more",
  "firewheel",
- "futures",
- "hex",
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
@@ -5506,7 +5503,6 @@ dependencies = [
  "reqwest",
  "ringbuf",
  "serde",
- "serde_json",
  "serial_test",
  "tracing",
  "tracing-subscriber",
@@ -5761,7 +5757,6 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "serde_json",
- "serial_test",
 ]
 
 [[package]]
