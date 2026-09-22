@@ -10,6 +10,7 @@ mod dsp;
 pub mod eq;
 mod gain_db;
 mod limiter;
+pub mod node;
 
 pub use chain::{apply_effects, held_source_frames, reset_effects};
 pub use contract::AudioEffect;

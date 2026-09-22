@@ -1,10 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_effects::eq::{EqConfig, generate_log_spaced_bands};
 use kithara_test_utils::kithara;
 
 use super::MasterEqNode;
-use crate::test_pools::pools_with_budget;
+use crate::{
+    eq::{EqConfig, generate_log_spaced_bands},
+    test_pools::pools_with_budget,
+};
 
 #[kithara::test]
 fn replacement_allocation_failure_is_reported_before_publication() {

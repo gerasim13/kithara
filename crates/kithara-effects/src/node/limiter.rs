@@ -9,18 +9,21 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_effects::{LimiterConfig, PeakLimiter};
 use kithara_test_utils::kithara;
+
+use crate::{LimiterConfig, PeakLimiter};
 
 /// Firewheel adapter around the shared [`PeakLimiter`]: the only site that sees
 /// Firewheel buffers.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LimiterNode {
+pub struct LimiterNode {
     config: LimiterConfig,
 }
 
 impl LimiterNode {
-    pub(crate) const fn new(config: LimiterConfig) -> Self {
+    /// Wrap `config` in a node the session graph can install.
+    #[must_use]
+    pub const fn new(config: LimiterConfig) -> Self {
         Self { config }
     }
 }
