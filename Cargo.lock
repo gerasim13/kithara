@@ -5479,7 +5479,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "firewheel",
- "firewheel-core",
  "hex",
  "hotpath",
  "humantime-serde",

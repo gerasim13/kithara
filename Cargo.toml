@@ -647,6 +647,9 @@ opt-level = 1
 [profile.test-release.package.kithara-decode-tests]
 opt-level = 1
 
+[profile.test-release.package.kithara-effects-tests]
+opt-level = 1
+
 [profile.test-release.package.kithara-encode-tests]
 opt-level = 1
 
