@@ -1,10 +1,10 @@
 #![cfg(target_arch = "wasm32")]
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Once};
 
 use js_sys::{Float32Array, Float64Array, Reflect};
 use kithara::platform::time::{Duration, sleep};
-use kithara_ffi::player::AudioPlayer;
+use kithara_ffi::{default_host_config, player::AudioPlayer, web::initialize_host};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
@@ -56,8 +56,11 @@ fn revisions(events: &Events) -> Vec<f64> {
 }
 
 fn observed_player() -> (AudioPlayer, Events) {
+    static HOST: Once = Once::new();
+    HOST.call_once(|| initialize_host(default_host_config()).expect("host initialization"));
+
     let events: Events = Rc::new(RefCell::new(Vec::new()));
-    let player = AudioPlayer::new_js();
+    let player = AudioPlayer::new_js().expect("player after host initialization");
 
     let sink = Rc::clone(&events);
     let observer = Closure::wrap(Box::new(move |event: JsValue| {
