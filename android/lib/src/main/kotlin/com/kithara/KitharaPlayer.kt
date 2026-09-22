@@ -335,8 +335,10 @@ class KitharaPlayer(config: Config = Config()) {
      */
     @Throws(KitharaError::class)
     fun selectItem(at: Int, transition: Transition = Transition.None) {
+        val item = items.getOrNull(at)
+            ?: throw KitharaError.InvalidArgument("queue index $at out of bounds")
         try {
-            inner.selectItem(at.toUInt(), transition.toFfi())
+            inner.select(item.inner, transition.toFfi())
         } catch (error: FfiException) {
             throw KitharaError.fromFfi(error)
         }

@@ -24,17 +24,6 @@ use kithara::{
 };
 
 use super::salt;
-fn player_timestretch() -> Arc<StretchControls> {
-    let controls = StretchControls::new(1.0);
-    #[cfg(all(
-        feature = "apple",
-        target_vendor = "apple",
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    controls.set_keylock(true);
-    controls
-}
-
 use crate::{
     FfiEqBandConfig,
     asset::FfiAssetStore,
@@ -49,6 +38,17 @@ use crate::{
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
 };
+
+fn player_timestretch() -> Arc<StretchControls> {
+    let controls = StretchControls::new(1.0);
+    #[cfg(all(
+        feature = "apple",
+        target_vendor = "apple",
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    controls.set_keylock(true);
+    controls
+}
 
 fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
     Arc::new(move |key: Bytes| {
@@ -220,7 +220,7 @@ impl NativeInner {
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .warp(WarpConfig::builder().stretch(player_timestretch()).build())
             .cancel(player_cancel.child())
-            .sample_rate(super::session::requested_sample_rate())
+            .sample_rate(super::session::requested_sample_rate()?)
             .worker(worker)
             .build();
         let player = PlayerImpl::new(player_config);
@@ -231,8 +231,7 @@ impl NativeInner {
             .action_at_item_end(action_at_item_end.try_into()?)
             .crossfade_settings(crossfade_settings.try_into()?)
             .build();
-        let queue_owner = super::session::insert(FfiQueue::new(queue_config))
-            .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
+        let queue_owner = super::session::insert(FfiQueue::new(queue_config))?;
         let queue = queue_owner.control().clone();
         let net = default_net_options();
         let downloader = Downloader::new(

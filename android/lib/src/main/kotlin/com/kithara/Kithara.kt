@@ -1,6 +1,8 @@
 package com.kithara
 
 import android.content.Context
+import com.kithara.ffi.defaultHostConfig
+import com.kithara.ffi.initializeHost
 
 /**
  * Minimum log level forwarded from the Rust layer to logcat.
@@ -54,22 +56,30 @@ object Kithara {
      * Initialize the native Kithara library.
      *
      * Must be called once before creating any [KitharaPlayer] or [KitharaPlayerItem].
-     * Safe to call multiple times — subsequent calls are no-ops.
+     * A second call fails with the typed native `AlreadyInitialized` error.
      *
      * @param context Any [Context]; the application context is used internally.
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
      */
+    @Throws(KitharaError::class)
     fun initialize(context: Context, logLevel: LogLevel = LogLevel.Warn) {
-        if (initializedStore != null) return
-        synchronized(this) {
-            if (initializedStore != null) return
-            System.loadLibrary("kithara_ffi")
-            nativeInit(context.applicationContext, logLevel.ordinal)
-            initializedStore = AssetStore(
-                root = context.applicationContext.cacheDir
-                    .resolve("kithara")
-                    .absolutePath,
-            )
+        try {
+            synchronized(this) {
+                if (initializedStore != null) {
+                    initializeHost(defaultHostConfig())
+                    return
+                }
+                System.loadLibrary("kithara_ffi")
+                nativeInit(context.applicationContext, logLevel.ordinal)
+                initializeHost(defaultHostConfig())
+                initializedStore = AssetStore(
+                    root = context.applicationContext.cacheDir
+                        .resolve("kithara")
+                        .absolutePath,
+                )
+            }
+        } catch (error: com.kithara.ffi.FfiException) {
+            throw KitharaError.fromFfi(error)
         }
     }
 

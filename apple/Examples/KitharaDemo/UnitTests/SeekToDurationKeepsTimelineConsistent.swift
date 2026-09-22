@@ -45,7 +45,7 @@ extension IntegrationRegressionsIOS {
         try audioSession.setActive(true)
         audioSessionActivated = true
 
-        let player = KitharaPlayer(
+        let player = try KitharaPlayer(
             config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(

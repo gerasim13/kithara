@@ -19,7 +19,7 @@ extension IntegrationRegressionsIOS {
             "precondition: the dedicated cache directory was not empty"
         )
 
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = try KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(url: fixtureURL.absoluteString)
         defer {
             player.stop()

@@ -27,7 +27,7 @@ extension IntegrationRegressionsIOS {
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = try KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
             url: fixture.childURL("signal_mp3_track_sine440_187s.mp3").absoluteString
         )

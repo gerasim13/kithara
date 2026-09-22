@@ -27,6 +27,7 @@ pub struct FfiPlayerConfig {
 #[cfg(test)]
 impl FfiPlayerConfig {
     pub(crate) fn for_test() -> Self {
+        super::session::initialize_test_host();
         Self {
             eq_band_count: 10,
             auth_token: String::new(),

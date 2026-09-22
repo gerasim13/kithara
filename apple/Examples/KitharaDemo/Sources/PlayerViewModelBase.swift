@@ -59,11 +59,11 @@ class PlayerViewModelBase: ObservableObject {
 
     /// Engine instance. Subclasses install event subscriptions during
     /// `bindEvents()` (invoked from `init`).
-    let player = PlayerViewModelBase.makePlayer()
+    let player: KitharaPlayer
 
     /// Build the demo player with all initial policy and DRM state applied
     /// atomically at construction.
-    static func makePlayer() -> KitharaPlayer {
+    static func makePlayer() throws -> KitharaPlayer {
         let rules = bundledDrmProviders().map { provider -> KitharaPlayer.KeyRule in
             let salt = provider.salt
             let cipherKey = provider.cipherKey
@@ -85,7 +85,7 @@ class PlayerViewModelBase: ObservableObject {
         } catch {
             preconditionFailure("static crossfade settings must be valid: \(error)")
         }
-        return KitharaPlayer(
+        return try KitharaPlayer(
             config: KitharaPlayer.Config(
                 keyRules: rules,
                 store: AssetStore(root: defaultCacheDir),
@@ -146,7 +146,8 @@ class PlayerViewModelBase: ObservableObject {
         "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
     ]
 
-    init() {
+    init() throws {
+        player = try Self.makePlayer()
         volume = player.volume
         isMuted = player.isMuted
         eqGains = Array(repeating: 0, count: player.eqBandCount)

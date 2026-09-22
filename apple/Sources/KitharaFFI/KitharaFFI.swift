@@ -763,6 +763,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func setEqGain(band: UInt32, gainDb: Float) throws
 
+    /**
+     * Replace the complete live equalizer layout through the owning player.
+     *
+     * # Errors
+     * Returns an error when the player cannot prepare or publish the layout.
+     */
+    func setEqLayout(layout: [FfiEqBandConfig]) throws
+
     func setMuted(muted: Bool)
 
     func setObserver(observer: PlayerObserver)
@@ -1281,6 +1289,20 @@ open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(band),
         FfiConverterFloat.lower(gainDb),$0
+    )
+}
+}
+
+    /**
+     * Replace the complete live equalizer layout through the owning player.
+     *
+     * # Errors
+     * Returns an error when the player cannot prepare or publish the layout.
+     */
+open func setEqLayout(layout: [FfiEqBandConfig])throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_eq_layout(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceTypeFfiEqBandConfig.lower(layout),$0
     )
 }
 }
@@ -3829,6 +3851,164 @@ public func FfiConverterTypeFfiCrossfadeSettings_lower(_ value: FfiCrossfadeSett
 
 
 /**
+ * Configuration for a single EQ band.
+ */
+public struct FfiEqBandConfig: Equatable, Hashable {
+    /**
+     * Filter response applied by this band.
+     */
+    public let kind: FfiEqFilterKind
+    /**
+     * Signed band gain in decibels.
+     */
+    public let gainDb: Float
+    /**
+     * Center or cutoff frequency in hertz.
+     */
+    public let frequency: Float
+    /**
+     * Dimensionless quality factor controlling filter bandwidth.
+     */
+    public let qFactor: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Filter response applied by this band.
+         */kind: FfiEqFilterKind,
+        /**
+         * Signed band gain in decibels.
+         */gainDb: Float,
+        /**
+         * Center or cutoff frequency in hertz.
+         */frequency: Float,
+        /**
+         * Dimensionless quality factor controlling filter bandwidth.
+         */qFactor: Float) {
+        self.kind = kind
+        self.gainDb = gainDb
+        self.frequency = frequency
+        self.qFactor = qFactor
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiEqBandConfig: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEqBandConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEqBandConfig {
+        return
+            try FfiEqBandConfig(
+                kind: FfiConverterTypeFfiEqFilterKind.read(from: &buf),
+                gainDb: FfiConverterFloat.read(from: &buf),
+                frequency: FfiConverterFloat.read(from: &buf),
+                qFactor: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiEqBandConfig, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiEqFilterKind.write(value.kind, into: &buf)
+        FfiConverterFloat.write(value.gainDb, into: &buf)
+        FfiConverterFloat.write(value.frequency, into: &buf)
+        FfiConverterFloat.write(value.qFactor, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEqBandConfig_lift(_ buf: RustBuffer) throws -> FfiEqBandConfig {
+    return try FfiConverterTypeFfiEqBandConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEqBandConfig_lower(_ value: FfiEqBandConfig) -> RustBuffer {
+    return FfiConverterTypeFfiEqBandConfig.lower(value)
+}
+
+
+/**
+ * Settings fixed for the lifetime of the process-wide audio host.
+ */
+public struct FfiHostConfig: Equatable, Hashable {
+    /**
+     * Initial device sample-rate hint in hertz.
+     */
+    public let sampleRateHint: UInt32
+    /**
+     * Optional native output callback size in frames.
+     */
+    public let outputBlockFrames: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Initial device sample-rate hint in hertz.
+         */sampleRateHint: UInt32,
+        /**
+         * Optional native output callback size in frames.
+         */outputBlockFrames: UInt32?) {
+        self.sampleRateHint = sampleRateHint
+        self.outputBlockFrames = outputBlockFrames
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiHostConfig: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiHostConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiHostConfig {
+        return
+            try FfiHostConfig(
+                sampleRateHint: FfiConverterUInt32.read(from: &buf),
+                outputBlockFrames: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiHostConfig, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.sampleRateHint, into: &buf)
+        FfiConverterOptionUInt32.write(value.outputBlockFrames, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHostConfig_lift(_ buf: RustBuffer) throws -> FfiHostConfig {
+    return try FfiConverterTypeFfiHostConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHostConfig_lower(_ value: FfiHostConfig) -> RustBuffer {
+    return FfiConverterTypeFfiHostConfig.lower(value)
+}
+
+
+/**
  * FFI-friendly per-item configuration. All fields immutable after
  * [`crate::item::AudioPlayerItem::new`].
  */
@@ -6026,6 +6206,83 @@ public func FfiConverterTypeFfiDuckingMode_lower(_ value: FfiDuckingMode) -> Rus
 }
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Filter response applied by one equalizer band.
+ */
+
+public enum FfiEqFilterKind: Equatable, Hashable {
+
+    case lowShelf
+    case peaking
+    case highShelf
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiEqFilterKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEqFilterKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiEqFilterKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEqFilterKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .lowShelf
+
+        case 2: return .peaking
+
+        case 3: return .highShelf
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiEqFilterKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .lowShelf:
+            writeInt(&buf, Int32(1))
+
+
+        case .peaking:
+            writeInt(&buf, Int32(2))
+
+
+        case .highShelf:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEqFilterKind_lift(_ buf: RustBuffer) throws -> FfiEqFilterKind {
+    return try FfiConverterTypeFfiEqFilterKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEqFilterKind_lower(_ value: FfiEqFilterKind) -> RustBuffer {
+    return FfiConverterTypeFfiEqFilterKind.lower(value)
+}
+
+
 
 /**
  * FFI-friendly error type bridging playback failures into platform bindings.
@@ -6034,6 +6291,9 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
 
 
 
+    case NotInitialized
+    case InitializationInProgress
+    case AlreadyInitialized
     case NotReady
     case ItemFailed(reason: String
     )
@@ -6073,18 +6333,21 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case 1: return .NotReady
-        case 2: return .ItemFailed(
+        case 1: return .NotInitialized
+        case 2: return .InitializationInProgress
+        case 3: return .AlreadyInitialized
+        case 4: return .NotReady
+        case 5: return .ItemFailed(
             reason: try FfiConverterString.read(from: &buf)
             )
-        case 3: return .SeekFailed(
+        case 6: return .SeekFailed(
             reason: try FfiConverterString.read(from: &buf)
             )
-        case 4: return .EngineNotRunning
-        case 5: return .InvalidArgument(
+        case 7: return .EngineNotRunning
+        case 8: return .InvalidArgument(
             reason: try FfiConverterString.read(from: &buf)
             )
-        case 6: return .Internal(
+        case 9: return .Internal(
             description: try FfiConverterString.read(from: &buf)
             )
 
@@ -6099,31 +6362,43 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case .NotReady:
+        case .NotInitialized:
             writeInt(&buf, Int32(1))
 
 
-        case let .ItemFailed(reason):
+        case .InitializationInProgress:
             writeInt(&buf, Int32(2))
-            FfiConverterString.write(reason, into: &buf)
 
 
-        case let .SeekFailed(reason):
+        case .AlreadyInitialized:
             writeInt(&buf, Int32(3))
-            FfiConverterString.write(reason, into: &buf)
 
 
-        case .EngineNotRunning:
+        case .NotReady:
             writeInt(&buf, Int32(4))
 
 
-        case let .InvalidArgument(reason):
+        case let .ItemFailed(reason):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(reason, into: &buf)
 
 
-        case let .Internal(description):
+        case let .SeekFailed(reason):
             writeInt(&buf, Int32(6))
+            FfiConverterString.write(reason, into: &buf)
+
+
+        case .EngineNotRunning:
+            writeInt(&buf, Int32(7))
+
+
+        case let .InvalidArgument(reason):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(reason, into: &buf)
+
+
+        case let .Internal(description):
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(description, into: &buf)
 
         }
@@ -9065,6 +9340,31 @@ fileprivate struct FfiConverterSequenceTypeFfiCacheIdentityRule: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiEqBandConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiEqBandConfig]
+
+    public static func write(_ value: [FfiEqBandConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiEqBandConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiEqBandConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiEqBandConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiEqBandConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
     typealias SwiftType = [FfiKeyRule]
 
@@ -9207,6 +9507,15 @@ public func FfiConverterTypeTrackId_lower(_ value: TrackId) -> UInt64 {
 }
 
 /**
+ * Return canonical host defaults without initializing runtime resources.
+ */
+public func defaultHostConfig() -> FfiHostConfig  {
+    return try!  FfiConverterTypeFfiHostConfig_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_default_host_config($0
+    )
+})
+}
+/**
  * Create a Rust-owned query-aware layout.
  *
  * Register the returned layout through the ordinary asset-layout registry
@@ -9243,6 +9552,18 @@ public func drmLowercaseHexSalt() -> String  {
     )
 })
 }
+/**
+ * Initialize the process-wide audio host exactly once.
+ *
+ * # Errors
+ * Returns a typed lifecycle or host-construction error.
+ */
+public func initializeHost(config: FfiHostConfig)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_func_initialize_host(
+        FfiConverterTypeFfiHostConfig_lower(config),$0
+    )
+}
+}
 
 private enum InitializationResult {
     case ok
@@ -9259,6 +9580,9 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 12196) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9269,6 +9593,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 42846) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {
@@ -9410,6 +9737,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 47675) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {

@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -15,7 +16,7 @@ class KitharaInitTest {
     @Test
     fun multiplePlayersCanBeCreated() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        Kithara.initialize(context)
+        TestHost.initialize(context)
 
         val p1 = KitharaPlayer()
         val p2 = KitharaPlayer()
@@ -23,12 +24,14 @@ class KitharaInitTest {
     }
 
     @Test
-    fun initializePublishesOneDefaultStore() {
+    fun repeatedInitializationIsRejectedWithoutReplacingTheStore() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        Kithara.initialize(context)
+        TestHost.initialize(context)
         val store = Kithara.defaultStore
 
-        Kithara.initialize(context)
+        assertThrows(KitharaError.AlreadyInitialized::class.java) {
+            Kithara.initialize(context)
+        }
 
         assertSame(store, Kithara.defaultStore)
         assertSame(store, KitharaPlayer.Config().store)
@@ -37,7 +40,7 @@ class KitharaInitTest {
     @Test
     fun nativeRegistryAndStoreCanCreatePlayer() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        Kithara.initialize(context)
+        TestHost.initialize(context)
         val layouts = AssetLayoutRegistry().apply {
             register(FixedLayout, AssetLayoutTarget.File)
         }
@@ -54,7 +57,7 @@ class KitharaInitTest {
     @Test
     fun queryIdentityLayoutRegistersForFileAndHls() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        Kithara.initialize(context)
+        TestHost.initialize(context)
         val layout = AssetLayouts.queryIdentity(
             listOf(
                 CacheIdentityRule(

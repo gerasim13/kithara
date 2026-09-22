@@ -8,36 +8,40 @@ import Testing
 struct KitharaPlayerTests {
     final class LegacyItem {}
 
+    init() throws {
+        try TestHost.initialize()
+    }
+
     @Test("init creates player with unknown status")
-    func initCreatesPlayerWithUnknownStatus() {
-        let player = KitharaPlayer()
+    func initCreatesPlayerWithUnknownStatus() throws {
+        let player = try KitharaPlayer()
         #expect(player.status == .unknown)
         #expect(player.currentTime == 0.0)
         #expect(player.duration == nil)
     }
 
     @Test("playing rate is 1.0")
-    func playingRateIsOne() {
-        let player = KitharaPlayer()
+    func playingRateIsOne() throws {
+        let player = try KitharaPlayer()
         #expect(player.playingRate == 1.0)
     }
 
     @Test("items() starts empty")
-    func itemsStartsEmpty() {
-        let player = KitharaPlayer()
+    func itemsStartsEmpty() throws {
+        let player = try KitharaPlayer()
         #expect(player.items().isEmpty)
     }
 
     @Test("removeAllItems on empty queue does not crash")
-    func removeAllItemsOnEmpty() {
-        let player = KitharaPlayer()
+    func removeAllItemsOnEmpty() throws {
+        let player = try KitharaPlayer()
         player.removeAllItems()
         #expect(player.items().isEmpty)
     }
 
     @Test("stop clears the queue and allows a fresh item")
     func stopClearsQueueAndAllowsFreshItem() throws {
-        let player = KitharaPlayer()
+        let player = try KitharaPlayer()
         let old = KitharaPlayerItem(url: "https://example.com/old.mp3")
         try player.insert(old)
 
@@ -54,8 +58,8 @@ struct KitharaPlayerTests {
     }
 
     @Test("snapshot returns consistent state")
-    func snapshotReturnsConsistentState() {
-        let player = KitharaPlayer()
+    func snapshotReturnsConsistentState() throws {
+        let player = try KitharaPlayer()
         let snap = player.snapshot
         #expect(snap.rate == 0.0)
         #expect(snap.playingRate == 1.0)
@@ -64,14 +68,14 @@ struct KitharaPlayerTests {
     }
 
     @Test("currentAudioItem nil when queue empty")
-    func currentAudioItemNilWhenEmpty() {
-        let player = KitharaPlayer()
+    func currentAudioItemNilWhenEmpty() throws {
+        let player = try KitharaPlayer()
         #expect(player.currentAudioItem == nil)
     }
 
     @Test("first inserted item becomes current before playback")
     func firstInsertedItemBecomesCurrentBeforePlayback() throws {
-        let player = KitharaPlayer()
+        let player = try KitharaPlayer()
         var observed: [Int64?] = []
         let cancellable = player.currentItem.sink { item in
             observed.append(item?.uuid)
@@ -92,7 +96,7 @@ struct KitharaPlayerTests {
 
     @Test("represented item follows queue identity")
     func representedItemFollowsQueueIdentity() throws {
-        let player = KitharaPlayer()
+        let player = try KitharaPlayer()
         let represented = LegacyItem()
         let item = KitharaPlayerItem(
             url: "https://example.com/represented.mp3",
@@ -112,8 +116,8 @@ struct KitharaPlayerTests {
     }
 
     @Test("setupNetwork stores auth token")
-    func setupNetworkStoresAuthToken() {
-        let player = KitharaPlayer()
+    func setupNetworkStoresAuthToken() throws {
+        let player = try KitharaPlayer()
         // setupNetwork is fire-and-forget; we just verify the call
         // path doesn't throw. Header-side asserts are covered by the
         // Rust-level FFI tests.
@@ -123,7 +127,7 @@ struct KitharaPlayerTests {
 
     @Test("typed queue policy and complete crossfade profile round trip")
     func typedQueuePolicyRoundTrips() throws {
-        let player = KitharaPlayer()
+        let player = try KitharaPlayer()
         let settings = try CrossfadeSettings(
             duration: 2.5,
             curve: .linear,
@@ -139,7 +143,7 @@ struct KitharaPlayerTests {
     }
 
     @Test("crossfade settings reject invalid values")
-    func crossfadeSettingsRejectInvalidValues() {
+    func crossfadeSettingsRejectInvalidValues() throws {
         #expect(throws: KitharaError.self) {
             try CrossfadeSettings(duration: -.infinity)
         }
@@ -152,8 +156,8 @@ struct KitharaPlayerTests {
     }
 
     @Test("command errors are emitted with affected item id")
-    func commandErrorsAreEmittedWithAffectedItemId() {
-        let player = KitharaPlayer()
+    func commandErrorsAreEmittedWithAffectedItemId() throws {
+        let player = try KitharaPlayer()
         var observed: [KitharaPlayerError] = []
         let cancellable = player.contextualError.sink { error in
             observed.append(error)
@@ -183,7 +187,7 @@ struct KitharaPlayerTests {
 
     @Test("track load failures preserve reason and item id")
     func trackLoadFailuresPreserveReasonAndItemId() throws {
-        let player = KitharaPlayer()
+        let player = try KitharaPlayer()
         let item = KitharaPlayerItem(
             url: "https://example.com/failing.mp3",
             audioId: 42,

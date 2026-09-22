@@ -18,7 +18,7 @@ class KitharaPlayerTest {
         @BeforeClass
         fun setUpClass() {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            Kithara.initialize(context)
+            TestHost.initialize(context)
         }
     }
 
@@ -65,9 +65,11 @@ class KitharaPlayerTest {
 
     @Test
     fun configuredCrossfadeDurationAppliesAtConstruction() {
-        val player = KitharaPlayer(KitharaPlayer.Config(crossfadeDuration = 3.5f))
+        val player = KitharaPlayer(
+            KitharaPlayer.Config(crossfadeSettings = CrossfadeSettings(duration = 3.5f))
+        )
 
-        assertEquals(3.5f, player.crossfadeDuration, 0.0f)
+        assertEquals(3.5f, player.crossfadeSettings.duration, 0.0f)
     }
 
     @Test

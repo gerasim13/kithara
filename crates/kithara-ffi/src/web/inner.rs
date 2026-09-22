@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
+    play::EqBandConfig,
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
@@ -383,7 +384,7 @@ impl WasmInner {
     }
 
     pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
-        let layout: Vec<_> = layout.into_iter().map(Into::into).collect();
+        let layout: Vec<EqBandConfig> = layout.into_iter().map(Into::into).collect();
         let gains = layout
             .iter()
             .map(|band| f32::from(band.gain_db()))

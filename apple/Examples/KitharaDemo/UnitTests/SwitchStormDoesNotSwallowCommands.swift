@@ -21,7 +21,7 @@ extension IntegrationRegressionsIOS {
             "precondition: public-next fixtures are not unique"
         )
 
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = try KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let observation = PublicNextObservation()
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)

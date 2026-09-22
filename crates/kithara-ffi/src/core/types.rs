@@ -23,6 +23,15 @@ use kithara_hls::{KeyFailureStage, KeySource};
 #[derive(Clone, Debug, thiserror::Error)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum FfiError {
+    #[error("Kithara host is not initialized")]
+    NotInitialized,
+
+    #[error("Kithara host initialization is already in progress")]
+    InitializationInProgress,
+
+    #[error("Kithara host is already initialized")]
+    AlreadyInitialized,
+
     #[error("player not ready")]
     NotReady,
 

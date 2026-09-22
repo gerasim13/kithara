@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use kithara::{
-    host::{HostConfig, wasm},
+    host::wasm,
     platform::{
         sync::{Mutex, MutexGuard, mpsc},
         thread,
@@ -15,6 +15,8 @@ use kithara::{
 use wasm_bindgen::JsValue;
 
 use crate::{
+    FfiHostConfig,
+    core::host::lifecycle::Lifecycle,
     pools::{FfiHost, FfiPools, Pools, build as build_pools},
     web::commands::WorkerCmd,
 };
@@ -31,44 +33,46 @@ fn current_track_id_cell() -> &'static AtomicI64 {
     &CELL
 }
 
-fn host_channel() -> &'static Mutex<Option<HostChannel>> {
-    static CHANNEL: LazyLock<Mutex<Option<HostChannel>>> = LazyLock::new(|| Mutex::new(None));
+fn host_channel() -> &'static Lifecycle<HostChannel> {
+    static CHANNEL: LazyLock<Lifecycle<HostChannel>> = LazyLock::new(Lifecycle::default);
     &CHANNEL
 }
 
-fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue> {
-    let mut guard = host_channel().lock();
-    if let Some(channel) = guard.as_ref() {
-        return Ok((channel.sender.clone(), channel.pools.clone()));
-    }
-
-    let pools = build_pools()
-        .map_err(|error| JsValue::from_str(&format!("pool construction failed: {error}")))?;
-    let host = FfiHost::new(HostConfig::builder().build())
-        .map_err(|error| JsValue::from_str(&format!("host construction failed: {error}")))?;
-    let (sender, receiver) = wasm::worker_host_channel(&host)
-        .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
-    play_wasm::spawn_webcodecs_probe(pools.clone());
-    wasm::warm_up_audio(&host)
-        .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
-    *guard = Some(HostChannel {
-        receiver,
-        _host: host,
-        pools: pools.clone(),
-        sender: sender.clone(),
-    });
-    Ok((sender, pools))
+fn ready_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue> {
+    host_channel()
+        .with_ready(|channel| (channel.sender.clone(), channel.pools.clone()))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
-pub(crate) fn initialize() -> Result<(), JsValue> {
-    ensure_host_channel().map(drop)
+pub(crate) fn require_initialized() -> Result<(), JsValue> {
+    ready_host_channel().map(drop)
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = initializeHost)]
+pub fn initialize_host(config: FfiHostConfig) -> Result<(), JsValue> {
+    host_channel()
+        .initialize(|| {
+            let pools = build_pools().map_err(|error| crate::types::FfiError::Internal {
+                description: format!("pool construction failed: {error}"),
+            })?;
+            let host = FfiHost::new(config.into_domain()?)?;
+            let (sender, receiver) = wasm::worker_host_channel(&host)?;
+            play_wasm::spawn_webcodecs_probe(pools.clone());
+            wasm::warm_up_audio(&host)?;
+            Ok(HostChannel {
+                receiver,
+                _host: host,
+                pools,
+                sender,
+            })
+        })
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
 pub(crate) fn tick_and_poll() {
-    let guard = host_channel().lock();
-    if let Some(channel) = guard.as_ref() {
+    let _ = host_channel().with_ready(|channel| {
         wasm::tick_and_poll(&channel.receiver);
-    }
+    });
 }
 
 /// Record the worker's current track id for the main-thread read-back.
@@ -117,19 +121,17 @@ impl WorkerBridge {
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
     /// early while a live channel exists.
-    pub(crate) fn ensure_worker_started(&self) {
+    pub(crate) fn ensure_worker_started(&self) -> Result<(), JsValue> {
         if self.lock_cmd_tx().is_some() {
-            return;
+            return Ok(());
         }
 
         let _start_guard = self.start_lock.lock();
         if self.lock_cmd_tx().is_some() {
-            return;
+            return Ok(());
         }
 
-        let Ok((host_sender, pools)) = ensure_host_channel() else {
-            return;
-        };
+        let (host_sender, pools) = ready_host_channel()?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
@@ -138,6 +140,7 @@ impl WorkerBridge {
             crate::web::worker::worker_main(cmd_rx, host_sender, pools);
         });
         std::mem::forget(worker);
+        Ok(())
     }
 
     /// Whether the worker's audio session is currently playing.
@@ -178,7 +181,7 @@ impl WorkerBridge {
     /// respawned because the main thread cannot prove that its old Host member
     /// was detached before creating a replacement.
     pub(crate) fn send(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
-        self.ensure_worker_started();
+        self.ensure_worker_started()?;
 
         let tx = self
             .lock_cmd_tx()

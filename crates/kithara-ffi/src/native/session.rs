@@ -1,37 +1,49 @@
-use std::{num::NonZeroU32, sync::OnceLock};
+use std::{num::NonZeroU32, sync::LazyLock};
 
-use kithara::{
-    host::{HostConfig, HostOwned},
-    platform::sync::Mutex,
-    play::{PlayError, player::PlayerControlSource},
+use kithara::{host::HostOwned, play::player::PlayerControlSource};
+
+use crate::{
+    FfiHostConfig,
+    core::host::lifecycle::Lifecycle,
+    pools::{FfiHost, FfiPools},
+    types::FfiError,
 };
 
-use crate::pools::{FfiHost, FfiPools};
+static HOST: LazyLock<Lifecycle<FfiHost>> = LazyLock::new(Lifecycle::default);
 
-static HOST: OnceLock<Mutex<FfiHost>> = OnceLock::new();
-
-fn host() -> &'static Mutex<FfiHost> {
-    HOST.get_or_init(|| {
-        let host = FfiHost::new(HostConfig::builder().build())
-            .expect("INVARIANT: the process audio Host must allocate its root identity");
-        Mutex::new(host)
-    })
+/// Initialize the process-wide audio host exactly once.
+///
+/// # Errors
+/// Returns a typed lifecycle or host-construction error.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
+    HOST.initialize(|| FfiHost::new(config.into_domain()?).map_err(FfiError::from))
 }
 
-pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, PlayError>
+#[cfg(test)]
+pub(crate) fn initialize_test_host() {
+    match initialize_host(FfiHostConfig::default()) {
+        Ok(()) | Err(FfiError::AlreadyInitialized) => {}
+        Err(error) => panic!("test FFI host initialization failed: {error}"),
+    }
+}
+
+pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, FfiError>
 where
     P: PlayerControlSource<Schema = FfiPools>,
 {
-    host().lock().insert(player)
+    HOST.with_ready_mut(|host| host.insert(player))?
+        .map_err(FfiError::from)
 }
 
-pub(crate) fn requested_sample_rate() -> NonZeroU32 {
-    host().lock().requested_sample_rate()
+pub(crate) fn requested_sample_rate() -> Result<NonZeroU32, FfiError> {
+    HOST.with_ready(FfiHost::requested_sample_rate)
 }
 
-pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), PlayError>
+pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), FfiError>
 where
     P: PlayerControlSource<Schema = FfiPools>,
 {
-    host().lock().remove(player)
+    HOST.with_ready_mut(|host| host.remove(player))?
+        .map_err(FfiError::from)
 }

@@ -13,7 +13,8 @@ import AVFoundation
 /// updates through ``eventPublisher``.
 ///
 /// ```swift
-/// let player = KitharaPlayer()
+/// try KitharaHost.initialize()
+/// let player = try KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// player.play()
@@ -379,7 +380,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     }
 
     /// Create a new player instance.
-    public init(config: Config = Config()) {
+    public init(config: Config = Config()) throws {
         let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
             FfiKeyRule(
                 processor: KeyProcessorBridge(processor: rule.processor),
@@ -399,11 +400,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             actionAtItemEnd: config.actionAtItemEnd.ffi,
             crossfadeSettings: config.crossfadeSettings.ffi
         )
-        do {
-            self._inner = try AudioPlayer(config: ffiConfig)
-        } catch {
-            preconditionFailure("validated player configuration was rejected: \(error)")
-        }
+        self._inner = try AudioPlayer(config: ffiConfig)
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
