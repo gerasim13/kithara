@@ -68,9 +68,11 @@ impl<T> Lifecycle<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::{
+        sync::{Arc, mpsc},
+        thread,
+    };
 
-    use kithara::platform::{sync::Arc, thread};
     use kithara_test_utils::kithara;
 
     use super::*;
