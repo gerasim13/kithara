@@ -12,7 +12,7 @@ use std::{
 use kithara_test_utils::{
     memory::{self, Counting},
     test::{
-        setup_tracing,
+        setup_tracing_with_filter,
         usdt::{MAX_EVENTS, ProbeEvent, scope},
     },
     tracing::{Level, event},
@@ -89,7 +89,7 @@ fn prime_panic_backtrace() {
 
 #[test]
 fn continuous_probes_keep_the_heap_bounded() {
-    setup_tracing();
+    setup_tracing_with_filter("warn,kithara_test_probe=trace");
     prime_panic_backtrace();
 
     let (peak, left) = hammer(Some("unobserved"), "unobserved");
