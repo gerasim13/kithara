@@ -1,6 +1,49 @@
 use super::discover;
 
 #[test]
+fn schema_modules_and_patch_derives_do_not_require_config_suffixes() {
+    let source = "struct Ordinary; mod config { struct Limits; } #[derive(Patch)] struct Recipe; mod other { struct Hidden; }";
+    let entries = discover("src/lib.rs", source).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Limits", "Recipe"]
+    );
+    for path in [
+        "src/config.rs",
+        "src/config/host.rs",
+        "src/document/schema.rs",
+    ] {
+        assert_eq!(
+            discover(path, "enum Mode { Fast } type Configuration = Mode;")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    assert!(
+        discover("src/configuration_cache.rs", "struct Ordinary;")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn config_bearing_inputs_are_detected_without_bon() {
+    let entries = discover("src/lib.rs", "impl Player { fn new(config: &AudioConfig, mode: Mode) -> Self { todo!() } fn ordinary(value: usize) {} } fn prepare(input: Option<Settings>) {} type Configuration = AudioConfig;").unwrap();
+    assert_eq!(
+        entries.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
+        ["config_inputs", "config_inputs", "alias"]
+    );
+    assert_eq!(
+        entries[0].members,
+        ["config : & AudioConfig", "mode : Mode"]
+    );
+}
+
+#[test]
 fn file_conditions_and_associated_aliases_are_not_lost() {
     let entries = discover("src/native.rs", "#![cfg(unix)] impl Service for Audio { type Config = Options; } fn test() { struct LocalConfig; }").unwrap();
     assert_eq!(entries.len(), 2);

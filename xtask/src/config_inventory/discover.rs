@@ -50,25 +50,56 @@ fn conditions(attrs: &[Attribute]) -> impl Iterator<Item = String> + '_ {
         .map(tokens)
 }
 
-fn is_candidate(name: &str, attrs: &[Attribute]) -> bool {
-    ["Config", "Settings", "Options", "Params", "Policy", "Setup"]
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
-        || attrs.iter().any(|attr| {
-            attr.path().is_ident("config")
-                || attr
-                    .path()
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "config")
-                || (attr.path().is_ident("derive")
-                    && tokens(attr)
-                        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-                        .any(|word| word == "Builder"))
-        })
+fn config_name(name: &str) -> bool {
+    [
+        "Config",
+        "Configuration",
+        "Settings",
+        "Options",
+        "Params",
+        "Policy",
+        "Setup",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
+}
+
+struct ConfigInput(bool);
+
+impl<'ast> Visit<'ast> for ConfigInput {
+    fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
+        self.0 |= ty
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| config_name(&segment.ident.to_string()));
+        visit::visit_type_path(self, ty);
+    }
 }
 
 impl Discovery<'_> {
+    fn is_candidate(&self, name: &str, attrs: &[Attribute]) -> bool {
+        self.source
+            .split('/')
+            .any(|part| matches!(part, "config" | "config.rs" | "schema" | "schema.rs"))
+            || self
+                .scope
+                .iter()
+                .any(|part| matches!(part.as_str(), "config" | "schema"))
+            || config_name(name)
+            || attrs.iter().any(|attr| {
+                attr.path().is_ident("config")
+                    || attr
+                        .path()
+                        .segments
+                        .last()
+                        .is_some_and(|segment| segment.ident == "config")
+                    || (attr.path().is_ident("derive")
+                        && tokens(attr)
+                            .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                            .any(|word| matches!(word, "Builder" | "Patch")))
+            })
+    }
     fn record(
         &mut self,
         name: &syn::Ident,
@@ -94,15 +125,26 @@ impl Discovery<'_> {
     }
 
     fn constructor(&mut self, signature: &Signature, attrs: &[Attribute]) {
-        if attrs.iter().any(|attr| {
+        let builder = attrs.iter().any(|attr| {
             attr.path()
                 .segments
                 .last()
                 .is_some_and(|part| part.ident == "builder")
-        }) {
+        });
+        let mut config_input = ConfigInput(false);
+        for input in &signature.inputs {
+            if let FnArg::Typed(input) = input {
+                config_input.visit_type(&input.ty);
+            }
+        }
+        if builder || config_input.0 {
             self.record(
                 &signature.ident,
-                "builder_inputs",
+                if builder {
+                    "builder_inputs"
+                } else {
+                    "config_inputs"
+                },
                 attrs,
                 signature
                     .inputs
@@ -124,7 +166,7 @@ impl<'ast> Visit<'ast> for Discovery<'_> {
     }
 
     fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
-        if is_candidate(&item.ident.to_string(), &item.attrs) {
+        if self.is_candidate(&item.ident.to_string(), &item.attrs) {
             self.record(
                 &item.ident,
                 "struct",
@@ -136,7 +178,7 @@ impl<'ast> Visit<'ast> for Discovery<'_> {
     }
 
     fn visit_item_enum(&mut self, item: &'ast ItemEnum) {
-        if is_candidate(&item.ident.to_string(), &item.attrs) {
+        if self.is_candidate(&item.ident.to_string(), &item.attrs) {
             self.record(
                 &item.ident,
                 "enum",
@@ -148,14 +190,14 @@ impl<'ast> Visit<'ast> for Discovery<'_> {
     }
 
     fn visit_item_type(&mut self, item: &'ast ItemType) {
-        if is_candidate(&item.ident.to_string(), &item.attrs) {
+        if self.is_candidate(&item.ident.to_string(), &item.attrs) {
             self.record(&item.ident, "alias", &item.attrs, vec![tokens(&item.ty)]);
         }
         visit::visit_item_type(self, item);
     }
 
     fn visit_impl_item_type(&mut self, item: &'ast ImplItemType) {
-        if is_candidate(&item.ident.to_string(), &item.attrs) {
+        if self.is_candidate(&item.ident.to_string(), &item.attrs) {
             self.record(
                 &item.ident,
                 "associated_alias",
