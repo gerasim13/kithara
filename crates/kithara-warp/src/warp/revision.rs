@@ -11,6 +11,7 @@ use std::num::NonZeroU64;
     PartialEq,
     PartialOrd,
     derive_more::Display,
+    derive_more::From,
     derive_more::Into,
 )]
 #[display("{_0}")]

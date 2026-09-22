@@ -26,9 +26,17 @@ pub(crate) struct BungeeElastic {
 }
 
 impl BungeeElastic {
+    fn rendered_source_frames(&self, request: ElasticRequest) -> usize {
+        if self.core.anchor.is_some() {
+            request.output_source_frames()
+        } else {
+            request.source_frames()
+        }
+    }
+
     fn exact_tail_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
         let latency = self.capabilities.latency();
-        let source = Self::frame_count(request.source_frames())?;
+        let source = Self::frame_count(self.rendered_source_frames(request))?;
         let output = Self::frame_count(request.output_frames())?;
         let source_tail = Self::frame_count(latency.source_frames())?
             .checked_mul(output)
@@ -95,9 +103,9 @@ impl BungeeElastic {
         let latency_frames = self.capabilities.latency().output_frames();
         let same_rate = self.last_request.map(|previous| {
             Ok::<_, ElasticError>(
-                Self::frame_count(previous.source_frames())?
+                Self::frame_count(self.rendered_source_frames(previous))?
                     * Self::frame_count(request.output_frames())?
-                    == Self::frame_count(request.source_frames())?
+                    == Self::frame_count(self.rendered_source_frames(request))?
                         * Self::frame_count(previous.output_frames())?,
             )
         });
@@ -241,6 +249,11 @@ impl ElasticEngine for BungeeElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
+        if self.core.anchor.is_none() && request.source_frames() != request.output_source_frames() {
+            return Err(ElasticError::EnginePreparation(
+                "distinct admitted and audible source spans require a primed Bungee engine",
+            ));
+        }
         self.core
             .render(Some(source), request, self.pitch, Some(output))?;
         self.record_request(request)?;
@@ -259,5 +272,41 @@ impl ElasticEngine for BungeeElastic {
         self.pitch =
             f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::test_pools::pools;
+
+    #[kithara::test]
+    fn unprimed_bungee_rejects_distinct_audible_span_before_rendering() {
+        let config = ElasticConfig::builder()
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(64)
+            .max_output_frames(64)
+            .build()
+            .expect("valid preparation");
+        let mut engine = BungeeElastic::prepare(config).expect("prepared Bungee");
+        let request = ElasticRequest::new(32, 16)
+            .expect("physical span")
+            .with_output_source_frames(16)
+            .expect("audible span");
+        let mut output = [0.25; 32];
+        let input_end = engine.core.source_end();
+        assert_eq!(
+            engine.process(request, &[0.5; 64], &mut output),
+            Err(ElasticError::EnginePreparation(
+                "distinct admitted and audible source spans require a primed Bungee engine",
+            ))
+        );
+        assert_eq!(engine.core.source_end(), input_end);
+        assert_eq!(output, [0.25; 32]);
+        assert!(engine.last_request.is_none());
     }
 }

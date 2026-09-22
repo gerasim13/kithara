@@ -68,6 +68,8 @@ members = [
     "tests/crates/queue",
     "tests/crates/storage",
     "tests/crates/stream",
+    "tests/crates/sync",
+    "tests/crates/warp",
     "tests/fuzz",
     "xtask",
 ]
@@ -133,6 +135,8 @@ default-members = [
     "tests/crates/queue",
     "tests/crates/storage",
     "tests/crates/stream",
+    "tests/crates/sync",
+    "tests/crates/warp",
 ]
 
 [workspace.lints.rust]
@@ -682,6 +686,12 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-sync-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-warp-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-test-dylib]

@@ -142,7 +142,7 @@ pub(super) mod lifecycle {
         sample_rate: u32,
         master_volume: f32,
         render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: NonZeroUsize,
+        response_budget_frames: Option<NonZeroUsize>,
     ) -> Result<(), SessionError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
@@ -205,7 +205,7 @@ pub(super) mod lifecycle {
     fn validate_response_geometry<T, S>(
         state: &SessionState<T, S>,
         render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: NonZeroUsize,
+        response_budget_frames: Option<NonZeroUsize>,
     ) -> Result<(), SessionError> {
         let Some(render_quantum_frames) = render_quantum_frames else {
             return Ok(());
@@ -809,8 +809,7 @@ mod tests {
                 player_id,
                 sample_rate,
                 render_quantum_frames: None,
-                response_budget_frames: NonZeroUsize::new(448)
-                    .expect("fixture response budget is non-zero"),
+                response_budget_frames: NonZeroUsize::new(448),
                 master_volume: 1.0,
             },
         ) {

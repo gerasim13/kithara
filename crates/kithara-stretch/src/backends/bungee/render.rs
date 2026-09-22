@@ -19,7 +19,29 @@ impl StreamCore {
             .output_frames()
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let rate = input / output_count;
+        let audible_input = if self.anchor.is_some() {
+            request
+                .output_source_frames()
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?
+        } else {
+            input
+        };
+        if self.anchor.is_some() {
+            let source_frames = u64::try_from(request.output_source_frames())
+                .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let output_frames = u64::try_from(request.output_frames())
+                .map_err(|_| ElasticError::SampleCountOverflow)?;
+            self.audible_source_end = self
+                .audible_source_end
+                .checked_add(source_frames)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            self.audible_output_end = self
+                .audible_output_end
+                .checked_add(output_frames)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        }
+        let rate = audible_input / output_count;
         self.request.speed = rate;
         self.request.pitch = pitch;
         self.samples_needed += output_count;
@@ -265,7 +287,34 @@ impl StreamCore {
         if self.cue_grain_pending {
             self.cue_grain_pending = false;
         } else {
+            let previous_position = self.request.position;
+            let rate = self.request.speed;
             self.native.next(&mut self.request);
+            let output_hop = (self.request.position - previous_position) / rate;
+            if !output_hop.is_finite() || output_hop <= 0.0 {
+                return Err(ElasticError::EnginePreparation(
+                    "Bungee reported an invalid anchored grain hop",
+                ));
+            }
+            self.grain_output_position += output_hop;
+            let source_end = self
+                .audible_source_end
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let output_end = self
+                .audible_output_end
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            // Anchor each grain to all audible source spans, including calls
+            // served entirely from an already synthesised native output chunk.
+            let desired_position =
+                (self.grain_output_position - output_end).mul_add(rate, source_end);
+            let minimum_position =
+                previous_position + output_hop * self.rate_envelope.min_source_frames_per_output();
+            let maximum_position =
+                previous_position + output_hop * self.rate_envelope.max_source_frames_per_output();
+            self.request.position = desired_position.clamp(minimum_position, maximum_position);
+            self.request.reset = 0;
         }
         self.input.set_requested(self.native.specify(&self.request));
         self.request_pending = true;

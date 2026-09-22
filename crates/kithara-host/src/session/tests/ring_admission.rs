@@ -78,8 +78,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
                 master_volume: 1.0,
                 player_id,
                 render_quantum_frames: None,
-                response_budget_frames: NonZeroUsize::new(448)
-                    .expect("fixture response budget is non-zero"),
+                response_budget_frames: NonZeroUsize::new(448),
                 sample_rate: SAMPLE_RATE,
             })
             .expect("start player command"),

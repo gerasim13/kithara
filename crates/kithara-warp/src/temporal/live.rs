@@ -8,7 +8,7 @@ use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevisio
 use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
-use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat};
+use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat, WarpMapRevision};
 
 const SEQLOCK_PHASES: u64 = 2;
 
@@ -28,6 +28,7 @@ struct RenderCell {
     beat_end: AtomicU64,
     beat_start: AtomicU64,
     frontier_source: AtomicU64,
+    warp_map: AtomicU64,
     session_epoch: AtomicU64,
     transport_revision: AtomicU64,
     version: AtomicU64,
@@ -64,6 +65,7 @@ impl RenderCell {
                 session_epoch: self.session_epoch.load(Ordering::Relaxed),
                 transport_revision: self.transport_revision.load(Ordering::Relaxed),
                 frontier_source: self.frontier_source.load(Ordering::Relaxed),
+                warp_map: self.warp_map.load(Ordering::Relaxed),
                 frontier_output: self.frontier_output.load(Ordering::Relaxed),
             };
             fence(Ordering::Acquire);
@@ -116,6 +118,8 @@ impl RenderCell {
                 context.output().transport_revision().map_or(0, u64::from),
                 Ordering::Relaxed,
             );
+            cell.warp_map
+                .store(frontier.warp_map().map_or(0, u64::from), Ordering::Relaxed);
             cell.frontier_source
                 .store(frontier.source(), Ordering::Relaxed);
             cell.frontier_output
@@ -147,6 +151,7 @@ struct RawSnapshot {
     beat_end: u64,
     beat_start: u64,
     frontier_source: u64,
+    warp_map: u64,
     session_epoch: u64,
     transport_revision: u64,
 }
@@ -191,6 +196,7 @@ impl RawSnapshot {
         };
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
+            .maybe_warp_map(NonZeroU64::new(self.warp_map).map(WarpMapRevision::from))
             .output(SessionFrame::new(self.frontier_output))
             .build();
         Some(RenderSnapshot { frontier, context })
@@ -266,6 +272,30 @@ pub struct RenderSnapshot {
 }
 
 impl RenderSnapshot {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
+        self.frontier = self.frontier.with_warp_map(revision);
+        self
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
+        Self {
+            context: self.context,
+            frontier: PresentationFrontier::builder()
+                .source(cursor.source())
+                .output(cursor.output())
+                .warp_map(cursor.revision())
+                .build(),
+        }
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn advance(
         self,
@@ -295,6 +325,7 @@ impl RenderSnapshot {
         let frontier = PresentationFrontier::builder()
             .source(source)
             .output(SessionFrame::new(output))
+            .maybe_warp_map(self.frontier.warp_map())
             .build();
         Some(Self {
             frontier,
@@ -343,7 +374,11 @@ mod tests {
         let publisher = RenderPublisher::default();
         let reader = publisher.reader();
         let expected_context = context(3, 1_000);
-        let expected_frontier = frontier(8_000, 1_128);
+        let expected_frontier = PresentationFrontier::builder()
+            .source(8_000)
+            .output(SessionFrame::new(1_128))
+            .warp_map(crate::WarpMapRevision::first())
+            .build();
 
         publisher.publish(&expected_context, expected_frontier);
 
@@ -385,5 +420,25 @@ mod tests {
                 expected.for_output_range(split..128)
             );
         }
+    }
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn advancing_a_prepared_snapshot_keeps_its_warp_map() {
+        let previous_map = crate::WarpMapRevision::first();
+        let warp_map = crate::WarpMapRevision::from(
+            std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
+        );
+        let previous = super::RenderSnapshot {
+            context: context(3, 1_000),
+            frontier: frontier(7_900, 1_000).with_warp_map(Some(previous_map)),
+        };
+        let advanced = super::RenderSnapshot {
+            context: context(3, 1_000),
+            frontier: frontier(8_000, 1_128).with_warp_map(Some(warp_map)),
+        }
+        .advance(Some(&previous), 8_128, 128)
+        .expect("monotonic prepared frontier advances");
+
+        assert_eq!(advanced.frontier().warp_map(), Some(warp_map));
     }
 }

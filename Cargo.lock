@@ -5718,6 +5718,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-signal",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5744,6 +5745,23 @@ dependencies = [
  "kithara-warp",
  "kithara-workspace-hack",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-sync-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "delegate",
+ "futures",
+ "hex",
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serde_json",
+ "serial_test",
 ]
 
 [[package]]
@@ -5910,6 +5928,23 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-warp-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-beat",
+ "kithara-integration-tests",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-stretch",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-warp",
+ "num-traits",
+ "serde_json",
 ]
 
 [[package]]

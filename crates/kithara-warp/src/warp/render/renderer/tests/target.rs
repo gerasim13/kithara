@@ -34,6 +34,11 @@ fn live_backend_swap_continues_and_keeps_pitch(
         if i == 6 {
             controls.set_backend(replacement);
             fx.prepare(spec());
+            while fx.transition_pending() {
+                if let Some(output) = flush_serviced(&mut fx) {
+                    out.extend_from_slice(&output.samples);
+                }
+            }
         }
         if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             out.extend_from_slice(&c.samples);

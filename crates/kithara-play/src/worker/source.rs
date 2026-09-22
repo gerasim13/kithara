@@ -1,5 +1,7 @@
-use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
-use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
+use std::ops::ControlFlow;
+
+use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep, WaitingReason};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::SeekObserve;
@@ -49,7 +51,6 @@ pub(crate) struct WarpSource<T, S> {
     retired_input: Option<AudioChunk>,
     staged_epoch: Option<u64>,
     staged_meta: Option<AudioChunkInfo>,
-    staging: Option<BufferRing<SampleBuffer>>,
     pools: PoolRegion<S>,
     source: T,
     effects: Vec<Box<dyn AudioEffect>>,
@@ -84,7 +85,6 @@ where
             drain_state: DrainState::Open,
             reset_epoch: None,
             pending_input: None,
-            staging: None,
             staged_meta: None,
             staged_epoch: None,
             prepared_frames: None,
@@ -95,14 +95,9 @@ where
     }
 
     fn clear_staging(&mut self) {
-        let Some(staging) = self.staging.take() else {
-            self.staged_meta = None;
-            self.staged_epoch = None;
-            self.prepared_frames = None;
-            return;
-        };
-        let buffer = staging.into_inner();
-        self.staging = BufferRing::from_prefix(buffer, 0).ok();
+        if let Some(input) = self.render_input.as_mut() {
+            input.clear();
+        }
         self.staged_meta = None;
         self.staged_epoch = None;
         self.prepared_frames = None;
@@ -133,36 +128,25 @@ where
         }) else {
             return;
         };
-        let Some(frames) = self.warp.prepare_quantum(meta, remaining) else {
-            self.quantum_failed = true;
-            return;
+        let frames = match self.warp.prepare_quantum(meta, remaining) {
+            Ok(frames) => frames,
+            Err(kithara_warp::WarpRenderError::PendingActivation) => return,
+            Err(kithara_warp::WarpRenderError::NeedsService) => {
+                if self.warp.transition_pending() {
+                    self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
+                }
+                return;
+            }
+            Err(_) => {
+                self.quantum_failed = true;
+                return;
+            }
         };
         let frames = frames.get();
         let Some(required) = frames.checked_mul(usize::from(self.spec.channels.max(1))) else {
             self.quantum_failed = true;
             return;
         };
-
-        let needs_staging = self
-            .staging
-            .as_ref()
-            .is_none_or(|staging| staging.capacity() != required);
-        if needs_staging {
-            let mut buffer = self
-                .staging
-                .take()
-                .map_or_else(|| self.pools.get::<f32>(), BufferRing::into_inner);
-            if buffer.ensure_len(required).is_err() {
-                self.quantum_failed = true;
-                return;
-            }
-            buffer.truncate(required);
-            let Ok(staging) = BufferRing::from_prefix(buffer, 0) else {
-                self.quantum_failed = true;
-                return;
-            };
-            self.staging = Some(staging);
-        }
 
         let mut input = self
             .render_input
@@ -173,7 +157,12 @@ where
             self.quantum_failed = true;
             return;
         }
+        input.clear();
         self.render_input = Some(input);
+        if frames == 0 {
+            self.staged_meta = Self::span_meta(meta, 0, 0);
+            self.staged_epoch = self.pending_input.as_ref().map(|pending| pending.epoch);
+        }
         self.prepared_frames = Some(frames);
     }
 
@@ -204,10 +193,13 @@ where
 
     fn stage_pending(&mut self) -> bool {
         let channels = usize::from(self.spec.channels.max(1));
-        let Some(capacity) = self.staging.as_ref().map(BufferRing::capacity) else {
+        let Some(capacity) = self
+            .prepared_frames
+            .and_then(|frames| frames.checked_mul(channels))
+        else {
             return false;
         };
-        let staged = self.staging.as_ref().map_or(0, BufferRing::len);
+        let staged = self.render_input.as_ref().map_or(0, |input| input.len());
         let staged_frames = staged / channels;
         let Some(pending) = self.pending_input.as_mut() else {
             return false;
@@ -248,11 +240,12 @@ where
             self.staged_meta = Self::span_meta(pending.chunk.meta, pending.consumed_frames, 0);
             self.staged_epoch = Some(pending.epoch);
         }
-        if !self
-            .staging
-            .as_mut()
-            .is_some_and(|staging| staging.try_push(source))
-        {
+        let Some(input) = self.render_input.as_mut() else {
+            self.quantum_failed = true;
+            return false;
+        };
+        let end = staged.saturating_add(samples);
+        if end > input.capacity() || input.try_extend_from_slice(source).is_err() {
             self.quantum_failed = true;
             return false;
         }
@@ -266,7 +259,7 @@ where
 
     fn staged_frames(&self) -> usize {
         let channels = usize::from(self.spec.channels.max(1));
-        self.staging.as_ref().map_or(0, BufferRing::len) / channels
+        self.render_input.as_ref().map_or(0, |input| input.len()) / channels
     }
 }
 
@@ -369,14 +362,26 @@ where
     fn prepare_renderers(&mut self, spec: AudioSpec) {
         self.spec = spec;
         self.warp.prepare(spec);
-        self.prepare_staging();
+        if self.warp.transition_pending() && matches!(self.drain_state, DrainState::Open) {
+            self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
+        }
+        if !self.warp.transition_pending() {
+            self.prepare_staging();
+        }
         for effect in &mut self.effects {
             effect.service_deferred(spec);
         }
     }
 
     fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
-        let chunk = self.warp.render(chunk);
+        let chunk = match self.warp.render(chunk) {
+            ControlFlow::Continue(output) => output,
+            ControlFlow::Break(input) => {
+                self.retired_input = Some(input);
+                self.quantum_failed = true;
+                return None;
+            }
+        };
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp(epoch);
         }
@@ -390,18 +395,37 @@ where
         (self.staged_frames() == frames).then(|| self.render_staged(frames))
     }
 
-    fn render_quantum(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
-        let chunk = self.warp.render_quantum(chunk);
+    fn render_quantum(
+        &mut self,
+        chunk: AudioChunk,
+        epoch: u64,
+    ) -> ControlFlow<AudioChunk, Option<Fetch<AudioChunk>>> {
+        let output = self.warp.render_quantum(chunk)?;
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp(epoch);
         }
-        let chunk = chunk?;
-        let output = apply_effects(&mut self.effects, chunk)?;
-        Some(self.fetch(output, epoch))
+        let output = output.and_then(|chunk| apply_effects(&mut self.effects, chunk));
+        ControlFlow::Continue(output.map(|output| self.fetch(output, epoch)))
+    }
+
+    fn render_source_quantum(
+        &mut self,
+        chunk: AudioChunk,
+        epoch: u64,
+    ) -> Option<Fetch<AudioChunk>> {
+        match self.render_quantum(chunk, epoch) {
+            ControlFlow::Continue(output) => output,
+            ControlFlow::Break(input) => {
+                debug_assert!(self.retired_input.is_none());
+                self.retired_input = Some(input);
+                self.quantum_failed = true;
+                None
+            }
+        }
     }
 
     fn render_staged(&mut self, frames: usize) -> TrackStep<AudioChunk> {
-        if self.quantum_failed || frames == 0 {
+        if self.quantum_failed {
             return TrackStep::Failed;
         }
         let channels = usize::from(self.spec.channels.max(1));
@@ -420,31 +444,27 @@ where
             self.quantum_failed = true;
             return TrackStep::Failed;
         };
-        let Some(mut input) = self.render_input.take() else {
+        let Some(input) = self.render_input.take() else {
             return TrackStep::StateChanged;
         };
-        if input.len() < samples {
+        if input.len() != samples {
             self.render_input = Some(input);
             self.quantum_failed = true;
             return TrackStep::Failed;
         }
-        input.truncate(samples);
-        if !self
-            .staging
-            .as_mut()
-            .is_some_and(|staging| staging.try_pop_into(&mut input))
-        {
-            self.render_input = Some(input);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        }
-        if self.staging.as_ref().is_none_or(BufferRing::is_empty) {
-            self.staged_meta = None;
-            self.staged_epoch = None;
-        }
+        self.staged_meta = None;
+        self.staged_epoch = None;
         self.prepared_frames = None;
-        self.render_quantum(AudioChunk::new(meta, input), epoch)
-            .map_or(TrackStep::StateChanged, TrackStep::Produced)
+        match self.render_quantum(AudioChunk::new(meta, input), epoch) {
+            ControlFlow::Continue(output) => {
+                output.map_or(TrackStep::StateChanged, TrackStep::Produced)
+            }
+            ControlFlow::Break(input) => {
+                self.render_input = Some(input.samples);
+                self.quantum_failed = true;
+                TrackStep::Failed
+            }
+        }
     }
 
     fn render_whole_pending(&mut self) -> Option<TrackStep<AudioChunk>> {
@@ -456,7 +476,7 @@ where
         let pending = self.pending_input.take()?;
         self.prepared_frames = None;
         Some(
-            self.render_quantum(pending.chunk, pending.epoch)
+            self.render_source_quantum(pending.chunk, pending.epoch)
                 .map_or(TrackStep::StateChanged, TrackStep::Produced),
         )
     }
@@ -565,7 +585,7 @@ where
         }
         if self.pending_input.is_some() {
             if self.prepared_frames.is_none() {
-                return TrackStep::StateChanged;
+                return TrackStep::Blocked(WaitingReason::Waiting);
             }
             self.stage_pending();
             return self
@@ -583,10 +603,10 @@ where
                     && self
                         .warp
                         .prepare_quantum(data.meta, data.frames())
-                        .is_some_and(|frames| frames.get() == data.frames())
+                        .is_ok_and(|frames| frames.get() == data.frames())
                 {
                     return self
-                        .render_quantum(data, epoch)
+                        .render_source_quantum(data, epoch)
                         .map_or(TrackStep::StateChanged, TrackStep::Produced);
                 }
                 self.pending_input = Some(PendingInput {
@@ -1373,6 +1393,236 @@ mod tests {
         assert_eq!(head.load(Ordering::Acquire), sentinel_end);
         assert_eq!(data.samples.as_ptr(), sentinel_ptr);
         assert_eq!(&data.samples[..], &sentinel_samples);
+    }
+
+    #[kithara::test(native)]
+    #[cfg(feature = "stretch-signalsmith")]
+    async fn rejected_staged_quantum_retains_both_owning_buffers(quarter: Vec<f32>) {
+        const FRAMES: usize = 64;
+        #[kithara::allow_block]
+        fn prepare(quarter: &[f32]) -> (WarpSource<RawSource, TestPools>, *const f32, *const f32) {
+            let pools = pools();
+            let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+            let raw = RawSource {
+                head: Arc::new(AtomicU64::new(0)),
+                seek: Arc::new(SeekState::new()),
+                chunks: VecDeque::new(),
+            };
+            let decoded = chunk_with_frames(&pools, spec, 0, 64, quarter);
+            let decoded_pointer = decoded.samples.as_ptr();
+            let mut source = source_stage_with_quantum(&pools, raw, Vec::new(), spec, FRAMES);
+            source.pending_input = Some(PendingInput {
+                chunk: decoded,
+                epoch: 0,
+                consumed_frames: 0,
+            });
+            source.prepare_staging();
+            assert_eq!(source.prepared_frames, Some(FRAMES));
+            assert!(source.stage_pending());
+            assert!(source.pending_input.is_none());
+            let staged_pointer = source.render_input.as_ref().expect("staged PCM").as_ptr();
+            assert_ne!(decoded_pointer, staged_pointer);
+            source.warp.reset();
+            (source, decoded_pointer, staged_pointer)
+        }
+        #[kithara::no_block(budget_ms = 1_000)]
+        async fn reject(source: &mut WarpSource<RawSource, TestPools>) -> TrackStep<AudioChunk> {
+            source.render_staged(FRAMES)
+        }
+        #[kithara::allow_block]
+        fn release(source: WarpSource<RawSource, TestPools>) {
+            drop(source);
+        }
+        let (mut source, decoded_pointer, staged_pointer) = prepare(&quarter);
+        let result = reject(&mut source).await;
+        assert!(matches!(result, TrackStep::Failed));
+        assert!(source.quantum_failed);
+        let decoded = source
+            .retired_input
+            .as_ref()
+            .expect("decoded retirement retained");
+        assert_eq!(decoded.samples.as_ptr(), decoded_pointer);
+        assert_eq!(&decoded.samples[..], &quarter[..FRAMES * 2]);
+        let staged = source
+            .render_input
+            .as_ref()
+            .expect("rejected staging retained");
+        assert_eq!(staged.as_ptr(), staged_pointer);
+        assert_eq!(&staged[..], &quarter[..FRAMES * 2]);
+        release(source);
+    }
+
+    #[kithara::test(native)]
+    #[cfg(feature = "stretch-signalsmith")]
+    fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: Vec<f32>) {
+        use kithara_beat::{
+            BeatGridModel, BeatGridState as WireState, GridBeat, RawBeatGrid, SCHEMA_VERSION,
+        };
+        use kithara_signal::{SessionEpoch, SessionFrame};
+        use kithara_warp::{
+            AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridRevision,
+            BeatGridSnapshot, MapPoint, SessionAnchor, SessionBeat, WarpMap, WarpMapRevision,
+            WarpPlan,
+        };
+
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+        let pools = pools();
+        let model = BeatGridModel::try_from(RawBeatGrid {
+            schema_version: SCHEMA_VERSION,
+            model_id: "projected-worker".to_owned(),
+            revision: 1,
+            state: WireState::Final,
+            duration: Some(10.0),
+            bpm: 120.0,
+            beats: vec![
+                GridBeat {
+                    at: 0.0,
+                    ordinal: 0,
+                    confidence: Some(1.0),
+                },
+                GridBeat {
+                    at: 0.5,
+                    ordinal: 1,
+                    confidence: Some(1.0),
+                },
+            ],
+            downbeats: Vec::new(),
+            meter: None,
+        })
+        .expect("valid model");
+        let asset = BeatGridSnapshot::model(
+            BeatGridId::allocate().expect("asset identity"),
+            BeatGridRevision::first(),
+            &model,
+            AssetAxis::new(spec.sample_rate, AssetExtent::Bounded(480_000)),
+        )
+        .expect("bounded asset grid");
+        let session = BeatGridSnapshot::session(
+            BeatGridId::allocate().expect("session identity"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            SessionAnchor::new(
+                SessionFrame::new(0),
+                SessionBeat::default(),
+                3.0,
+                spec.sample_rate,
+            )
+            .expect("session tempo"),
+            None,
+        );
+        let cue = Beat::new(0.0).expect("cue");
+        let alignment = BeatAlignment::new(
+            MapPoint::new(asset.stamp(), cue),
+            MapPoint::new(session.stamp(), cue),
+        );
+        let map = WarpMap::projected(asset, session, alignment, WarpMapRevision::first())
+            .expect("projected geometry");
+        let controls = StretchControls::new(1.0);
+        controls.set_keylock(true);
+        controls.set_backend(StretchKind::Signalsmith);
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(Arc::clone(&controls))
+            .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
+            .build();
+        config.plan().install(Some(Arc::new(
+            WarpPlan::new(map, SessionFrame::new(0)).expect("initial activation"),
+        )));
+        let head = Arc::new(AtomicU64::new(0));
+        let raw = RawSource {
+            head: Arc::clone(&head),
+            seek: Arc::new(SeekState::new()),
+            chunks: (0..8)
+                .map(|index| chunk_with_frames(&pools, spec, index * 4096, 4096, &quarter))
+                .collect(),
+        };
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+        let mut source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone());
+        let mut produced = 0;
+        for _ in 0..128 {
+            flush_deferred(&mut source);
+            match source.step_track() {
+                TrackStep::Produced(Fetch::Data { data, .. }) => {
+                    assert!(data.frames() > 0);
+                    produced += 1;
+                }
+                TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+                _ => panic!("projected source must stay live before the switch"),
+            }
+            if produced >= 4 && source.pending_input.is_some() && source.prepared_frames.is_none() {
+                break;
+            }
+        }
+        assert!(
+            produced >= 4,
+            "the old backend must emit before it is replaced"
+        );
+        let pending = source.pending_input.as_ref().expect("held decoded input");
+        let pointer = pending.chunk.samples.as_ptr();
+        let meta = pending.chunk.meta;
+        let consumed = pending.consumed_frames;
+        let input_head = head.load(Ordering::Acquire);
+        controls.set_keylock(false);
+        source.warp.prepare(spec);
+        assert!(
+            source.warp.transition_pending(),
+            "the old backend needs retirement"
+        );
+        source.prepare_staging();
+        assert!(
+            !source.quantum_failed,
+            "NeedsService is not a fatal render error"
+        );
+        assert!(
+            matches!(source.drain_state, DrainState::LiveWarp(_)),
+            "backend retirement must be serviced before retrying the held input"
+        );
+        let mut resident_output = false;
+        let mut resumed_input = false;
+        for _ in 0..128 {
+            flush_deferred(&mut source);
+            let before = source
+                .pending_input
+                .as_ref()
+                .expect("input remains held until resumed")
+                .consumed_frames;
+            let step = source.step_track();
+            assert!(
+                !matches!(step, TrackStep::Failed | TrackStep::Eof),
+                "backend service must neither fail nor finish the source"
+            );
+            let pending = source
+                .pending_input
+                .as_ref()
+                .expect("one resumed quantum leaves decoded input");
+            assert_eq!(pending.chunk.samples.as_ptr(), pointer);
+            assert_eq!(pending.chunk.meta, meta);
+            assert_eq!(
+                &pending.chunk.samples[..],
+                &quarter[..pending.chunk.samples.len()]
+            );
+            assert_eq!(head.load(Ordering::Acquire), input_head);
+            if let TrackStep::Produced(Fetch::Data { data, .. }) = step {
+                assert!(data.frames() > 0);
+                if pending.consumed_frames == before {
+                    resident_output = true;
+                    assert_eq!(pending.consumed_frames, consumed);
+                }
+            }
+            if pending.consumed_frames > consumed {
+                resumed_input = true;
+                break;
+            }
+        }
+        assert!(
+            resident_output,
+            "buffered projection must emit without taking new decoded frames"
+        );
+        assert!(
+            resumed_input,
+            "the replacement backend must resume the retained input"
+        );
+        assert!(!source.quantum_failed);
     }
 
     #[kithara::test]

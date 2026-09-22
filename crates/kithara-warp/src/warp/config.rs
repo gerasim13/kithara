@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 ))]
 use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
-use crate::StretchControls;
+use crate::{StretchControls, WarpPlanSlot};
 
 const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
@@ -24,6 +24,11 @@ const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) 
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpConfig {
+    /// Explicit projected selection prepared by the musical policy owner.
+    #[builder(default = Arc::new(WarpPlanSlot::default()))]
+    #[field(get, deref = false)]
+    #[patch(skip)]
+    plan: Arc<WarpPlanSlot>,
     /// Live temporal controls consumed by the resident Warp lane. Not a
     /// document key: this is the handle the UI and the deck already share, so
     /// a document naming a stretch ratio would be overwritten by the first

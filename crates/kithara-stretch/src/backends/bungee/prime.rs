@@ -159,6 +159,9 @@ impl StreamCore {
         self.request_pending = false;
         self.samples_needed = 0.0;
         self.anchor = Some(0.0);
+        self.audible_source_end = 0;
+        self.audible_output_end = 0;
+        self.grain_output_position = 0.0;
         self.cue_grain_pending = true;
         Ok(())
     }

@@ -31,7 +31,7 @@ pub struct EngineConfig<S> {
     /// Initial output sample rate supplied by the owning player session.
     pub(crate) sample_rate: NonZeroU32,
     /// Player-owned response contract used to validate session geometry.
-    pub(crate) response_budget_frames: NonZeroUsize,
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.

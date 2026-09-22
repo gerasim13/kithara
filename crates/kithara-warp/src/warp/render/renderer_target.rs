@@ -4,13 +4,16 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
     ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
+    build_varispeed_engine,
 };
+use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::renderer::WarpRenderer;
+use super::{renderer::WarpRenderer, renderer_residency::SourceResidency};
 
 #[derive(Default)]
 pub(super) struct PreparedTarget {
+    pub(super) residency: Option<SourceResidency>,
     pub(super) activation_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     pub(super) pending_source: Option<SampleBuffer>,
@@ -40,22 +43,74 @@ where
     }
 
     pub(super) fn prepare_target(
-        kind: StretchKind,
+        (kind, keylock): (StretchKind, bool),
         backends: ElasticBackendConfig,
         source_block_frames: NonZeroUsize,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         reusable: PreparedTarget,
-    ) -> PreparedTarget {
+        measure_capabilities: bool,
+    ) -> Result<PreparedTarget, ElasticError> {
         let PreparedTarget {
+            residency: reusable_residency,
             activation_scratch: reusable_activation_scratch,
             engine: reusable_engine,
             pending_source: reusable_pending,
             scratch: reusable_scratch,
         } = reusable;
         drop(reusable_engine);
-        let result = Self::config_for(kind, backends, source_block_frames, spec, pools)
-            .and_then(build_engine)
+        let channels = usize::from(spec.channels.max(1));
+        let mut history_frames = reusable_residency
+            .as_ref()
+            .map_or(0, |resident| resident.history_frames);
+        let mut resident_frames = reusable_residency.as_ref().map_or_else(
+            || source_block_frames.get(),
+            |resident| resident.samples.capacity() / channels,
+        );
+        let mut replacement_frames = reusable_residency
+            .as_ref()
+            .map_or(0, |resident| resident.replacement.capacity() / channels);
+        let measured = (|| -> Result<(), ElasticError> {
+            for backend in StretchKind::all().iter().filter(|_| measure_capabilities) {
+                let capabilities =
+                    Self::config_for(*backend, backends, source_block_frames, spec, pools)
+                        .and_then(build_engine)
+                        .map(|engine| engine.capabilities())?;
+                {
+                    let latency = capabilities.latency();
+                    history_frames = history_frames.max(latency.source_frames());
+                    let source_tail = (latency.source_frames().to_f64().unwrap_or(f64::MAX)
+                        / capabilities.rate_envelope().min_source_frames_per_output())
+                    .ceil()
+                    .to_usize()
+                    .unwrap_or(usize::MAX);
+                    replacement_frames =
+                        replacement_frames.max(latency.output_frames().saturating_add(source_tail));
+                    let warm = (latency.output_frames().to_f64().unwrap_or(f64::MAX)
+                        * capabilities.rate_envelope().max_source_frames_per_output())
+                    .ceil()
+                    .to_usize()
+                    .unwrap_or(usize::MAX);
+                    resident_frames = resident_frames.max(
+                        latency
+                            .source_frames()
+                            .saturating_mul(2)
+                            .saturating_add(warm)
+                            .saturating_add(source_block_frames.get().saturating_mul(2)),
+                    );
+                }
+            }
+            Ok(())
+        })();
+        let result = measured
+            .and_then(|()| Self::config_for(kind, backends, source_block_frames, spec, pools))
+            .and_then(|config| {
+                if keylock {
+                    build_engine(config)
+                } else {
+                    build_varispeed_engine(config)
+                }
+            })
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
                 let pending_samples = SampleCount::new(
@@ -69,14 +124,7 @@ where
                 pending
                     .ensure_len(pending_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
-                let history_samples = engine
-                    .capabilities()
-                    .latency()
-                    .source_frames()
-                    .checked_mul(channels)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                pending.truncate(history_samples);
-                pending.fill(0.0);
+                pending.clear();
                 let scratch_samples = Self::scratch_samples(engine.as_ref(), spec)?;
                 let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
                 scratch
@@ -95,20 +143,25 @@ where
                     .ensure_len(activation_samples)
                     .map_err(|_| ElasticError::PoolCapacity)?;
                 activation_scratch.clear();
-                Ok((engine, pending, scratch, activation_scratch))
+                let residency = SourceResidency::prepare(
+                    pools,
+                    reusable_residency,
+                    history_frames,
+                    resident_frames,
+                    replacement_frames,
+                    channels,
+                )?;
+                Ok((engine, pending, scratch, activation_scratch, residency))
             });
-        match result {
-            Ok((engine, pending, scratch, activation_scratch)) => PreparedTarget {
+        result.map(
+            |(engine, pending, scratch, activation_scratch, residency)| PreparedTarget {
+                residency: Some(residency),
                 activation_scratch: Some(activation_scratch),
                 engine: Some(engine),
                 pending_source: Some(pending),
                 scratch: Some(scratch),
             },
-            Err(error) => {
-                warn!(%kind, %error, "time-stretch engine preparation failed");
-                PreparedTarget::default()
-            }
-        }
+        )
     }
 
     fn scratch_samples(
@@ -156,9 +209,40 @@ where
     /// scheduler shell, never from the checked render core.
     pub(super) fn service_target(&mut self, spec: AudioSpec) {
         drop(self.retired_engine.take());
+        drop(self.projection.retired.take());
+        if self.prepared_quantum.is_none()
+            && self
+                .residency
+                .as_ref()
+                .is_none_or(|resident| resident.prepared.is_none())
+        {
+            self.projection.prepared = None;
+        }
+        self.projection.selected = self.plan_slot.load();
         if self.transition_pending() && spec == self.spec {
             self.service_scratch();
             return;
+        }
+        if (self.prepared_quantum.is_some()
+            || self
+                .residency
+                .as_ref()
+                .is_some_and(|resident| resident.prepared.is_some()))
+            && spec == self.spec
+        {
+            self.service_scratch();
+            return;
+        }
+        let channels = usize::from(self.spec.channels.max(1));
+        if self.projection.selected.is_none() && self.projection.active.is_some() {
+            if self.active || self.pending_frames(channels) > 0 {
+                self.backend_transition_pending = true;
+                self.service_scratch();
+                return;
+            }
+            self.projection.retired = self.projection.active.take();
+            self.projection.cursor = None;
+            self.projection.output_frames = 0;
         }
         self.sync_plan();
 
@@ -169,7 +253,7 @@ where
         }
 
         let kind = self.controls.backend();
-        let channels = usize::from(self.spec.channels.max(1));
+        let keylock = self.controls.keylock();
         let entering_unity = spec == self.spec
             && (self.active || self.pending_frames(channels) > 0)
             && self.unity_passthrough(self.controls.speed());
@@ -177,29 +261,65 @@ where
             self.service_scratch();
             return;
         }
-        if kind != self.current_kind || spec != self.spec || self.rebuild_pending {
-            self.rebuild_pending = false;
+        let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
+        if backend_changed
+            && spec == self.spec
+            && (self.active || self.pending_frames(channels) > 0)
+        {
+            self.backend_transition_pending = true;
+            self.service_scratch();
+            return;
+        }
+        if backend_changed || spec != self.spec || self.rebuild_pending {
             drop(self.deferred_scratch.take());
-            self.clear_render_state();
+            if spec != self.spec || self.rebuild_pending {
+                self.clear_render_state();
+            }
+            self.rebuild_pending = false;
+            if spec != self.spec {
+                for buffer in [&mut self.pending_source, &mut self.activation_scratch] {
+                    if let Some(buffer) = buffer.as_mut() {
+                        buffer.shrink_to_fit();
+                    }
+                }
+                if spec.channels != self.spec.channels
+                    && let Some(scratch) = self.scratch.as_mut()
+                {
+                    scratch.shrink_to_fit();
+                }
+                if let Some(resident) = self.residency.as_mut() {
+                    resident.samples.shrink_to_fit();
+                    resident.replacement.shrink_to_fit();
+                }
+            }
+            let reusable = PreparedTarget {
+                residency: self.residency.take(),
+                activation_scratch: self.activation_scratch.take(),
+                engine: self.engine.take(),
+                pending_source: self.pending_source.take(),
+                scratch: self.scratch.take(),
+            };
             let target = Self::prepare_target(
-                kind,
+                (kind, keylock),
                 self.backends,
                 self.source_block_frames,
                 spec,
                 &self.pools,
-                PreparedTarget {
-                    activation_scratch: self.activation_scratch.take(),
-                    engine: self.engine.take(),
-                    pending_source: self.pending_source.take(),
-                    scratch: self.scratch.take(),
-                },
-            );
+                reusable,
+                spec != self.spec,
+            )
+            .unwrap_or_else(|error| {
+                warn!(%kind, %error, "time-stretch engine preparation failed");
+                PreparedTarget::default()
+            });
+            self.residency = target.residency;
             self.activation_scratch = target.activation_scratch;
             self.engine = target.engine;
             self.pending_source = target.pending_source;
-            self.passthrough_history_head = self.engine.is_some().then_some(0);
             self.scratch = target.scratch;
             self.current_kind = kind;
+            self.current_keylock = keylock;
+            self.applied_pitch = f64::NAN;
             self.spec = spec;
             self.reset_pending = false;
             return;
@@ -217,11 +337,6 @@ where
             warn!(%error, "time-stretch deferred reset failed");
             self.engine = None;
             self.rebuild_pending = true;
-            return;
-        }
-        if let Err(error) = self.reset_passthrough_history() {
-            warn!(%error, "time-stretch history preparation failed");
-            self.clear_pending_source();
         }
     }
 }
