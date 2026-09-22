@@ -9,6 +9,12 @@ description = "Channel and master audio effects for Kithara: equalisers, limiter
 keywords = ["audio", "dsp", "equalizer", "limiter", "effects"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Ranged)]` and `unimock` only
+# through `#[kithara::mock]`; both are named by the expansion, never by a
+# source line in this crate.
+ignored = ["serde", "unimock"]
+
 [features]
 default = []
 mock = ["dep:unimock"]

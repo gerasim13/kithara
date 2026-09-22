@@ -7,6 +7,10 @@ license.workspace = true
 publish = false
 autotests = false
 
+[package.metadata.cargo-machete]
+# `kithara-test-utils` is named only by the `#[kithara::test]` expansion.
+ignored = ["kithara-test-utils"]
+
 [features]
 default = ["client-reqwest", "tls-rustls", "usdt"]
 client-reqwest = ["kithara/client-reqwest"]
