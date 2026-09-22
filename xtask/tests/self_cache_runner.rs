@@ -5,7 +5,7 @@ use std::{
     io::{self, ErrorKind, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
@@ -416,8 +416,8 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = command.spawn()?;
-    wait_for_file(&ready)?;
+    let mut child = command.spawn()?;
+    wait_for_file(&ready, &mut child)?;
     let lease = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -457,8 +457,8 @@ fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = command.spawn()?;
-    wait_for_file(&ready)?;
+    let mut child = command.spawn()?;
+    wait_for_file(&ready, &mut child)?;
     let target = cache.join("bootstrap/review/target-Darwin-arm64-0");
     let lease = fs::OpenOptions::new()
         .read(true)
@@ -929,9 +929,9 @@ wait "$descendant"
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut refresh = command.spawn()?;
-    wait_for_file(&cargo_pid)?;
-    wait_for_file(&descendant_pid)?;
-    wait_for_file(&worker_pid)?;
+    wait_for_file(&cargo_pid, &mut refresh)?;
+    wait_for_file(&descendant_pid, &mut refresh)?;
+    wait_for_file(&worker_pid, &mut refresh)?;
     let cargo = read_pid(&cargo_pid)?;
     let descendant = read_pid(&descendant_pid)?;
     let worker = read_pid(&worker_pid)?;
@@ -1007,11 +1007,22 @@ fn assert_success(output: &Output) {
     );
 }
 
-fn wait_for_file(path: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+/// Waits for `path` while `process` is still alive.
+///
+/// The condition is the process, not the clock. Reaching this point means
+/// spawning `just`, which compiles the lease helper with a real `rustc` before
+/// it can write anything, so a wall-clock deadline measures how busy the
+/// machine is rather than whether the runner works: on a loaded host these
+/// waits timed out at exactly their deadline while the helper was still
+/// compiling. A process that exits without producing the file is the actual
+/// defect, and it is reported here with the status it exited on.
+fn wait_for_file(path: &Path, process: &mut Child) -> Result<()> {
     while !path.is_file() {
-        if Instant::now() >= deadline {
-            return Err(anyhow!("timed out waiting for {}", path.display()));
+        if let Some(status) = process.try_wait()? {
+            return Err(anyhow!(
+                "the supervised process exited ({status}) without producing {}",
+                path.display()
+            ));
         }
         thread::sleep(Duration::from_millis(10));
     }
