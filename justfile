@@ -45,16 +45,6 @@ export PKG_CONFIG_PATH := ```
     printf '%s' "$keg:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
 ```
 
-# Whether Cargo fetches a git dependency with the system git rather than its
-# own client. The system git is much faster on a large history - `btls-sys`
-# carries `boringssl`, measured at 25.6 minutes on the Apple host (GitLab job
-# 9811155) - but it fetches with whatever credentials the machine has, and a
-# Linux container has none: GitHub answered its anonymous request with a
-# challenge and git, having no terminal, failed the job outright. Cargo's own
-# client asks anonymously and never prompts. So the faster path is taken only
-# on the hosts it was measured on and where it works.
-export CARGO_NET_GIT_FETCH_WITH_CLI := if os() == "macos" { "true" } else { "false" }
-
 # sccache refuses incremental compilations, so a wrapper without this is never
 # hit. `check clippy` opts back in on a workstation, where the dependencies are
 # already built and incremental turns 15s into 2.4s, and leaves the shared cache

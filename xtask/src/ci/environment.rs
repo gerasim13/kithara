@@ -360,20 +360,6 @@ impl CiEnvironment {
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
-        // Same reasoning as the justfile's: the system git fetches a large
-        // git history far faster, but it fetches with the machine's
-        // credentials, and a Linux container has none for the challenge
-        // GitHub answers its anonymous request with. Cargo's own client asks
-        // anonymously, so it is what the fleet without credentials uses.
-        insert(
-            &mut vars,
-            "CARGO_NET_GIT_FETCH_WITH_CLI",
-            if cfg!(target_os = "macos") {
-                "true"
-            } else {
-                "false"
-            },
-        );
         // Same statement as the GitHub fleet's container: a Linux job links
         // with `lld`. The lane executor is the other way a job reaches this
         // machine, and a linker chosen for only one of them is a measurement
