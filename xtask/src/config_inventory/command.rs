@@ -10,7 +10,10 @@ use kithara_devtools::Ctx;
 use serde::Serialize;
 use tracing::info;
 
-use super::discover::{Declaration, Registration, discover, registrations};
+use super::{
+    discover::{Declaration, Registration, discover, registrations},
+    project,
+};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ConfigCommand {
@@ -28,6 +31,15 @@ pub(crate) enum ConfigCommand {
         /// Compilation surface whose cfg availability must be verified later.
         #[arg(long, value_enum, default_value_t)]
         target_profile: TargetProfile,
+    },
+    /// Generate FFI records and converters for registered SDK operations.
+    Project {
+        /// Rust source output, relative to the workspace unless absolute.
+        #[arg(
+            long,
+            default_value = "crates/kithara-ffi/src/core/config_generated.rs"
+        )]
+        output: PathBuf,
     },
 }
 
@@ -57,6 +69,17 @@ struct Manifest {
 }
 
 pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
+    if let ConfigCommand::Project { output } = &command {
+        let manifest = manifest(&ctx.root, TargetProfile::Native)?;
+        let generated = project::render(&manifest.registrations)?;
+        let output = ctx.root.join(output);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::write(&output, generated).with_context(|| format!("write {}", output.display()))?;
+        info!(path = %output.display(), "configuration FFI projection complete");
+        return Ok(());
+    }
     let (output, contents, files, entries, message) = match command {
         ConfigCommand::Discover { output } => {
             let inventory = inventory(&ctx.root)?;
@@ -85,6 +108,7 @@ pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
                 "configuration registration manifest complete",
             )
         }
+        ConfigCommand::Project { .. } => unreachable!("handled above"),
     };
     let output = ctx.root.join(output);
     if let Some(parent) = output.parent() {

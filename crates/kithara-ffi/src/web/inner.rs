@@ -7,6 +7,7 @@ use kithara::{
 };
 
 use crate::{
+    FfiEqBandConfig,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
@@ -53,7 +54,7 @@ pub(crate) struct WasmInner {
     playback_order: Mutex<FfiPlaybackOrder>,
     action_at_item_end: Mutex<FfiActionAtItemEnd>,
     bridge: WorkerBridge,
-    eq_gains: [AtomicU32; EQ_BANDS],
+    eq_gains: Mutex<Box<[f32]>>,
 }
 
 impl Default for WasmInner {
@@ -75,7 +76,7 @@ impl Default for WasmInner {
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
             action_at_item_end: Mutex::new(FfiActionAtItemEnd::Advance),
             muted: Mutex::default(),
-            eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
+            eq_gains: Mutex::new(Box::new([0.0; EQ_BANDS])),
         }
     }
 }
@@ -144,7 +145,7 @@ impl WasmInner {
     }
 
     pub(crate) fn eq_band_count(&self) -> u32 {
-        let n = self.eq_gains.len();
+        let n = self.eq_gains.lock().len();
         u32::try_from(n).unwrap_or_else(|_| {
             tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
             0
@@ -152,7 +153,11 @@ impl WasmInner {
     }
 
     pub(crate) fn eq_gain(&self, band: u32) -> f32 {
-        self.eq_gains.get(band as usize).map_or(0.0, load_f32)
+        self.eq_gains
+            .lock()
+            .get(band as usize)
+            .copied()
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn insert(
@@ -300,8 +305,8 @@ impl WasmInner {
     }
 
     pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
-        for g in &self.eq_gains {
-            store_f32(g, 0.0);
+        for gain in self.eq_gains.lock().iter_mut() {
+            *gain = 0.0;
         }
         self.try_send(WorkerCmd::ResetEq)
     }
@@ -371,10 +376,21 @@ impl WasmInner {
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
-        if let Some(slot) = self.eq_gains.get(band as usize) {
-            store_f32(slot, gain_db);
+        if let Some(slot) = self.eq_gains.lock().get_mut(band as usize) {
+            *slot = gain_db;
         }
         self.try_send(WorkerCmd::SetEqGain { band, gain_db })
+    }
+
+    pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        let layout: Vec<_> = layout.into_iter().map(Into::into).collect();
+        let gains = layout
+            .iter()
+            .map(|band| f32::from(band.gain_db()))
+            .collect::<Box<[_]>>();
+        self.try_send(WorkerCmd::SetEqLayout(layout))?;
+        *self.eq_gains.lock() = gains;
+        Ok(())
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {

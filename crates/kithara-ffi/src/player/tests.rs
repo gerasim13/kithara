@@ -1,4 +1,4 @@
-use crate::{config::FfiPlayerConfig, player::AudioPlayer};
+use crate::{FfiEqBandConfig, FfiEqFilterKind, config::FfiPlayerConfig, player::AudioPlayer};
 
 #[kithara::test]
 fn create_player() {
@@ -50,6 +50,21 @@ fn eq_band_count_from_config() {
     })
     .expect("create player");
     assert_eq!(player.eq_band_count(), 3);
+}
+
+#[kithara::test]
+fn generated_eq_layout_reaches_the_player_owner() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    player
+        .set_eq_layout(vec![FfiEqBandConfig {
+            kind: FfiEqFilterKind::Peaking,
+            gain_db: 3.0,
+            frequency: 440.0,
+            q_factor: 0.8,
+        }])
+        .expect("replace EQ layout");
+    assert_eq!(player.eq_band_count(), 1);
+    assert_eq!(player.eq_gain(0), 3.0);
 }
 
 #[kithara::test]

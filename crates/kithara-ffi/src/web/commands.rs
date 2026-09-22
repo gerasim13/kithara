@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use kithara::{
-    play::{CrossfadeSettings, SessionDuckingMode},
+    play::{CrossfadeSettings, EqBandConfig, SessionDuckingMode},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
 
@@ -28,6 +28,7 @@ pub(crate) enum WorkerCmd {
         band: u32,
         gain_db: f32,
     },
+    SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
     /// Append a track to the tail of the queue. Loading starts in the
     /// background; playback does not begin until a matching `SelectQueue`.

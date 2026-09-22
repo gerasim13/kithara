@@ -36,6 +36,7 @@ fn player_timestretch() -> Arc<StretchControls> {
 }
 
 use crate::{
+    FfiEqBandConfig,
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
     event_bridge::EventBridge,
@@ -468,6 +469,12 @@ impl NativeInner {
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.queue
             .set_eq_gain(band as usize, gain_db)
+            .map_err(FfiError::from)
+    }
+
+    pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        self.queue
+            .set_eq_layout(layout.into_iter().map(Into::into).collect())
             .map_err(FfiError::from)
     }
 

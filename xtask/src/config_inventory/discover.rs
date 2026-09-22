@@ -9,28 +9,28 @@ use syn::{
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Registration {
-    source: String,
-    package: String,
-    module_path: String,
+    pub(super) source: String,
+    pub(super) package: String,
+    pub(super) module_path: String,
     scope: Vec<String>,
     pub(super) owner: String,
-    property: Option<String>,
-    hook: Option<String>,
-    kind: &'static str,
-    sdk: bool,
-    docs: Vec<String>,
+    pub(super) property: Option<String>,
+    pub(super) hook: Option<String>,
+    pub(super) kind: &'static str,
+    pub(super) sdk: bool,
+    pub(super) docs: Vec<String>,
     conditions: Vec<String>,
-    fields: Vec<RegisteredField>,
+    pub(super) fields: Vec<RegisteredField>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
-struct RegisteredField {
-    name: String,
-    rust_type: String,
-    role: String,
+pub(super) struct RegisteredField {
+    pub(super) name: String,
+    pub(super) rust_type: String,
+    pub(super) role: String,
     update: bool,
     exclusion_reason: Option<String>,
-    docs: Vec<String>,
+    pub(super) docs: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]

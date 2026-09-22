@@ -38,7 +38,7 @@ pub use bridge::{
     SessionError, SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason,
     TrackState, TrackTransition,
 };
-pub use effects::eq::EqBandConfig;
+pub use effects::eq::{EqBandConfig, FilterKind, GainDb};
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 use humantime_serde as _;

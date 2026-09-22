@@ -197,6 +197,9 @@ fn dispatch_cmd(
             let band_idx: usize = num_traits::cast(band).unwrap_or(0);
             let _ = queue.set_eq_gain(band_idx, gain_db);
         }
+        WorkerCmd::SetEqLayout(layout) => {
+            let _ = queue.set_eq_layout(layout);
+        }
         WorkerCmd::ResetEq => {
             let _ = queue.reset_eq();
         }

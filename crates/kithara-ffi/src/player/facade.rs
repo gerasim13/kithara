@@ -3,7 +3,7 @@ use kithara::platform::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::config::FfiPlayerConfig;
 use crate::{
-    Inner,
+    FfiEqBandConfig, Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
@@ -231,6 +231,14 @@ impl AudioPlayer {
     /// Returns error if the engine is not running.
     pub fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.inner.set_eq_gain(band, gain_db)
+    }
+
+    /// Replace the complete live equalizer layout through the owning player.
+    ///
+    /// # Errors
+    /// Returns an error when the player cannot prepare or publish the layout.
+    pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        self.inner.set_eq_layout(layout)
     }
 
     pub fn set_muted(&self, muted: bool) {
