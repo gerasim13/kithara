@@ -168,5 +168,5 @@ fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
         transport.session_epoch,
         transport.transport_revision,
     )?;
-    RenderContext::new(output, transport.session_beats.clone())
+    RenderContext::try_from((output, transport.trajectory)).ok()
 }

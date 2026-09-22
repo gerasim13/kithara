@@ -215,9 +215,15 @@ fn transport_frame_carries_the_exact_processed_musical_context() {
     let (_processor, mut extra, _output, active) = active_harness();
     let frame = process_transport(&proc_info_at(block_frame(1)), &mut extra.store)
         .expect("invariant: the next contiguous transport block is valid");
-    let beats = frame
-        .session_beats
-        .expect("invariant: the active playing transport has a beat range");
+    let trajectory = frame
+        .trajectory
+        .expect("invariant: playing transport has a trajectory");
+    let beats = trajectory
+        .beat_at(SessionFrame::new(block_frame(1)))
+        .expect("finite beat")
+        ..trajectory
+            .beat_at(SessionFrame::new(block_frame(2)))
+            .expect("finite beat");
 
     assert_eq!(frame.session_epoch, SessionEpoch::new(0));
     assert_eq!(frame.transport_revision, Some(active.revision()));
@@ -508,7 +514,8 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         .expect("invariant: applied transport publishes a snapshot");
     assert_eq!(applied.revision(), second_revision());
     assert_eq!(applied.tempo(), next.tempo());
-    assert!((f64::from(applied.position()) - 0.05).abs() <= f64::EPSILON);
+    let expected_beat = 0.05 + 0.005 * (1.0 - (-2.0_f64).exp());
+    assert!((f64::from(applied.position()) - expected_beat).abs() <= f64::EPSILON);
     let new_grid = applied.session_grid();
     assert!(new_grid.revision() > old_grid.revision());
     assert_eq!(old_grid.revision(), before.session_grid_stamp().revision());
@@ -521,8 +528,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         BeatGridQuery::Stale { expected, given }
             if expected == new_grid.stamp() && given == old_grid.stamp()
     ));
-    let new_tempo = BeatsPerMinute::try_from(60.0)
-        .expect("invariant: fixture tempo is a positive finite value");
+    let new_tempo = old_tempo;
     assert!(matches!(
         new_grid.tempo_at(MapPoint::new(
             new_grid.stamp(),

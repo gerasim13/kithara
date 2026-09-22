@@ -8,12 +8,18 @@ use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevisio
 use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
-use crate::{PresentationFrontier, RenderContext, SessionBeat};
+use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat};
 
 const SEQLOCK_PHASES: u64 = 2;
 
 #[derive(Debug, Default)]
 struct RenderCell {
+    anchor_frame: AtomicI64,
+    anchor_beat: AtomicU64,
+    anchor_tempo: AtomicU64,
+    anchor_target: AtomicU64,
+    anchor_smoothing: AtomicU64,
+    trajectory_present: AtomicU32,
     frontier_output: AtomicI64,
     output_end: AtomicI64,
     output_start: AtomicI64,
@@ -43,6 +49,12 @@ impl RenderCell {
                 continue;
             }
             let raw = RawSnapshot {
+                anchor_frame: self.anchor_frame.load(Ordering::Relaxed),
+                anchor_beat: self.anchor_beat.load(Ordering::Relaxed),
+                anchor_tempo: self.anchor_tempo.load(Ordering::Relaxed),
+                anchor_target: self.anchor_target.load(Ordering::Relaxed),
+                anchor_smoothing: self.anchor_smoothing.load(Ordering::Relaxed),
+                trajectory_present: self.trajectory_present.load(Ordering::Relaxed) != 0,
                 output_start: self.output_start.load(Ordering::Relaxed),
                 output_end: self.output_end.load(Ordering::Relaxed),
                 sample_rate: self.sample_rate.load(Ordering::Relaxed),
@@ -64,6 +76,23 @@ impl RenderCell {
 
     fn publish(&self, context: &RenderContext, frontier: PresentationFrontier) {
         self.write(|cell| {
+            if let Some(anchor) = context.trajectory() {
+                cell.anchor_frame
+                    .store(i64::from(anchor.frame()), Ordering::Relaxed);
+                cell.anchor_beat
+                    .store(f64::from(anchor.beat()).to_bits(), Ordering::Relaxed);
+                cell.anchor_tempo
+                    .store(anchor.beats_per_second().to_bits(), Ordering::Relaxed);
+                cell.anchor_target.store(
+                    anchor.target_beats_per_second().to_bits(),
+                    Ordering::Relaxed,
+                );
+                cell.anchor_smoothing
+                    .store(anchor.smooth_seconds().to_bits(), Ordering::Relaxed);
+                cell.trajectory_present.store(1, Ordering::Relaxed);
+            } else {
+                cell.trajectory_present.store(0, Ordering::Relaxed);
+            }
             let output = context.output().output_frames();
             cell.output_start
                 .store(i64::from(output.start), Ordering::Relaxed);
@@ -104,6 +133,12 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
+    anchor_frame: i64,
+    anchor_beat: u64,
+    anchor_tempo: u64,
+    anchor_target: u64,
+    anchor_smoothing: u64,
+    trajectory_present: bool,
     beats_present: bool,
     frontier_output: i64,
     output_end: i64,
@@ -135,7 +170,25 @@ impl RawSnapshot {
             SessionEpoch::new(self.session_epoch),
             transport_revision,
         )?;
-        let context = RenderContext::new(output, session_beats)?;
+        let context = if self.trajectory_present {
+            let frame = SessionFrame::new(self.anchor_frame);
+            let anchor = SessionAnchor::new(
+                frame,
+                SessionBeat::new(f64::from_bits(self.anchor_beat)).ok()?,
+                f64::from_bits(self.anchor_tempo),
+                sample_rate,
+            )
+            .ok()?
+            .retarget(
+                frame,
+                f64::from_bits(self.anchor_target),
+                f64::from_bits(self.anchor_smoothing),
+            )
+            .ok()?;
+            RenderContext::try_from((output, Some(anchor))).ok()?
+        } else {
+            RenderContext::new(output, session_beats)?
+        };
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
             .output(SessionFrame::new(self.frontier_output))
@@ -258,7 +311,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::RenderPublisher;
-    use crate::{PresentationFrontier, RenderContext, SessionBeat};
+    use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat};
 
     fn context(epoch: u64, start: i64) -> RenderContext {
         let output = OutputContext::new(
@@ -308,5 +361,29 @@ mod tests {
         publisher.clear();
 
         assert!(reader.load().is_none());
+    }
+    #[kithara::test]
+    fn publication_preserves_the_exact_ramp_and_its_subranges() {
+        let publisher = RenderPublisher::default();
+        let output = context(3, 1_000).output().clone();
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(900),
+            SessionBeat::new(1.0).expect("finite beat"),
+            2.0,
+            output.sample_rate(),
+        )
+        .expect("valid anchor")
+        .retarget(SessionFrame::new(950), 3.0, 0.005)
+        .expect("valid ramp");
+        let expected = RenderContext::try_from((output, Some(anchor))).expect("valid context");
+        publisher.publish(&expected, frontier(8_000, 1_128));
+        let actual = publisher.reader().load().expect("published snapshot");
+        assert_eq!(actual.context(), &expected);
+        for split in [1, 17, 64, 127] {
+            assert_eq!(
+                actual.context().for_output_range(split..128),
+                expected.for_output_range(split..128)
+            );
+        }
     }
 }
