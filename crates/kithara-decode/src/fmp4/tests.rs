@@ -383,6 +383,44 @@ fn seek_emits_notneeded_for_first_segment_flac(flac_three: (Vec<u8>, FakeSegment
     );
 }
 
+/// A seek into the middle of a segment starts at the frame covering the
+/// target, not at the segment's first frame. Landing on the segment start
+/// left every frame in between to be decoded and dropped — a whole segment
+/// of codec work per seek, during which the pipeline publishes nothing and a
+/// blocked consumer sees no progress. `CodecPriming::default()` asks for no
+/// pre-roll, so the first frame must cover the target itself.
+#[kithara::test]
+fn seek_starts_at_the_frame_covering_the_target(aac_five: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_five;
+    let source: BoxedSource = Box::new(Cursor::new(blob));
+    let layout: Arc<dyn ByteMap> = Arc::new(segmented);
+    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: demuxer");
+
+    // WHY: 16s sits inside seg-2 (12s..18s), well past its first frame.
+    let target = Duration::from_secs(16);
+    demuxer
+        .seek(target, CodecPriming::default())
+        .expect("BUG: seek");
+
+    let mut pts = None;
+    for _ in 0..16 {
+        match demuxer.next_frame().expect("BUG: demux after seek") {
+            DemuxOutcome::Frame(frame) => {
+                pts = Some(frame.pts + frame.duration);
+                break;
+            }
+            DemuxOutcome::Pending(_) => continue,
+            DemuxOutcome::Eof => panic!("seek into seg-2 must not report EOF"),
+        }
+    }
+    let frame_end = pts.expect("BUG: no frame after seek");
+    assert!(
+        frame_end >= target,
+        "seek must land on the frame covering {target:?}, but the first frame ends at \
+         {frame_end:?} — the segment is being replayed from its start",
+    );
+}
+
 #[cfg(feature = "symphonia")]
 type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 
