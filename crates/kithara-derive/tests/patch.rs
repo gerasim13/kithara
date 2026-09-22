@@ -8,7 +8,7 @@ mod seconds {
 
     use super::Duration;
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<Duration>, D::Error> {
         Option::<u64>::deserialize(deserializer).map(|value| value.map(Duration::from_secs))

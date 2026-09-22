@@ -27,7 +27,12 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
     let mut built_default = false;
     let mut builder = true;
     let mut values_vis = None;
+    let mut seen: Vec<syn::Path> = Vec::new();
     syn::meta::parser(|meta| {
+        if seen.contains(&meta.path) {
+            return Err(meta.error("duplicate config option"));
+        }
+        seen.push(meta.path.clone());
         if meta.path.is_ident("default") {
             built_default = true;
         } else if meta.path.is_ident("builder") {
@@ -145,4 +150,33 @@ fn filter_meta(meta: &syn::Meta, docs: bool) -> Result<Option<syn::Meta>> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use quote::quote;
+
+    use super::expand;
+
+    #[kithara::test(native, flash(false))]
+    fn duplicate_options_are_rejected_instead_of_overriding_configuration() {
+        for options in [
+            quote!(default, default),
+            quote!(builder = false, builder = true),
+            quote!(values_vis = "pub", values_vis = "pub(crate)"),
+        ] {
+            let error = expand(
+                options,
+                quote! {
+                    struct Settings {
+                        #[config(value)]
+                        threshold: u32,
+                    }
+                },
+            )
+            .expect_err("duplicate configuration options must be rejected");
+            assert_eq!(error.to_string(), "duplicate config option");
+        }
+    }
 }
