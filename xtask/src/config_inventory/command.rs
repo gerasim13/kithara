@@ -40,6 +40,9 @@ pub(crate) enum ConfigCommand {
             default_value = "crates/kithara-ffi/src/core/config_generated.rs"
         )]
         output: PathBuf,
+        /// Verify the existing projection instead of writing it.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -69,10 +72,15 @@ struct Manifest {
 }
 
 pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
-    if let ConfigCommand::Project { output } = &command {
+    if let ConfigCommand::Project { output, check } = &command {
         let manifest = manifest(&ctx.root, TargetProfile::Native)?;
         let generated = project::render(&manifest.registrations)?;
         let output = ctx.root.join(output);
+        if *check {
+            verify_projection(&output, &generated)?;
+            info!(path = %output.display(), "configuration FFI projection is current");
+            return Ok(());
+        }
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
@@ -118,6 +126,17 @@ pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
     json.push('\n');
     fs::write(&output, json).with_context(|| format!("write {}", output.display()))?;
     info!(files, entries, path = %output.display(), message);
+    Ok(())
+}
+
+fn verify_projection(output: &Path, generated: &str) -> Result<()> {
+    let existing = fs::read_to_string(output)
+        .with_context(|| format!("read configuration FFI projection {}", output.display()))?;
+    ensure!(
+        existing == generated,
+        "configuration FFI projection is stale: {}",
+        output.display()
+    );
     Ok(())
 }
 
@@ -188,7 +207,17 @@ fn inventory(root: &Path) -> Result<Inventory> {
 mod tests {
     use std::{fs, process::Command};
 
-    use super::{TargetProfile, inventory, manifest};
+    use super::{TargetProfile, inventory, manifest, verify_projection};
+
+    #[test]
+    fn projection_check_rejects_stale_output() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("config_generated.rs");
+        fs::write(&output, "old").unwrap();
+        assert!(verify_projection(&output, "new").is_err());
+        fs::write(&output, "new").unwrap();
+        verify_projection(&output, "new").unwrap();
+    }
 
     #[test]
     fn discovery_includes_untracked_source_excludes_artifacts_and_rejects_bad_source() {
