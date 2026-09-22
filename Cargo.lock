@@ -12327,6 +12327,7 @@ dependencies = [
  "nix",
  "plist",
  "proc-macro2",
+ "quote",
  "regex",
  "reqwest",
  "roxmltree",
