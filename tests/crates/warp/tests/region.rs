@@ -629,7 +629,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();
                 let output = render_configured_grid(
-                    config,
+                    config.clone(),
                     Some(plan.clone()),
                     &warp_nominal_clicks,
                     2.0,
@@ -645,8 +645,19 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     )
                     .expect("ramp artifact")
                 {
-                    tap.push(&output);
-                    for beat in 0..=BARS {
+                    let source_start = source_clicks[0];
+                    let mut listening_source = warp_nominal_clicks[source_start * CH..].to_vec();
+                    listening_source.resize(NOMINAL * BARS * CH, 0.0);
+                    let listening = render_configured_grid(
+                        config,
+                        Some(plan.clone()),
+                        &listening_source,
+                        2.0,
+                        None,
+                        Some(anchor),
+                    );
+                    tap.push(&listening);
+                    for beat in 0..BARS {
                         let frame = anchor
                             .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
                             .expect("Host beat frame");
@@ -662,9 +673,26 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                             "target_bps": target_bps,
                             "keylock": keylock,
                             "quantum": quantum,
-                            "source_attack_phase_beats": f64_of(source_clicks[0]) / f64_of(NOMINAL),
+                            "source_beat_zero_frame": source_start,
                         }),
                     );
+                    let listening_clicks = click_positions(&mono(&listening));
+                    assert_eq!(
+                        listening_clicks.len(),
+                        BARS,
+                        "listening artifact keeps every beat"
+                    );
+                    for (beat, actual) in listening_clicks.iter().enumerate() {
+                        let expected = anchor
+                            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
+                            .expect("Host beat frame");
+                        let expected =
+                            usize::try_from(i64::from(expected)).expect("positive frame");
+                        assert!(
+                            actual.abs_diff(expected) <= NOMINAL / 20,
+                            "listening artifact beat {beat}: {actual} vs Host {expected}"
+                        );
+                    }
                     assert_eq!(tap.metronome_mix().1, 0, "listening mix has headroom");
                 }
                 let clicks = click_positions(&mono(&output));
