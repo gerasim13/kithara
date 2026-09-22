@@ -184,7 +184,21 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
     }
 
     fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
-        if config_attribute(&item.attrs).is_some() {
+        if let Some(attribute) = config_attribute(&item.attrs) {
+            let mut sdk = false;
+            if matches!(attribute.meta, syn::Meta::List(_))
+                && let Err(error) = attribute.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("sdk") {
+                        sdk = true;
+                    } else if meta.input.peek(syn::Token![=]) {
+                        let _: syn::Expr = meta.value()?.parse()?;
+                    }
+                    Ok(())
+                })
+            {
+                self.error = Some(error.into());
+                return;
+            }
             match item.fields.iter().map(registered_field).collect() {
                 Ok(fields) => self.registrations.push(Registration {
                     source: self.source.to_owned(),
@@ -195,7 +209,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                     property: None,
                     hook: None,
                     kind: "retained",
-                    sdk: false,
+                    sdk,
                     docs: docs(&item.attrs),
                     conditions: self
                         .conditions

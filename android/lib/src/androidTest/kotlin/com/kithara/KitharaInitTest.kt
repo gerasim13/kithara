@@ -33,7 +33,11 @@ class KitharaInitTest {
         assertThrows(KitharaError.AlreadyInitialized::class.java) {
             Kithara.initialize(
                 context,
-                hostConfig = FfiHostConfig(sampleRateHint = 0u, outputBlockFrames = null),
+                hostConfig = FfiHostConfig(
+                    sampleRateHint = 0u,
+                    outputBlockFrames = null,
+                    limiter = com.kithara.ffi.defaultHostConfig().limiter,
+                ),
             )
         }
 

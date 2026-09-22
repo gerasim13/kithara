@@ -160,7 +160,7 @@ the raw query is never written to disk.
 | Layer | Contract |
 |-------|----------|
 | `com.kithara` | Public Kotlin API, `StateFlow`-based reactive state |
-| `com.kithara.ffi` | Generated UniFFI bindings — not for direct use |
+| `com.kithara.ffi` | Generated UniFFI types and low-level bindings, including host configuration |
 | `libkithara_ffi.so` | Rust core (kithara-play, kithara-ffi) |
 
 The release AAR decodes the AAC family, MP3, and FLAC through the Android

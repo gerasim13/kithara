@@ -6,10 +6,16 @@ public enum KitharaHost {
     public struct Configuration: Sendable {
         public var sampleRateHint: UInt32
         public var outputBlockFrames: UInt32?
+        public var limiter: FfiLimiterConfig
 
-        public init(sampleRateHint: UInt32 = 44_100, outputBlockFrames: UInt32? = nil) {
+        public init(
+            sampleRateHint: UInt32 = defaultHostConfig().sampleRateHint,
+            outputBlockFrames: UInt32? = defaultHostConfig().outputBlockFrames,
+            limiter: FfiLimiterConfig = defaultHostConfig().limiter
+        ) {
             self.sampleRateHint = sampleRateHint
             self.outputBlockFrames = outputBlockFrames
+            self.limiter = limiter
         }
     }
 
@@ -19,7 +25,8 @@ public enum KitharaHost {
             try initializeHost(
                 config: FfiHostConfig(
                     sampleRateHint: configuration.sampleRateHint,
-                    outputBlockFrames: configuration.outputBlockFrames
+                    outputBlockFrames: configuration.outputBlockFrames,
+                    limiter: configuration.limiter
                 )
             )
         } catch let error as FfiError {

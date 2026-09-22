@@ -1,11 +1,35 @@
 use std::num::NonZeroU32;
 
-use kithara::host::HostConfig;
+use kithara::{host::HostConfig, play::effects::LimiterConfig};
 
-use crate::types::FfiError;
+use crate::{FfiLimiterConfig, types::FfiError};
+
+impl Default for FfiLimiterConfig {
+    fn default() -> Self {
+        let config = LimiterConfig::default();
+        Self {
+            ceiling: config.ceiling(),
+            release_ms: config.release_ms(),
+        }
+    }
+}
+
+impl TryFrom<FfiLimiterConfig> for LimiterConfig {
+    type Error = FfiError;
+
+    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {
+        Self::builder()
+            .ceiling(config.ceiling)
+            .release_ms(config.release_ms)
+            .build()
+            .map_err(|error| FfiError::InvalidArgument {
+                reason: error.to_string(),
+            })
+    }
+}
 
 /// Settings fixed for the lifetime of the process-wide audio host.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct FfiHostConfig {
@@ -13,6 +37,8 @@ pub struct FfiHostConfig {
     pub sample_rate_hint: u32,
     /// Optional native output callback size in frames.
     pub output_block_frames: Option<u32>,
+    /// Output limiter policy prepared when the host starts.
+    pub limiter: FfiLimiterConfig,
 }
 
 impl Default for FfiHostConfig {
@@ -20,6 +46,7 @@ impl Default for FfiHostConfig {
         Self {
             sample_rate_hint: 44_100,
             output_block_frames: None,
+            limiter: FfiLimiterConfig::default(),
         }
     }
 }
@@ -41,6 +68,7 @@ impl FfiHostConfig {
         Ok(HostConfig::builder()
             .sample_rate_hint(sample_rate_hint)
             .maybe_output_block_frames(output_block_frames)
+            .limiter(self.limiter.try_into()?)
             .build())
     }
 }
@@ -81,5 +109,38 @@ mod tests {
             zero_block.into_domain::<FfiPools>(),
             Err(FfiError::InvalidArgument { .. })
         ));
+
+        let invalid_limiter = FfiHostConfig {
+            limiter: FfiLimiterConfig {
+                ceiling: 1.5,
+                ..FfiLimiterConfig::default()
+            },
+            ..FfiHostConfig::default()
+        };
+        assert!(matches!(
+            invalid_limiter.into_domain::<FfiPools>(),
+            Err(FfiError::InvalidArgument { .. })
+        ));
+    }
+
+    #[kithara::test]
+    fn host_configuration_carries_validated_limiter_settings() {
+        let defaults = FfiHostConfig::default();
+        let domain_defaults = LimiterConfig::default();
+        assert_eq!(defaults.limiter.ceiling, domain_defaults.ceiling());
+        assert_eq!(defaults.limiter.release_ms, domain_defaults.release_ms());
+
+        let wire = FfiHostConfig {
+            limiter: FfiLimiterConfig {
+                ceiling: 0.5,
+                release_ms: 75.0,
+            },
+            ..FfiHostConfig::default()
+        };
+        let HostConfig::Realtime { limiter, .. } = wire.into_domain::<FfiPools>().unwrap() else {
+            panic!("FFI host settings select the realtime session");
+        };
+        assert_eq!(limiter.ceiling(), 0.5);
+        assert_eq!(limiter.release_ms(), 75.0);
     }
 }

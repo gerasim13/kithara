@@ -52,10 +52,11 @@ pub(crate) fn require_initialized() -> Result<(), JsValue> {
 pub fn initialize_host(config: FfiHostConfig) -> Result<(), JsValue> {
     host_channel()
         .initialize(|| {
+            let host_config = config.into_domain()?;
             let pools = build_pools().map_err(|error| crate::types::FfiError::Internal {
                 description: format!("pool construction failed: {error}"),
             })?;
-            let host = FfiHost::new(config.into_domain()?)?;
+            let host = FfiHost::new(host_config)?;
             let (sender, receiver) = wasm::worker_host_channel(&host)?;
             play_wasm::spawn_webcodecs_probe(pools.clone());
             wasm::warm_up_audio(&host)?;

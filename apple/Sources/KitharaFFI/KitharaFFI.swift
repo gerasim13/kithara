@@ -3951,6 +3951,10 @@ public struct FfiHostConfig: Equatable, Hashable {
      * Optional native output callback size in frames.
      */
     public let outputBlockFrames: UInt32?
+    /**
+     * Output limiter policy prepared when the host starts.
+     */
+    public let limiter: FfiLimiterConfig
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3960,9 +3964,13 @@ public struct FfiHostConfig: Equatable, Hashable {
          */sampleRateHint: UInt32,
         /**
          * Optional native output callback size in frames.
-         */outputBlockFrames: UInt32?) {
+         */outputBlockFrames: UInt32?,
+        /**
+         * Output limiter policy prepared when the host starts.
+         */limiter: FfiLimiterConfig) {
         self.sampleRateHint = sampleRateHint
         self.outputBlockFrames = outputBlockFrames
+        self.limiter = limiter
     }
 
 
@@ -3982,13 +3990,15 @@ public struct FfiConverterTypeFfiHostConfig: FfiConverterRustBuffer {
         return
             try FfiHostConfig(
                 sampleRateHint: FfiConverterUInt32.read(from: &buf),
-                outputBlockFrames: FfiConverterOptionUInt32.read(from: &buf)
+                outputBlockFrames: FfiConverterOptionUInt32.read(from: &buf),
+                limiter: FfiConverterTypeFfiLimiterConfig.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiHostConfig, into buf: inout [UInt8]) {
         FfiConverterUInt32.write(value.sampleRateHint, into: &buf)
         FfiConverterOptionUInt32.write(value.outputBlockFrames, into: &buf)
+        FfiConverterTypeFfiLimiterConfig.write(value.limiter, into: &buf)
     }
 }
 
@@ -4438,6 +4448,75 @@ public func FfiConverterTypeFfiKeyRule_lift(_ buf: RustBuffer) throws -> FfiKeyR
 #endif
 public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer {
     return FfiConverterTypeFfiKeyRule.lower(value)
+}
+
+
+/**
+ * Output ceiling and gain recovery of one `PeakLimiter`.
+ */
+public struct FfiLimiterConfig: Equatable, Hashable {
+    /**
+     * Linear peak the output never exceeds, in `(0.0, 1.0]`.
+     */
+    public let ceiling: Float
+    /**
+     * Milliseconds the gain takes to recover toward unity.
+     */
+    public let releaseMs: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Linear peak the output never exceeds, in `(0.0, 1.0]`.
+         */ceiling: Float,
+        /**
+         * Milliseconds the gain takes to recover toward unity.
+         */releaseMs: Float) {
+        self.ceiling = ceiling
+        self.releaseMs = releaseMs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiLimiterConfig: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiLimiterConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiLimiterConfig {
+        return
+            try FfiLimiterConfig(
+                ceiling: FfiConverterFloat.read(from: &buf),
+                releaseMs: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiLimiterConfig, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.ceiling, into: &buf)
+        FfiConverterFloat.write(value.releaseMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLimiterConfig_lift(_ buf: RustBuffer) throws -> FfiLimiterConfig {
+    return try FfiConverterTypeFfiLimiterConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLimiterConfig_lower(_ value: FfiLimiterConfig) -> RustBuffer {
+    return FfiConverterTypeFfiLimiterConfig.lower(value)
 }
 
 
@@ -9580,7 +9659,7 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 12196) {
+    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 64921) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
@@ -9595,7 +9674,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 42846) {
+    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 1992) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {

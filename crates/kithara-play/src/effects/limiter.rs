@@ -28,7 +28,7 @@ pub enum LimiterError {
 }
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
-#[kithara_config::config(builder = false)]
+#[kithara_config::config(builder = false, sdk)]
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]

@@ -51,7 +51,57 @@ pub(super) fn render(registrations: &[Registration]) -> Result<String> {
             .ok_or_else(|| anyhow::anyhow!("EqBandConfig is not registered"))?;
         render_record(&mut output, retained)?;
     }
+    for retained in registrations
+        .iter()
+        .filter(|registration| registration.kind == "retained" && registration.sdk)
+    {
+        render_sdk_record(&mut output, retained)?;
+    }
     Ok(output)
+}
+
+fn render_sdk_record(output: &mut String, registration: &Registration) -> Result<()> {
+    ensure!(
+        registration
+            .fields
+            .iter()
+            .all(|field| field.role == "value"),
+        "SDK value projection requires value fields: {}",
+        registration.owner
+    );
+    let fields: Vec<_> = readable_fields(registration).collect();
+    ensure!(
+        !fields.is_empty(),
+        "empty SDK config: {}",
+        registration.owner
+    );
+    output.push('\n');
+    for line in &registration.docs {
+        writeln!(output, "/// {}", ffi_doc_line(line))?;
+    }
+    output.push_str("#[derive(Clone, Copy, Debug, PartialEq)]\n");
+    output.push_str("#[cfg_attr(feature = \"uniffi\", derive(uniffi::Record))]\n");
+    output.push_str("#[cfg_attr(target_arch = \"wasm32\", wasm_bindgen::prelude::wasm_bindgen)]\n");
+    writeln!(output, "pub struct Ffi{} {{", registration.owner)?;
+    for field in fields {
+        for line in &field.docs {
+            writeln!(output, "    /// {}", ffi_doc_line(line))?;
+        }
+        let wire_type = ffi_type(field)?;
+        ensure!(
+            matches!(wire_type, "f32" | "u32" | "i32" | "bool"),
+            "SDK config field {}.{} needs a scalar Web mapping",
+            registration.owner,
+            field.name
+        );
+        writeln!(output, "    pub {}: {wire_type},", field.name)?;
+    }
+    output.push_str("}\n");
+    Ok(())
+}
+
+fn ffi_doc_line(line: &str) -> String {
+    line.replace("[`", "`").replace("`]", "`")
 }
 
 fn render_record(output: &mut String, registration: &Registration) -> Result<()> {
@@ -145,6 +195,42 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Mystery")
+        );
+    }
+
+    #[test]
+    fn opted_in_sdk_record_uses_registered_scalar_fields() {
+        let source = r#"
+            /// Limiter settings.
+            #[kithara_config::config(builder = false, sdk)]
+            struct LimiterConfig {
+                /// Output ceiling.
+                #[config(value)] ceiling: f32,
+                /// Release in milliseconds.
+                #[config(value)] release_ms: f32,
+            }
+            impl PlayerControl {
+                #[kithara_config::config(delegate = "eq_layout", sdk)]
+                fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
+            }
+            #[kithara_config::config]
+            struct EqBandConfig {
+                #[config(value)] frequency: f32,
+            }
+        "#;
+        let registered = registrations("crates/kithara-play/src/eq.rs", source).unwrap();
+        let generated = render(&registered).unwrap();
+        assert!(generated.contains("pub struct FfiLimiterConfig"));
+        assert!(generated.contains("pub release_ms: f32"));
+        assert!(generated.contains("/// Release in milliseconds."));
+
+        let unsupported = source.replace("ceiling: f32", "ceiling: FilterKind");
+        let registered = registrations("crates/kithara-play/src/eq.rs", &unsupported).unwrap();
+        assert!(
+            render(&registered)
+                .unwrap_err()
+                .to_string()
+                .contains("scalar Web mapping")
         );
     }
 }

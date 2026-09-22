@@ -27,8 +27,8 @@ pub mod web;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
 pub use core::{
-    FfiEqBandConfig, FfiEqFilterKind, FfiHostConfig, analysis, default_host_config, item, layout,
-    observer, types,
+    FfiEqBandConfig, FfiEqFilterKind, FfiHostConfig, FfiLimiterConfig, analysis,
+    default_host_config, item, layout, observer, types,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

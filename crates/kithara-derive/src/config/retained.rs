@@ -77,13 +77,15 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
             built_default = true;
         } else if meta.path.is_ident("update") {
             runtime_update = true;
+        } else if meta.path.is_ident("sdk") {
+            // The source registration drives SDK projection.
         } else if meta.path.is_ident("builder") {
             builder = meta.value()?.parse::<syn::LitBool>()?.value;
         } else if meta.path.is_ident("values_vis") {
             let visibility: syn::LitStr = meta.value()?.parse()?;
             values_vis = Some(syn::parse_str::<syn::Visibility>(&visibility.value())?);
         } else {
-            return Err(meta.error("expected default, update, builder = false, or values_vis"));
+            return Err(meta.error("expected default, update, sdk, builder = false, or values_vis"));
         }
         Ok(())
     })
