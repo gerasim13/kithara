@@ -39,6 +39,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-effects = { path = ".", default-features = false, features = ["mock"] }
+kithara-resampler = { workspace = true, default-features = false, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
 
