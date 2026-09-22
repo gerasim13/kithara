@@ -1,7 +1,6 @@
 //! Test-only transport and lifecycle model for generated SDK acceptance.
 
 use std::{
-    fmt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -31,7 +30,8 @@ pub enum Mode {
     Window { frames: u32 },
 }
 
-#[derive(Debug, uniffi::Error)]
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[error("{self:?}")]
 pub enum ProbeError {
     InvalidRevision,
     NotInitialized,
@@ -41,13 +41,6 @@ pub enum ProbeError {
     WaitInProgress,
     Cancelled,
 }
-
-impl fmt::Display for ProbeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-impl std::error::Error for ProbeError {}
 
 #[must_use]
 #[uniffi::export]

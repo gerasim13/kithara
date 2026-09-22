@@ -326,6 +326,46 @@ mod tests {
     use crate::test_pools::pools;
 
     #[kithara::test]
+    fn document_clear_preserves_backend_preparation_validation() {
+        for (document, valid) in [
+            (
+                "signalsmith:\n  block_frames: null\n  interval_frames: null",
+                true,
+            ),
+            ("signalsmith:\n  block_frames: null", false),
+        ] {
+            let signalsmith = SignalsmithConfig::builder()
+                .block_frames(NonZeroUsize::new(512).unwrap())
+                .interval_frames(NonZeroUsize::new(16).unwrap())
+                .build();
+            let mut backends = ElasticBackendConfig::builder()
+                .signalsmith(signalsmith)
+                .build();
+            backends.apply(serde_yaml_ng::from_str(document).unwrap());
+            assert_eq!(backends.signalsmith().block_frames(), None);
+            let result = ElasticConfig::builder()
+                .backends(backends)
+                .pools(pools())
+                .sample_rate(48_000)
+                .channels(2)
+                .max_source_frames(960)
+                .max_output_frames(480)
+                .build();
+            if valid {
+                let config = result.unwrap();
+                assert_eq!(config.values().backends.signalsmith.interval_frames, None);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ElasticError::EnginePreparation(
+                        "Signalsmith block and interval must be configured together"
+                    ))
+                ));
+            }
+        }
+    }
+
+    #[kithara::test]
     fn retained_values_report_effective_preparation_without_pool_ownership() {
         let config = ElasticConfig::builder()
             .pools(pools())

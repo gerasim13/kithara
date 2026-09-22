@@ -4800,6 +4800,7 @@ dependencies = [
  "futures",
  "kithara-config",
  "kithara-test-utils",
+ "thiserror 2.0.18",
  "uniffi",
  "wasm-bindgen-futures",
 ]
@@ -4875,6 +4876,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha4"
 dependencies = [
+ "humantime-serde",
  "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5730,7 +5732,6 @@ dependencies = [
 name = "kithara-stretch"
 version = "0.0.1-alpha4"
 dependencies = [
- "bon",
  "bungee-sys",
  "delegate",
  "derive_more",
@@ -5748,6 +5749,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "serde",
+ "serde_yaml_ng",
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",

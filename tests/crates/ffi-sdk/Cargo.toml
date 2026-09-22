@@ -13,9 +13,11 @@ single-threaded = ["uniffi/wasm-unstable-single-threaded"]
 
 [dependencies]
 futures = { workspace = true }
+thiserror = { workspace = true }
 uniffi = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+thiserror = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]

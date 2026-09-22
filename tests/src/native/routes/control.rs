@@ -1,5 +1,6 @@
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Request, State},
     http::StatusCode,
     middleware::Next,
@@ -7,6 +8,7 @@ use axum::{
     routing::post,
 };
 use base64::{Engine as _, prelude::BASE64_STANDARD};
+use futures::{StreamExt as _, stream};
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{Mp3Shape, assets::by_name, hls::long_plain};
 use serde::{Deserialize, Serialize};
@@ -164,7 +166,7 @@ async fn create_behavior(
     }
 }
 
-/// Reject every data route while the global network switch is offline.
+/// Reject data routes and further response chunks while the network is offline.
 ///
 /// `/control/*` remains reachable so callers can restore the network,
 /// `/health` remains available for process-level liveness checks, and
@@ -182,13 +184,91 @@ pub(crate) async fn network_guard(
     if !exempt && !state.network_online() {
         return (StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response();
     }
-    next.run(request).await
+    let response = next.run(request).await;
+    if exempt {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let chunks = stream::try_unfold(body.into_data_stream(), move |mut body| {
+        let state = Arc::clone(&state);
+        async move {
+            let Some(chunk) = body.next().await else {
+                return Ok(None);
+            };
+            if !state.network_online() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "network offline",
+                ));
+            }
+            chunk
+                .map(|bytes| Some((bytes, body)))
+                .map_err(std::io::Error::other)
+        }
+    });
+    Response::from_parts(parts, Body::from_stream(chunks))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{kithara, test_server_state::TestServerState};
+
+    #[kithara::test(tokio)]
+    #[case::data("/stream", false)]
+    #[case::health("/health", true)]
+    #[case::control("/control/network", true)]
+    #[case::store("/store/fixture", true)]
+    async fn network_outage_interrupts_an_admitted_body(
+        #[case] path: &'static str,
+        #[case] exempt: bool,
+    ) {
+        use axum::{body::Body, middleware, routing::get};
+        use bytes::Bytes;
+        use futures::{StreamExt, stream};
+        use tower::ServiceExt;
+
+        let state = TestServerState::new();
+        let app = Router::new()
+            .route(
+                path,
+                get(|| async {
+                    Body::from_stream(stream::iter([
+                        Ok::<_, std::io::Error>(Bytes::from_static(b"first")),
+                        Ok(Bytes::from_static(b"second")),
+                    ]))
+                }),
+            )
+            .layer(middleware::from_fn_with_state(
+                Arc::clone(&state),
+                network_guard,
+            ));
+        let response = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(
+            body.next().await.unwrap().unwrap(),
+            Bytes::from_static(b"first")
+        );
+        state.set_network_online(false);
+        let next = body.next().await.unwrap();
+        if exempt {
+            assert_eq!(next.unwrap(), Bytes::from_static(b"second"));
+        } else {
+            assert!(
+                next.is_err(),
+                "an outage must interrupt a response already in flight"
+            );
+        }
+        state.set_network_online(true);
+        assert!(
+            body.next().await.is_none(),
+            "reconnection must not revive an interrupted response"
+        );
+    }
 
     #[kithara::test]
     fn network_starts_online() {

@@ -26,7 +26,6 @@ kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 
-bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
@@ -59,6 +58,7 @@ signalsmith-stretch = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls"] }
+serde_yaml_ng = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

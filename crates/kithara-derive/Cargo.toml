@@ -42,6 +42,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }
+
+humantime-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml_ng = { workspace = true }
 
@@ -62,3 +64,7 @@ required-features = ["mirror"]
 [[test]]
 name = "vocabulary"
 required-features = ["enum-str", "variants"]
+
+[[test]]
+name = "patch"
+required-features = ["patch"]
