@@ -4784,6 +4784,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-config-uniffi-probe"
+version = "0.0.1-alpha4"
+dependencies = [
+ "futures",
+ "uniffi",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "kithara-core-test-fixtures"
 version = "0.0.1-alpha4"
 

@@ -28,11 +28,14 @@ wasm MODE="check" *ARGS:
       build)
         just _xtask wasm build "$@"
         ;;
+      sdk-build)
+        just _xtask wasm sdk-build "$@"
+        ;;
       size-check)
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|build|size-check); tests are `just test wasm`"
+        echo "unknown wasm mode: $mode (use check|build|size-check|sdk-build); tests are `just test wasm`"
         exit 2
         ;;
     esac

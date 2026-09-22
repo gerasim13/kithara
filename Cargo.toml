@@ -57,6 +57,7 @@ members = [
     "tests/crates/decode",
     "tests/crates/encode",
     "tests/crates/events",
+    "tests/crates/ffi-sdk",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",

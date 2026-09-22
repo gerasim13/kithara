@@ -484,5 +484,6 @@ rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests 
 
 # Generated UniFFI SDK contract; browser and workers share a 1 GiB RSS budget.
 [positional-arguments]
-sdk-web *ARGS:
-    just _xtask wasm sdk-test "$@"
+sdk-web BACKEND BROWSER:
+    just _xtask wasm sdk-build --backend "$1"
+    just _xtask wasm sdk-test --directory target/config-protocol/sdk --browser "$2"

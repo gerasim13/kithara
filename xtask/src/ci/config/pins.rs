@@ -34,6 +34,7 @@ pub(crate) struct CiPins {
     /// to the ABI it declares rather than to whatever the unversioned formula
     /// became overnight.
     pub(crate) brew_formulae: Vec<String>,
+    pub(crate) bun_version: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -75,6 +76,7 @@ pub(crate) struct CiPins {
     pub(crate) rustup_windows_sha256: String,
     pub(crate) sccache_s3_image: String,
     pub(crate) stable_toolchain: String,
+    pub(crate) uniffi_javascript_rev: String,
     pub(crate) windows_eval_iso_sha256: String,
     pub(crate) windows_eval_iso_url: String,
     /// Serialised last: TOML requires tables after plain values.
@@ -112,6 +114,8 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
+            ("bun_version", self.bun_version.as_str()),
+            ("uniffi_javascript_rev", self.uniffi_javascript_rev.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
