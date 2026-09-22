@@ -1,4 +1,48 @@
-use super::discover;
+use super::{discover, registrations};
+
+#[test]
+fn registrations_separate_retained_values_from_delegated_operations() {
+    let entries = registrations(
+        "crates/player/src/control.rs",
+        r#"
+        /// A retained recipe.
+        #[kithara_config::config(builder = false)]
+        struct EqConfig<S> {
+            /// Smoothing policy.
+            #[config(value)] smoothing: SmootherConfig,
+            #[config(skip = "injected pool")] pools: S,
+        }
+        impl<S> PlayerControl<S> {
+            /// Replace the live layout.
+            #[kithara_config::config(delegate = "eq_layout", sdk)]
+            fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), Error> { todo!() }
+        }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].package, "player");
+    assert_eq!(entries[0].module_path, "control");
+    assert_eq!(entries[0].kind, "retained");
+    assert_eq!(entries[0].fields[0].role, "value");
+    assert_eq!(entries[0].fields[1].role, "skip");
+    assert_eq!(
+        entries[0].fields[1].exclusion_reason.as_deref(),
+        Some("injected pool")
+    );
+    assert_eq!(entries[1].kind, "delegate");
+    assert_eq!(entries[1].owner, "PlayerControl < S >");
+    assert_eq!(entries[1].property.as_deref(), Some("eq_layout"));
+    assert_eq!(entries[1].hook.as_deref(), Some("set_eq_layout"));
+    assert!(entries[1].sdk);
+    assert_eq!(entries[1].fields[0].rust_type, "Vec < EqBandConfig >");
+    assert!(
+        entries[1]
+            .docs
+            .iter()
+            .any(|line| line.contains("live layout"))
+    );
+}
 
 #[test]
 fn schema_modules_and_patch_derives_do_not_require_config_suffixes() {

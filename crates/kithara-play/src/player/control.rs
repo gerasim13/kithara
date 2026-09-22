@@ -185,6 +185,7 @@ where
     }
 
     /// Replace the EQ band layout.
+    #[kithara_config::config(delegate = "eq_layout", sdk)]
     pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.set_eq_layout(layout))

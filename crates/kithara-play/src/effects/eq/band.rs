@@ -43,17 +43,21 @@ impl From<u8> for FilterKind {
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct EqBandConfig {
+    /// Filter response applied by this band.
     #[config(value)]
     #[builder(default)]
     #[field(get(copy))]
     kind: FilterKind,
+    /// Signed band gain in decibels.
     #[config(value)]
     #[builder(default)]
     #[field(get(copy))]
     gain_db: GainDb,
+    /// Center or cutoff frequency in hertz.
     #[config(value)]
     #[builder(default = Consts::DEFAULT_FREQ)]
     frequency: f32,
+    /// Dimensionless quality factor controlling filter bandwidth.
     #[config(value)]
     #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     q_factor: f32,

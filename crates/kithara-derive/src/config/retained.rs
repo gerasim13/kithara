@@ -16,11 +16,50 @@ pub(crate) fn expand(attributes: TokenStream, input: TokenStream) -> Result<Toke
             #[::kithara_config::__private::bon::builder(crate = ::kithara_config::__private::bon)]
             #item
         }),
+        Item::Fn(item) => delegated(attributes, &item),
         other => Err(syn::Error::new_spanned(
             other,
             "config requires a named struct, or a function/impl without options",
         )),
     }
+}
+
+fn delegated(options: TokenStream, item: &syn::ItemFn) -> Result<TokenStream> {
+    let mut property = None;
+    let mut sdk = false;
+    let mut seen: Vec<syn::Path> = Vec::new();
+    syn::meta::parser(|meta| {
+        if seen.contains(&meta.path) {
+            return Err(meta.error("duplicate config option"));
+        }
+        seen.push(meta.path.clone());
+        if meta.path.is_ident("delegate") {
+            let value: syn::LitStr = meta.value()?.parse()?;
+            if value.value().trim().is_empty() {
+                return Err(meta.error("delegated property name cannot be empty"));
+            }
+            property = Some(value);
+        } else if meta.path.is_ident("sdk") {
+            sdk = true;
+        } else {
+            return Err(meta.error("expected delegate = property or sdk"));
+        }
+        Ok(())
+    })
+    .parse2(options)?;
+    if property.is_none() {
+        return Err(syn::Error::new_spanned(
+            &item.sig.ident,
+            "config operation requires delegate = property",
+        ));
+    }
+    if !sdk {
+        return Err(syn::Error::new_spanned(
+            &item.sig.ident,
+            "delegated config operation requires explicit sdk exposure",
+        ));
+    }
+    Ok(quote!(#item))
 }
 
 fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
@@ -294,6 +333,42 @@ mod tests {
             )
             .expect_err("duplicate configuration options must be rejected");
             assert_eq!(error.to_string(), "duplicate config option");
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn delegated_operations_require_a_named_sdk_property() {
+        let expanded = expand(
+            quote!(delegate = "eq_layout", sdk),
+            quote! {
+                pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), Error> {
+                    self.runtime.set_eq_layout(layout)
+                }
+            },
+        )
+        .expect("valid delegated operation")
+        .to_string();
+        assert!(expanded.contains("fn set_eq_layout"));
+        assert!(!expanded.contains("delegate"));
+
+        for (options, expected) in [
+            (quote!(sdk), "config operation requires delegate = property"),
+            (
+                quote!(delegate = "eq_layout"),
+                "delegated config operation requires explicit sdk exposure",
+            ),
+        ] {
+            assert_eq!(
+                expand(
+                    options,
+                    quote!(
+                        fn update(&self) {}
+                    )
+                )
+                .expect_err("incomplete operation metadata must fail")
+                .to_string(),
+                expected
+            );
         }
     }
 
