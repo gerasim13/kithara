@@ -47,6 +47,35 @@ pub struct EngineImpl<S> {
     session: SessionHandle<S>,
 }
 
+#[cfg(test)]
+mod config_tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use kithara_config::Config as _;
+    use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
+
+    use super::*;
+    use crate::test_pools::{TestPools, pools};
+
+    #[kithara::test]
+    fn engine_retains_configuration_after_moving_live_eq_layout() {
+        let config: EngineConfig<TestPools> = EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("a grid identity"))
+            .pools(pools())
+            .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
+            .response_budget_frames(NonZeroUsize::new(448).expect("448 is not zero"))
+            .max_slots(3)
+            .build();
+        let engine = EngineImpl::new(config, EventBus::new(32));
+
+        assert_eq!(engine.config.values().sample_rate.get(), 48_000);
+        assert_eq!(engine.config.values().max_slots, 3);
+        assert_eq!(engine.eq_layout.lock().len(), 10);
+        assert!(engine.config.eq_layout.is_empty());
+    }
+}
+
 impl<S> EngineImpl<S> {
     /// Create a new engine with the given configuration.
     #[must_use]
