@@ -4878,6 +4878,7 @@ dependencies = [
  "glob",
  "proc-macro2",
  "quote",
+ "rayon",
  "regex",
  "roxmltree",
  "serde",

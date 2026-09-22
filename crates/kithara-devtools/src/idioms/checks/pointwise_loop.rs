@@ -3,10 +3,9 @@ use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::parse_file,
     suppress::Suppressions,
     violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+    walker::{compile_globs, matches_any, relative_to},
 };
 
 pub(crate) const ID: &str = "pointwise_loop";
@@ -22,15 +21,15 @@ impl Check for PointwiseLoop {
         let cfg = &ctx.config.thresholds.pointwise_loop;
         let exempt = compile_globs(&cfg.exempt_files);
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path);
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path);
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
-            let src = std::fs::read_to_string(&path)?;
+            let src = std::fs::read_to_string(path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             analyze_file(&rel_str, &file, &suppress, &mut violations);

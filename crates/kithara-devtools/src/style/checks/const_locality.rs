@@ -12,11 +12,7 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::{parse_file, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
-};
+use crate::common::{parse::self_ty_name, violation::Violation, walker::relative_to};
 
 pub(crate) const ID: &str = "const_locality";
 
@@ -33,14 +29,14 @@ impl Check for ConstLocality {
         // lets us ask "is this const referenced from another file of the same
         // crate?" — a cross-file use that single-file scanning cannot see.
         let mut files: Vec<ParsedFile> = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let crate_key = crate_key_for(ctx.workspace_root, &path);
+            let crate_key = crate_key_for(ctx.workspace_root, path);
             let mut names = HashSet::new();
             let mut collector = NameCollector { names: &mut names };
             collector.visit_file(&file);

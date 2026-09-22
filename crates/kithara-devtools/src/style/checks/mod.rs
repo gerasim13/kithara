@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::config::StyleConfig;
-use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
+use crate::common::{fix::FixOutcome, scan::Scan, scope::Scope, violation::Violation};
 
 pub(crate) mod comment_hygiene;
 pub(crate) mod const_locality;
@@ -26,11 +26,12 @@ pub(crate) mod trait_item_order;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
+    pub(crate) scan: &'a Scan,
     pub(crate) scope: &'a Scope,
     pub(crate) config: &'a StyleConfig,
 }
 
-pub(crate) trait Check {
+pub(crate) trait Check: Sync {
     /// Apply the check's autofix in place. Default: no autofix; the
     /// violation stays in the report and the user resolves it manually.
     /// Implementations must uphold the four invariants from

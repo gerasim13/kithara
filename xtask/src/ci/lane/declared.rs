@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
 use toml::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
@@ -86,8 +86,8 @@ pub(crate) fn run(
         }
         process.run_command(&mut command, &step.label)?;
     }
-    if !process.is_recording() {
-        publish_source_layer(process, tools, &kind);
+    if !process.is_recording() && lane.publishes_sources {
+        publish_source_layer(process, tools, &kind)?;
     }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
         let mc = process.resolve_program(tools.program("mc"))?;
@@ -104,30 +104,45 @@ fn kind_name(kind: PipelineKind) -> String {
 
 /// Put the dependency sources in place before the lane's first Cargo command.
 ///
-/// Every failure here is a warning, never a stop: the layer is an accelerator,
-/// and a lane that cannot reach the cache must still be able to fetch and run.
+/// A failed restore stays non-fatal: the layer is an accelerator, and a lane
+/// that cannot reach the cache must still be able to fetch and run. What it no
+/// longer does is report every outcome as the same warning. A lane whose
+/// `Cargo.lock` has no object yet is the ordinary case and says so; only a
+/// lane that could not ask warns.
 fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
     let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
         return;
     };
-    if let Err(error) = snapshot::restore_sources(process.root(), &cargo_home, &mc) {
-        warn!(%error, "could not restore the dependency sources");
+    match snapshot::restore_sources(process.root(), &cargo_home, &mc) {
+        Ok(snapshot::Restored::AlreadyPresent) => {
+            info!("the dependency sources for this lock file are already in place");
+        }
+        Ok(snapshot::Restored::Absent) => {
+            info!("no dependency source layer for this lock file yet; the lane will fetch");
+        }
+        Ok(snapshot::Restored::Layer(object)) => {
+            info!(%object, "restored the dependency sources");
+        }
+        Err(error) => warn!(%error, "could not restore the dependency sources"),
     }
 }
 
 /// Record what the lane ended up with, once its steps have fetched whatever
 /// the restored layer did not carry. The default branch is the only publisher
 /// because the trusted scope is the only one the bucket policy lets write.
-fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) {
+///
+/// This fails the lane. The defect this repairs is that it did not: the
+/// publish was refused on every run for weeks and the lane stayed green, so
+/// the layer read as a working cache that happened to always miss.
+fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> Result<()> {
     if kind != PipelineKind::Main.name() {
-        return;
+        return Ok(());
     }
     let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
-        return;
+        return Ok(());
     };
-    if let Err(error) = snapshot::publish_sources(process.root(), &cargo_home, &mc) {
-        warn!(%error, "could not publish the dependency sources");
-    }
+    snapshot::publish_sources(process.root(), &cargo_home, &mc)
+        .context("publish the dependency sources")
 }
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {

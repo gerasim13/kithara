@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -6,7 +6,7 @@ use super::{Check, Context};
 use crate::{
     common::{
         violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_text_files_scoped},
+        walker::{compile_globs, matches_any, relative_to},
     },
     style::config::DocSizeConfig,
 };
@@ -23,11 +23,11 @@ impl Check for DocSize {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.doc_size;
         let mut violations = Vec::new();
-        for path in workspace_text_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.text_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             violations.extend(scan_content(cfg, &rel, &src));

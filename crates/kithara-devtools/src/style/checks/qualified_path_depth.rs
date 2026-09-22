@@ -19,9 +19,8 @@ use super::{Check, Context};
 use crate::{
     common::{
         fix::{FixOutcome, SourceRewriter},
-        parse::parse_file,
         violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+        walker::{compile_globs, matches_any, relative_to},
     },
     style::config::QualifiedPathDepthConfig,
 };
@@ -34,12 +33,12 @@ impl Check for QualifiedPathDepth {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.qualified_path_depth;
         let mut outcome = FixOutcome::default();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative(ctx.workspace_root, &path);
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let rel = relative(ctx.workspace_root, path);
             if !cfg.covers(&rel) {
                 continue;
             }
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let rewrite =
@@ -50,7 +49,7 @@ impl Check for QualifiedPathDepth {
             let Some(rewritten) = rewrite.source else {
                 continue;
             };
-            fs::write(&path, rewritten)?;
+            fs::write(path, rewritten)?;
             outcome.writes += 1;
             outcome.changes.push(rel);
         }
@@ -64,12 +63,12 @@ impl Check for QualifiedPathDepth {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.qualified_path_depth;
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative(ctx.workspace_root, &path);
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let rel = relative(ctx.workspace_root, path);
             if !cfg.covers(&rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
             let mut visitor = PathVisitor::default();
@@ -1267,8 +1266,8 @@ mod tests {
         visitor
             .found
             .iter()
-            .filter(|found| !found.gated && is_deep(&cfg, &found.path))
-            .map(|found| print_path(&found.path))
+            .filter(|found| !found.gated && is_deep(&cfg, found.path))
+            .map(|found| print_path(found.path))
             .collect()
     }
 
