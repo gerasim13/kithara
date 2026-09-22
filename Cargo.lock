@@ -5922,6 +5922,7 @@ dependencies = [
  "firewheel-core",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
