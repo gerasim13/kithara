@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_signal::SessionFrame;
 use num_traits::cast::ToPrimitive;
 
 /// An invalid session coordinate or coordinate rate.
@@ -38,18 +39,6 @@ impl TryFrom<f64> for SessionBeat {
 
     fn try_from(value: f64) -> Result<Self, Self::Error> {
         Self::new(value)
-    }
-}
-
-/// A frame on the session clock, counted from the master ring's origin.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Into)]
-#[repr(transparent)]
-pub struct SessionFrame(i64);
-
-impl SessionFrame {
-    #[must_use]
-    pub const fn new(value: i64) -> Self {
-        Self(value)
     }
 }
 
@@ -144,9 +133,10 @@ impl SessionAnchor {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_signal::SessionFrame;
     use kithara_test_utils::kithara;
 
-    use super::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
+    use super::{CoordinateError, SessionAnchor, SessionBeat};
 
     struct Consts;
 

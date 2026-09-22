@@ -4,10 +4,9 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
-    event::ProcEvents,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
 use kithara_events::EventBus;
@@ -351,17 +350,17 @@ impl AudioNode for PanickingNode {
         &self,
         _configuration: &Self::Configuration,
         _cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        PanickingProcessor
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
+        Ok(PanickingProcessor)
     }
 
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _configuration: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("ring_panicking")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
-            })
+            }))
     }
 }
 
@@ -372,7 +371,6 @@ impl AudioNodeProcessor for PanickingProcessor {
         &mut self,
         _info: &ProcInfo,
         _buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
         panic!("ring fixture panic")

@@ -18,6 +18,16 @@ on:
         description: Name of the declared CI lane to run.
         required: true
         type: string
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Empty on every
+          ordinary run: the store is keyed by name, so a format change leaves
+          entries that still answer to their name and only a deliberate run
+          replaces them. Dispatch the pipeline once with this set, and leave
+          it unset afterwards.
+        default: ''
+        type: string
       kind:
         description: Pipeline kind the lane runs under, for `xtask ci lane --kind`.
         required: true
@@ -72,6 +82,9 @@ env:
   # called workflow inherits nothing from its caller, so every workflow that
   # runs a lane on that fleet says it for itself.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
+  # What this run produces again rather than reads from the store; empty unless
+  # the pipeline was dispatched to refill it.
+  KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
   # Bootstrap xtask beside the runner's persistent Cargo target. Without this,
   # every fresh Actions checkout recompiles xtask before the lane can start.
   KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci

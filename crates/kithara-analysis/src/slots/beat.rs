@@ -1,8 +1,9 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
+use rangemap::RangeSet;
 use tracing::warn;
 
 use super::{Intake, Opens};
@@ -11,7 +12,6 @@ use crate::{
     BeatArtifact, BlobError,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
     beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
-    coverage::{Coverage, FrameRange},
     progress::BeatResume,
 };
 
@@ -131,7 +131,7 @@ where
         }
     }
 
-    pub(crate) fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
+    pub(crate) fn coverage<'a>(&'a self, seen: &'a RangeSet<u64>) -> &'a RangeSet<u64> {
         self.0.as_ref().map_or(seen, BeatPass::coverage)
     }
 
@@ -196,7 +196,7 @@ where
         detector: Option<&mut Detector>,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    ) -> Option<(BeatArtifact, Vec<Range<u64>>)>
     where
         S: HasPool<f32>,
     {

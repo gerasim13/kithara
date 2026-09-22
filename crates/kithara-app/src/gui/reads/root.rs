@@ -260,10 +260,10 @@ mod tests {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         fixture.decks[0]
             .0
-            .set_analysis(Some(covered(&[(0, 200), (400, 1_000)], Some(1_000))));
+            .set_analysis(Some(covered(&[(0, 200), (400, 1_000)], Some(1_000)).into()));
         fixture.decks[1]
             .0
-            .set_analysis(Some(covered(&[(0, 1_000)], Some(1_000))));
+            .set_analysis(Some(covered(&[(0, 1_000)], Some(1_000)).into()));
         let root = fixture.root();
         let walk = Walk::new(&root);
 

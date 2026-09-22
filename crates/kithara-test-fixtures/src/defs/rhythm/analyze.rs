@@ -7,7 +7,8 @@ use std::{
 
 use futures_lite::future::block_on;
 use kithara_analysis::{
-    AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatArtifact,
+    AnalysisDemand, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
+    BeatArtifact,
 };
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
@@ -64,6 +65,7 @@ fn analyze(reader: PcmReader) -> (BeatArtifact, u64) {
         AnalysisToken::from("rhythm-fixture"),
         rate,
         0,
+        AnalysisDemand::ALL,
     );
     let progress = block_on(async {
         while results.changed().await.is_ok() {}

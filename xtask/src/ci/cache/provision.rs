@@ -170,12 +170,15 @@ fn policy(scope: &str, bucket: &str) -> serde_json::Value {
                 "Effect": "Allow",
                 "Action": ["s3:ListBucket"],
                 "Resource": [format!("arn:aws:s3:::{trusted}")],
-                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*"]}}
+                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*", "source-snapshots/*"]}}
             }),
             json!({
                 "Effect": "Allow",
                 "Action": ["s3:GetObject"],
-                "Resource": [format!("arn:aws:s3:::{trusted}/target-snapshots/*")]
+                "Resource": [
+                    format!("arn:aws:s3:::{trusted}/target-snapshots/*"),
+                    format!("arn:aws:s3:::{trusted}/source-snapshots/*")
+                ]
             }),
         ]);
     }
@@ -250,6 +253,19 @@ b",
 
         let trusted = policy("trusted", "kithara-trusted").to_string();
         assert!(!trusted.contains("target-snapshots/*"));
+    }
+
+    /// The source layer is published by the default branch and read by every
+    /// branch. Without this grant a review job asks the trusted bucket for the
+    /// layer, is refused, and fetches every dependency from the internet.
+    #[test]
+    fn untrusted_scopes_read_but_never_write_the_trusted_source_layer() {
+        let review = policy("review", "kithara-review").to_string();
+        assert!(review.contains("kithara-trusted/source-snapshots/*"));
+        assert!(!review.contains(r#"["s3:PutObject"],"Resource":["arn:aws:s3:::kithara-trusted"#));
+
+        let trusted = policy("trusted", "kithara-trusted").to_string();
+        assert!(!trusted.contains("source-snapshots/*"));
     }
 
     #[test]

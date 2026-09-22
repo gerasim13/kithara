@@ -3,7 +3,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisProducer, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
+    analysis::{
+        AnalysisDemand, AnalysisProducer, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
+    },
     audio::AudioObserveError,
     platform::CancelToken,
     resampler::NoResamplerBackend,
@@ -44,8 +46,13 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
         .cancel(cancel)
         .build(),
     );
-    let (_analysis, mut producer) =
-        worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate, 0);
+    let (_analysis, mut producer) = worker.analyze(
+        stalled_reader(spec(rate)),
+        "rt-track".into(),
+        rate,
+        0,
+        AnalysisDemand::ALL,
+    );
 
     // Allocated before the realtime region opens, the way a decoded chunk is.
     let pcm = &quarter[..SAMPLES];

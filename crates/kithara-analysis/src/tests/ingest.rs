@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     BeatAnalysisConfig,
-    analyzer::{Extent, Ingest},
+    analyzer::{AnalysisDemand, Extent, Ingest},
     beat::GridParams,
     test_pools::{Pools, TestPools, pools},
 };
@@ -36,7 +36,12 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has(analysis_pcm:
     let mut detector = builder.take_detector();
     let mut extent = Extent::default();
     let mut pass = builder
-        .build(spec().sample_rate, "ingest-harness".into(), 0)
+        .build(
+            spec().sample_rate,
+            "ingest-harness".into(),
+            0,
+            AnalysisDemand::ALL,
+        )
         .expect("analysis buffers fit the test region");
 
     // Offering a range twice tells the outcomes apart, since the second offer

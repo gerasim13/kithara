@@ -4,6 +4,7 @@ use kithara_platform::time::Duration;
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_utils::kithara;
+use rangemap::RangeSet;
 
 use super::{
     AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate,
@@ -12,8 +13,7 @@ use super::{
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 use crate::test_pools::pools;
 use crate::{
-    AnalysisFingerprint, AnalysisProgress, Coverage, FrameRange, TrackAnalysis, blob::Writer,
-    progress::AnalysisResume,
+    AnalysisFingerprint, AnalysisProgress, TrackAnalysis, blob::Writer, progress::AnalysisResume,
 };
 
 const EXTENT: u64 = 64;
@@ -65,9 +65,9 @@ fn analysis_with(
     ranges: &[(u64, u64)],
     settled: bool,
 ) -> TrackAnalysis {
-    let mut coverage = Coverage::default();
+    let mut coverage = RangeSet::new();
     for &(start, frames) in ranges {
-        coverage.insert(FrameRange::new(start, frames));
+        coverage.insert(start..start + frames);
     }
     TrackAnalysis::builder()
         .token("archive:test".into())
@@ -203,8 +203,12 @@ fn partial_unsettled_snapshot_round_trips() {
     assert!(!file.latest().analysis().is_settled());
     assert!(file.latest().is_resumable());
     assert_eq!(
-        file.latest().analysis().coverage().runs(),
-        &[FrameRange::new(0, CHUNK_FRAMES)]
+        file.latest()
+            .analysis()
+            .coverage()
+            .iter()
+            .collect::<Vec<_>>(),
+        [&(0..CHUNK_FRAMES)]
     );
     assert_eq!(&bytes[HEADER_LEN..HEADER_LEN + 4], &[1, 0, 0, 0]);
 }
@@ -314,8 +318,13 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
     assert!(restored.latest().analysis().is_settled());
     assert!(!restored.latest().is_resumable());
     assert_eq!(
-        restored.latest().analysis().coverage().runs(),
-        &[FrameRange::new(0, EXTENT)]
+        restored
+            .latest()
+            .analysis()
+            .coverage()
+            .iter()
+            .collect::<Vec<_>>(),
+        [&(0..EXTENT)]
     );
     assert_eq!(&bytes[HEADER_LEN..HEADER_LEN + 4], &[1, 1, 1, 1]);
 }

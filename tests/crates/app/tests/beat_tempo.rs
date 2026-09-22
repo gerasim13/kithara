@@ -6,7 +6,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{BeatAnalysisConfig, BeatArtifact},
+    analysis::{AnalysisDemand, BeatAnalysisConfig, BeatArtifact},
     assets::StorageBackend,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
@@ -80,7 +80,14 @@ async fn analyse(path: &str) -> TrackAnalysis {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut rx = runner.analyze(config, "integration-track".into(), RATE, 0, drop);
+    let mut rx = runner.analyze(
+        config,
+        "integration-track".into(),
+        RATE,
+        0,
+        AnalysisDemand::ALL,
+        drop,
+    );
 
     // The runner emits the envelope before the beat grid.
     let mut last = None;

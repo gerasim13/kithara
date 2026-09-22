@@ -428,6 +428,100 @@ async fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
     assert_eq!(node.tick(), TickResult::UpstreamPending);
 }
 
+/// A producer that parked upstream with audio behind it opens the preload
+/// latch. The chunk count reachable before the demuxer reads past the
+/// delivered segment is not a property the pipeline controls, so a latch that
+/// only counts chunks leaves resource construction waiting on a fetch that may
+/// not land. The quota here is two against one emitted chunk, so the count
+/// cannot be what opens it.
+#[kithara::test(tokio)]
+#[case(WaitingReason::Waiting)]
+#[case(WaitingReason::WaitingDemand)]
+#[case(WaitingReason::WaitingMetadata)]
+async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(
+    #[case] reason: WaitingReason,
+) {
+    let pools = pools();
+    let source = Unimock::new((
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Blocked(reason)),
+    ));
+
+    let (mut node, _audio) = prepared_node(source, 4, 2).await;
+    let gate = Arc::clone(&node.preload_gate);
+
+    let _ = node.tick();
+    assert!(
+        !gate.is_ready(),
+        "the chunk quota is not met after one chunk"
+    );
+
+    let _ = node.tick();
+
+    assert!(
+        gate.is_ready(),
+        "a producer parked on {reason:?} with audio behind it must not strand the construction wait"
+    );
+}
+
+/// A park with nothing emitted leaves the latch shut.
+///
+/// The park states that the delivered bytes are spent, which releases
+/// construction only when they yielded something. With no chunk behind it the
+/// statement is vacuous, and opening on it starts playback against a ring that
+/// holds no audio, where the playhead cannot advance past whatever the first
+/// fetch happened to deliver.
+#[kithara::test(tokio)]
+#[case(WaitingReason::Waiting)]
+#[case(WaitingReason::WaitingDemand)]
+#[case(WaitingReason::WaitingMetadata)]
+async fn decoder_node_park_without_audio_keeps_the_preload_gate_shut(
+    #[case] reason: WaitingReason,
+) {
+    let source = Unimock::new(
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Blocked(reason)),
+    );
+
+    let (mut node, _audio) = prepared_node(source, 2, 1).await;
+    let gate = Arc::clone(&node.preload_gate);
+
+    let _ = node.tick();
+
+    assert!(
+        !gate.is_ready(),
+        "a park on {reason:?} with nothing emitted is not preload"
+    );
+}
+
+/// The park opener does not weaken the count opener: a producer that keeps
+/// delivering never reaches a park, so the latch still waits for the full
+/// chunk quota.
+#[kithara::test(tokio)]
+async fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
+    let pools = pools();
+    let source = Unimock::new(
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
+    );
+
+    let (mut node, _audio) = prepared_node(source, 4, 2).await;
+    let gate = Arc::clone(&node.preload_gate);
+
+    let _ = node.tick();
+
+    assert!(
+        !gate.is_ready(),
+        "one chunk of a two-chunk quota is not preload"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn decoder_node_seek_rearms_preload_gate() {
     let pools = pools();

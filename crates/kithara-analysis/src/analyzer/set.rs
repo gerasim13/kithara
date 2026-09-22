@@ -2,15 +2,16 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_resampler::ResamplerBackend;
+use rangemap::RangeSet;
 
 use super::{
-    AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig, session::TrackAnalyzers,
+    AnalysisDemand, AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig,
+    session::TrackAnalyzers,
 };
 use crate::{
     AnalysisProgress, BlobError,
-    coverage::Coverage,
     slots::{
-        beat::{self, Config},
+        beat::{self, Config, Slot},
         waveform,
     },
 };
@@ -23,7 +24,9 @@ where
     B: ResamplerBackend,
 {
     beat: Config<B>,
-    waveform: waveform::Config,
+    /// The bucket ceiling a waveform is asked to fill, when one is wanted at
+    /// all. No waveform configured means no waveform slot is ever built.
+    waveform: Option<usize>,
     beat_config: Option<BeatAnalysisConfig<B>>,
     #[field(get, vis = "pub(crate)")]
     pools: PoolRegion<S>,
@@ -40,10 +43,7 @@ where
         Self {
             pools,
             beat: Config::default(),
-            #[cfg(feature = "analysis-waveform")]
-            waveform: waveform::Config::default(),
-            #[cfg(not(feature = "analysis-waveform"))]
-            waveform: waveform::Config,
+            waveform: None,
             beat_config: None,
         }
     }
@@ -53,14 +53,22 @@ where
         rate: NonZeroU32,
         token: AnalysisToken,
         revision: u64,
+        demand: AnalysisDemand,
     ) -> Result<TrackAnalyzers<B, S>, PoolError> {
         Ok(TrackAnalyzers {
             revision,
             token,
-            beat: self.beat.build(rate, &self.pools),
-            waveform: waveform::Slot::try_from((&self.waveform, rate, &self.pools))?,
-            coverage: Coverage::default(),
-            fingerprint: self.fingerprint(),
+            beat: if demand.beat() {
+                self.beat.build(rate, &self.pools)
+            } else {
+                Slot::default()
+            },
+            waveform: match self.waveform.filter(|_| demand.waveform()) {
+                Some(buckets) => waveform::Slot::try_from((buckets, rate, &self.pools))?,
+                None => waveform::Slot::default(),
+            },
+            coverage: RangeSet::new(),
+            fingerprint: self.fingerprint_for(demand),
             settled: false,
             source_sample_rate: rate,
             pools: self.pools.clone(),
@@ -72,18 +80,34 @@ where
     /// results.
     #[must_use]
     pub fn fingerprint(&self) -> AnalysisFingerprint {
+        self.fingerprint_for(AnalysisDemand::ALL)
+    }
+
+    /// What a pass opened for `demand` produces. A narrowed pass carries a
+    /// narrowed fingerprint, so its result is never read as a full one.
+    #[must_use]
+    pub fn fingerprint_for(&self, demand: AnalysisDemand) -> AnalysisFingerprint {
         AnalysisFingerprint::new(
-            self.beat_config
-                .as_ref()
-                .and_then(BeatAnalysisConfig::cache_tag)
+            demand
+                .beat()
+                .then(|| {
+                    self.beat_config
+                        .as_ref()
+                        .and_then(BeatAnalysisConfig::cache_tag)
+                })
+                .flatten()
                 .as_deref(),
-            waveform::cache_tag(self.waveform).as_deref(),
+            demand
+                .waveform()
+                .then(|| waveform::cache_tag(self.waveform))
+                .flatten()
+                .as_deref(),
         )
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        waveform::config_is_empty(self.waveform) && self.beat.is_empty()
+        self.waveform.is_none() && self.beat.is_empty()
     }
 
     pub(crate) fn restore(
@@ -101,6 +125,7 @@ where
                 analysis.source_sample_rate(),
                 analysis.token().clone(),
                 analysis.revision(),
+                AnalysisDemand::ALL,
             )
             .map_err(|_| BlobError::Corrupt)?;
         analyzers.restore(analysis, resume, chunk_frames)?;
@@ -108,10 +133,7 @@ where
     }
 
     pub(crate) fn resume_shape(&self) -> (bool, bool) {
-        (
-            !waveform::config_is_empty(self.waveform),
-            !self.beat.is_empty(),
-        )
+        (self.waveform.is_some(), !self.beat.is_empty())
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
@@ -165,7 +187,7 @@ where
     #[cfg(feature = "analysis-waveform")]
     pub const fn with_waveform(self, buckets: usize) -> Self {
         let mut builder = self;
-        waveform::with_buckets(&mut builder.waveform, buckets);
+        builder.waveform = Some(buckets);
         builder
     }
 }
@@ -181,22 +203,23 @@ mod tests {
 
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
-    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCoverage};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
         super::{
+            demand::AnalysisDemand,
             extent::Extent,
             session::{Ingest, TrackAnalyzers},
         },
         AnalyzerBuilder,
     };
     use crate::{
-        BeatState,
+        BeatGridModel, BeatGridState, BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
-        coverage::FrameRange,
         test_pools::{Pools, TestPools, pools, sample_buffer},
     };
 
@@ -221,10 +244,12 @@ mod tests {
     }
 
     fn beat_detector() -> Box<dyn BeatDetector> {
-        let raw = RawBeats {
-            beats: Vec::<BeatMark>::new(),
-            downbeats: (0..9u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
-        };
+        let raw = RawBeats::new(
+            Vec::<BeatMark>::new(),
+            (0..9u8)
+                .map(|n| BeatMark::new(f32::from(n) * 2.0, 0.9))
+                .collect(),
+        );
         let mock = Unimock::new(
             BeatDetectorMock
                 .next_call(matching!(_))
@@ -239,7 +264,7 @@ mod tests {
     ) -> TrackAnalyzers<NoResamplerBackend, TestPools> {
         AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
             .with_waveform(buckets)
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region")
     }
 
@@ -266,7 +291,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -335,7 +360,7 @@ mod tests {
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(axis, "track-a".into(), 0)
+            .build(axis, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
 
         assert_eq!(
@@ -379,7 +404,7 @@ mod tests {
 
         assert_eq!(
             analyzers.snapshot(None, false, None).missing(),
-            vec![FrameRange::new(8192, 8192)],
+            vec![8192..8192 + 8192],
             "the hole is known to exist because something landed past it"
         );
 
@@ -415,9 +440,8 @@ mod tests {
         assert!(
             snapshot
                 .coverage()
-                .runs()
                 .iter()
-                .all(|run| run.end() <= snapshot.source_frames()),
+                .all(|run| run.end <= snapshot.source_frames()),
             "no covered frame may sit past the denominator it is divided by"
         );
     }
@@ -472,7 +496,7 @@ mod tests {
         let pools = pools();
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into(), 3)
+            .build(spec().sample_rate, "track-a".into(), 3, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -488,11 +512,11 @@ mod tests {
         let pools = pools();
         let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         let mut second = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-b".into(), 0)
+            .build(spec().sample_rate, "track-b".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         first.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -521,7 +545,7 @@ mod tests {
             AnalyzerBuilder::<RubatoBackend, _>::new(pools())
                 .with_waveform(buckets)
                 .with_beat()
-                .build(spec().sample_rate, "track-a".into(), 0)
+                .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
                 .expect("analysis buffers fit the test region")
                 .snapshot(None, false, None)
                 .fingerprint()
@@ -552,7 +576,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into(), 0)
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         analyzers.push(
             &chunk(&pools, &analysis_silence, 8192, 0),
@@ -590,5 +614,110 @@ mod tests {
             "the pass settled over a covered extent, so the grid is final"
         );
         assert_eq!(ended.coverage().frames(), ended.extent().unwrap_or(0));
+    }
+
+    /// Chunks of source the pass reads before it is asked for a grid: enough
+    /// to cover the markers the steady detector states.
+    const COVERED_CHUNKS: u32 = 24;
+
+    /// A detector that hears a beat every half second, whatever it is handed:
+    /// the pass, not the hearing, is what this test is about.
+    fn steady_detector() -> Box<dyn BeatDetector> {
+        let raw = RawBeats::new(
+            (0..8u8)
+                .map(|n| BeatMark::new(f32::from(n) * 0.5, 0.9))
+                .collect(),
+            (0..2u8)
+                .map(|n| BeatMark::new(f32::from(n) * 2.0, 0.9))
+                .collect(),
+        );
+        Box::new(Unimock::new(
+            BeatDetectorMock
+                .each_call(matching!(_))
+                .answers_arc(Arc::new(move |_, _| Ok(raw.clone())))
+                .at_least_times(1),
+        ))
+    }
+
+    /// Every publication of a real pass states the shared grid, and it states
+    /// it in media seconds on the source axis rather than in the frames the
+    /// artifact keeps. The same pass run on a server writes these documents;
+    /// a client that cannot run a detector reads them back unchanged, which is
+    /// what the round trip at the end stands for.
+    #[kithara::test(native, flash(false))]
+    fn every_publication_of_a_pass_states_the_grid_it_found(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
+            .with_waveform(8)
+            .with_beat_detector(steady_detector(), GridParams::default());
+        let mut detector = builder.take_detector();
+        let mut analyzers = builder
+            .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
+            .expect("analysis buffers fit the test region");
+        // Four seconds of source, so the markers the detector states all fall
+        // inside what the pass has actually covered.
+        let mut extent = Extent::default();
+        for index in 0..COVERED_CHUNKS {
+            let at = u64::from(index) * 8192;
+            analyzers.push(
+                &chunk(&pools, &analysis_silence, 8192, at),
+                &mut extent,
+                detector.as_mut(),
+            );
+        }
+        let covered = u64::from(COVERED_CHUNKS) * 8192;
+
+        let early = analyzers.snapshot(detector.as_mut(), true, None);
+        let provisional = early.grid().expect("the pass states what it heard");
+        assert_eq!(provisional.as_raw().state, BeatGridState::Provisional);
+        assert!(
+            provisional.as_raw().duration.is_none(),
+            "an unknown length is absent rather than zero"
+        );
+        assert!(
+            (provisional.as_raw().bpm - 120.0).abs() < 1e-6,
+            "half-second beats are 120 bpm, got {}",
+            provisional.as_raw().bpm
+        );
+        let seconds: Vec<f64> = provisional
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.at)
+            .collect();
+        assert!(
+            seconds
+                .iter()
+                .enumerate()
+                .all(|(index, at)| (at - 0.5 * index.to_f64().unwrap_or(f64::NAN)).abs() < 1e-9),
+            "the markers stand on the source axis in media seconds: {seconds:?}"
+        );
+        assert_eq!(
+            provisional
+                .as_raw()
+                .beats
+                .iter()
+                .map(|beat| beat.ordinal)
+                .collect::<Vec<_>>(),
+            (0..seconds.len().to_i64().unwrap_or(0)).collect::<Vec<_>>(),
+            "the ordinals are the beats the music names, not array positions"
+        );
+
+        analyzers.settle();
+        let ended = analyzers.snapshot(detector.as_mut(), true, Some(covered));
+        let settled = ended.grid().expect("the settled pass states its grid");
+        assert_eq!(settled.as_raw().state, BeatGridState::Final);
+        assert!(
+            settled.as_raw().revision > provisional.as_raw().revision,
+            "a later publication carries a later revision"
+        );
+
+        let document = serde_json::to_string(settled).expect("a grid serializes");
+        let read_back: BeatGridModel =
+            serde_json::from_str(&document).expect("a client reads the stored grid");
+        assert_eq!(
+            &read_back, settled,
+            "what a server stores is what a client without an analyzer gets back"
+        );
     }
 }

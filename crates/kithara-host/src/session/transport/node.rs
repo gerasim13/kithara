@@ -1,16 +1,16 @@
 use firewheel::{
-    FirewheelCtx,
-    backend::AudioBackend,
+    FirewheelContext,
     clock::{EventInstant, InstantSamples},
     event::{NodeEventType, ProcEvents},
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
+use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::{RenderContext, SessionFrame};
+use kithara_warp::RenderContext;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -19,13 +19,13 @@ use super::{
     },
     process::{
         TransportCommitState, TransportFrame, TransportObservationInput, process_transport,
-        restart_transport,
+        restart_transport, stage_transport_events,
     },
 };
 use crate::api::TransportRevision;
 
-pub(crate) fn install<B: AudioBackend>(
-    ctx: &mut FirewheelCtx<B>,
+pub(crate) fn install(
+    ctx: &mut FirewheelContext,
     session_grid: SessionGridGeneration,
 ) -> Result<TransportControl, &'static str> {
     let initial = TransportObservation::new(None, None, session_grid);
@@ -40,7 +40,9 @@ pub(crate) fn install<B: AudioBackend>(
     store
         .insert(TransportObservationInput::new(observation_input))
         .map_err(|_| "session transport observation store slot already exists")?;
-    let node_id = ctx.add_node(SessionTransportNode, None);
+    let node_id = ctx
+        .add_node(SessionTransportNode, None)
+        .map_err(|_| "session transport node was rejected by the audio graph")?;
     Ok(TransportControl::new(node_id, observation_output))
 }
 
@@ -58,22 +60,14 @@ impl TransportControl {
         }
     }
 
-    pub(crate) fn queue_abort<B: AudioBackend>(
-        &self,
-        ctx: &mut FirewheelCtx<B>,
-        revision: TransportRevision,
-    ) {
+    pub(crate) fn queue_abort(&self, ctx: &mut FirewheelContext, revision: TransportRevision) {
         ctx.queue_event_for(
             self.node_id,
             NodeEventType::custom(TransportCommitEvent::Abort(revision)),
         );
     }
 
-    pub(crate) fn queue_stamp<B: AudioBackend>(
-        &self,
-        ctx: &mut FirewheelCtx<B>,
-        stamp: TransportCommitStamp,
-    ) {
+    pub(crate) fn queue_stamp(&self, ctx: &mut FirewheelContext, stamp: TransportCommitStamp) {
         ctx.queue_event_for(
             self.node_id,
             NodeEventType::custom(TransportCommitEvent::Stage(stamp)),
@@ -81,7 +75,7 @@ impl TransportControl {
         ctx.schedule_event_for(
             self.node_id,
             NodeEventType::custom(TransportCommitEvent::Apply(stamp.revision())),
-            Some(EventInstant::Samples(InstantSamples(i64::from(
+            Some(EventInstant::AtClockSamples(InstantSamples(i64::from(
                 stamp.target_frame(),
             )))),
         );
@@ -105,14 +99,14 @@ impl AudioNode for SessionTransportNode {
         &self,
         _configuration: &Self::Configuration,
         _cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        SessionTransportProcessor
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
+        Ok(SessionTransportProcessor)
     }
 
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _configuration: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("SessionTransport")
-            .is_pre_process()
+            .is_pre_process())
     }
 }
 
@@ -120,14 +114,20 @@ pub(crate) struct SessionTransportProcessor;
 
 impl AudioNodeProcessor for SessionTransportProcessor {
     #[kithara::rtsan_forbid_blocking]
+    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, extra: &mut ProcExtra) {
+        if let Err(error) = stage_transport_events(events, &mut extra.store) {
+            let _ = extra.logger.try_error(error.message());
+        }
+    }
+
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,
         _buffers: ProcBuffers,
-        events: &mut ProcEvents,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let processed = process_transport(info, events, &mut extra.store);
+        let processed = process_transport(info, &mut extra.store);
         let context = processed
             .as_ref()
             .ok()
@@ -162,11 +162,11 @@ impl AudioNodeProcessor for SessionTransportProcessor {
 
 fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
     let output_frames = info.clock_samples_range();
-    RenderContext::new(
+    let output = OutputContext::new(
         SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
         info.sample_rate,
-        transport.session_beats.clone(),
         transport.session_epoch,
         transport.transport_revision,
-    )
+    )?;
+    RenderContext::new(output, transport.session_beats.clone())
 }

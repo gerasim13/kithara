@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use firewheel::{
-    dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
+    dsp::filter::smoothing_filter::DEFAULT_SETTLE_RATIO, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_platform::CancelToken;
@@ -15,7 +15,7 @@ use crate::{
 
 pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.005,
-    settle_epsilon: DEFAULT_SETTLE_EPSILON,
+    settle_ratio: DEFAULT_SETTLE_RATIO,
 };
 
 /// Configuration for the audio engine.

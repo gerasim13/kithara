@@ -1,10 +1,7 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_waveform::WaveformResume;
 
-use crate::{
-    BlobError,
-    progress::WaveformResume,
-    waveform::{AnalysisParams, WaveformAnalyzer, bucket::Waveform},
-};
+use crate::{AnalysisParams, BlobError, Waveform, WaveformAnalyzer};
 
 pub(crate) struct WaveformPass {
     inner: WaveformAnalyzer,

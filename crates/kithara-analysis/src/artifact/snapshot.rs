@@ -1,6 +1,8 @@
+use std::ops::Range;
+
 use num_traits::cast::ToPrimitive;
 
-use crate::{BeatArtifact, coverage::FrameRange};
+use crate::BeatArtifact;
 
 /// Whether a beat artifact can still change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,12 +19,12 @@ pub struct BeatSnapshot {
     artifact: BeatArtifact,
     state: BeatState,
     confidence: Option<f32>,
-    unanalysed: Vec<FrameRange>,
+    unanalysed: Vec<Range<u64>>,
 }
 
 impl BeatSnapshot {
     #[must_use]
-    pub fn new(artifact: BeatArtifact, state: BeatState, unanalysed: Vec<FrameRange>) -> Self {
+    pub fn new(artifact: BeatArtifact, state: BeatState, unanalysed: Vec<Range<u64>>) -> Self {
         Self {
             confidence: artifact_confidence(&artifact),
             artifact,
@@ -52,7 +54,7 @@ impl BeatSnapshot {
     /// Source ranges the pass could not analyse, so the artifact claims nothing
     /// about them.
     #[must_use]
-    pub fn unanalysed(&self) -> &[FrameRange] {
+    pub fn unanalysed(&self) -> &[Range<u64>] {
         &self.unanalysed
     }
 }

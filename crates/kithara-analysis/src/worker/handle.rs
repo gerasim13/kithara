@@ -17,7 +17,7 @@ use tracing::warn;
 use super::{AnalysisNode, AnalysisObserver, AnalysisWorkerConfig, Job};
 use crate::{
     AnalysisFileError, AnalysisProgress,
-    analyzer::{AnalysisFingerprint, AnalysisToken},
+    analyzer::{AnalysisDemand, AnalysisFingerprint, AnalysisToken},
     producer::{AnalysisProducer, ring},
 };
 
@@ -48,6 +48,7 @@ struct ActiveTask {
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
     token: AnalysisToken,
+    demand: AnalysisDemand,
     cancel: CancelToken,
     rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
@@ -173,8 +174,9 @@ impl AnalysisWorker {
         token: AnalysisToken,
         rate: NonZeroU32,
         revision: u64,
+        demand: AnalysisDemand,
     ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate, revision);
+        let (rx, producer, pass) = self.open(token, rate, revision, demand);
         self.start(pass, reader);
         (rx, producer)
     }
@@ -200,6 +202,7 @@ impl AnalysisWorker {
         token: AnalysisToken,
         rate: NonZeroU32,
         revision: u64,
+        demand: AnalysisDemand,
     ) -> (
         watch::Receiver<Option<AnalysisProgress>>,
         AnalysisProducer,
@@ -213,6 +216,7 @@ impl AnalysisWorker {
             rate,
             token,
             revision,
+            demand,
             tx,
             cancel: self.scope.token().child(),
             resume: None,
@@ -244,11 +248,7 @@ impl AnalysisWorker {
             || analysis.fingerprint() != &self.fingerprint
             || chunk_frames != expected_chunk
             || shape != self.resume_shape
-            || analysis
-                .coverage()
-                .runs()
-                .iter()
-                .any(|range| range.end() > extent)
+            || analysis.coverage().iter().any(|range| range.end > extent)
         {
             return Err(AnalysisFileError::Config);
         }
@@ -263,6 +263,7 @@ impl AnalysisWorker {
             rate,
             token,
             revision,
+            demand: AnalysisDemand::ALL,
             tx,
             cancel: self.scope.token().child(),
             resume: Some(progress),
@@ -280,6 +281,7 @@ impl AnalysisWorker {
             rate,
             token,
             revision,
+            demand,
             tx,
             resume,
         } = pass;
@@ -292,6 +294,7 @@ impl AnalysisWorker {
             ingest,
             tx,
             revision,
+            demand,
         });
     }
 

@@ -1,12 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
 use bon::Builder;
+use kithara_beat::{BeatDetector, BeatMark, RawBeats};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::ToPrimitive;
+use rangemap::RangeSet;
 
 use super::{
-    detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
+    detector::BeatPassError,
     grid::{GridBuffers, GridParams, build_grid_with},
     runs::Runs,
 };
@@ -14,7 +19,6 @@ use crate::{
     BeatArtifact, BlobError,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    coverage::{Coverage, FrameRange},
     progress::{BeatMarkResume, BeatResume, RawBeatsResume},
     slots::{Intake, Opens},
 };
@@ -35,14 +39,14 @@ pub(crate) struct DetectRequest {
 }
 
 pub(crate) struct DetectOutput {
-    result: Result<RawBeats, BeatDetectError>,
+    result: Result<RawBeats, BeatPassError>,
     window: WindowMeta,
 }
 
 impl DetectRequest {
     pub(crate) fn detect(self, detector: &dyn BeatDetector) -> DetectOutput {
         DetectOutput {
-            result: detector.detect(&self.input),
+            result: detector.detect(&self.input).map_err(Into::into),
             window: self.window,
         }
     }
@@ -70,7 +74,7 @@ where
     short: BTreeSet<usize>,
     grid: GridBuffers,
     params: GridParams,
-    failure: Option<BeatDetectError>,
+    failure: Option<BeatPassError>,
     runs: Runs<B>,
     downmix: SampleBuffer,
     #[field(get, copy, vis = "pub(crate)")]
@@ -138,10 +142,10 @@ where
     fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
         self.windows.insert(
             window.index,
-            RawBeats {
-                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
-                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
-            },
+            RawBeats::new(
+                window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
+                window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
+            ),
         );
         if window.full {
             self.short.remove(&window.index);
@@ -151,15 +155,12 @@ where
         self.release_detected();
     }
 
-    fn build_artifact(&mut self) -> Result<BeatArtifact, BeatDetectError> {
+    fn build_artifact(&mut self) -> Result<BeatArtifact, BeatPassError> {
         if let Some(error) = self.failure.take() {
             return Err(error);
         }
 
-        let mut raw = RawBeats {
-            beats: Vec::new(),
-            downbeats: Vec::new(),
-        };
+        let mut raw = RawBeats::new(Vec::new(), Vec::new());
         for window in self.windows.values() {
             raw.beats.extend_from_slice(&window.beats);
             raw.downbeats.extend_from_slice(&window.downbeats);
@@ -175,7 +176,7 @@ where
         pools: &PoolRegion<S>,
         detector: &dyn BeatDetector,
         trailing: bool,
-    ) -> Result<(), BeatDetectError>
+    ) -> Result<(), BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -187,7 +188,7 @@ where
         Ok(())
     }
 
-    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
+    pub(crate) fn failure(&self) -> Option<&BeatPassError> {
         self.failure.as_ref()
     }
 
@@ -367,7 +368,7 @@ where
         pools: &PoolRegion<S>,
         detector: &dyn BeatDetector,
         ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError>
+    ) -> Result<BeatArtifact, BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -382,15 +383,17 @@ where
     pub(crate) fn snapshot_deferred(
         &mut self,
         ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError> {
+    ) -> Result<BeatArtifact, BeatPassError> {
         if ending {
             self.runs.flush()?;
         }
         self.build_artifact()
     }
 
-    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
-        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
+    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<Range<u64>> {
+        extent.map_or_else(Vec::new, |extent| {
+            self.runs.taken().gaps(&(0..extent)).collect()
+        })
     }
 
     pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
@@ -412,7 +415,7 @@ where
         to self.runs {
             pub(crate) fn intake(&self) -> Intake;
             #[call(taken)]
-            pub(crate) fn coverage(&self) -> &Coverage;
+            pub(crate) fn coverage(&self) -> &RangeSet<u64>;
             #[cfg(test)]
             #[call(held)]
             pub(crate) fn held_frames(&self) -> usize;
@@ -424,10 +427,7 @@ fn window_marks(marks: Vec<BeatMark>, offset: f32, keep_until: f32) -> Vec<BeatM
     marks
         .into_iter()
         .filter(|mark| mark.at.is_finite() && mark.at >= 0.0 && mark.at < keep_until)
-        .map(|mark| BeatMark {
-            at: offset + mark.at,
-            ..mark
-        })
+        .map(|mark| BeatMark::new(offset + mark.at, mark.confidence))
         .collect()
 }
 
@@ -440,17 +440,14 @@ fn write_marks(writer: &mut Writer<'_>, marks: &[BeatMark]) {
 }
 
 fn raw_beats(raw: RawBeatsResume) -> RawBeats {
-    RawBeats {
-        beats: raw.beats.into_iter().map(beat_mark).collect(),
-        downbeats: raw.downbeats.into_iter().map(beat_mark).collect(),
-    }
+    RawBeats::new(
+        raw.beats.into_iter().map(beat_mark).collect(),
+        raw.downbeats.into_iter().map(beat_mark).collect(),
+    )
 }
 
 const fn beat_mark(mark: BeatMarkResume) -> BeatMark {
-    BeatMark {
-        at: mark.at,
-        confidence: mark.confidence,
-    }
+    BeatMark::new(mark.at, mark.confidence)
 }
 
 fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
@@ -471,8 +468,10 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats};
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_signal::FrameSpan;
     use kithara_test_fixtures::analysis_beat_fixtures::{
         cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
         quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
@@ -483,8 +482,7 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
-        super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
-        BeatAnalyzer, Opens, normalize_marks, window_marks,
+        super::detector::BeatPassError, BeatAnalyzer, Opens, normalize_marks, window_marks,
     };
     use crate::{
         BeatAnalysisConfig,
@@ -501,16 +499,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_block_boundary_moves_a_mark_without_touching_its_confidence() {
-        let marks = vec![
-            BeatMark {
-                at: 0.25,
-                confidence: 0.9,
-            },
-            BeatMark {
-                at: 0.75,
-                confidence: 0.1,
-            },
-        ];
+        let marks = vec![BeatMark::new(0.25, 0.9), BeatMark::new(0.75, 0.1)];
 
         let moved = window_marks(marks, 10.0, 1.0);
 
@@ -529,18 +518,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn two_windows_reporting_one_beat_keep_the_surer_answer() {
         let mut marks = vec![
-            BeatMark {
-                at: 1.0,
-                confidence: 0.4,
-            },
-            BeatMark {
-                at: 1.0,
-                confidence: 0.8,
-            },
-            BeatMark {
-                at: 2.0,
-                confidence: 0.6,
-            },
+            BeatMark::new(1.0, 0.4),
+            BeatMark::new(1.0, 0.8),
+            BeatMark::new(2.0, 0.6),
         ];
 
         normalize_marks(&mut marks);
@@ -551,10 +531,7 @@ mod tests {
     }
 
     fn empty_raw() -> RawBeats {
-        RawBeats {
-            beats: Vec::new(),
-            downbeats: Vec::new(),
-        }
+        RawBeats::new(Vec::new(), Vec::new())
     }
 
     struct Pass {
@@ -594,7 +571,7 @@ mod tests {
             &mut self,
             detector: &dyn BeatDetector,
             ending: bool,
-        ) -> Result<crate::BeatArtifact, BeatDetectError> {
+        ) -> Result<crate::BeatArtifact, BeatPassError> {
             self.analyzer.snapshot(&self.pools, detector, ending)
         }
 
@@ -602,7 +579,7 @@ mod tests {
             to self.analyzer {
                 fn apply_detection(&mut self, output: super::DetectOutput);
                 fn held_frames(&self) -> usize;
-                fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange>;
+                fn unanalysed(&self, extent: Option<u64>) -> Vec<std::ops::Range<u64>>;
                 fn write_resume(&mut self, out: &mut Vec<u8>);
             }
         }
@@ -861,10 +838,7 @@ mod tests {
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
             seen_for_detector.lock().push(mono.len());
-            RawBeats {
-                beats: vec![BeatMark::at(0.5)],
-                downbeats: vec![BeatMark::at(0.5)],
-            }
+            RawBeats::new(vec![BeatMark::new(0.5, 0.9)], vec![BeatMark::new(0.5, 0.9)])
         });
         let mut analyzer = analyzer(Consts::SRC, config);
 
@@ -905,20 +879,20 @@ mod tests {
     fn finalize_builds_grid_in_source_frames(tenth_816000: Vec<f32>) {
         // 9 downbeats every 2.0 s -> 120 bpm, positions converted at the
         // SOURCE rate (48 kHz here), not the detector's 22 050 Hz.
-        let raw = RawBeats {
-            beats: (0..33)
+        let raw = RawBeats::new(
+            (0..33)
                 .map(|n| {
                     let t: f32 = n.as_();
-                    BeatMark::at(t * 0.5)
+                    BeatMark::new(t * 0.5, 0.9)
                 })
                 .collect(),
-            downbeats: (0..9)
+            (0..9)
                 .map(|n| {
                     let t: f32 = n.as_();
-                    BeatMark::at(t * 2.0)
+                    BeatMark::new(t * 2.0, 0.9)
                 })
                 .collect(),
-        };
+        );
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(move |_| raw.clone());
         analyzer.push_interleaved(&tenth_816000, 2, 0, Opens::Run, &mut detector);
@@ -1091,9 +1065,11 @@ mod tests {
 
         // Each window reports one beat a quarter of the way in, so the marker
         // positions are a pure function of where the window sits.
-        let beats = |_: &[f32]| RawBeats {
-            beats: vec![BeatMark::at(0.25)],
-            downbeats: vec![BeatMark::at(0.25)],
+        let beats = |_: &[f32]| {
+            RawBeats::new(
+                vec![BeatMark::new(0.25, 0.9)],
+                vec![BeatMark::new(0.25, 0.9)],
+            )
         };
 
         let block = usize::try_from(Consts::SRC).unwrap_or(1) * 2;

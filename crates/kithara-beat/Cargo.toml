@@ -11,7 +11,9 @@ categories = ["multimedia::audio"]
 exclude = ["tests/**"]
 
 [package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
+# `unimock` is reached only through `kithara_test_macros::mock`, whose
+# expansion names it; no source line in this crate spells the crate out.
+ignored = ["kithara-workspace-hack", "unimock"]
 
 [features]
 default = []
@@ -21,11 +23,13 @@ embed-model = []
 embed-small-model = ["nn", "embed-model"]
 embed-full-model = ["nn", "embed-model"]
 embed-full-int8-model = ["nn", "embed-model"]
+mock = ["dep:unimock"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "patch"] }
 kithara-platform = { workspace = true, optional = true }
+kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 num-traits = { workspace = true }
@@ -35,6 +39,7 @@ rten-tensor = { workspace = true, optional = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -49,6 +54,7 @@ kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 
 serde_json = { workspace = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

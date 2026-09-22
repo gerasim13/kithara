@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, ops::Index};
 
 use firewheel_core::{
     dsp::filter::smoothing_filter::{SmoothingFilter, SmoothingFilterCoeff},
-    param::smoother::SmootherConfig,
+    param::smoother::{DEFAULT_GAIN_SPAN, SmootherConfig},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -34,7 +34,8 @@ impl SmoothedGain {
     #[cfg(test)]
     fn is_smoothing(&self, smoothing: SmootherConfig) -> bool {
         !self.filter.has_settled(self.target_linear)
-            && (self.filter.z1 - self.target_linear).abs() >= smoothing.settle_epsilon
+            && (self.filter.z1 - self.target_linear).abs()
+                >= DEFAULT_GAIN_SPAN * smoothing.settle_ratio
     }
 
     fn set_target(&mut self, target: GainDb) {
@@ -46,9 +47,10 @@ impl SmoothedGain {
     }
 
     #[inline]
-    fn smooth(&mut self, coeff: SmoothingFilterCoeff, settle_epsilon: f32) {
+    fn smooth(&mut self, coeff: SmoothingFilterCoeff, settle_ratio: f32) {
         self.filter.process(self.target_linear, coeff);
-        self.filter.settle(self.target_linear, settle_epsilon);
+        self.filter
+            .try_settle(self.target_linear, DEFAULT_GAIN_SPAN, settle_ratio);
     }
 }
 
@@ -88,7 +90,7 @@ impl GainBank {
 
     pub(crate) fn tick(&mut self) {
         for gain in &mut self.gains {
-            gain.smooth(self.coeff, self.smoothing.settle_epsilon);
+            gain.smooth(self.coeff, self.smoothing.settle_ratio);
         }
     }
 
@@ -119,7 +121,7 @@ impl GainBank {
 fn smoothing_coeff(sample_rate: f32, smoothing: SmootherConfig) -> SmoothingFilterCoeff {
     let rate: u32 = sample_rate.max(1.0).as_();
     let rate = NonZeroU32::new(rate).unwrap_or(NonZeroU32::MIN);
-    SmoothingFilterCoeff::new(rate, smoothing.smooth_seconds)
+    SmoothingFilterCoeff::new(rate, smoothing.smooth_seconds, smoothing.settle_ratio)
 }
 
 #[cfg(test)]
@@ -134,7 +136,7 @@ mod tests {
     fn a_bank_built_at_an_unusable_sample_rate_still_reaches_its_target() {
         let smoothing = SmootherConfig {
             smooth_seconds: 0.01,
-            settle_epsilon: 0.0001,
+            settle_ratio: 0.0001,
         };
         let mut bank = GainBank::new([GainDb::default()].into_iter(), 0.0, smoothing);
         bank.set(0, GainDb::MAX);

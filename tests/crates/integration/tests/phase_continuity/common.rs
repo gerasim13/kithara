@@ -1,8 +1,8 @@
 use std::f64::consts::{PI, TAU};
 
 use kithara::{
-    audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
-    events::EventBus,
+    audio::{AudioControl, AudioEvent, AudioRead, AudioSession, ReadOutcome},
+    events::{EventBus, RecvError, TopicReceiver},
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
@@ -179,7 +179,19 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
     end_frame.saturating_sub(frames_read)
 }
 
-/// Async twin of [`read_block_with_position`]; same reason for the guard.
+/// Async twin of [`read_block_with_position`]; same reason for the guard, and
+/// the same budget.
+///
+/// A pending read waits for the producer to announce progress, not for a pause
+/// to expire. The ring publishes [`AudioEvent::OutputAvailable`] the moment it
+/// goes from empty to non-empty, and this scan runs its consumer in
+/// `ImmediateOffRt`, where that event reaches the bus inline — so the retry
+/// costs one wake and nothing else.
+///
+/// Pacing the retry instead measures the host, not the pipeline: a bare yield
+/// registers neither a deadline nor a pause, so a starved decoder burns the
+/// whole budget before it has produced a single frame, while a blocking
+/// backoff spends real time and a task per attempt.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
@@ -189,11 +201,29 @@ async fn read_block_async<T>(
 where
     T: StreamType<Events = EventBus>,
 {
+    // Subscribed before the first read, so a chunk that lands between a pending
+    // read and its wait is already queued rather than missed.
+    let mut produced = TopicReceiver::<AudioEvent>::new(audio.event_bus());
+    let mut retries = 0usize;
     loop {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(1)).await;
+                retries += 1;
+                assert!(
+                    retries < READ_PENDING_RETRIES,
+                    "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
+                );
+                match produced.recv().await {
+                    Ok(_) => {}
+                    // A lagging receiver missed wakes, which is news enough: the
+                    // producer has been busy, so read again rather than wait for
+                    // a fresh event that may never come.
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => {
+                        panic!("{label}: audio event bus closed while the read was pending")
+                    }
+                }
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
             Err(e) => panic!("{label}: read error: {e}"),

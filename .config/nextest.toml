@@ -51,9 +51,12 @@ leak-timeout = "2s"
 fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
-# The verdict reads a single failure as a regression, so one bad throw blocks
-# whichever change is under it. One retry removes that class; a test that
-# survives two attempts is a bug to look at, not a number to raise.
+# One retry, and a retried pass still fails the lane: `test.known_flakes` in
+# `.config/xtask.toml` owns the exceptions, and starts empty. What the extra
+# attempt buys is evidence — nextest keeps the failing attempt inside
+# `flakyFailure` with its streams and its dump, and whether the second attempt
+# passes is what separates a test that is non-deterministic from a change that
+# broke it.
 retries = 1
 
 # `path` resolves against the profile's store directory
@@ -155,3 +158,17 @@ leak-timeout = "2s"
 [profile.rtsan.junit]
 path = "junit.xml"
 store-failure-output = true
+
+# The memory budget asks the graphics device how many bytes the process holds,
+# and the device answers for the whole process. Any test drawing beside it is
+# counted into its readings, which would make the verdict a property of the
+# schedule rather than of the host. Reserving every thread runs it alone.
+# Repeated per profile: nextest inherits settings from `default`, but not
+# override lists, so a lane on `ci` would otherwise run it beside the rest.
+[[profile.default.overrides]]
+filter = 'binary_id(=kithara-ui::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = 'binary_id(=kithara-ui::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
+threads-required = "num-test-threads"

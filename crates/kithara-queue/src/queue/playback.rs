@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_play::{PlayError, SeekOutcome, SessionDuckingMode};
+use kithara_play::{InterruptionKind, PlayError, SeekOutcome, SessionDuckingMode};
 use smallvec::SmallVec;
 
 use super::{
@@ -70,6 +70,14 @@ where
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
         self.with_open_result(|queue| queue.player.invalidate_audio_route(reason))?;
         Ok(())
+    }
+
+    /// The platform interrupted, or released, the audio output.
+    ///
+    /// Recording the fact is all this does: an interruption leaves the native
+    /// output unscheduled, and restoring it is the route-invalidation path.
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        self.command(|queue| queue.player.notify_interruption(kind));
     }
 
     /// Lower or restore the whole session output under a competing sound,

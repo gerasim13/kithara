@@ -2,7 +2,10 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use num_traits::cast::ToPrimitive;
 
 use super::{consts::TrackerConsts, decode, frames, novelty::Novelty, period, tempo::Tempo};
-use crate::mark::{BeatMark, RawBeats};
+use crate::{
+    detector::{BeatDetectError, BeatDetector},
+    mark::{BeatMark, RawBeats},
+};
 
 /// Signal-processing beat detector: novelty curve, comb-filtered period,
 /// then beats decoded over inter-beat intervals. No model data, no network.
@@ -53,6 +56,15 @@ where
             beats,
             downbeats: Vec::new(),
         })
+    }
+}
+
+impl<S> BeatDetector for SpectralBeats<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+        Ok(self.analyze(mono_window)?)
     }
 }
 

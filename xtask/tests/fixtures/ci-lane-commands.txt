@@ -218,7 +218,7 @@
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
-  just lint fast
+  just lint gate
 # apple-lint / platforms
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
@@ -228,12 +228,12 @@
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
-  just lint fast
+  just lint gate
 # apple-lint / quarantine
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
-  just lint fast
+  just lint gate
 # apple-lint / main
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen

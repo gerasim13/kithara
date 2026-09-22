@@ -1,8 +1,10 @@
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision,
-    BeatGridSnapshotError, BeatGridStamp, BeatGridState, BeatGridUnavailable, BeatGridView,
+    BeatGridSnapshotError, BeatGridState, BeatGridUnavailable, BeatGridView, view::stale,
 };
-use crate::{Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion, Meter, SegmentSet};
+use crate::{
+    AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion, Meter, SegmentSet,
+};
 
 /// Immutable query view over validated sparse timing segments.
 #[derive(Debug)]
@@ -71,11 +73,6 @@ impl SegmentGridView {
             _ => false,
         }
     }
-
-    fn stale<T>(&self, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
-        let expected = self.stamp();
-        (given != expected).then_some(BeatGridQuery::Stale { expected, given })
-    }
 }
 
 impl BeatGridView for SegmentGridView {
@@ -87,7 +84,7 @@ impl BeatGridView for SegmentGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         if position.value().kind() != self.axis().kind() {
@@ -116,7 +113,7 @@ impl BeatGridView for SegmentGridView {
     }
 
     fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
+        if let Some(stale) = stale(self, beat.stamp()) {
             return stale;
         }
         let Some(segment) = self.segments.by_beat(*beat.value()) else {
@@ -137,7 +134,7 @@ impl BeatGridView for SegmentGridView {
         &self,
         beat: MapPoint<Beat>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
+        if let Some(stale) = stale(self, beat.stamp()) {
             return stale;
         }
         let Some((position, evidence, uncertainty)) = self
@@ -155,8 +152,13 @@ impl BeatGridView for SegmentGridView {
         ))
     }
 
+    fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64> {
+        self.source_at(position)
+            .and_then(|_| BeatGridQuery::Resolved(1.0))
+    }
+
     fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         if position.value().kind() != self.axis().kind() {
@@ -175,6 +177,19 @@ impl BeatGridView for SegmentGridView {
         self.revision
     }
 
+    fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame> {
+        if let Some(stale) = stale(self, position.stamp()) {
+            return stale;
+        }
+        let MapPosition::Asset(frame) = *position.value() else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        };
+        if self.outside_asset_extent(*position.value()) {
+            return BeatGridQuery::OutsideDomain;
+        }
+        BeatGridQuery::Resolved(frame)
+    }
+
     fn state(&self) -> BeatGridState {
         self.state
     }
@@ -183,7 +198,7 @@ impl BeatGridView for SegmentGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>> {
-        if let Some(stale) = self.stale(position.stamp()) {
+        if let Some(stale) = stale(self, position.stamp()) {
             return stale;
         }
         if position.value().kind() != self.axis().kind() {
@@ -216,11 +231,12 @@ mod tests {
 
     use super::SegmentGridView;
     use crate::{
-        AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRegion,
-        BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridView, BeatMarker, BeatOrdinal,
-        FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
-        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
+        AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery,
+        BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
+        BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
+        MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment, Meter, MeterFacts,
+        SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionEpoch,
+        SessionFrame, beat_grid::session::SessionGridView,
     };
 
     struct Consts;
@@ -268,6 +284,27 @@ mod tests {
         };
         let bpm: f64 = (*tempo.value()).into();
         assert_eq!(bpm, 120.0);
+
+        assert_eq!(
+            view.rate_at(position),
+            BeatGridQuery::Resolved(1.0),
+            "a grid that describes its own recording applies no ratio to it"
+        );
+
+        let foreign = BeatGridStamp::new(
+            view.id(),
+            view.revision()
+                .checked_next()
+                .expect("invariant: the fixture revision has a successor"),
+        );
+        assert_eq!(
+            view.rate_at(MapPoint::new(foreign, *position.value())),
+            BeatGridQuery::Stale {
+                expected: stamp,
+                given: foreign
+            },
+            "a rate is answered only for the revision it was asked on"
+        );
 
         let middle_beat = MapPoint::new(
             stamp,
@@ -318,7 +355,10 @@ mod tests {
         )
         .expect("invariant: fixture markers form an increasing relation");
         let segments = SegmentSet::new(
-            MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+            MapAxis::Asset(AssetAxis::new(
+                sample_rate(),
+                AssetExtent::Bounded(Consts::FRAME_COUNT),
+            )),
             vec![segment],
         )
         .expect("invariant: fixture segments are valid");
@@ -348,8 +388,59 @@ mod tests {
     }
 
     #[kithara::test]
+    fn an_analysed_grid_refuses_a_rate_it_has_no_geometry_for() {
+        let segment = MapSegment::new(
+            asset_marker(0.0, 0),
+            asset_marker(24_000.0, 1),
+            SegmentFacts::new(BeatEvidence::Declared, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing relation");
+        let segments = SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(
+                sample_rate(),
+                AssetExtent::Bounded(Consts::FRAME_COUNT),
+            )),
+            vec![segment],
+        )
+        .expect("invariant: fixture segments are valid");
+        let grid = SegmentGridView::new(
+            BeatGridId::allocate().expect("invariant: segment grid id can be allocated"),
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            segments,
+        )
+        .expect("invariant: complete segment geometry is valid on the asset axis");
+        let stamp = grid.stamp();
+
+        assert_eq!(
+            grid.rate_at(MapPoint::new(
+                stamp,
+                MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME))
+            )),
+            BeatGridQuery::OutsideDomain,
+            "a position past the recording carries no ratio"
+        );
+        assert_eq!(
+            grid.rate_at(MapPoint::new(
+                stamp,
+                MapPosition::Session(SessionFrame::new(0))
+            )),
+            BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch),
+            "a rate is answered only on the axis the grid describes"
+        );
+        assert_eq!(
+            grid.source_at(MapPoint::new(
+                stamp,
+                MapPosition::Asset(asset_frame(12_000.0))
+            )),
+            BeatGridQuery::Resolved(asset_frame(12_000.0)),
+            "a grid that describes its own recording answers with the frame it was asked about"
+        );
+    }
+
+    #[kithara::test]
     fn complete_asset_grid_round_trips_a_segment_endpoint_at_eof() {
-        let asset_axis = AssetAxis::new(sample_rate(), Consts::FRAME_COUNT);
+        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(Consts::FRAME_COUNT));
         let eof = asset_frame(Consts::EOF_FRAME);
         assert!(
             !asset_axis.contains(eof),
@@ -403,7 +494,7 @@ mod tests {
 
     #[kithara::test]
     fn uncovered_eof_uses_grid_lifecycle_instead_of_current_geometry() {
-        let asset_axis = AssetAxis::new(sample_rate(), Consts::FRAME_COUNT);
+        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(Consts::FRAME_COUNT));
         let axis = MapAxis::Asset(asset_axis);
         let eof = MapPosition::Asset(asset_frame(Consts::EOF_FRAME));
         let beyond_eof = MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME));

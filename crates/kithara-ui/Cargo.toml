@@ -23,6 +23,10 @@ gpu = ["iced", "dep:pollster"]
 capture = ["iced", "dep:futures-lite", "dep:iced_renderer", "dep:iced_runtime", "dep:iced_wgpu"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# Hand the no-block gate the platform layer the toolkit draws through, so a
+# lane that runs this package under the gate detects a blocking call made
+# from a paint pass.
+no-block = ["kithara-platform/no-block"]
 # Everything that draws. Artwork reading is part of it rather than an opt-in:
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
@@ -78,6 +82,11 @@ velato = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
+# The graphics device answers how much it holds. The platform call that asks it
+# belongs to `kithara-apple`, which owns every Apple ABI this workspace uses.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara-apple = { workspace = true, features = ["metal"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 hotpath = { workspace = true, optional = true }
@@ -101,6 +110,10 @@ iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
+# The budget guard reads the renderer's bump allocators back, which vello only
+# does when this is on. A dev-dependency so a shipped build keeps the fast path
+# rather than a readback on every frame.
+vello = { workspace = true, features = ["debug_layers"] }
 
 [lints]
 workspace = true
@@ -120,6 +133,20 @@ test = false
 name = "masonry_host"
 required-features = ["masonry"]
 test = true
+
+# Its own binary: the graphics device counts bytes for the whole process, so a
+# reading taken beside another drawing test would measure that test too.
+[[test]]
+name = "ui_memory"
+path = "tests/ui_memory.rs"
+required-features = ["capture"]
+
+# Its own binary for the same reason `ui_memory` is: it draws, and a drawing
+# test beside that one is counted into its readings.
+[[test]]
+name = "ui_buffers"
+path = "tests/ui_buffers.rs"
+required-features = ["capture", "masonry"]
 
 [[test]]
 name = "frame_perf"

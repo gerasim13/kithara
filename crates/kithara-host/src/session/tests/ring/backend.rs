@@ -3,16 +3,12 @@ use std::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
+use audioadapter_buffers::direct::InterleavedSlice;
 use firewheel::{
-    StreamInfo,
-    backend::{AudioBackend, BackendProcessInfo},
-    node::StreamStatus,
+    ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
     processor::FirewheelProcessor,
 };
-use kithara_platform::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use kithara_platform::{sync::Arc, time::Duration};
 
 use super::buffer::RingWriter;
 
@@ -50,7 +46,7 @@ impl RingBackendProbe {
     pub(crate) fn pre_arm_error(&self) -> Option<RingRenderError> {
         match self.inner.pre_arm_error.load(Ordering::SeqCst) {
             1 => Some(RingRenderError::NotArmed),
-            2 => Some(RingRenderError::MissingProcessor),
+            2 => Some(RingRenderError::BlockShape),
             3 => Some(RingRenderError::Full),
             4 => Some(RingRenderError::FrameLedgerOverflow),
             _ => None,
@@ -60,7 +56,7 @@ impl RingBackendProbe {
     pub(crate) fn record_pre_arm_error(&self, error: RingRenderError) {
         let value = match error {
             RingRenderError::NotArmed => 1,
-            RingRenderError::MissingProcessor => 2,
+            RingRenderError::BlockShape => 2,
             RingRenderError::Full => 3,
             RingRenderError::FrameLedgerOverflow => 4,
         };
@@ -117,7 +113,7 @@ pub(crate) struct RingBackend {
     block_frames_usize: usize,
     committed_frames: u64,
     layout: RingLayout,
-    processor: Option<FirewheelProcessor<Self>>,
+    processor: FirewheelProcessor,
     session_rate: NonZeroU32,
     writer: RingWriter,
 }
@@ -127,8 +123,8 @@ pub(crate) struct RingBackend {
 pub(crate) enum RingRenderError {
     #[error("ring backend is not armed")]
     NotArmed,
-    #[error("ring backend has no firewheel processor")]
-    MissingProcessor,
+    #[error("ring block does not describe a valid interleaved buffer")]
+    BlockShape,
     #[error("master ring is full")]
     Full,
     #[error("committed frame ledger overflow")]
@@ -144,72 +140,46 @@ pub(crate) enum RingStartError {
     ZeroBlockFrames,
     #[error("ring backend block size does not fit usize")]
     BlockFramesOutOfRange,
+    #[error("firewheel refused to activate the ring backend")]
+    Activation,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("ring backend stream failed")]
-pub(crate) struct RingStreamError;
-
-impl AudioBackend for RingBackend {
-    type Config = RingBackendConfig;
-    type Enumerator = ();
-    type Instant = Instant;
-    type StartStreamError = RingStartError;
-    type StreamError = RingStreamError;
-
-    fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
-        None
-    }
-
-    fn enumerator() -> Self::Enumerator {}
-
-    fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-        Ok(())
-    }
-
-    fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
-        self.processor = Some(processor);
-    }
-
-    fn start_stream(
-        mut config: Self::Config,
-    ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
+impl RingBackend {
+    /// Activates `cx` for manual rendering and takes the processor it returns.
+    /// Nothing drives this stream but `render_block`, so the test decides when
+    /// a block happens and what clock it happens at.
+    pub(crate) fn start(
+        cx: &mut FirewheelContext,
+        mut config: RingBackendConfig,
+    ) -> Result<Self, RingStartError> {
         let max_block_frames =
             NonZeroU32::new(config.block_frames).ok_or(RingStartError::ZeroBlockFrames)?;
         let block_frames_usize = usize::try_from(config.block_frames)
             .map_err(|_| RingStartError::BlockFramesOutOfRange)?;
         let writer = config.writer.take().ok_or(RingStartError::MissingWriter)?;
         let channels = config.layout.channels();
-        let stream_info = StreamInfo {
-            sample_rate: config.session_rate,
-            sample_rate_recip: f64::from(config.session_rate.get()).recip(),
-            prev_sample_rate: config.session_rate,
-            max_block_frames,
-            num_stream_in_channels: 0,
-            num_stream_out_channels: channels as u32,
-            input_to_output_latency_seconds: 0.0,
-            declick_frames: max_block_frames,
-            output_device_id: String::from("manual-master-ring"),
-            input_device_id: None,
-        };
+        let processor = cx
+            .activate(ActivateInfo {
+                sample_rate: config.session_rate,
+                max_block_frames,
+                num_stream_in_channels: 0,
+                num_stream_out_channels: channels as u32,
+                input_to_output_latency_seconds: 0.0,
+            })
+            .map_err(|_| RingStartError::Activation)?;
         config.probe.record_start();
-        Ok((
-            Self {
-                armed: false,
-                block_frames: config.block_frames,
-                block_frames_usize,
-                committed_frames: 0,
-                layout: config.layout,
-                processor: None,
-                session_rate: config.session_rate,
-                writer,
-            },
-            stream_info,
-        ))
+        Ok(Self {
+            armed: false,
+            block_frames: config.block_frames,
+            block_frames_usize,
+            committed_frames: 0,
+            layout: config.layout,
+            processor,
+            session_rate: config.session_rate,
+            writer,
+        })
     }
-}
 
-impl RingBackend {
     pub(crate) const fn arm(&mut self) {
         self.armed = true;
     }
@@ -229,26 +199,29 @@ impl RingBackend {
             .ok_or(RingRenderError::FrameLedgerOverflow)?;
         let channels = self.layout.channels();
         let process_info = BackendProcessInfo {
-            num_in_channels: 0,
-            num_out_channels: channels,
             frames: self.block_frames_usize,
-            process_timestamp: Instant::now(),
+            // Firewheel stamps a block with its own clock type, so the
+            // platform clock cannot be handed over here.
+            process_timestamp: Some(bevy_platform::time::Instant::now()),
             duration_since_stream_start: Duration::from_secs_f64(
                 clock_samples as f64 / f64::from(self.session_rate.get()),
             ),
             input_stream_status: StreamStatus::empty(),
             output_stream_status: StreamStatus::empty(),
             dropped_frames: 0,
+            process_to_playback_delay: None,
         };
         {
             let (processor, writer) = (&mut self.processor, &mut self.writer);
             let mut block = writer
                 .reserve(self.block_frames)
                 .ok_or(RingRenderError::Full)?;
-            let processor = processor
-                .as_mut()
-                .ok_or(RingRenderError::MissingProcessor)?;
-            processor.process_interleaved(&[], block.as_mut_slice(), process_info);
+            let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
+                .map_err(|_| RingRenderError::BlockShape)?;
+            let mut output =
+                InterleavedSlice::new_mut(block.as_mut_slice(), channels, self.block_frames_usize)
+                    .map_err(|_| RingRenderError::BlockShape)?;
+            processor.process(&input, &mut output, process_info);
             block.commit();
         }
         self.committed_frames = next_committed;

@@ -100,10 +100,14 @@ unresolved call is never assigned a guessed target.
 `just ci audit` runs scoped fmt, Clippy, ast-grep, xtask lint, typos, similarity,
 and orphan-module checks; unscoped, its orphan stage is latency-capped and the full
 workspace sweep belongs to `just ci health`, whose heavy or environment-sensitive
-stages may report SKIP. `just lint full` is the fast chain plus xtask self-tests,
-the quality scans, `style`, and every idiom check. Audit and health consume one
-canonical argv source for their shared stages, and each xtask command shape is
-validated in the `kithara-devtools` unit tests.
+stages may report SKIP. `just lint gate`, which a review runs, is the fast chain
+plus the xtask self-tests; those read the live package graph and lane
+configuration, so they answer a diff. They stay out of `fast`, which a git hook
+runs: the hook hands its own repository down the environment, and a test driving
+a temporary one inherits it. `just lint full` adds the quality scans, `style`,
+and every idiom check. Audit and health consume one canonical argv source for
+their shared stages, and each xtask command shape is validated in the
+`kithara-devtools` unit tests.
 
 ## Decision-Oriented Assessment
 

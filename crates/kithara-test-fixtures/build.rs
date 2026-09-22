@@ -80,10 +80,59 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
     resolved
 }
 
+/// The accessor names this build must produce again, with every asset built
+/// from one of them. A derived asset holds bytes of its dependency, so
+/// refreshing a source without its dependents would leave the two disagreeing.
+#[cfg(feature = "native-fixtures")]
+fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String> {
+    let selection = store::Refresh::requested();
+    let mut names: HashSet<String> = resolved
+        .iter()
+        .filter(|(name, _, def)| selection.selects(def.func, name))
+        .map(|(name, _, _)| name.clone())
+        .collect();
+    // A name this build does not register is reported, not fatal: the asset set
+    // is gated by the enabled families, so one selection is read by builds that
+    // register different halves of it.
+    if let store::Refresh::Named(requested) = &selection {
+        for requested in requested {
+            if !resolved
+                .iter()
+                .any(|(name, _, def)| name == requested || def.func == requested)
+            {
+                println!(
+                    "cargo:warning={} names `{requested}`, which no enabled family registers",
+                    store::REFRESH_ENV,
+                );
+            }
+        }
+    }
+    // Dependencies are acyclic, so one pass per level suffices; the graph is
+    // small enough that repeating until nothing is added stays trivial.
+    loop {
+        let grown: Vec<String> = resolved
+            .iter()
+            .filter(|(name, _, def)| {
+                !names.contains(name)
+                    && def
+                        .dependencies
+                        .iter()
+                        .any(|dependency| names.contains(*dependency))
+            })
+            .map(|(name, _, _)| name.clone())
+            .collect();
+        if grown.is_empty() {
+            return names;
+        }
+        names.extend(grown);
+    }
+}
+
 #[cfg(feature = "native-fixtures")]
 fn materialize(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
+    refresh: &HashSet<String>,
 ) -> HashMap<String, String> {
     let mut unavailable = HashMap::new();
     let nodes: Vec<_> = resolved
@@ -105,7 +154,13 @@ fn materialize(
                     .iter()
                     .map(|&index| {
                         scope.spawn(move || {
-                            materialize_one(namespace, resolved, index, unavailable_snapshot)
+                            materialize_one(
+                                namespace,
+                                resolved,
+                                index,
+                                unavailable_snapshot,
+                                refresh,
+                            )
                         })
                     })
                     .collect::<Vec<_>>()
@@ -125,9 +180,14 @@ fn materialize_one(
     resolved: &[(String, String, &'static AssetDef)],
     index: usize,
     unavailable: &HashMap<String, String>,
+    refresh: &HashSet<String>,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
-    if store::has_entry(namespace, id, def.ext) {
+    // A fetching family cannot be produced again without hydration, so a
+    // refresh never reaches one: the store keeps what it already holds.
+    let hydration_off = def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none();
+    let reuse = hydration_off || !refresh.contains(name);
+    if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
     }
     if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
@@ -138,7 +198,7 @@ fn materialize_one(
     }
     let _lock = store::lock_entry(namespace, id)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
-    if store::has_entry(namespace, id, def.ext) {
+    if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
     }
     if let Some((dependency, reason)) = def.dependencies.iter().find_map(|dependency| {
@@ -270,6 +330,7 @@ fn codegen(
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
     println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
+    println!("cargo:rerun-if-env-changed={}", store::REFRESH_ENV);
 
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
     assert!(
@@ -286,7 +347,7 @@ fn main() {
     let root =
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
-    let unavailable = materialize(&namespace, &resolved);
+    let unavailable = materialize(&namespace, &resolved, &refreshed(&resolved));
     for (_, id, def) in &resolved {
         println!(
             "cargo:rerun-if-changed={}",

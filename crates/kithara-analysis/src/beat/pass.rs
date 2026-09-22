@@ -1,15 +1,18 @@
+use std::ops::Range;
+
+use kithara_beat::BeatDetector;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
+use rangemap::RangeSet;
 use tracing::warn;
 
 use super::{
     analyzer::{BeatAnalyzer, BeatPassConfig, DetectOutput, DetectRequest},
-    detector::{BeatDetectError, BeatDetector},
+    detector::BeatPassError,
     grid::extend_over,
 };
 use crate::{
     BeatArtifact, BlobError,
-    coverage::{Coverage, FrameRange},
     progress::BeatResume,
     slots::{Intake, Opens},
 };
@@ -93,7 +96,7 @@ where
         detector: &dyn BeatDetector,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    ) -> Option<(BeatArtifact, Vec<Range<u64>>)>
     where
         S: HasPool<f32>,
     {
@@ -117,7 +120,7 @@ where
         &mut self,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<Range<u64>>)> {
         match self.analyzer.snapshot_deferred(ending) {
             Ok(grid) => {
                 let rate = self.analyzer.source_rate();
@@ -136,9 +139,9 @@ where
 
     delegate::delegate! {
         to self.analyzer {
-            pub(crate) fn coverage(&self) -> &Coverage;
+            pub(crate) fn coverage(&self) -> &RangeSet<u64>;
             pub(crate) fn intake(&self) -> Intake;
-            pub(crate) fn failure(&self) -> Option<&BeatDetectError>;
+            pub(crate) fn failure(&self) -> Option<&BeatPassError>;
             pub(crate) fn apply_detection(&mut self, output: DetectOutput);
             pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
         }

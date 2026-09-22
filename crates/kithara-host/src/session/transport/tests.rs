@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{
     clock::InstantSamples,
-    dsp::{buffer::ChannelBuffer, declick::DeclickValues},
+    dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     event::{NodeEvent, NodeEventType, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
     log::{RealtimeLoggerConfig, realtime_logger},
     mask::{ConnectedMask, ConstantMask, SilenceMask},
@@ -13,11 +13,9 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 use kithara_play::rt::{install_render_context, read_render_context};
+use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::{
-    Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, SessionEpoch,
-    SessionFrame,
-};
+use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -28,7 +26,7 @@ use super::{
     node::SessionTransportProcessor,
     process::{
         TransportCommitState, TransportObservationInput, converge_transport_restart,
-        process_transport,
+        process_transport, stage_transport_events,
     },
 };
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
@@ -64,7 +62,10 @@ fn proc_info_at(clock_samples: i64) -> ProcInfo {
         out_constant_mask: ConstantMask::default(),
         in_connected_mask: ConnectedMask::default(),
         out_connected_mask: ConnectedMask::default(),
-        prev_output_was_silent: true,
+        total_cpu_seconds_recip: 1.0,
+        process_to_playback_delay: None,
+        did_just_unbypass: false,
+        last_marker_instant: InstantSamples(0),
         sample_rate_recip: f64::from(SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(clock_samples),
         duration_since_stream_start: Duration::ZERO,
@@ -100,7 +101,7 @@ fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
         ProcExtra {
             logger,
             store,
-            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(BLOCK_FRAMES),
+            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(BLOCK_FRAMES),
             declick_values: DeclickValues::new(
                 NonZeroU32::new(16).expect("invariant: static fade is non-zero"),
             ),
@@ -144,9 +145,10 @@ fn process_node(
         inputs: &inputs,
         outputs: &mut outputs,
     };
-    let status = with_events(first, second, |events| {
-        processor.process(info, buffers, events, extra)
+    with_events(first, second, |events| {
+        processor.events(info, events, extra)
     });
+    let status = processor.process(info, buffers, extra);
     assert_eq!(status, ProcessStatus::ClearAllOutputs);
 }
 
@@ -157,8 +159,9 @@ fn process_result(
     second: Option<NodeEventType>,
 ) -> Result<(), TransportProcessError> {
     with_events(first, second, |events| {
-        process_transport(info, events, &mut extra.store).map(|_| ())
-    })
+        stage_transport_events(events, &mut extra.store)
+    })?;
+    process_transport(info, &mut extra.store).map(|_| ())
 }
 
 fn stage_event(stamp: TransportCommitStamp) -> NodeEventType {
@@ -210,10 +213,8 @@ fn active_harness() -> (
 #[kithara::test]
 fn transport_frame_carries_the_exact_processed_musical_context() {
     let (_processor, mut extra, _output, active) = active_harness();
-    let frame = with_events(None, None, |events| {
-        process_transport(&proc_info_at(block_frame(1)), events, &mut extra.store)
-    })
-    .expect("invariant: the next contiguous transport block is valid");
+    let frame = process_transport(&proc_info_at(block_frame(1)), &mut extra.store)
+        .expect("invariant: the next contiguous transport block is valid");
     let beats = frame
         .session_beats
         .expect("invariant: the active playing transport has a beat range");
@@ -232,12 +233,15 @@ fn pre_process_publishes_the_exact_render_context() {
         .expect("invariant: the pre-process node published this exact block");
 
     assert_eq!(
-        context.output_frames(),
+        context.output().output_frames(),
         &(SessionFrame::new(0)..SessionFrame::new(block_frame(1)))
     );
-    assert_eq!(context.sample_rate(), sample_rate());
-    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
-    assert_eq!(context.transport_revision(), Some(active.revision()));
+    assert_eq!(context.output().sample_rate(), sample_rate());
+    assert_eq!(context.output().session_epoch(), SessionEpoch::new(0));
+    assert_eq!(
+        context.output().transport_revision(),
+        Some(active.revision())
+    );
     let beats = context
         .session_beats()
         .expect("invariant: active transport carries a musical range");
@@ -259,8 +263,8 @@ fn inactive_transport_is_a_valid_render_context() {
 
     let context = read_render_context(&extra.store, &info)
         .expect("invariant: inactive transport still publishes the session axis");
-    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
-    assert_eq!(context.transport_revision(), None);
+    assert_eq!(context.output().session_epoch(), SessionEpoch::new(0));
+    assert_eq!(context.output().transport_revision(), None);
     assert_eq!(context.session_beats(), None);
 }
 

@@ -3,11 +3,10 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    event::ProcEvents,
     mask::MaskType,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_test_utils::kithara;
@@ -34,17 +33,20 @@ impl AudioNode for LimiterNode {
         &self,
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        LimiterProcessor::new(cx.stream_info.sample_rate, self.config)
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
+        Ok(LimiterProcessor::new(
+            cx.stream_info.sample_rate,
+            self.config,
+        ))
     }
 
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("session_limiter")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::STEREO,
-            })
+            }))
     }
 }
 
@@ -79,7 +81,6 @@ impl AudioNodeProcessor for LimiterProcessor {
         &mut self,
         info: &ProcInfo,
         buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
         if buffers.inputs.len() < Self::STEREO.get() || buffers.outputs.len() < Self::STEREO.get() {

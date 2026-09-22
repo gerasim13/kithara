@@ -474,6 +474,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return action
         }
 
+        // The platform, not the engine, owns the output during an
+        // interruption: the audio callback stops and every value it publishes
+        // freezes. The engine is told before the transport acts on it.
+        notifyInterruption(type, options: interruptionOptions(notification))
+
         if action.pause {
             pause()
         }
@@ -485,6 +490,22 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         if action.resume {
             play()
         }
+    }
+
+    private func notifyInterruption(
+        _ type: AVAudioSession.InterruptionType,
+        options: AVAudioSession.InterruptionOptions
+    ) {
+        let kind: FfiInterruptionKind
+        switch type {
+        case .began:
+            kind = .began
+        case .ended:
+            kind = .ended(shouldResume: options.contains(.shouldResume))
+        @unknown default:
+            return
+        }
+        _inner.notifyInterruption(kind: kind)
     }
 
     private func interruptionOptions(

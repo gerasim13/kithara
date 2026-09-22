@@ -11,12 +11,28 @@ on:
         description: Space-separated additional required lane names, or all.
         type: string
         default: ''
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Leave unset on
+          ordinary runs and dispatch once with it set when a format change
+          has to replace what the store already answers for.
+        default: ''
+        type: string
   workflow_dispatch:
     inputs:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
         default: ''
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Leave unset on
+          ordinary runs and dispatch once with it set when a format change
+          has to replace what the store already answers for.
+        default: ''
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -122,6 +138,7 @@ jobs:
       role: gate
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   deep:
     name: Deep
@@ -138,6 +155,7 @@ jobs:
       role: deep
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   # Mutation testing is its own group, not a tail of `deep`: the suites run
   # per group of crates and are judged per group, so a clean group's lane is
@@ -157,6 +175,7 @@ jobs:
       role: mutants
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   platforms:
     name: Platforms
@@ -169,6 +188,7 @@ jobs:
       role: platforms
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   quality:
     name: Quality
@@ -185,6 +205,7 @@ jobs:
       role: quality
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+      fixture-refresh: ${{ inputs.fixture-refresh }}
 
   ui:
     name: UI

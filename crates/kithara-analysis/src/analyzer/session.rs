@@ -1,15 +1,18 @@
-use std::num::{NonZeroU32, NonZeroU64};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    ops::Range,
+};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
-use kithara_signal::AudioChunk;
+use kithara_signal::{AudioChunk, FrameCoverage};
 use num_traits::cast::ToPrimitive;
+use rangemap::RangeSet;
 use tracing::warn;
 
 use super::{AnalysisFingerprint, AnalysisToken, Extent, TrackAnalysis};
 use crate::{
     AnalysisProgress, BeatSnapshot, BeatState, BlobError,
-    coverage::{Coverage, FrameRange},
     progress::{AnalysisResume, ResumeState},
     slots::{
         Intake, Opens,
@@ -35,7 +38,7 @@ where
     pub(super) fingerprint: AnalysisFingerprint,
     pub(super) token: AnalysisToken,
     #[field(get, vis = "pub(crate)")]
-    pub(super) coverage: Coverage,
+    pub(super) coverage: RangeSet<u64>,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) pools: PoolRegion<S>,
     pub(super) beat: Slot<B>,
@@ -49,17 +52,13 @@ where
     B: ResamplerBackend,
     S: HasPool<f32>,
 {
-    pub(crate) fn analysed(&self) -> &Coverage {
+    pub(crate) fn analysed(&self) -> &RangeSet<u64> {
         self.beat.coverage(&self.coverage)
     }
 
     fn beat_state(&self) -> BeatState {
         let analysed = self.analysed();
-        let taken = self
-            .coverage
-            .runs()
-            .iter()
-            .all(|run| analysed.contains(*run));
+        let taken = self.coverage.iter().all(|run| analysed.covers(run));
         if self.settled && taken {
             BeatState::Final
         } else {
@@ -75,27 +74,21 @@ where
         &mut self,
         pcm: &[f32],
         channels: usize,
-        range: FrameRange,
+        range: Range<u64>,
         opens: Opens,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
-        extent.deliver(range);
-        let seen = self.coverage.contains(range);
+        extent.deliver(&range);
+        let seen = self.coverage.covers(&range);
         if !seen {
-            self.coverage.insert(range);
-            waveform::push(
-                &mut self.waveform,
-                &self.pools,
-                pcm,
-                channels,
-                range.start(),
-            );
+            self.coverage.insert(range.clone());
+            waveform::push(&mut self.waveform, &self.pools, pcm, channels, range.start);
         }
-        let analysed = self.beat.coverage(&self.coverage).contains(range);
+        let analysed = self.beat.coverage(&self.coverage).covers(&range);
         let took = self
             .beat
-            .push(&self.pools, pcm, channels, range.start(), opens, detector);
+            .push(&self.pools, pcm, channels, range.start, opens, detector);
         if took || !seen {
             return Ingest::Accepted;
         }
@@ -148,7 +141,7 @@ where
         }
 
         let channels = usize::from(chunk.spec().channels.max(1));
-        let range = FrameRange::from(&chunk.meta);
+        let range = chunk.meta.frame_range();
         self.ingest(
             &chunk.samples[..],
             channels,
@@ -167,14 +160,7 @@ where
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
         let frames = mono.len().to_u64().unwrap_or(0);
-        self.ingest(
-            mono,
-            1,
-            FrameRange::new(at, frames),
-            Opens::Extends,
-            extent,
-            detector,
-        )
+        self.ingest(mono, 1, at..at + frames, Opens::Extends, extent, detector)
     }
 
     pub(crate) fn restore(

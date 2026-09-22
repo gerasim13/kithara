@@ -1,14 +1,11 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::{marker::PhantomData, num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
+use rangemap::RangeSet;
 
 use super::{Intake, Opens};
-use crate::{
-    BeatAnalysisConfig, BeatArtifact, BlobError,
-    coverage::{Coverage, FrameRange},
-    progress::BeatResume,
-};
+use crate::{BeatAnalysisConfig, BeatArtifact, BlobError, progress::BeatResume};
 
 pub(crate) type Detector = ();
 
@@ -63,7 +60,7 @@ where
 {
     pub(crate) fn apply_detection(&mut self, _output: DetectOutput) {}
 
-    pub(crate) const fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
+    pub(crate) const fn coverage<'a>(&'a self, seen: &'a RangeSet<u64>) -> &'a RangeSet<u64> {
         seen
     }
 
@@ -118,7 +115,7 @@ where
         _detector: Option<&mut Detector>,
         _ending: bool,
         _extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    ) -> Option<(BeatArtifact, Vec<Range<u64>>)>
     where
         S: HasPool<f32>,
     {

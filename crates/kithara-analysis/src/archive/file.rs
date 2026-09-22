@@ -1,13 +1,15 @@
 use std::{
     num::{NonZeroU32, NonZeroU64},
+    ops::Range,
     str,
 };
 
 use bytes::{BufMut, Bytes, BytesMut};
 use kithara_platform::time::Duration;
+use kithara_signal::FrameCoverage;
 
 use crate::{
-    AnalysisFingerprint, AnalysisProgress, FrameRange, TrackAnalysis,
+    AnalysisFingerprint, AnalysisProgress, TrackAnalysis,
     archive::{AnalysisFileError, AnalysisFilePatch, AnalysisFileUpdate, AnalysisFileWrite},
     blob::{MAX_PREALLOC, Reader},
 };
@@ -478,7 +480,7 @@ fn build_update(
     for (index_position, held) in index.iter().copied().enumerate() {
         let id = u64::try_from(index_position).map_err(|_| AnalysisFileError::TooLarge)?;
         let range = chunk_range(spec, id)?;
-        let covered = analysis.coverage().contains(range);
+        let covered = analysis.coverage().covers(&range);
         if !held.is_empty() && !covered {
             return Err(AnalysisFileError::CoverageRegression { chunk: id });
         }
@@ -515,9 +517,8 @@ fn validate_analysis(
         || analysis.fingerprint() != &spec.fingerprint
         || analysis
             .coverage()
-            .runs()
             .iter()
-            .any(|range| range.end() > spec.extent)
+            .any(|range| range.end > spec.extent)
     {
         return Err(AnalysisFileError::Config);
     }
@@ -532,7 +533,7 @@ fn validate_index_coverage(
     for (position, entry) in index.iter().copied().enumerate() {
         let id = u64::try_from(position).map_err(|_| AnalysisFileError::Corrupt)?;
         let range = chunk_range(spec, id).map_err(|_| AnalysisFileError::Corrupt)?;
-        let covered = latest.coverage().contains(range);
+        let covered = latest.coverage().covers(&range);
         if entry.is_empty() != !covered {
             return Err(AnalysisFileError::Corrupt);
         }
@@ -540,7 +541,7 @@ fn validate_index_coverage(
     Ok(())
 }
 
-fn chunk_range(spec: &AnalysisFileSpec, id: u64) -> Result<FrameRange, AnalysisFileError> {
+fn chunk_range(spec: &AnalysisFileSpec, id: u64) -> Result<Range<u64>, AnalysisFileError> {
     let start = id
         .checked_mul(spec.chunk_frames.get())
         .ok_or(AnalysisFileError::TooLarge)?;
@@ -550,7 +551,7 @@ fn chunk_range(spec: &AnalysisFileSpec, id: u64) -> Result<FrameRange, AnalysisF
     if end <= start {
         return Err(AnalysisFileError::Corrupt);
     }
-    Ok(FrameRange::new(start, end - start))
+    Ok(start..start + end - start)
 }
 
 fn index_entry_offset(layout: Layout, id: u64) -> Result<u64, AnalysisFileError> {

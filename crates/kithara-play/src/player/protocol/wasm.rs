@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+use kithara_signal::SessionEpoch;
+use kithara_sync::{
+    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
-
-use crate::sync::GroupState;
 
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,
@@ -23,13 +23,13 @@ impl PlayerSync {
         self.status = owned.status();
         Some(owned)
     }
-    pub(crate) fn unavailable(
+    pub(crate) fn owning(
         id: BeatGridId,
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
-        member_kind: SyncMemberKind,
+        member: SyncMember<PlayerMember>,
     ) -> Self {
-        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind);
+        let owned = GroupState::owning(id, sample_rate, epoch, member);
         Self {
             grid: owned.snapshot(),
             topology: owned.topology(),

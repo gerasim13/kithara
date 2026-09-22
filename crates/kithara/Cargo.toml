@@ -38,6 +38,7 @@ default = [
 all = [
     "abr",
     "analysis",
+    "beat",
     "analysis-beat",
     "analysis-waveform",
     "assets",
@@ -73,12 +74,14 @@ all = [
     "tls-rustls",
     "ui",
     "warp",
+    "waveform",
     "worker",
     "workspace-hack",
 ]
 abr = ["dep:kithara-abr"]
-analysis = ["dep:kithara-analysis"]
+analysis = ["waveform", "dep:kithara-analysis"]
 assets = ["storage", "dep:kithara-assets"]
+beat = ["dep:kithara-beat"]
 audio = ["dep:kithara-audio"]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
 broadcast = ["output", "dep:kithara-broadcast"]
@@ -101,8 +104,10 @@ signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
+sync = ["warp", "dep:kithara-sync"]
 ui = ["dep:kithara-ui"]
 warp = ["dep:kithara-warp"]
+waveform = ["dep:kithara-waveform"]
 worker = ["dep:kithara-worker"]
 workspace-hack = ["dep:kithara-workspace-hack"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
@@ -232,8 +237,8 @@ resample-rubato = [
     "kithara-play?/resample-rubato",
     "kithara-resampler?/resample-rubato",
 ]
-analysis-beat = ["analysis", "kithara-analysis/analysis-beat"]
-analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform"]
+analysis-beat = ["analysis", "beat", "kithara-analysis/analysis-beat"]
+analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform", "kithara-waveform/dsp"]
 # Native-only C++ time-stretch backends. Native builds require at least one;
 # enabling both makes them selectable at runtime in the DJ deck.
 stretch-signalsmith = [
@@ -254,13 +259,13 @@ stretch-bungee = [
 ]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
-beat-nn = ["analysis", "kithara-analysis/beat-nn"]
-beat-nn-small = ["analysis", "kithara-analysis/beat-nn-small"]
-beat-nn-full = ["analysis", "kithara-analysis/beat-nn-full"]
-beat-nn-full-int8 = ["analysis", "kithara-analysis/beat-nn-full-int8"]
+beat-nn = ["analysis", "beat", "kithara-analysis/beat-nn"]
+beat-nn-small = ["analysis", "beat", "kithara-analysis/beat-nn-small"]
+beat-nn-full = ["analysis", "beat", "kithara-analysis/beat-nn-full"]
+beat-nn-full-int8 = ["analysis", "beat", "kithara-analysis/beat-nn-full-int8"]
 # Signal-processing beat detector, no model bytes. Independent of `beat-nn`;
 # a build carrying both uses the network.
-beat-dsp = ["analysis", "kithara-analysis/beat-dsp"]
+beat-dsp = ["analysis", "beat", "kithara-analysis/beat-dsp"]
 ui-capture = ["ui", "kithara-ui/capture"]
 ui-iced = ["ui", "kithara-ui/iced"]
 ui-masonry = ["ui", "kithara-ui/masonry"]
@@ -285,6 +290,7 @@ usdt = [
     "kithara-play?/usdt",
     "kithara-queue?/usdt",
     "kithara-stream?/usdt",
+    "kithara-sync?/usdt",
     "kithara-test-utils/usdt",
     "kithara-worker?/usdt",
 ]
@@ -304,6 +310,7 @@ perf = [
     "kithara-play?/perf",
     "kithara-storage?/perf",
     "kithara-stream?/perf",
+    "kithara-sync?/perf",
     "kithara-bufpool?/perf",
     "kithara-file?/perf",
     "kithara-hls?/perf",
@@ -360,6 +367,7 @@ full = [
     "resampler",
     "signal",
     "stream",
+    "sync",
     "warp",
     "workspace-hack",
 ]
@@ -369,6 +377,7 @@ kithara-abr = { workspace = true, optional = true, default-features = false }
 kithara-analysis = { workspace = true, optional = true, default-features = false }
 kithara-assets = { workspace = true, optional = true }
 kithara-audio = { workspace = true, optional = true, default-features = false }
+kithara-beat = { workspace = true, optional = true }
 kithara-broadcast = { workspace = true, optional = true, default-features = false }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true, default-features = false }
@@ -390,10 +399,12 @@ kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
+kithara-sync = { workspace = true, optional = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true, default-features = false }
 kithara-warp = { workspace = true, optional = true, default-features = false }
+kithara-waveform = { workspace = true, optional = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]

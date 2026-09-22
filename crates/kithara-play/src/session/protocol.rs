@@ -5,7 +5,8 @@ mod wire {
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
+    use kithara_sync::SyncError;
+    use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -226,7 +227,10 @@ mod wire {
 }
 
 mod handle {
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::{
+        num::{NonZeroU32, NonZeroUsize},
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
@@ -324,6 +328,9 @@ mod handle {
 
     struct SessionSlot<S> {
         binding: Mutex<Option<SessionBinding<S>>>,
+        /// The audio-thread tick the platform suspended this output at, plus
+        /// one; `0` means the output was never taken away.
+        suspended_at: AtomicU64,
     }
 
     #[derive_where::derive_where(Clone)]
@@ -334,6 +341,7 @@ mod handle {
         pub fn new(binding: SessionBinding<S>) -> Self {
             Self(Arc::new(SessionSlot {
                 binding: Mutex::new(Some(binding)),
+                suspended_at: AtomicU64::new(0),
             }))
         }
 
@@ -394,6 +402,31 @@ mod handle {
             .map(|_| ())
         }
 
+        /// The audio-thread tick this output was suspended at, if the platform
+        /// has taken it away and has not driven it since.
+        ///
+        /// A suspended output leaves the RT processor unscheduled, so every
+        /// value it publishes stays at whatever it last wrote. The tick is how
+        /// a reader tells the two apart: while the audio thread still stands
+        /// where it stood, its publications describe an output that is gone.
+        /// One tick past it the processor has drained its commands and
+        /// republished, so the output speaks for itself again and nothing
+        /// needs to release it.
+        #[must_use]
+        pub fn suspended_at(&self) -> Option<u64> {
+            match self.0.suspended_at.load(Ordering::Acquire) {
+                0 => None,
+                tick => Some(tick - 1),
+            }
+        }
+
+        /// Record that the platform suspended the output at `tick`.
+        pub fn suspend_output(&self, tick: u64) {
+            self.0
+                .suspended_at
+                .store(tick.saturating_add(1), Ordering::Release);
+        }
+
         pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
             self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
         }
@@ -402,6 +435,7 @@ mod handle {
         pub(crate) fn pending() -> Self {
             Self(Arc::new(SessionSlot {
                 binding: Mutex::default(),
+                suspended_at: AtomicU64::new(0),
             }))
         }
 

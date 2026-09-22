@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ops::Range};
 
-use crate::coverage::{Coverage, FrameRange};
+use kithara_signal::FrameSpan;
+use rangemap::RangeSet;
 
 #[derive(Default)]
 pub(crate) struct Schedule {
@@ -13,36 +14,47 @@ impl Schedule {
         self.barren.insert(at);
     }
 
-    pub(crate) fn extend(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
+    pub(crate) fn extend(&self, coverage: &RangeSet<u64>, extent: Option<u64>) -> Option<u64> {
         let extent = extent?;
-        let mut widest: Option<FrameRange> = None;
-        for gap in coverage.gaps(extent) {
-            if self.barren.contains(&gap.start()) {
+        let mut widest: Option<Range<u64>> = None;
+        for gap in coverage.gaps(&(0..extent)) {
+            if self.barren.contains(&gap.start) {
                 continue;
             }
-            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+            if widest
+                .as_ref()
+                .is_none_or(|held| gap.frames() > held.frames())
+            {
                 widest = Some(gap);
             }
         }
-        widest.map(FrameRange::start)
+        widest.map(|gap| gap.start)
     }
 
-    fn gap_target(&self, coverage: &Coverage, extent: u64, window: Option<u64>) -> Option<u64> {
-        let mut widest: Option<FrameRange> = None;
-        for gap in coverage.gaps(extent) {
-            if self.barren.contains(&aim(gap, window)) {
+    fn gap_target(
+        &self,
+        coverage: &RangeSet<u64>,
+        extent: u64,
+        window: Option<u64>,
+    ) -> Option<u64> {
+        let mut widest: Option<Range<u64>> = None;
+        for gap in coverage.gaps(&(0..extent)) {
+            if self.barren.contains(&aim(&gap, window)) {
                 continue;
             }
-            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+            if widest
+                .as_ref()
+                .is_none_or(|held| gap.frames() > held.frames())
+            {
                 widest = Some(gap);
             }
         }
-        widest.map(|gap| aim(gap, window))
+        widest.as_ref().map(|gap| aim(gap, window))
     }
 
     pub(crate) fn next(
         &self,
-        coverage: &Coverage,
+        coverage: &RangeSet<u64>,
         extent: Option<u64>,
         window: Option<u64>,
     ) -> Option<u64> {
@@ -71,7 +83,7 @@ impl Schedule {
 
     fn untouched(
         &self,
-        coverage: &Coverage,
+        coverage: &RangeSet<u64>,
         extent: u64,
         window: u64,
         identity: u64,
@@ -80,7 +92,7 @@ impl Schedule {
         let frames = window.min(extent.saturating_sub(at));
         (!self.barren.contains(&at)
             && frames > 0
-            && !overlaps(coverage, FrameRange::new(at, frames)))
+            && !overlaps(coverage, &(at..at.saturating_add(frames))))
         .then_some(at)
     }
 }
@@ -93,29 +105,27 @@ fn region_midpoint(identities: u64, regions: u64, region: u64) -> u64 {
     start + count / 2
 }
 
-fn overlaps(coverage: &Coverage, target: FrameRange) -> bool {
-    coverage
-        .runs()
-        .iter()
-        .any(|run| run.start() < target.end() && target.start() < run.end())
+fn overlaps(coverage: &RangeSet<u64>, target: &Range<u64>) -> bool {
+    coverage.overlapping(target).next().is_some()
 }
 
-fn aim(gap: FrameRange, window: Option<u64>) -> u64 {
+fn aim(gap: &Range<u64>, window: Option<u64>) -> u64 {
     let Some(inset) = window
         .filter(|window| gap.frames() > *window)
         .map(|window| (gap.frames() - window) / 2)
     else {
-        return gap.start();
+        return gap.start;
     };
-    gap.start().saturating_add(inset)
+    gap.start.saturating_add(inset)
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_signal::FrameCoverage;
     use kithara_test_utils::kithara;
+    use rangemap::RangeSet;
 
     use super::Schedule;
-    use crate::coverage::{Coverage, FrameRange};
 
     struct Consts;
 
@@ -124,10 +134,10 @@ mod tests {
         const WINDOW: u64 = 200;
     }
 
-    fn coverage(runs: &[(u64, u64)]) -> Coverage {
-        let mut out = Coverage::default();
+    fn coverage(runs: &[(u64, u64)]) -> RangeSet<u64> {
+        let mut out = RangeSet::new();
         for (start, frames) in runs {
-            out.insert(FrameRange::new(*start, *frames));
+            out.insert(*start..start.saturating_add(*frames));
         }
         out
     }
@@ -139,11 +149,11 @@ mod tests {
         const EXTENT: u64 = CHUNKS * WINDOW;
 
         let schedule = Schedule::default();
-        let mut covered = Coverage::default();
+        let mut covered = RangeSet::new();
         let mut identities = Vec::new();
         while let Some(at) = schedule.next(&covered, Some(EXTENT), Some(WINDOW)) {
             identities.push(at / WINDOW);
-            covered.insert(FrameRange::new(at, WINDOW));
+            covered.insert(at..at + WINDOW);
         }
 
         assert_eq!(&identities[..2], &[4, 12]);
@@ -159,11 +169,7 @@ mod tests {
     fn an_untouched_track_starts_with_the_middle_of_its_first_half() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(
-                &Coverage::default(),
-                Some(Consts::EXTENT),
-                Some(Consts::WINDOW)
-            ),
+            schedule.next(&RangeSet::new(), Some(Consts::EXTENT), Some(Consts::WINDOW)),
             Some(200),
             "the first run is chunk one, the middle of the first half"
         );
@@ -189,7 +195,7 @@ mod tests {
         // Holes of 100 and 300 frames; the second one is the wider.
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
         assert_eq!(
-            covered.gaps(Consts::EXTENT).len(),
+            covered.gaps(&(0..Consts::EXTENT)).count(),
             2,
             "two holes to choose between"
         );
@@ -213,23 +219,23 @@ mod tests {
     fn every_gap_closes_in_a_bounded_number_of_runs() {
         // Each choice covers the window it was aimed at, the way a run does.
         let schedule = Schedule::default();
-        let mut covered = Coverage::default();
+        let mut covered = RangeSet::new();
         let mut runs = 0;
 
         while let Some(at) = schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)) {
-            covered.insert(FrameRange::new(at, Consts::WINDOW));
+            covered.insert(at..at + Consts::WINDOW);
             runs += 1;
             assert!(
                 runs <= 2 * Consts::EXTENT.div_ceil(Consts::WINDOW),
                 "a choice that leaves the front of its gap behind never converges: {:?}",
-                covered.runs()
+                covered.iter().collect::<Vec<_>>()
             );
         }
 
         assert!(
-            covered.contains(FrameRange::new(0, Consts::EXTENT)),
+            covered.covers(&(0..Consts::EXTENT)),
             "the track is covered, not approached: {:?}",
-            covered.gaps(Consts::EXTENT)
+            covered.gaps(&(0..Consts::EXTENT)).collect::<Vec<_>>()
         );
     }
 

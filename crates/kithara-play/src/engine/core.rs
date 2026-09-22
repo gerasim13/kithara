@@ -199,6 +199,17 @@ impl<S> EngineImpl<S> {
         self.session.set_session_ducking(mode)
     }
 
+    /// The platform suspended this session's audio output at `tick`.
+    pub fn suspend_output(&self, tick: u64) {
+        self.session.suspend_output(tick);
+    }
+
+    /// The audio-thread tick this session's output was suspended at, while the
+    /// platform still holds it.
+    pub fn suspended_at(&self) -> Option<u64> {
+        self.session.suspended_at()
+    }
+
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }

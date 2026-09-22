@@ -657,6 +657,22 @@ mod tests {
         assert_eq!(label, "full lint gate");
     }
 
+    /// The xtask tests resolve the shipped package graph and the configured
+    /// lane commands, so a review has to run them; only the ratchets that
+    /// guard a baseline wait for the default branch.
+    #[test]
+    fn a_review_lints_through_the_chain_that_runs_the_xtask_tests() {
+        for kind in [
+            PipelineKind::Branch,
+            PipelineKind::MergeRequest,
+            PipelineKind::Quarantine,
+        ] {
+            let (args, _) = gate("apple-lint", kind);
+
+            assert_eq!(args, ["lint", "gate"], "{}", kind.name());
+        }
+    }
+
     /// The conversion runs off what a simulator run leaves behind, so a
     /// checkout without a result bundle asks `xcrun` for nothing. The snapshot
     /// resolves the same lane in a checkout that has one.

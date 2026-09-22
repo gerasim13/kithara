@@ -1,13 +1,16 @@
 use std::{collections::BTreeSet, num::NonZeroU64};
 
 use kithara_platform::sync::Arc;
+use kithara_signal::{CoverageRead, FrameCoverage};
+use kithara_waveform::WaveformResume;
+use rangemap::RangeSet;
 
 use crate::{
-    BlobError, Coverage, FrameRange, TrackAnalysis,
+    BlobError, TrackAnalysis,
     blob::{MAX_PREALLOC, Reader, Writer},
 };
 
-const RESUME_VERSION: u32 = 0x4b41_5201;
+const RESUME_VERSION: u32 = 0x4b41_5202;
 
 /// One atomic analysis publication and the opaque state needed to continue it.
 #[derive(Clone, Debug)]
@@ -136,84 +139,10 @@ pub(crate) struct ResumeState {
     pub(crate) waveform: Option<WaveformResume>,
 }
 
-pub(crate) struct WaveformResume {
-    pub(crate) bands: Vec<(u64, [f32; 3])>,
-    pub(crate) partials: Vec<WaveformPartialResume>,
-    pub(crate) opened: u64,
-}
-
-pub(crate) struct WaveformPartialResume {
-    pub(crate) samples: Box<[f32]>,
-    pub(crate) written: Coverage,
-    pub(crate) index: u64,
-    pub(crate) seq: u64,
-}
-
-impl WaveformResume {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
-        let band_count = read_count(reader, 20)?;
-        let mut bands: Vec<(u64, [f32; 3])> = Vec::with_capacity(band_count.min(MAX_PREALLOC));
-        let mut previous = None;
-        for _ in 0..band_count {
-            let index = read_ordered(reader.read_u64()?, previous)?;
-            previous = Some(index);
-            bands.push((
-                index,
-                [reader.read_f32()?, reader.read_f32()?, reader.read_f32()?],
-            ));
-        }
-
-        let partial_count = read_count(reader, 32)?;
-        let mut partials: Vec<WaveformPartialResume> =
-            Vec::with_capacity(partial_count.min(MAX_PREALLOC));
-        previous = None;
-        for _ in 0..partial_count {
-            let index = read_ordered(reader.read_u64()?, previous)?;
-            previous = Some(index);
-            partials.push(WaveformPartialResume {
-                index,
-                samples: read_samples(reader)?,
-                written: read_coverage(reader)?,
-                seq: reader.read_u64()?,
-            });
-        }
-        let opened = reader.read_u64()?;
-        let resume = Self {
-            bands,
-            partials,
-            opened,
-        };
-        resume.validate()?;
-        Ok(resume)
-    }
-
-    fn validate(&self) -> Result<(), BlobError> {
-        let mut partials = self.partials.iter();
-        let mut partial = partials.next();
-        for (index, energy) in &self.bands {
-            if energy.iter().any(|value| !value.is_finite()) {
-                return Err(BlobError::Corrupt);
-            }
-            while partial.is_some_and(|held| held.index < *index) {
-                partial = partials.next();
-            }
-            if partial.is_some_and(|held| held.index == *index) {
-                return Err(BlobError::Corrupt);
-            }
-        }
-        if self.partials.iter().any(|held| {
-            held.samples.is_empty() || held.written.runs().is_empty() || held.seq >= self.opened
-        }) {
-            return Err(BlobError::Corrupt);
-        }
-        Ok(())
-    }
-}
-
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
     pub(crate) runs: Vec<BeatRunResume>,
-    pub(crate) taken: Vec<(u64, u64)>,
+    pub(crate) taken: RangeSet<u64>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
@@ -236,7 +165,7 @@ pub(crate) struct BeatMarkResume {
 
 impl BeatResume {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
-        let run_count = read_count(reader, 24)?;
+        let run_count = reader.read_count(24)?;
         let mut runs: Vec<BeatRunResume> = Vec::with_capacity(run_count.min(MAX_PREALLOC));
         let mut previous_end = None;
         for _ in 0..run_count {
@@ -249,31 +178,19 @@ impl BeatResume {
             runs.push(BeatRunResume {
                 start,
                 end,
-                mono: read_samples(reader)?,
+                mono: reader.read_samples()?,
             });
         }
 
-        let taken_count = read_count(reader, 16)?;
-        let mut taken: Vec<(u64, u64)> = Vec::with_capacity(taken_count.min(MAX_PREALLOC));
-        let mut previous_to = None;
-        for _ in 0..taken_count {
-            let from = reader.read_u64()?;
-            let to = reader.read_u64()?;
-            if from >= to || previous_to.is_some_and(|previous| previous >= from) {
-                return Err(BlobError::Corrupt);
-            }
-            previous_to = Some(to);
-            taken.push((from, to));
-        }
+        let taken = reader.read_coverage()?;
 
-        let window_count = read_count(reader, 24)?;
+        let window_count = reader.read_count(24)?;
         let mut windows: Vec<(usize, RawBeatsResume)> =
             Vec::with_capacity(window_count.min(MAX_PREALLOC));
         let mut previous = None;
         for _ in 0..window_count {
-            let raw = reader.read_u64()?;
+            let raw = reader.read_ordered(previous)?;
             let index = usize::try_from(raw).map_err(|_| BlobError::Corrupt)?;
-            read_ordered(raw, previous)?;
             previous = Some(raw);
             windows.push((
                 index,
@@ -284,13 +201,12 @@ impl BeatResume {
             ));
         }
 
-        let short_count = read_count(reader, 8)?;
+        let short_count = reader.read_count(8)?;
         let mut short = BTreeSet::new();
         previous = None;
         for _ in 0..short_count {
-            let raw = reader.read_u64()?;
+            let raw = reader.read_ordered(previous)?;
             let index = usize::try_from(raw).map_err(|_| BlobError::Corrupt)?;
-            read_ordered(raw, previous)?;
             previous = Some(raw);
             short.insert(index);
         }
@@ -306,12 +222,10 @@ impl BeatResume {
 
     fn validate(&self) -> Result<(), BlobError> {
         if self.runs.iter().any(|run| run.mono.is_empty())
-            || self.runs.iter().any(|run| {
-                !self
-                    .taken
-                    .iter()
-                    .any(|(from, to)| *from <= run.start && run.end <= *to)
-            })
+            || self
+                .runs
+                .iter()
+                .any(|run| !self.taken.covers(&(run.start..run.end)))
             || self.short.iter().any(|index| {
                 self.windows
                     .binary_search_by_key(index, |(at, _)| *at)
@@ -327,23 +241,6 @@ impl BeatResume {
             return Err(BlobError::Corrupt);
         }
         Ok(())
-    }
-}
-
-#[cfg(feature = "analysis-waveform")]
-pub(crate) fn write_coverage(writer: &mut Writer<'_>, coverage: &Coverage) {
-    writer.write_len(coverage.runs().len());
-    for range in coverage.runs() {
-        writer.write_u64(range.start());
-        writer.write_u64(range.frames());
-    }
-}
-
-#[cfg(feature = "analysis-waveform")]
-pub(crate) fn write_samples(writer: &mut Writer<'_>, samples: &[f32]) {
-    writer.write_len(samples.len());
-    for sample in samples {
-        writer.write_f32(*sample);
     }
 }
 
@@ -387,38 +284,8 @@ fn decode_section<T>(
     Ok(Some(value))
 }
 
-fn read_count(reader: &mut Reader<'_>, item_bytes: usize) -> Result<usize, BlobError> {
-    let count = reader.read_len()?;
-    if count.saturating_mul(item_bytes) > reader.remaining() {
-        return Err(BlobError::Corrupt);
-    }
-    Ok(count)
-}
-
-fn read_samples(reader: &mut Reader<'_>) -> Result<Box<[f32]>, BlobError> {
-    let count = read_count(reader, size_of::<f32>())?;
-    (0..count).map(|_| reader.read_f32()).collect()
-}
-
-fn read_coverage(reader: &mut Reader<'_>) -> Result<Coverage, BlobError> {
-    let count = read_count(reader, 16)?;
-    let mut coverage = Coverage::default();
-    let mut previous_end = None;
-    for _ in 0..count {
-        let start = reader.read_u64()?;
-        let frames = reader.read_u64()?;
-        let range = FrameRange::new(start, frames);
-        if frames == 0 || range.frames() != frames || previous_end.is_some_and(|end| end >= start) {
-            return Err(BlobError::Corrupt);
-        }
-        previous_end = Some(range.end());
-        coverage.insert(range);
-    }
-    Ok(coverage)
-}
-
 fn read_marks(reader: &mut Reader<'_>) -> Result<Vec<BeatMarkResume>, BlobError> {
-    let count = read_count(reader, 8)?;
+    let count = reader.read_count(8)?;
     let mut marks: Vec<BeatMarkResume> = Vec::with_capacity(count.min(MAX_PREALLOC));
     for _ in 0..count {
         let at = reader.read_f32()?;
@@ -429,16 +296,4 @@ fn read_marks(reader: &mut Reader<'_>) -> Result<Vec<BeatMarkResume>, BlobError>
         marks.push(BeatMarkResume { at, confidence });
     }
     Ok(marks)
-}
-
-fn read_ordered(value: u64, previous: Option<u64>) -> Result<u64, BlobError> {
-    if previous.is_some_and(|previous| previous >= value) {
-        Err(BlobError::Corrupt)
-    } else {
-        Ok(value)
-    }
-}
-
-const fn size_of<T>() -> usize {
-    std::mem::size_of::<T>()
 }

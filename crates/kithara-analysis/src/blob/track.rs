@@ -1,12 +1,13 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
+
+use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 
 use crate::{
-    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange,
-    TrackAnalysis, Waveform,
-    blob::{BlobError, Reader, Writer},
+    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform,
+    blob::{BlobError, MAX_PREALLOC, Reader, Writer},
 };
 
-const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0006;
+const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0007;
 
 impl TrackAnalysis {
     /// Append this snapshot to caller-owned storage using the durable analysis format.
@@ -22,7 +23,7 @@ impl TrackAnalysis {
         writer.write_optional_u64(self.extent());
         writer.write_u64(self.revision());
         writer.write_bool(self.is_settled());
-        write_ranges(&mut writer, self.coverage().runs())?;
+        writer.write_coverage(self.coverage());
 
         writer.write_str(self.fingerprint().waveform().unwrap_or_default())?;
         writer.write_section(|out| {
@@ -39,7 +40,7 @@ impl TrackAnalysis {
             }
         })?;
         writer.write_bool(beat.is_some_and(|beat| beat.state() == BeatState::Final));
-        write_ranges(&mut writer, beat.map_or(&[], BeatSnapshot::unanalysed))?;
+        write_ranges(&mut writer, beat.map_or(&[], BeatSnapshot::unanalysed));
         Ok(())
     }
 }
@@ -62,7 +63,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
         let settled = reader.read_bool()?;
-        let coverage = read_ranges(&mut reader)?;
+        let coverage = reader.read_coverage()?;
 
         let waveform_tag = reader.read_str()?;
         let waveform_bytes = reader.read_section()?;
@@ -100,18 +101,13 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             BeatState::Provisional
         };
 
-        let mut restored = Coverage::default();
-        for range in coverage {
-            restored.insert(range);
-        }
-
         Ok(Self::builder()
             .token(token.as_str().into())
             .revision(revision)
             .source_sample_rate(source_sample_rate)
             .maybe_extent(extent)
             .settled(settled)
-            .coverage(restored)
+            .coverage(coverage)
             .fingerprint(AnalysisFingerprint::new(
                 beat_ok.then_some(beat_tag.as_str()),
                 waveform_ok.then_some(waveform_tag.as_str()),
@@ -122,26 +118,21 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
     }
 }
 
-fn write_ranges(writer: &mut Writer<'_>, ranges: &[FrameRange]) -> Result<(), BlobError> {
-    let count = u32::try_from(ranges.len()).map_err(|_| BlobError::TooLarge)?;
-    writer.write_u32(count);
+fn write_ranges(writer: &mut Writer<'_>, ranges: &[Range<u64>]) {
+    writer.write_len(ranges.len());
     for range in ranges {
-        writer.write_u64(range.start());
+        writer.write_u64(range.start);
         writer.write_u64(range.frames());
     }
-    Ok(())
 }
 
-fn read_ranges(reader: &mut Reader<'_>) -> Result<Vec<FrameRange>, BlobError> {
-    let count = usize::try_from(reader.read_u32()?).map_err(|_| BlobError::Corrupt)?;
-    if count.saturating_mul(16) > reader.remaining() {
-        return Err(BlobError::Corrupt);
-    }
-    let mut ranges: Vec<FrameRange> = Vec::with_capacity(count);
+fn read_ranges(reader: &mut Reader<'_>) -> Result<Vec<Range<u64>>, BlobError> {
+    let count = reader.read_count(16)?;
+    let mut ranges: Vec<Range<u64>> = Vec::with_capacity(count.min(MAX_PREALLOC));
     for _ in 0..count {
         let start = reader.read_u64()?;
         let frames = reader.read_u64()?;
-        ranges.push(FrameRange::new(start, frames));
+        ranges.push(start..start.saturating_add(frames));
     }
     Ok(ranges)
 }
@@ -151,6 +142,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_test_utils::kithara;
+    use rangemap::RangeSet;
 
     use super::*;
     use crate::artifact::FitRegion;
@@ -171,16 +163,16 @@ mod tests {
             0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00,
         ];
-        const V6_FIXTURE: &'static [u8] = &[
-            0x06, 0x00, 0x41, 0x4b, 0x09, 0x00, 0x00, 0x00, 0x67, 0x6f, 0x6c, 0x64, 0x65, 0x6e,
-            0x2d, 0x76, 0x36, 0x80, 0xbb, 0x00, 0x00, 0x01, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00,
+        const V7_FIXTURE: &'static [u8] = &[
+            0x07, 0x00, 0x41, 0x4b, 0x09, 0x00, 0x00, 0x00, 0x67, 0x6f, 0x6c, 0x64, 0x65, 0x6e,
+            0x2d, 0x76, 0x37, 0x44, 0xac, 0x00, 0x00, 0x01, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x77, 0x61, 0x76, 0x65, 0x3a,
-            0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
-            0x62, 0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x77,
+            0x61, 0x76, 0x65, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x07, 0x00, 0x00, 0x00, 0x62, 0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
     }
 
@@ -215,8 +207,10 @@ mod tests {
         waveform: Option<Waveform>,
         extent: u64,
     ) -> TrackAnalysis {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, extent));
+        let mut coverage = RangeSet::new();
+        if extent > 0 {
+            coverage.insert(0..extent);
+        }
         TrackAnalysis::builder()
             .token(Consts::TOKEN.into())
             .revision(7)
@@ -226,9 +220,9 @@ mod tests {
             .coverage(coverage)
             .fingerprint(active())
             .maybe_waveform(waveform)
-            .maybe_beat(beat.map(|grid| {
-                BeatSnapshot::new(grid, BeatState::Provisional, vec![FrameRange::new(100, 50)])
-            }))
+            .maybe_beat(
+                beat.map(|grid| BeatSnapshot::new(grid, BeatState::Provisional, vec![100..150])),
+            )
             .build()
     }
 
@@ -251,26 +245,26 @@ mod tests {
     }
 
     #[kithara::test]
-    fn frozen_v6_fixture_decodes_and_reencodes_identically() {
+    fn frozen_v7_fixture_decodes_and_reencodes_identically() {
         let active = fingerprint("wave:v1", "beat:v1");
-        let decoded = TrackAnalysis::try_from((Consts::V6_FIXTURE, &active)).expect("v6 decodes");
+        let decoded = TrackAnalysis::try_from((Consts::V7_FIXTURE, &active)).expect("v7 decodes");
 
-        assert_eq!(decoded.token().as_str(), "golden-v6");
-        assert_eq!(decoded.source_sample_rate().get(), 48_000);
+        assert_eq!(decoded.token().as_str(), "golden-v7");
+        assert_eq!(decoded.source_sample_rate().get(), 44_100);
         assert_eq!(decoded.extent(), Some(1_234));
         assert_eq!(decoded.revision(), 9);
         assert!(!decoded.is_settled());
         assert_eq!(
-            decoded.coverage().runs(),
-            &[FrameRange::new(0, 100), FrameRange::new(200, 50)]
+            decoded.coverage().iter().collect::<Vec<_>>(),
+            [&(0..100), &(200..250)]
         );
         assert_eq!(decoded.fingerprint(), &active);
         assert!(decoded.waveform().is_none());
         assert!(decoded.beat().is_none());
 
         let mut encoded = Vec::new();
-        decoded.write_to(&mut encoded).expect("v6 re-encodes");
-        assert_eq!(encoded.as_slice(), Consts::V6_FIXTURE);
+        decoded.write_to(&mut encoded).expect("v7 re-encodes");
+        assert_eq!(encoded.as_slice(), Consts::V7_FIXTURE);
     }
 
     #[kithara::test]
@@ -287,8 +281,8 @@ mod tests {
 
     #[kithara::test]
     fn codec_preserves_an_empty_fingerprint() {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, 64));
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..64);
         let analysis = TrackAnalysis::builder()
             .token("empty-fingerprint".into())
             .revision(1)
@@ -335,9 +329,9 @@ mod tests {
 
     #[kithara::test]
     fn every_snapshot_field_round_trips() {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, 400));
-        coverage.insert(FrameRange::new(600, 400));
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..400);
+        coverage.insert(600..1000);
         let want = TrackAnalysis::builder()
             .token(Consts::TOKEN.into())
             .revision(11)
@@ -349,7 +343,7 @@ mod tests {
             .beat(BeatSnapshot::new(
                 grid(),
                 BeatState::Provisional,
-                vec![FrameRange::new(400, 200)],
+                vec![400..600],
             ))
             .build();
         let bytes = encode(&want);

@@ -65,13 +65,14 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
-usdt = ["kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
+usdt = ["kithara-test-utils/usdt", "kithara-sync/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
 mock = ["dep:unimock", "kithara-stream/mock"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-sync/perf",
     "kithara-warp/perf",
     "kithara-worker/perf",
 ]
@@ -81,6 +82,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 # Kithara sub-crates
 kithara-audio = { workspace = true, default-features = false }
+kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
@@ -94,9 +96,11 @@ kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-sync = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
+kithara-waveform = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 # Utilities
@@ -119,6 +123,7 @@ portable-atomic = { workspace = true }
 # Async & channels
 ringbuf = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -136,6 +141,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
+kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
@@ -145,7 +151,10 @@ bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+
+axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

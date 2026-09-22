@@ -18,6 +18,73 @@ const ASSET_ID_BYTES: usize = 16;
 /// Explicit fixture cache revision, shared by build-time and integration assets.
 pub const CACHE_VERSION: &str = include_str!("../../cache-version");
 
+/// Entries this build refuses to reuse, whatever the cache already holds.
+pub const REFRESH_ENV: &str = "KITHARA_FIXTURE_REFRESH";
+
+/// The prepared entries a build discards before materializing.
+///
+/// Reuse is the default: a prepared entry is never rebuilt, because nothing
+/// about a source or dependency edit changes an asset id. This is the lever
+/// that rebuilds one anyway, without retiring the whole cache revision.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub enum Refresh {
+    /// Reuse every prepared entry.
+    #[default]
+    Nothing,
+    /// Rebuild the whole revision.
+    Everything,
+    /// Rebuild these names: an accessor `{func}_{case}`, or a producing
+    /// function `{func}`, which stands for every case it registers.
+    Named(Vec<String>),
+}
+
+impl Refresh {
+    /// The selection [`REFRESH_ENV`] asks this build for.
+    ///
+    /// An unset or blank parameter reuses everything, `all` rebuilds the whole
+    /// revision, and anything else is a comma-separated list of accessor names
+    /// and producing function names.
+    #[must_use]
+    pub fn requested() -> Self {
+        let raw = std::env::var(REFRESH_ENV).unwrap_or_default();
+        Self::parse(&raw)
+    }
+
+    #[must_use]
+    fn parse(raw: &str) -> Self {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Self::Nothing;
+        }
+        if raw.eq_ignore_ascii_case("all") {
+            return Self::Everything;
+        }
+        Self::Named(
+            raw.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
+    /// Whether the entry `func` registers as `name` must be produced again.
+    ///
+    /// A producing function names its whole family: a format its assets are
+    /// written in has one version for all of them, so its cases go stale
+    /// together.
+    #[must_use]
+    pub fn selects(&self, func: &str, name: &str) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::Everything => true,
+            Self::Named(names) => names
+                .iter()
+                .any(|selected| selected == name || selected == func),
+        }
+    }
+}
+
 /// Stable identity of one asset case: `sha2-256(func || 0x00 || case)`.
 ///
 /// The pair is unique by construction — every accessor lands in one flat
@@ -277,6 +344,35 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[kithara::test(native, flash(false))]
+    fn a_blank_refresh_reuses_every_prepared_entry() {
+        assert_eq!(Refresh::parse(""), Refresh::Nothing);
+        assert_eq!(Refresh::parse("   "), Refresh::Nothing);
+        assert!(!Refresh::parse("").selects("sine_wav", "sine_wav_a440_6s"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn refresh_selects_all_or_the_named_accessors() {
+        assert_eq!(Refresh::parse("ALL"), Refresh::Everything);
+        assert!(Refresh::parse("all").selects("anything", "anything_at_all"));
+
+        let named = Refresh::parse(" sine_wav_a440_6s , rhythm_wav_steady ,");
+        assert_eq!(
+            named,
+            Refresh::Named(vec![
+                String::from("sine_wav_a440_6s"),
+                String::from("rhythm_wav_steady"),
+            ])
+        );
+        assert!(named.selects("rhythm_wav", "rhythm_wav_steady"));
+        assert!(!named.selects("sine_wav", "sine_wav_a440_2s"));
+
+        let family = Refresh::parse("sine_wav");
+        assert!(family.selects("sine_wav", "sine_wav_a440_6s"));
+        assert!(family.selects("sine_wav", "sine_wav_a440_2s"));
+        assert!(!family.selects("sine_mp3", "sine_mp3_a440_6s"));
+    }
 
     #[kithara::test(native, flash(false))]
     fn id_is_stable_and_separates_case_from_function() {

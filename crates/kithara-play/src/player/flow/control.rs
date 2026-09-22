@@ -3,7 +3,10 @@ use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent, SlotId},
+    api::{
+        InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
+        SlotId,
+    },
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -31,6 +34,32 @@ impl<S> PlayerRuntime<S> {
             previous_route: RouteDescription::default(),
         });
         Ok(())
+    }
+
+    /// Notify the player that the platform interrupted, or released, the audio
+    /// output.
+    ///
+    /// An interruption stops the output below us — the RT processor is no
+    /// longer scheduled, so it can neither observe the interruption nor report
+    /// it. The fact enters here and playback state reads it from the session.
+    /// Handing the output back is the route-invalidation path, which is what
+    /// rebuilds the stream.
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        if matches!(kind, InterruptionKind::Began) {
+            let tick = self
+                .slot()
+                .and_then(|slot| self.core.engine.slot_playback(slot))
+                .map_or(0, |shared| {
+                    shared
+                        .process_count
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                });
+            self.core.engine.suspend_output(tick);
+        }
+        self.core
+            .engine
+            .bus()
+            .publish(SessionEvent::Interruption { kind });
     }
 
     /// Reset EQ gains to 0 dB for all bands.
@@ -111,9 +140,13 @@ impl<S> PlayerRuntime<S> {
                 rate_requested,
                 request_revision = revision,
                 target_rate_bits = target.to_bits(),
-                session_epoch = u64::from(snapshot.context().session_epoch()),
-                transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
-                session_frame = i64::from(snapshot.context().output_frames().end)
+                session_epoch = u64::from(snapshot.context().output().session_epoch()),
+                transport_revision = snapshot
+                    .context()
+                    .output()
+                    .transport_revision()
+                    .map_or(0, u64::from),
+                session_frame = i64::from(snapshot.context().output().output_frames().end)
             );
         }
         self.core.worker.wake();

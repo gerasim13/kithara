@@ -1,7 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
-    analysis::AnalysisProgress,
     events::TrackId,
     platform::{
         CancelToken,
@@ -14,8 +13,10 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::{
-    entry::{Entry, Stage, settled_for},
+    TrackArtifacts,
+    entry::{Entry, Stage},
     handle::{AnalysisHandle, Request},
+    load::LoadReply,
     run::Activity,
 };
 use crate::{
@@ -25,6 +26,11 @@ use crate::{
     wave_cache::{AnalysisPersistence, AnalysisTarget, TrackAnalysisCache},
     waveform::TrackAnalysisRunner,
 };
+
+/// How many artifact answers may queue before a reading task waits. One track
+/// answers at most twice, so this only ever bounds a burst of re-pointed
+/// entries.
+const LOAD_REPLIES: usize = 16;
 
 pub(crate) struct AnalysisService {
     pub(super) owner: Owner,
@@ -41,6 +47,10 @@ pub(super) struct Owner {
     pub(super) runner: TrackAnalysisRunner,
     pub(super) entries: Vec<Entry>,
     pub(super) pending: VecDeque<usize>,
+    /// Where an artifact read hands its answer back to the one task that owns
+    /// the entries, and where that task takes it.
+    pub(super) loads: mpsc::Sender<LoadReply>,
+    pub(super) replies: mpsc::Receiver<LoadReply>,
 }
 
 impl AnalysisService {
@@ -63,7 +73,10 @@ impl AnalysisService {
             config.worker.pools(),
             config.analysis_chunk_seconds,
         );
+        let (loads, replies) = mpsc::channel(LOAD_REPLIES);
         let owner = Owner {
+            loads,
+            replies,
             runner,
             cache,
             persistence,
@@ -218,7 +231,7 @@ impl Owner {
         let held = entry.is_held();
         if entry
             .value_for(axis)
-            .is_some_and(|progress| settled_for(&progress, fingerprint))
+            .is_some_and(|progress| entry.prepared().settled_for(&progress, fingerprint))
         {
             debug!(?track_id, held, "analysis: settled; nothing to schedule");
             return;
@@ -248,16 +261,21 @@ impl Owner {
         if entry.value_for(axis).is_some() {
             return;
         }
-        if let Some(progress) = self.cache.get(entry.target(), axis) {
-            debug!(
-                track_id = ?entry.track_id(),
-                revision = progress.analysis().revision(),
-                complete = progress.analysis().is_complete(),
-                resumable = progress.is_resumable(),
-                "analysis: cached snapshot served"
-            );
-            entry.offer(progress);
-        }
+        let cached = self.cache.get(entry.target(), axis);
+        let track_id = entry.track_id();
+        let entry = &mut self.entries[index];
+        let Some(progress) = cached else {
+            entry.republish();
+            return;
+        };
+        debug!(
+            ?track_id,
+            revision = progress.analysis().revision(),
+            complete = progress.analysis().is_complete(),
+            resumable = progress.is_resumable(),
+            "analysis: cached snapshot served"
+        );
+        entry.offer(progress);
     }
 
     pub(super) fn subscribe(
@@ -266,12 +284,13 @@ impl Owner {
         track_id: TrackId,
         source: AppTrackSource,
         axis: NonZeroU32,
-    ) -> watch::Receiver<Option<AnalysisProgress>> {
+    ) -> watch::Receiver<Option<TrackArtifacts>> {
         self.axis = Some(axis);
         let Some((index, config)) = self.entry_for(&queue, track_id, source) else {
             return watch::channel(None).1;
         };
         self.entries[index].point_at(config, queue, track_id);
+        self.start_loads(index);
         self.seed(index, axis);
         let rx = self.entries[index].subscribe();
         self.schedule(index, axis);
@@ -295,6 +314,7 @@ impl Owner {
             };
             if !self.entries[index].is_held() {
                 self.entries[index].point_at(config, queue.clone(), track_id);
+                self.start_loads(index);
             }
             self.schedule(index, axis);
         }

@@ -10,12 +10,16 @@ keywords = ["audio", "buffer", "frames", "samples", "signal"]
 categories = ["multimedia::audio"]
 
 [dependencies]
+kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["ranged"] }
 kithara-platform = { workspace = true }
 
+delegate = { workspace = true }
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
+fieldwork = { workspace = true }
+rangemap = { workspace = true }
 serde = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]

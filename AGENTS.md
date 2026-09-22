@@ -58,6 +58,13 @@ Every fact below has one owner. Link to the owner; do not restate it.
   explicit reason.
 - Name the canonical owner before changing shared state, shared types, or
   cross-crate contracts. If the owner is unclear, stop and clarify.
+- Place a new shared type by the first rule that answers, in order: the
+  standard library or an already-used dependency already provides it, so write
+  no type; a crate owns the invariant the type expresses, so it goes there
+  even when the shape looks general; the type is a self-contained mechanism
+  with no domain, so it gets its own small crate named after that mechanism.
+  A name like `common`, `core`, or `utils` means the owner was never found:
+  go back to the second rule.
 - Do not introduce parallel mutable sources of truth. When old and new state
   must coexist, stage the ownership transfer in the task packet or plan.
 - No fallback chains (`try A, else B, else C`) to paper over state-resolution
@@ -89,7 +96,7 @@ exposes domain modules only, and recipes live under `.config/just/`.
 
 - Format: `just fmt`; check-only `just fmt check`.
 - Compile and Clippy: `just check`; `just check clippy`.
-- Lint: `just lint`; `just lint fast`; `just lint full`.
+- Lint: `just lint`; `just lint fast`; `just lint gate`; `just lint full`.
 - Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
   Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
 - Duplication report: `just lint similarity [<crate>/src ...]`.
@@ -137,7 +144,8 @@ A change is done only when all of these hold:
   rather than an incidental detail.
 - `just fmt check` and `just lint fast` are clean, with no new baseline
   entries and no lint suppressions. Both `lint fast` (the commit hook) and
-  `lint full` run `style` through `_shared`. The `linux-lint` gate runs
+  `lint full` run `style` through `_shared`. A review lints through
+  `lint gate`, which adds this tool's own tests. The `linux-lint` gate runs
   `lint full` on main and branch pushes.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.

@@ -501,7 +501,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::{
-        analysis::{AnalysisFingerprint, Coverage, FrameRange, TrackAnalysis},
+        analysis::{AnalysisFingerprint, FrameCoverage, RangeSet, TrackAnalysis},
         assets::{ReadSide, StorageBackend},
         bufpool::{OverallBudget, PoolConfig},
         platform::{
@@ -524,9 +524,9 @@ mod tests {
     }
 
     fn analysis(revision: u64, ranges: &[(u64, u64)]) -> TrackAnalysis {
-        let mut coverage = Coverage::default();
+        let mut coverage = RangeSet::new();
         for &(start, frames) in ranges {
-            coverage.insert(FrameRange::new(start, frames));
+            coverage.insert(start..start + frames);
         }
         TrackAnalysis::builder()
             .token("persistence-test".into())

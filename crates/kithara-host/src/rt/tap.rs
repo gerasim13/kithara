@@ -3,10 +3,9 @@ use core::num::NonZeroU32;
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    event::ProcEvents,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_output::{LiveOutput, OutputGroup};
@@ -33,17 +32,20 @@ impl AudioNode for TapNode {
         &self,
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        TapProcessor::new(self.outputs.lock().take(), cx.stream_info.sample_rate)
+    ) -> Result<impl AudioNodeProcessor, NodeError> {
+        Ok(TapProcessor::new(
+            self.outputs.lock().take(),
+            cx.stream_info.sample_rate,
+        ))
     }
 
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
+    fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+        Ok(AudioNodeInfo::new()
             .debug_name("session_mix_tap")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::ZERO,
-            })
+            }))
     }
 }
 
@@ -83,7 +85,6 @@ impl AudioNodeProcessor for TapProcessor {
         &mut self,
         info: &ProcInfo,
         buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
         let Some(outputs) = self.outputs.as_mut() else {

@@ -6,7 +6,6 @@ use std::{
 
 use firewheel::{
     StreamInfo,
-    event::ProcEvents,
     node::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
         ProcessStatus,
@@ -406,7 +405,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         &mut self,
         info: &ProcInfo,
         mut buffers: ProcBuffers,
-        _events: &mut ProcEvents,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
@@ -447,7 +445,8 @@ mod tests {
         node::{ProcStore, StreamStatus},
     };
     use kithara_platform::time::Duration;
-    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_warp::RenderContext;
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -493,7 +492,10 @@ mod tests {
             out_constant_mask: ConstantMask::default(),
             in_connected_mask: ConnectedMask::default(),
             out_connected_mask: ConnectedMask::default(),
-            prev_output_was_silent: true,
+            total_cpu_seconds_recip: 1.0,
+            process_to_playback_delay: None,
+            did_just_unbypass: false,
+            last_marker_instant: InstantSamples(0),
             sample_rate_recip: f64::from(44_100).recip(),
             clock_samples: InstantSamples(0),
             duration_since_stream_start: Duration::ZERO,
@@ -510,11 +512,14 @@ mod tests {
         super::super::publish_render_context(
             &mut store,
             RenderContext::new(
-                SessionFrame::new(0)..SessionFrame::new(512),
-                NonZeroU32::new(44_100).expect("static sample rate"),
+                OutputContext::new(
+                    SessionFrame::new(0)..SessionFrame::new(512),
+                    NonZeroU32::new(44_100).expect("static sample rate"),
+                    SessionEpoch::new(3),
+                    Some(TransportRevision::first()),
+                )
+                .expect("invariant: fixture output range is ordered"),
                 None,
-                SessionEpoch::new(3),
-                Some(TransportRevision::first()),
             )
             .expect("invariant: fixture context is valid"),
         )
@@ -532,8 +537,11 @@ mod tests {
             .expect("required context");
 
         assert!(std::ptr::eq(left, right));
-        assert_eq!(left.session_epoch(), SessionEpoch::new(3));
-        assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
+        assert_eq!(left.output().session_epoch(), SessionEpoch::new(3));
+        assert_eq!(
+            left.output().transport_revision(),
+            Some(TransportRevision::first())
+        );
     }
 
     #[kithara::test]

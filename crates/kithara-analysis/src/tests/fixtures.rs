@@ -23,10 +23,10 @@ use unimock::{MockFn, matching};
 use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
+    Waveform,
     analyzer::TrackAnalysis,
-    beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
+    beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
-    waveform::bucket::Waveform,
 };
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -40,11 +40,11 @@ struct OneBeatPerWindow;
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 impl BeatDetector for OneBeatPerWindow {
-    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
-        Ok(RawBeats {
-            beats: vec![BeatMark::at(0.25)],
-            downbeats: vec![BeatMark::at(0.25)],
-        })
+    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, kithara_beat::BeatDetectError> {
+        Ok(RawBeats::new(
+            vec![BeatMark::new(0.25, 0.9)],
+            vec![BeatMark::new(0.25, 0.9)],
+        ))
     }
 }
 
@@ -71,10 +71,10 @@ fn a_detector_survives_a_drop_off_the_thread_that_built_it() {
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(|_, _| {
-                Ok(RawBeats {
-                    beats: vec![BeatMark::at(0.25)],
-                    downbeats: vec![BeatMark::at(0.25)],
-                })
+                Ok(RawBeats::new(
+                    vec![BeatMark::new(0.25, 0.9)],
+                    vec![BeatMark::new(0.25, 0.9)],
+                ))
             })),
     ));
 

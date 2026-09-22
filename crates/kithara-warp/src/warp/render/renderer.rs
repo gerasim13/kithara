@@ -20,6 +20,13 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+/// Span the speed smoother measures its settle threshold against: the range
+/// a playback speed realistically travels over, from a heavy stretch back to
+/// unity and a little past it. The smoother reads it as a scale, not a bound,
+/// so a speed outside it still smooths — it just settles on the same relative
+/// terms as one inside.
+const SPEED_SMOOTHING_SPAN: f32 = 2.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
     pub(super) activation: Option<PreparedActivation>,
@@ -162,6 +169,7 @@ where
             applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
                 SmoothedParam::new(
                     speed,
+                    SPEED_SMOOTHING_SPAN,
                     SmootherConfig {
                         smooth_seconds: smooth_frames / sample_rate,
                         ..SmootherConfig::default()
@@ -297,9 +305,10 @@ where
     ) {
         kithara::probe_event!(
             render_committed,
-            session_epoch = u64::from(committed.context().session_epoch()),
+            session_epoch = u64::from(committed.context().output().session_epoch()),
             transport_revision = committed
                 .context()
+                .output()
                 .transport_revision()
                 .map_or(0, u64::from),
             output_start,
@@ -364,7 +373,8 @@ where
             .committed
             .as_ref()
             .filter(|previous| {
-                previous.context().session_epoch() == snapshot.context().session_epoch()
+                previous.context().output().session_epoch()
+                    == snapshot.context().output().session_epoch()
             })
             .map_or_else(
                 || snapshot.frontier().source(),

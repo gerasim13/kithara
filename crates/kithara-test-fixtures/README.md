@@ -21,6 +21,16 @@ The explicit `cache-version` file selects the shared cache revision. Change it
 only when intentionally replacing the cached fixture set; use a new case name
 for an individual replacement. Rebuilds reuse existing entries.
 
+`KITHARA_FIXTURE_REFRESH` overrides that reuse for one build: `all` rebuilds the
+whole revision, and a comma-separated list rebuilds only what it names: an
+accessor (`{func}_{case}`), or a producing function (`{func}`), which stands for
+every case it registers. Every asset derived from a selected one is rebuilt with
+it, so the cache never holds a dependent that disagrees with its source. A name no
+enabled family registers is reported as a build warning, not an error: the asset
+set follows the enabled families, so one selection is read by builds that
+register different halves of it. Fetching families are never selected: without
+hydration they cannot be produced again, so the store keeps what it holds.
+
 Set `KITHARA_FIXTURE_CACHE` to an absolute persistent directory before building.
 There is no temporary-directory default. For all local worktrees, configure it
 once in your user Cargo configuration (`~/.cargo/config.toml`):

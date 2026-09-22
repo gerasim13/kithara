@@ -1,15 +1,16 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
+use kithara_signal::{CoverageWrite, FrameCoverage};
 use num_traits::cast::ToPrimitive;
+use rangemap::RangeSet;
 
-use super::detector::BeatDetectError;
+use super::detector::BeatPassError;
 use crate::{
     BlobError,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    coverage::{Coverage, FrameRange},
     progress::BeatRunResume,
     slots::{Intake, Opens},
 };
@@ -35,7 +36,7 @@ where
 {
     config: BeatAnalysisConfig<B>,
     #[field(get, vis = "pub(super)")]
-    taken: Coverage,
+    taken: RangeSet<u64>,
     runs: Vec<Run<B>>,
     ratio: f64,
     source_rate: u32,
@@ -62,7 +63,7 @@ where
             ratio: f64::from(target_rate) / source,
             budget,
             max_runs: max_runs.max(1),
-            taken: Coverage::default(),
+            taken: RangeSet::new(),
             config,
             source_rate: source_rate.max(1),
             target_rate,
@@ -75,7 +76,7 @@ where
         mono: &[f32],
         at: u64,
         end: u64,
-    ) -> Result<(), BeatDetectError>
+    ) -> Result<(), BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -94,7 +95,7 @@ where
         Ok(())
     }
 
-    fn admits(&self, range: FrameRange, opens: Opens) -> bool {
+    fn admits(&self, range: &Range<u64>, opens: Opens) -> bool {
         match (self.intake(), opens) {
             (Intake::Full, _) => false,
             (Intake::Continuing, Opens::Run) => {
@@ -109,7 +110,7 @@ where
         scale(frames, self.ratio)
     }
 
-    pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
+    pub(super) fn flush(&mut self) -> Result<(), BeatPassError> {
         for index in 0..self.runs.len() {
             let Some((span, stream)) = self
                 .runs
@@ -143,10 +144,10 @@ where
         }
     }
 
-    fn meets(&self, range: FrameRange) -> bool {
+    fn meets(&self, range: &Range<u64>) -> bool {
         self.runs
             .iter()
-            .any(|run| run.start <= range.end() && range.start() <= run.end)
+            .any(|run| run.start <= range.end && range.start <= run.end)
     }
 
     fn merge<S>(
@@ -156,7 +157,7 @@ where
         mono: &[f32],
         at: u64,
         end: u64,
-    ) -> Result<Option<Run<B>>, BeatDetectError>
+    ) -> Result<Option<Run<B>>, BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -203,19 +204,19 @@ where
         }))
     }
 
-    fn missing(&self, from: u64, until: u64) -> Option<FrameRange> {
+    fn missing(&self, from: u64, until: u64) -> Option<Range<u64>> {
         let mut at = from;
-        for run in self.taken.runs() {
-            if run.end() <= at {
+        for run in self.taken.iter() {
+            if run.end <= at {
                 continue;
             }
-            if at < run.start() {
-                let end = run.start().min(until);
-                return (at < end).then(|| FrameRange::new(at, end - at));
+            if at < run.start {
+                let end = run.start.min(until);
+                return (at < end).then(|| at..at + end - at);
             }
-            at = run.end();
+            at = run.end;
         }
-        (at < until).then(|| FrameRange::new(at, until - at))
+        (at < until).then(|| at..at + until - at)
     }
 
     pub(super) fn offset_in_run(&self, start: u64, frame: u64) -> usize {
@@ -228,7 +229,7 @@ where
         mono: &[f32],
         at: u64,
         end: u64,
-    ) -> Result<Run<B>, BeatDetectError>
+    ) -> Result<Run<B>, BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -255,7 +256,7 @@ where
         mono: &[f32],
         at: u64,
         opens: Opens,
-    ) -> Result<bool, BeatDetectError>
+    ) -> Result<bool, BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -267,25 +268,22 @@ where
         let mut took = false;
 
         while let Some(piece) = self.missing(cursor, end) {
-            if !self.admits(piece, opens) {
+            if !self.admits(&piece, opens) {
                 break;
             }
-            let Some(block) = slice(mono, at, piece.start(), piece.end()) else {
+            let Some(block) = slice(mono, at, piece.start, piece.end) else {
                 break;
             };
-            self.absorb(pools, block, piece.start(), piece.end())?;
+            self.absorb(pools, block, piece.start, piece.end)?;
+            cursor = piece.end;
             self.taken.insert(piece);
-            cursor = piece.end();
             took = true;
         }
         Ok(took)
     }
 
-    fn reaches(&self, range: FrameRange) -> bool {
-        self.taken
-            .runs()
-            .iter()
-            .any(|region| region.start() >= range.end())
+    fn reaches(&self, range: &Range<u64>) -> bool {
+        self.taken.iter().any(|region| region.start >= range.end)
     }
 
     pub(super) fn release(&mut self, opens_at: impl Fn(usize) -> usize) {
@@ -317,7 +315,7 @@ where
         out: &mut SampleBuffer,
         mono: &[f32],
         stream: &mut Option<MonoStream<B>>,
-    ) -> Result<(), BeatDetectError>
+    ) -> Result<(), BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -338,7 +336,7 @@ where
         self.runs.iter().map(|run| (run.start, &run.mono[..]))
     }
 
-    fn stream<S>(&self, pools: &PoolRegion<S>) -> Result<MonoStream<B>, BeatDetectError>
+    fn stream<S>(&self, pools: &PoolRegion<S>) -> Result<MonoStream<B>, BeatPassError>
     where
         S: HasPool<f32>,
     {
@@ -368,7 +366,7 @@ where
         &mut self,
         pools: &PoolRegion<S>,
         runs: Vec<BeatRunResume>,
-        taken: Vec<(u64, u64)>,
+        taken: RangeSet<u64>,
     ) -> Result<(), BlobError>
     where
         S: HasPool<f32>,
@@ -392,19 +390,15 @@ where
                 stream: None,
             });
         }
-        let mut coverage = Coverage::default();
-        for (from, to) in taken {
-            coverage.insert(FrameRange::new(from, to.saturating_sub(from)));
-        }
         if restored
             .iter()
-            .any(|run| !coverage.contains(FrameRange::new(run.start, run.end - run.start)))
+            .any(|run| !taken.covers(&(run.start..run.end)))
         {
             return Err(BlobError::Corrupt);
         }
 
         self.runs = restored;
-        self.taken = coverage;
+        self.taken = taken;
         if self.held() > self.budget || self.runs.len() > self.max_runs.saturating_add(1) {
             return Err(BlobError::Corrupt);
         }
@@ -427,11 +421,7 @@ where
                 self.detector_frames(run.end.saturating_sub(run.start)),
             );
         }
-        writer.write_len(self.taken.runs().len());
-        for run in self.taken.runs() {
-            writer.write_u64(run.start());
-            writer.write_u64(run.end());
-        }
+        writer.write_coverage(&self.taken);
     }
 }
 
@@ -455,7 +445,7 @@ fn write_padded(writer: &mut Writer<'_>, samples: &[f32], expected: usize) {
 fn finish_into<B>(
     out: &mut SampleBuffer,
     stream: Option<MonoStream<B>>,
-) -> Result<(), BeatDetectError>
+) -> Result<(), BeatPassError>
 where
     B: ResamplerBackend,
 {
@@ -479,7 +469,7 @@ fn push_stream<B>(
     stream: &mut MonoStream<B>,
     mono: &[f32],
     out: &mut SampleBuffer,
-) -> Result<(), BeatDetectError>
+) -> Result<(), BeatPassError>
 where
     B: ResamplerBackend,
 {
@@ -495,7 +485,7 @@ where
     result.map_err(resample_error)
 }
 
-fn finish_stream<B>(stream: MonoStream<B>, out: &mut SampleBuffer) -> Result<(), BeatDetectError>
+fn finish_stream<B>(stream: MonoStream<B>, out: &mut SampleBuffer) -> Result<(), BeatPassError>
 where
     B: ResamplerBackend,
 {
@@ -511,8 +501,8 @@ where
     result.map_err(resample_error)
 }
 
-fn resample_error(error: impl std::fmt::Display) -> BeatDetectError {
-    BeatDetectError::Resample {
+fn resample_error(error: impl std::fmt::Display) -> BeatPassError {
+    BeatPassError::Resample {
         reason: error.to_string(),
     }
 }
@@ -527,13 +517,13 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
 mod tests {
     use kithara_bufpool::PoolConfig;
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_signal::FrameCoverage;
     use kithara_test_fixtures::analysis_beat_fixtures::{fragments, run_ramp};
     use kithara_test_utils::kithara;
 
     use super::{Intake, Opens, Runs};
     use crate::{
         BeatAnalysisConfig,
-        coverage::FrameRange,
         test_pools::{Pools, pools, pools_with},
     };
 
@@ -727,7 +717,7 @@ mod tests {
 
         assert!(refused > 0, "ten blocks must not fit the hold");
         assert!(
-            set.taken().contains(FrameRange::new(0, 4410)),
+            set.taken().covers(&(0..4410)),
             "what it took starts at the front of the track"
         );
         let taken: u64 = set.taken().frames();
@@ -736,7 +726,7 @@ mod tests {
             "audio it turned down must stay outside its coverage, got {taken}"
         );
         assert_eq!(
-            set.taken().gaps(10 * 4410).len(),
+            set.taken().gaps(&(0..10 * 4410)).count(),
             1,
             "the tail it has not taken is one stretch the pass can be asked for again"
         );

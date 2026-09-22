@@ -1,18 +1,23 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    ops::Range,
+};
 
 use kithara_audio::{AudioReader, ChunkOutcome, SeekOutcome};
 use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, FrameCoverage};
 use kithara_worker::TickResult;
+use rangemap::RangeSet;
 use tracing::{debug, warn};
 
 use super::schedule::Schedule;
 use crate::{
     AnalysisProgress, BlobError,
-    analyzer::{AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers},
-    coverage::{Coverage, FrameRange},
+    analyzer::{
+        AnalysisDemand, AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers,
+    },
     producer::ring,
     slots::{
         Intake,
@@ -29,6 +34,7 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) revision: u64,
+    pub(crate) demand: AnalysisDemand,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +77,7 @@ where
     publish_frames: u64,
     published_at: u64,
     revision: u64,
+    demand: AnalysisDemand,
     producer_drain_limit: usize,
 }
 
@@ -120,6 +127,7 @@ where
             scratch: None,
             token: job.token,
             revision: job.revision,
+            demand: job.demand,
             tx: job.tx,
         })
     }
@@ -132,7 +140,7 @@ where
     }
 
     fn choose(&self, window: Option<u64>) -> Option<u64> {
-        let empty = Coverage::default();
+        let empty = RangeSet::new();
         let coverage = self.target().unwrap_or(&empty);
         let extent = self.extent.frames();
         match self.intake() {
@@ -148,13 +156,14 @@ where
     ) -> TickResult {
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
-                let range = FrameRange::from(&chunk.meta);
+                let range = chunk.meta.frame_range();
                 let Ok(analyzers) = open(
                     &mut self.analyzers,
                     builder,
                     self.rate,
                     &self.token,
                     self.revision,
+                    self.demand,
                 ) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
@@ -163,11 +172,11 @@ where
                 if outcome != Ingest::Accepted {
                     debug!(?outcome, "analysis: range not folded in");
                 }
-                self.frontier = range.end();
+                self.frontier = range.end;
                 if let Some(run) = &mut self.run {
                     if !run.started {
                         run.started = true;
-                        run.at = range.start();
+                        run.at = range.start;
                     }
                     run.grew |= outcome == Ingest::Accepted;
                     run.deferred |= outcome == Ingest::Deferred;
@@ -213,6 +222,7 @@ where
             self.rate,
             &self.token,
             self.revision,
+            self.demand,
         )?;
         let mut detector = detector;
         let mut folded = false;
@@ -269,12 +279,12 @@ where
         };
         self.analyzers
             .as_ref()
-            .is_some_and(|analyzers| analyzers.analysed().contains(FrameRange::new(0, extent)))
+            .is_some_and(|analyzers| analyzers.analysed().covers(&(0..extent)))
     }
 
-    fn is_covered(&self, range: FrameRange) -> bool {
+    fn is_covered(&self, range: Range<u64>) -> bool {
         self.target()
-            .is_some_and(|coverage| coverage.contains(range))
+            .is_some_and(|coverage| coverage.covers(&range))
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -307,7 +317,7 @@ where
         (self.intake() != Intake::Continuing).then_some(self.chunk_frames.get())
     }
 
-    fn target(&self) -> Option<&Coverage> {
+    fn target(&self) -> Option<&RangeSet<u64>> {
         let analyzers = self.analyzers.as_ref()?;
         match analyzers.beat_intake() {
             Intake::Full => Some(analyzers.coverage()),
@@ -392,7 +402,7 @@ where
         // Covered audio ends a run that already reached its gap. Before that
         // it is the lead-in a seek snapping back off the gap's start left in
         // front, and ending there would retire the gap unread.
-        if run.grew && self.is_covered(FrameRange::new(self.frontier, 1)) {
+        if run.grew && self.is_covered(self.frontier..self.frontier + 1) {
             return true;
         }
         // Read past what it was aimed at with nothing gained: the gap the
@@ -475,6 +485,7 @@ fn open<'a, B, S>(
     rate: NonZeroU32,
     token: &AnalysisToken,
     revision: u64,
+    demand: AnalysisDemand,
 ) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
@@ -484,7 +495,7 @@ where
         Ok(analyzers)
     } else {
         let analyzers = builder
-            .build(rate, token.clone(), revision)
+            .build(rate, token.clone(), revision, demand)
             .inspect_err(|error| {
                 warn!(?error, "analysis: analyzer buffer initialization failed");
             })?;

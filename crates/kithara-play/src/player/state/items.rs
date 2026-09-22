@@ -7,13 +7,20 @@ use kithara_platform::sync::{Arc, Mutex};
 use tracing::debug;
 
 use super::{QueuedResource, playlist::Playlist};
-use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
+use crate::{
+    api::PlayerEvent,
+    resource::{PreparedGrid, Resource},
+    rt::track::PlayerResource,
+};
 
 pub(crate) struct TakenItem {
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(crate) player_resource: PlayerResource,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
+    /// The prepared beat grid this load carries, kept out of the resource the
+    /// processor takes so the player can publish its geometry.
+    pub(crate) beat_grid: Arc<PreparedGrid>,
 }
 
 pub(crate) struct ItemQueue {
@@ -115,6 +122,7 @@ impl ItemQueue {
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
+        let beat_grid = Arc::clone(resource.beat_grid());
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
@@ -128,6 +136,7 @@ impl ItemQueue {
             player_resource,
             item_id,
             duration_seconds,
+            beat_grid,
         }))
     }
 

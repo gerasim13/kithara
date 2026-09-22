@@ -4,8 +4,8 @@ use kithara::{
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        CrossfadeCurve, CrossfadeSettings, ItemStatus, PlayError, PlayerStatus, RouteChangeReason,
-        SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
+        CrossfadeCurve, CrossfadeSettings, InterruptionKind, ItemStatus, PlayError, PlayerStatus,
+        RouteChangeReason, SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
     },
     queue::{
         ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueRepeatMode, RepeatMode, Transition,
@@ -391,6 +391,17 @@ pub enum FfiDuckingMode {
     Soft,
     /// Lowered to 20%.
     Hard,
+}
+
+/// What one platform audio-interruption notification reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
+#[mirror(into = InterruptionKind)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiInterruptionKind {
+    /// The system took the output away.
+    Began,
+    /// The system released the output, telling whether playback may resume.
+    Ended { should_resume: bool },
 }
 
 impl TryFrom<FfiRepeatMode> for RepeatMode {

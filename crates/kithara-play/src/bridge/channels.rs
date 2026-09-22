@@ -125,8 +125,8 @@ impl SlotControl {
             .max_by_key(|snapshot| {
                 let context = snapshot.context();
                 (
-                    u64::from(context.session_epoch()),
-                    i64::from(context.output_frames().end),
+                    u64::from(context.output().session_epoch()),
+                    i64::from(context.output().output_frames().end),
                 )
             })
     }

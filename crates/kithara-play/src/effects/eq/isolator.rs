@@ -131,6 +131,7 @@ impl IsolatorEq {
 
 #[cfg(test)]
 mod tests {
+    use firewheel_core::dsp::filter::smoothing_filter::SmoothingFilterCoeff;
     use kithara_test_fixtures::unit_fixtures::eq_impulse;
     use kithara_test_utils::kithara;
 
@@ -161,7 +162,9 @@ mod tests {
     }
 
     /// A gain move from unity is a ramp at the sample rate: no output sample
-    /// steps by more than the tone's own slope plus the smoother's per-sample share.
+    /// steps by more than the tone's own slope plus the smoother's per-sample
+    /// share. That share is the smoothing filter's first step over the whole
+    /// gain range, which is what a move from unity to silence asks of it.
     #[kithara::test]
     fn a_gain_move_from_unity_never_steps() {
         const SAMPLE_RATE: u32 = 48_000;
@@ -186,7 +189,11 @@ mod tests {
             previous = out;
         }
         let slope = TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32;
-        let ramp = 1.0 / (config.smoothing().smooth_seconds * SAMPLE_RATE as f32);
+        let smoothing = config.smoothing();
+        let rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate is non-zero");
+        let coeff =
+            SmoothingFilterCoeff::new(rate, smoothing.smooth_seconds, smoothing.settle_ratio);
+        let ramp = coeff.a0;
         assert!(
             max_step <= slope + ramp,
             "a gain move stepped the output: {max_step} > {slope} + {ramp}"

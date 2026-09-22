@@ -3,6 +3,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use thiserror::Error;
 
 use crate::{
+    detector::{BeatDetectError, BeatDetector},
     mark::RawBeats,
     nn::{
         config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
@@ -65,5 +66,17 @@ where
         let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.pools)?;
         let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;
         Ok(RawBeats { beats, downbeats })
+    }
+}
+
+impl<S> BeatDetector for BeatThis<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+        self.analyze(mono_window)
+            .map_err(|error| BeatDetectError::Detect {
+                reason: error.to_string(),
+            })
     }
 }

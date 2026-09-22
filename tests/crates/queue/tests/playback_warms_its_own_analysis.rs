@@ -5,7 +5,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
+    analysis::{
+        AnalysisDemand, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, FrameCoverage,
+    },
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
@@ -103,6 +105,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
         "played-track".into(),
         rate,
         0,
+        AnalysisDemand::ALL,
     );
     queue.attach_observer(id, producer);
     queue.run(move |q| q.play()).await;

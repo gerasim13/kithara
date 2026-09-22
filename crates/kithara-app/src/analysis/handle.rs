@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::AnalysisProgress,
     events::TrackId,
     platform::tokio::sync::{mpsc, oneshot, watch},
 };
 use tracing::debug;
 
+use super::TrackArtifacts;
 use crate::pools::{AppQueueControl, AppTrackSource};
 
 pub(crate) enum Request {
@@ -15,7 +15,7 @@ pub(crate) enum Request {
         track_id: TrackId,
         source: AppTrackSource,
         axis: NonZeroU32,
-        reply: oneshot::Sender<watch::Receiver<Option<AnalysisProgress>>>,
+        reply: oneshot::Sender<watch::Receiver<Option<TrackArtifacts>>>,
     },
     Warm {
         queue: AppQueueControl,
@@ -43,7 +43,7 @@ impl AnalysisHandle {
         track_id: TrackId,
         source: AppTrackSource,
         axis: NonZeroU32,
-    ) -> Option<watch::Receiver<Option<AnalysisProgress>>> {
+    ) -> Option<watch::Receiver<Option<TrackArtifacts>>> {
         let (reply, receiver) = oneshot::channel();
         self.tx
             .send(Request::Subscribe {

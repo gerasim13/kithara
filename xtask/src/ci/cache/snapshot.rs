@@ -28,6 +28,37 @@ impl Snapshot {
     }
 }
 
+/// The dependency sources a job would otherwise fetch from the public
+/// internet. Unlike a target snapshot this layer is content-addressed by
+/// `Cargo.lock` alone: sources do not depend on the toolchain, the flags, the
+/// lane or the checkout path, and they are identical on every platform, so one
+/// object serves both fleets. It is published from the trusted scope and read
+/// from there by every scope, which is what the bucket policy already admits.
+struct Sources;
+
+impl Sources {
+    const SCHEMA: &str = "kithara-source-snapshot-v1";
+    const PREFIX: &str = "source-snapshots";
+    const BUCKET: &str = "kithara-trusted";
+    /// Records which layer a `CARGO_HOME` already carries, so a job that
+    /// already has it neither downloads it again nor unpacks over a live one.
+    const MARKER: &str = ".kithara-source-snapshot";
+    /// The directories carried, relative to `CARGO_HOME`. `registry` holds the
+    /// index, the downloaded `.crate` files and their unpacked sources; `git`
+    /// holds the bare databases and the checkouts cargo builds from.
+    const PATHS: [&str; 5] = [
+        "registry/cache",
+        "registry/index",
+        "registry/src",
+        "git/db",
+        "git/checkouts",
+    ];
+
+    fn object(fingerprint: &str, checksum: &str) -> String {
+        format!("{}/{fingerprint}/{checksum}.tar", Self::PREFIX)
+    }
+}
+
 #[derive(Debug, Args)]
 pub(super) struct SnapshotArgs {
     #[command(subcommand)]
@@ -106,6 +137,140 @@ pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, mc: &Path) -> R
     publish(target, fingerprint, mc)
 }
 
+/// Fill `cargo_home` with the dependency sources this `Cargo.lock` names, so
+/// the job compiles instead of fetching. Returns whether anything was restored.
+pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<bool> {
+    let fingerprint = sources_fingerprint(root)?;
+    if read_marker(cargo_home)?.as_deref() == Some(fingerprint.as_str()) {
+        info!(%fingerprint, "source layer already present");
+        return Ok(false);
+    }
+    let client = Client::load(mc)?;
+    let Some(object) = client.latest(Sources::BUCKET, Sources::PREFIX, &fingerprint)? else {
+        info!(%fingerprint, "no source snapshot exists");
+        return Ok(false);
+    };
+    let expected = checksum_of(&object)?;
+    let archive = NamedTempFile::new().context("create source snapshot download")?;
+    client.copy_from(Sources::BUCKET, &object, archive.path())?;
+    ensure!(
+        sha256(archive.path())? == expected,
+        "source snapshot checksum mismatch"
+    );
+    verify_archive(archive.path())?;
+    fs::create_dir_all(cargo_home)
+        .with_context(|| format!("create cargo home {}", cargo_home.display()))?;
+    run_command(
+        Command::new("tar")
+            .args(["--extract", "--zstd", keep_existing()?, "--file"])
+            .arg(archive.path())
+            .arg("--directory")
+            .arg(cargo_home),
+        "restore source snapshot",
+    )?;
+    write_marker(cargo_home, &fingerprint)?;
+    info!(%fingerprint, object, "restored dependency sources");
+    Ok(true)
+}
+
+/// Publish the sources this job ended up with. Only the trusted scope may
+/// write the bucket, so a branch that fetched something new leaves it for the
+/// default branch to record rather than publishing its own.
+pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<()> {
+    let fingerprint = sources_fingerprint(root)?;
+    let present: Vec<&str> = Sources::PATHS
+        .into_iter()
+        .filter(|path| cargo_home.join(path).is_dir())
+        .collect();
+    ensure!(
+        !present.is_empty(),
+        "cargo home carries no sources to publish"
+    );
+    let archive = NamedTempFile::new().context("create source snapshot archive")?;
+    let mut command = Command::new("tar");
+    command
+        .args(["--create", "--zstd", "--file"])
+        .arg(archive.path())
+        .arg("--directory")
+        .arg(cargo_home);
+    for path in present {
+        command.arg(path);
+    }
+    run_command(&mut command, "archive source snapshot")?;
+    let checksum = sha256(archive.path())?;
+    let object = Sources::object(&fingerprint, &checksum);
+    let client = Client::load(mc)?;
+    if client.exists(Sources::BUCKET, &object)? {
+        info!(%fingerprint, %checksum, "source snapshot already exists");
+        return Ok(());
+    }
+    client.copy(archive.path(), Sources::BUCKET, &object)?;
+    write_marker(cargo_home, &fingerprint)?;
+    info!(%fingerprint, %checksum, "published dependency sources");
+    Ok(())
+}
+
+/// The extraction flag that leaves a file already on disk alone.
+///
+/// Nothing in this archive is worth overwriting: a registry entry is named by
+/// its content, so a file that is already there already holds the right bytes.
+/// Leaving it is also what keeps the restore safe beside a neighbour, because
+/// the two jobs this host runs at once share one cargo home and this untar does
+/// not hold the package-cache lock the neighbour's compile respects. The two
+/// tars disagree on which flag says it: the BSD one errors on `--skip-old-files`
+/// and the GNU one treats `--keep-old-files` as a demand that nothing collide.
+fn keep_existing() -> Result<&'static str> {
+    let version = Command::new("tar")
+        .arg("--version")
+        .output()
+        .context("read tar version")?;
+    Ok(if version.stdout.starts_with(b"tar (GNU tar)") {
+        "--skip-old-files"
+    } else {
+        "--keep-old-files"
+    })
+}
+
+/// The lock file is the whole key. It names every crate version and every git
+/// revision the build may reach, and nothing else about the job changes what
+/// those bytes are.
+fn sources_fingerprint(root: &Path) -> Result<String> {
+    let lock = root.join("Cargo.lock");
+    let bytes = fs::read(&lock).with_context(|| format!("read {}", lock.display()))?;
+    let mut hash = Sha256::new();
+    for value in [Sources::SCHEMA.as_bytes(), &bytes] {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value);
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
+fn read_marker(cargo_home: &Path) -> Result<Option<String>> {
+    let marker = cargo_home.join(Sources::MARKER);
+    if !marker.is_file() {
+        return Ok(None);
+    }
+    let value = fs::read_to_string(&marker)
+        .with_context(|| format!("read {}", marker.display()))?
+        .trim()
+        .to_owned();
+    Ok(Some(value))
+}
+
+fn write_marker(cargo_home: &Path, fingerprint: &str) -> Result<()> {
+    let marker = cargo_home.join(Sources::MARKER);
+    fs::write(&marker, fingerprint).with_context(|| format!("write {}", marker.display()))
+}
+
+/// The object name carries the checksum its bytes must have, which is what
+/// makes a published snapshot immutable rather than merely named.
+fn checksum_of(object: &str) -> Result<&str> {
+    object
+        .rsplit_once('/')
+        .and_then(|(_, name)| name.strip_suffix(".tar"))
+        .context("snapshot object has no checksum name")
+}
+
 fn fingerprint(
     lane: &str,
     profile: &str,
@@ -167,11 +332,11 @@ fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
     let checksum = sha256(archive.path())?;
     let object = Snapshot::object(fingerprint, &checksum);
     let client = Client::load(mc)?;
-    if client.exists(&object)? {
+    if client.exists(&client.bucket, &object)? {
         info!(%fingerprint, %checksum, "target snapshot already exists");
         return Ok(());
     }
-    client.copy(archive.path(), &object)?;
+    client.copy(archive.path(), &client.bucket, &object)?;
     info!(%fingerprint, %checksum, "published immutable target snapshot");
     Ok(())
 }
@@ -180,16 +345,13 @@ fn restore(target: &Path, fingerprint: &str, mc: &Path) -> Result<bool> {
     validate_fingerprint(fingerprint)?;
     require_target(target, true)?;
     let client = Client::load(mc)?;
-    let Some(object) = client.latest(fingerprint)? else {
+    let Some(object) = client.latest(&client.bucket, Snapshot::PREFIX, fingerprint)? else {
         info!(%fingerprint, "no target snapshot exists");
         return Ok(false);
     };
-    let expected = object
-        .rsplit_once('/')
-        .and_then(|(_, name)| name.strip_suffix(".tar"))
-        .context("target snapshot object has no checksum name")?;
+    let expected = checksum_of(&object)?;
     let archive = NamedTempFile::new().context("create target snapshot download")?;
-    client.copy_from(&object, archive.path())?;
+    client.copy_from(&client.bucket, &object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
         "target snapshot checksum mismatch"
@@ -367,24 +529,24 @@ impl Client {
         Ok(Command::new(&self.program))
     }
 
-    fn exists(&self, object: &str) -> Result<bool> {
+    fn exists(&self, bucket: &str, object: &str) -> Result<bool> {
         let mut command = self.command()?;
         let status = command
             .arg("stat")
-            .arg(self.remote(object))
+            .arg(Self::remote(bucket, object))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
         Ok(status.success())
     }
 
-    fn latest(&self, fingerprint: &str) -> Result<Option<String>> {
+    fn latest(&self, bucket: &str, prefix: &str, fingerprint: &str) -> Result<Option<String>> {
         let mut command = self.command()?;
         let output = command
             .args(["ls", "--json"])
-            .arg(self.remote(&format!("{}/{fingerprint}/", Snapshot::PREFIX)))
+            .arg(Self::remote(bucket, &format!("{prefix}/{fingerprint}/")))
             .output()?;
-        require_success(&output, "list target snapshots")?;
+        require_success(&output, "list snapshots")?;
         let mut objects = String::from_utf8(output.stdout)
             .context("snapshot storage listing is not UTF-8")?
             .lines()
@@ -396,10 +558,10 @@ impl Client {
                     .map(ToOwned::to_owned)
             })
             .filter_map(|key| {
-                let key = if key.starts_with(Snapshot::PREFIX) {
+                let key = if key.starts_with(prefix) {
                     key
                 } else {
-                    format!("{}/{fingerprint}/{key}", Snapshot::PREFIX)
+                    format!("{prefix}/{fingerprint}/{key}")
                 };
                 key.ends_with(".tar").then_some(key)
             })
@@ -408,24 +570,33 @@ impl Client {
         Ok(objects.pop())
     }
 
-    fn copy(&self, source: &Path, object: &str) -> Result<()> {
+    fn copy(&self, source: &Path, bucket: &str, object: &str) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command.arg("cp").arg(source).arg(self.remote(object)),
-            "upload target snapshot",
+            command
+                .arg("cp")
+                .arg(source)
+                .arg(Self::remote(bucket, object)),
+            "upload snapshot",
         )
     }
 
-    fn copy_from(&self, object: &str, destination: &Path) -> Result<()> {
+    fn copy_from(&self, bucket: &str, object: &str, destination: &Path) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command.arg("cp").arg(self.remote(object)).arg(destination),
-            "download target snapshot",
+            command
+                .arg("cp")
+                .arg(Self::remote(bucket, object))
+                .arg(destination),
+            "download snapshot",
         )
     }
 
-    fn remote(&self, object: &str) -> String {
-        format!("snapshot/{}/{object}", self.bucket)
+    /// Addresses a named bucket rather than only this job's own. The source
+    /// layer lives in the trusted scope and is read from there by every scope,
+    /// which is the access the bucket policy grants and nothing wider.
+    fn remote(bucket: &str, object: &str) -> String {
+        format!("snapshot/{bucket}/{object}")
     }
 }
 
@@ -450,6 +621,109 @@ mod tests {
         assert!(validate_component("audio/../trusted", "lane").is_err());
     }
 
+    /// A source snapshot must be reachable from a scope that is not trusted,
+    /// because that is the whole point: the default branch records the layer
+    /// and every branch reads it. A client that could only address its own
+    /// bucket sent a review job looking for an object only `main` ever writes.
+    #[test]
+    fn a_review_job_reads_sources_from_the_trusted_bucket() {
+        let client = Client {
+            bucket: "kithara-review".to_owned(),
+            endpoint: String::new(),
+            environment: BTreeMap::new(),
+            program: PathBuf::from("mc"),
+        };
+
+        assert_eq!(
+            Client::remote(Sources::BUCKET, &Sources::object("a", "b")),
+            "snapshot/kithara-trusted/source-snapshots/a/b.tar"
+        );
+        assert_eq!(
+            Client::remote(&client.bucket, "target-snapshots/a/b.tar"),
+            "snapshot/kithara-review/target-snapshots/a/b.tar"
+        );
+    }
+
+    /// The lock file is the entire key. A lane, a profile or a toolchain that
+    /// changed the fingerprint would manufacture a miss for sources that are
+    /// byte-identical, and the layer would go cold for no reason.
+    /// A restore runs beside a neighbour that is compiling out of the same
+    /// cargo home, so it must never rewrite a file that neighbour may have
+    /// open. Both tars can say that; they disagree on the spelling, and the
+    /// wrong one either fails the extraction or performs it destructively.
+    #[test]
+    fn a_restore_never_overwrites_what_the_cargo_home_already_holds() {
+        let flag = keep_existing().unwrap();
+        assert!(matches!(flag, "--skip-old-files" | "--keep-old-files"));
+        let archive = NamedTempFile::new().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join("kept"), b"original").unwrap();
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("kept"), b"replacement").unwrap();
+        run_command(
+            Command::new("tar")
+                .args(["--create", "--file"])
+                .arg(archive.path())
+                .arg("--directory")
+                .arg(source.path())
+                .arg("kept"),
+            "archive",
+        )
+        .unwrap();
+        run_command(
+            Command::new("tar")
+                .args(["--extract", flag, "--file"])
+                .arg(archive.path())
+                .arg("--directory")
+                .arg(home.path()),
+            "extract",
+        )
+        .unwrap();
+        assert_eq!(fs::read(home.path().join("kept")).unwrap(), b"original");
+    }
+
+    #[test]
+    fn the_source_key_follows_the_lock_file_alone() {
+        let first = tempfile::tempdir().expect("a temporary root");
+        let second = tempfile::tempdir().expect("a temporary root");
+        fs::write(first.path().join("Cargo.lock"), b"version = 4").expect("a lock file");
+        fs::write(second.path().join("Cargo.lock"), b"version = 4").expect("a lock file");
+
+        assert_eq!(
+            sources_fingerprint(first.path()).expect("a fingerprint"),
+            sources_fingerprint(second.path()).expect("a fingerprint"),
+            "the same lock in a different checkout names the same sources"
+        );
+
+        fs::write(second.path().join("Cargo.lock"), b"version = 5").expect("a lock file");
+        assert_ne!(
+            sources_fingerprint(first.path()).expect("a fingerprint"),
+            sources_fingerprint(second.path()).expect("a fingerprint"),
+            "a changed lock must not serve the previous sources"
+        );
+    }
+
+    #[test]
+    fn a_source_layer_is_recognised_by_its_marker() {
+        let home = tempfile::tempdir().expect("a temporary cargo home");
+
+        assert_eq!(read_marker(home.path()).expect("a marker read"), None);
+        write_marker(home.path(), "fingerprint").expect("a marker write");
+        assert_eq!(
+            read_marker(home.path()).expect("a marker read"),
+            Some("fingerprint".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_snapshot_object_names_the_checksum_its_bytes_must_have() {
+        assert_eq!(
+            checksum_of("source-snapshots/key/abc.tar").expect("a checksum"),
+            "abc"
+        );
+        assert!(checksum_of("source-snapshots/key/abc").is_err());
+    }
+
     #[test]
     fn target_snapshots_stay_in_the_compiler_cache_scope() {
         let client = Client {
@@ -460,7 +734,7 @@ mod tests {
         };
 
         assert_eq!(
-            client.remote("target-snapshots/fingerprint/archive.tar"),
+            Client::remote(&client.bucket, "target-snapshots/fingerprint/archive.tar"),
             "snapshot/kithara-review/target-snapshots/fingerprint/archive.tar"
         );
     }

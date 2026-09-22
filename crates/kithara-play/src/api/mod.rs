@@ -14,6 +14,7 @@ pub use event::{
     RouteDescription, SessionEvent, StretchBackendKind, TimeControlStatus, TimeRange, TrackRef,
     WaitingReason,
 };
-pub use kithara_warp::{SessionBeat, TransportRevision};
+pub use kithara_signal::TransportRevision;
+pub use kithara_warp::SessionBeat;
 pub use transport::{SessionTransportSnapshot, Tempo, TempoError};
 pub use types::{SessionDuckingMode, SlotId, TrackId};

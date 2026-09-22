@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
-use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, SessionEpoch, SessionFrame};
+use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp};
 
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
 

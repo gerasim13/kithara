@@ -51,9 +51,10 @@ mod tests {
     use std::num::NonZeroU64;
 
     use kithara_test_utils::kithara;
+    use rangemap::RangeSet;
 
     use super::*;
-    use crate::{AnalysisToken, Coverage};
+    use crate::AnalysisToken;
 
     fn analysis(settled: bool) -> TrackAnalysis {
         TrackAnalysis::builder()
@@ -61,7 +62,7 @@ mod tests {
             .revision(7)
             .source_sample_rate(std::num::NonZeroU32::MIN)
             .extent(64)
-            .coverage(Coverage::default())
+            .coverage(RangeSet::new())
             .fingerprint(AnalysisFingerprint::default())
             .settled(settled)
             .build()

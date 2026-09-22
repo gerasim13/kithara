@@ -1,0 +1,44 @@
+[package]
+name = "kithara-waveform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Waveform model, byte codec, and progressive band analyzer for Kithara."
+keywords = ["audio", "waveform", "dsp", "analysis"]
+categories = ["multimedia::audio"]
+
+[features]
+default = []
+# The FFT band analyzer. The model and its codec are available without it.
+dsp = ["dep:realfft"]
+
+[dependencies]
+kithara-blob = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
+
+bon = { workspace = true }
+delegate = { workspace = true }
+fieldwork = { workspace = true }
+num-traits = { workspace = true }
+rangemap = { workspace = true }
+realfft = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
+[lints]
+workspace = true

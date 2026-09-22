@@ -3,9 +3,8 @@ use std::{cell::Cell, num::NonZeroU32};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{
-    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
-};
+use kithara_play::{SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember};
+use kithara_sync::GroupState;
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -132,6 +131,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root,
         root_view.clone(),
         sample_rate,
+        None,
         None,
         limiter,
         start_stream_web_audio,

@@ -12,7 +12,7 @@ use kithara_platform::{
     tokio::sync::watch,
 };
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioSpec, FrameCoverage, FrameSpan};
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
@@ -20,6 +20,7 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{
+        AnalysisDemand,
         analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis},
         producer::{AnalysisProducer, ring},
         worker::Job,
@@ -29,7 +30,6 @@ use super::{
 };
 use crate::{
     AnalysisProgress,
-    coverage::FrameRange,
     test_pools::{TestPools, pools},
 };
 
@@ -335,6 +335,7 @@ where
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
+            demand: AnalysisDemand::ALL,
             tx,
             rate,
             ingest,
@@ -568,8 +569,8 @@ async fn a_source_with_no_length_is_decoded_in_order(analysis_pcm: &'static [f32
         "a source with no length is never repositioned"
     );
     assert_eq!(
-        pass.analysis().coverage().runs(),
-        &[FrameRange::new(0, Consts::EXTENT)],
+        pass.analysis().coverage().iter().collect::<Vec<_>>(),
+        [&(0..Consts::EXTENT)],
         "its coverage grows as one run"
     );
     assert!(calls.contains(&Call::Eof), "end of stream ends such a pass");
@@ -641,17 +642,17 @@ async fn a_snapshot_published_early_describes_the_whole_track(analysis_pcm: &'st
         "this is a snapshot published while coverage is still growing"
     );
 
-    let runs = analysis.coverage().runs();
+    let runs = analysis.coverage().iter().collect::<Vec<_>>();
     assert!(
         runs.len() > 1,
         "coverage must be spread over the source, not one run: {runs:?}"
     );
     assert!(
-        runs.first().is_some_and(|run| run.start() > 0),
+        runs.first().is_some_and(|run| run.start > 0),
         "an early snapshot must describe more than the opening: {runs:?}"
     );
     assert!(
-        runs.last().is_some_and(|run| run.end() > EXTENT / 2),
+        runs.last().is_some_and(|run| run.end > EXTENT / 2),
         "coverage must reach the far half of the track: {runs:?}"
     );
 }
@@ -718,7 +719,7 @@ async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm:
 
     assert_eq!(
         pass.analysis().missing(),
-        vec![FrameRange::new(0, FLOOR)],
+        vec![0..0 + FLOOR],
         "only what the source cannot deliver is left over"
     );
     let lengths = run_lengths(&pass.calls());
@@ -786,12 +787,7 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &
         !analysis.is_complete(),
         "a pass that gave up on a range is not a complete one"
     );
-    let missing: u64 = analysis
-        .missing()
-        .iter()
-        .copied()
-        .map(FrameRange::frames)
-        .sum();
+    let missing: u64 = analysis.missing().iter().map(|gap| gap.frames()).sum();
     assert_eq!(
         missing,
         Consts::EXTENT - covered,
@@ -890,6 +886,7 @@ async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked(analysis_pcm
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod artifacts {
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_signal::FrameSpan;
     use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
     use kithara_test_utils::kithara;
 
