@@ -8,9 +8,10 @@
 //! playing.
 
 use kithara::{
+    audio::DecodeErrorKind,
     events::{SlotId, TrackId},
     platform::sync::Arc,
-    play::{ItemRole, PlayerEvent, TrackRef},
+    play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef},
     queue::{QueueControl, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
@@ -96,6 +97,7 @@ async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) 
         .bus()
         .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
             item: ItemRole::Leading(TrackRef::new(playing, SlotId::new(0), Arc::from(source))),
+            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
         }));
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 

@@ -5,7 +5,7 @@ use kithara::{
     events::{EventBus, RecvError, TopicReceiver},
     platform::{
         thread::paced_backoff,
-        time::{Duration, TimeoutError, sleep, timeout},
+        time::{Duration, sleep},
     },
     play::RegisteredAudio,
     stream::{Stream, StreamType},
@@ -31,10 +31,6 @@ pub(crate) const MIN_SIGNAL_AMP: f64 = 0.1;
 /// = 2.9 ms post-seek read budget — well within decoder warm-up.
 pub(crate) const READ_FRAMES_AFTER_SEEK: usize = 128;
 pub(crate) const READ_PENDING_RETRIES: usize = 4096;
-/// How long a pending async read waits on the producer's wake before it
-/// reads again anyway. See [`read_block_async`] for why a wake alone cannot
-/// be the only thing that ends the wait.
-const READ_PENDING_WAKE_BUDGET: Duration = Duration::from_millis(1);
 pub(crate) const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
 pub(crate) const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
 
@@ -186,26 +182,15 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// Async twin of [`read_block_with_position`]; same reason for the guard, and
 /// the same budget.
 ///
-/// A pending read waits for the producer to announce progress rather than for
-/// a pause to expire. The ring publishes [`AudioEvent::OutputAvailable`] the
-/// moment it goes from empty to non-empty, and this scan runs its consumer in
-/// `ImmediateOffRt`, where that event reaches the bus inline — so the common
-/// retry costs one wake and nothing else.
+/// A pending read waits for the producer to announce progress, not for a pause
+/// to expire. Each producer pass that publishes output also delivers a
+/// coalesced [`AudioEvent::OutputAvailable`] wake from the scheduler shell,
+/// so the retry costs one wake and nothing else.
 ///
-/// That wake is an edge, while `Pending` is a level: it fires on the
-/// empty-to-non-empty transition only, so a `Pending` the transition does not
-/// clear — a ring the producer already filled, a seek epoch the consumer is
-/// still draining — leaves no further edge to wait for, and a producer parked
-/// on a full ring publishes nothing at all. Waiting on the wake alone
-/// deadlocks there until the test's own timeout. So the wake is raced against
-/// a deadline: it ends the wait when it comes, and the read happens anyway
-/// when it does not.
-///
-/// The deadline is what makes that bound honest rather than a pause. Under
-/// `flash` it is engine-backed virtual time, which advances only once every
-/// task is idle, so an expiry says the pipeline made no progress — it does not
-/// measure how loaded the host is, which is what a bare yield or a blocking
-/// backoff would report.
+/// Pacing the retry instead measures the host, not the pipeline: a bare yield
+/// registers neither a deadline nor a pause, so a starved decoder burns the
+/// whole budget before it has produced a single frame, while a blocking
+/// backoff spends real time and a task per attempt.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
@@ -228,18 +213,15 @@ where
                     retries < READ_PENDING_RETRIES,
                     "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
                 );
-                match timeout(READ_PENDING_WAKE_BUDGET, produced.recv()).await {
-                    Ok(Ok(_)) => {}
+                match produced.recv().await {
+                    Ok(_) => {}
                     // A lagging receiver missed wakes, which is news enough: the
                     // producer has been busy, so read again rather than wait for
                     // a fresh event that may never come.
-                    Ok(Err(RecvError::Lagged(_))) => {}
-                    Ok(Err(RecvError::Closed)) => {
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => {
                         panic!("{label}: audio event bus closed while the read was pending")
                     }
-                    // No wake inside the budget: read again to re-examine the
-                    // level the edge cannot announce.
-                    Err(TimeoutError) => {}
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => return None,

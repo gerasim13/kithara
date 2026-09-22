@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kithara_audio::DecodeErrorKind;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 
@@ -101,6 +102,36 @@ pub enum TrackTransition {
     },
 }
 
+/// Which fault ended a track before its natural end.
+///
+/// The classification is `Copy` because it is raised on the audio thread,
+/// which cannot allocate: the decoder's own error is reduced to its kind at
+/// the read that returned it and travels as a code from there. Carrying it
+/// is what lets a consumer tell a decode fault from an output rate the
+/// render context disagrees with, or from a range that context could not
+/// supply -- three different defects that otherwise reach the queue as one
+/// indistinguishable "the engine failed". It is named for the render path
+/// because the decode pipeline already owns its own failure classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackFault {
+    /// The decoder or source returned an error mid-stream.
+    Decode(DecodeErrorKind),
+    /// The render context's output rate disagreed with the track's.
+    OutputRateMismatch,
+    /// The render context could not supply the requested output range.
+    OutputRangeUnavailable,
+}
+
+impl fmt::Display for PlaybackFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Decode(kind) => write!(f, "decode error ({kind:?})"),
+            Self::OutputRateMismatch => f.write_str("output sample-rate mismatch"),
+            Self::OutputRangeUnavailable => f.write_str("render context has no output range"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackPlaybackStopReason {
     /// Playback stopped because the track naturally reached EOF.
@@ -111,8 +142,8 @@ pub enum TrackPlaybackStopReason {
     /// a non-recoverable error mid-stream. Distinct from `Eof`: the
     /// track did NOT play to its natural end. Queue consumers must
     /// treat this as a track-failed signal, NOT as an auto-advance
-    /// trigger.
-    Failed,
+    /// trigger, and the payload says which fault it was.
+    Failed(PlaybackFault),
 }
 
 #[derive(Debug, Clone)]

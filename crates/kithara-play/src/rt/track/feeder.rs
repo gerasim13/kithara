@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
-use kithara_audio::{SourceEnd, SourceSpan};
+use kithara_audio::{DecodeErrorKind, SourceEnd, SourceSpan, map_decode_error_kind};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
@@ -22,12 +22,12 @@ use crate::{bridge::RtMetrics, worker::ServiceClass};
 pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
+    failed: Option<DecodeErrorKind>,
     last_source_end: Option<SourceEnd>,
     source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,
     channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
     eof_seen: bool,
-    failed: bool,
     write_len: usize,
     write_pos: usize,
 }
@@ -88,8 +88,9 @@ pub enum ReadOutcome {
     /// mid-stream. Distinct from [`Eof`](Self::Eof): the track did NOT
     /// reach its natural end — surface this as a track-failed signal
     /// upstream instead of letting the queue auto-advance as if the
-    /// track played out.
-    Failed,
+    /// track played out. The payload names the decoder fault, so a
+    /// consumer reports which error ended the track rather than that one did.
+    Failed(DecodeErrorKind),
 }
 
 impl PlayerResource {
@@ -124,7 +125,7 @@ impl PlayerResource {
             write_pos: 0,
             last_source_end: None,
             eof_seen: false,
-            failed: false,
+            failed: None,
         })
     }
 
@@ -210,9 +211,9 @@ impl PlayerResource {
                     eof_reached = true;
                     (0, None)
                 }
-                Err(_) => {
+                Err(error) => {
                     metrics.record_decode_error();
-                    self.failed = true;
+                    self.failed = Some(map_decode_error_kind(&error));
                     (0, None)
                 }
             };
@@ -284,12 +285,15 @@ impl PlayerResource {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
-        if self.write_len == 0 && self.failed && !self.eof_seen {
+        if let Some(fault) = self.failed
+            && self.write_len == 0
+            && !self.eof_seen
+        {
             let range_len = range.len();
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            return ReadOutcome::Failed;
+            return ReadOutcome::Failed(fault);
         }
 
         if self.write_len > 0 {
@@ -363,7 +367,7 @@ impl PlayerResource {
         self.last_source_end = None;
         self.resource.get().clear_render();
         self.eof_seen = false;
-        self.failed = false;
+        self.failed = None;
     }
 
     const fn scratch_frames(sample_rate: u32) -> FrameCount {

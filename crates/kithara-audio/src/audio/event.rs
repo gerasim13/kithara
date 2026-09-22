@@ -217,14 +217,12 @@ impl ReaderOutputWake {
 
 impl WakeSignal for ReaderOutputWake {
     fn flush_deferred(&self) {
+        self.emit.flush();
         if self.pending.swap(false, Ordering::AcqRel) {
             WakeSignal::wake(self.thread.as_ref());
+            // A pre-push emptiness snapshot can race a consumer draining the ring.
+            self.emit.bus().publish(AudioEvent::OutputAvailable);
         }
-        self.emit.flush();
-    }
-
-    fn on_data_available(&self) {
-        self.emit.enqueue(AudioEvent::OutputAvailable);
     }
 
     fn wake(&self) {
@@ -265,7 +263,14 @@ pub(crate) fn map_playback_resampler_kind(name: &'static str) -> PlaybackResampl
     }
 }
 
-pub(crate) const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
+/// Reduce a decoder error to the `Copy` code that can travel on the audio thread.
+///
+/// `DecodeError` owns strings and a boxed source, so it cannot cross a render
+/// callback that must not allocate or drop. This crate owns `DecodeErrorKind`
+/// and `kithara-decode` owns `DecodeError`, so neither can carry an inherent
+/// conversion: the mapping is published here, next to the kind it produces.
+#[must_use]
+pub const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
     match error {
         DecodeError::Io { .. } => DecodeErrorKind::Io,
         DecodeError::UnsupportedCodec { .. } => DecodeErrorKind::UnsupportedCodec,
@@ -483,7 +488,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
+    fn output_available_event_is_coalesced_per_producer_pass() {
         let pools = pools();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
@@ -502,6 +507,12 @@ mod tests {
 
         tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("second push reaches ring");
+        assert!(events.try_recv().is_err());
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(AudioEvent::OutputAvailable)
+        ));
         tx.flush_wake_signals();
         assert!(events.try_recv().is_err());
 
@@ -510,11 +521,14 @@ mod tests {
 
         tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("third push reaches empty ring");
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
+            .expect("fourth push shares the producer pass");
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
             Ok(AudioEvent::OutputAvailable)
         ));
+        assert!(events.try_recv().is_err(), "one event per producer pass");
     }
 
     #[kithara::test]
