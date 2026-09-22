@@ -84,6 +84,7 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }

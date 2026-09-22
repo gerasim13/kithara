@@ -5475,6 +5475,7 @@ dependencies = [
  "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
