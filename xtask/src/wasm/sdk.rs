@@ -45,27 +45,7 @@ pub(super) fn run(args: Args, ctx: &Ctx) -> Result<()> {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
-    let generator = backend.join(format!(
-        "target/debug/uniffi-bindgen-react-native{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    run_command(
-        Command::new(generator)
-            .args([
-                "generate",
-                "bindings",
-                "--library",
-                "--flavor",
-                "wasm",
-                "--no-format",
-                "--ts-dir",
-            ])
-            .arg(&generated)
-            .arg("--cpp-dir")
-            .arg(shim.join("src"))
-            .arg(library),
-        &cancel,
-    )?;
+    generate_bindings(&backend, &generated, &shim, &library, &cancel)?;
     let module = shim.join("src/kithara_config_uniffi_probe_module.rs");
     fs::write(&module, canonical_rust(&fs::read_to_string(&module)?)?)?;
     write_shim(&ctx.root, &shim, &backend)?;
@@ -84,6 +64,89 @@ pub(super) fn run(args: Args, ctx: &Ctx) -> Result<()> {
     bundle(&ctx.root, &output, &backend, &cancel)?;
     tracing::info!(directory = %output.display(), revision = %pins.uniffi_javascript_rev, "generated SDK fixture ready");
     Ok(())
+}
+
+pub(super) fn run_product(args: Args, ctx: &Ctx) -> Result<()> {
+    let cancel = Cancel::install()?;
+    let pins = CiPins::load(&ctx.root.join(".config/ci-pins.toml"))?;
+    let backend = ctx.root.join(args.backend).canonicalize()?;
+    validate_tools(&backend, &pins, &cancel)?;
+    let output = ctx.root.join("target/config-protocol/product-sdk");
+    let generated = output.join("generated");
+    let shim = output.join("shim");
+    fs::create_dir_all(shim.join("src"))?;
+    build_backend(&backend, &cancel)?;
+    run_command(
+        Command::new("cargo").current_dir(&ctx.root).args([
+            "build",
+            "--locked",
+            "-p",
+            "kithara-ffi",
+            "--lib",
+            "--no-default-features",
+            "--features",
+            "uniffi-web,symphonia,client-reqwest,tls-rustls",
+        ]),
+        &cancel,
+    )?;
+    let library = ctx.root.join("target/debug").join(format!(
+        "{}kithara_ffi{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    generate_bindings(&backend, &generated, &shim, &library, &cancel)?;
+    let module = shim.join("src/kithara_ffi_module.rs");
+    fs::write(&module, canonical_rust(&fs::read_to_string(&module)?)?)?;
+    write_product_shim(&ctx.root, &shim, &backend)?;
+    fs::copy(
+        ctx.root.join("tests/crates/ffi-web/product/wasm.lock"),
+        shim.join("Cargo.lock"),
+    )?;
+    build_wasm(&shim, &pins.nightly_toolchain, &cancel)?;
+    run_command(
+        Command::new("wasm-bindgen")
+            .arg(
+                shim.join(
+                    "target/wasm32-unknown-unknown/debug/kithara_product_web_uniffi_probe.wasm",
+                ),
+            )
+            .args(["--target", "web", "--out-name", "index", "--out-dir"])
+            .arg(generated.join("wasm-bindgen")),
+        &cancel,
+    )?;
+    bundle_product(&ctx.root, &output, &backend, &cancel)?;
+    tracing::info!(directory = %output.display(), "product UniFFI Web host SDK ready");
+    Ok(())
+}
+
+fn generate_bindings(
+    backend: &Path,
+    generated: &Path,
+    shim: &Path,
+    library: &Path,
+    cancel: &Cancel,
+) -> Result<()> {
+    let generator = backend.join(format!(
+        "target/debug/uniffi-bindgen-react-native{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    run_command(
+        Command::new(generator)
+            .args([
+                "generate",
+                "bindings",
+                "--library",
+                "--flavor",
+                "wasm",
+                "--no-format",
+                "--ts-dir",
+            ])
+            .arg(generated)
+            .arg("--cpp-dir")
+            .arg(shim.join("src"))
+            .arg(library),
+        cancel,
+    )
 }
 
 fn validate_tools(backend: &Path, pins: &CiPins, cancel: &Cancel) -> Result<()> {
@@ -205,6 +268,61 @@ uniffi-runtime-javascript = { path = "", features = ["wasm32"] }
     Ok(())
 }
 
+fn write_product_shim(root: &Path, shim: &Path, backend: &Path) -> Result<()> {
+    let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let mut manifest: toml::Value = toml::from_str(
+        r#"
+[package]
+name = "kithara-product-web-uniffi-probe"
+version = "0.0.0"
+edition = "2018"
+publish = false
+[workspace]
+resolver = "2"
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+kithara-ffi = { path = "", default-features = false, features = ["wasm", "uniffi-web"] }
+uniffi-runtime-javascript = { path = "", features = ["wasm32"] }
+"#,
+    )?;
+    manifest["dependencies"]["kithara-ffi"]["path"] = toml::Value::String(
+        root.join("crates/kithara-ffi")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    manifest["dependencies"]["uniffi-runtime-javascript"]["path"] = toml::Value::String(
+        backend
+            .join("crates/uniffi-runtime-javascript")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    manifest["dependencies"]
+        .as_table_mut()
+        .context("product shim dependencies")?
+        .insert(
+            "wasm-bindgen".into(),
+            workspace["workspace"]["dependencies"]["wasm-bindgen"].clone(),
+        );
+    let mut crates_io = toml::value::Table::new();
+    crates_io.insert(
+        "firewheel-web-audio".into(),
+        workspace["patch"]["crates-io"]["firewheel-web-audio"].clone(),
+    );
+    let mut patch = toml::value::Table::new();
+    patch.insert("crates-io".into(), toml::Value::Table(crates_io));
+    manifest
+        .as_table_mut()
+        .context("product shim manifest")?
+        .insert("patch".into(), toml::Value::Table(patch));
+    fs::write(
+        shim.join("src/lib.rs"),
+        "use kithara_ffi as _;\nmod kithara_ffi_module;\n",
+    )?;
+    fs::write(shim.join("Cargo.toml"), toml::to_string_pretty(&manifest)?)?;
+    Ok(())
+}
+
 fn build_wasm(shim: &Path, nightly: &str, cancel: &Cancel) -> Result<()> {
     run_command(Command::new("cargo").current_dir(shim)
         .arg(format!("+{nightly}"))
@@ -255,6 +373,63 @@ fn bundle(root: &Path, output: &Path, backend: &Path, cancel: &Cancel) -> Result
             "browser.ts",
             "worker.ts",
             "wake-worker.ts",
+            "--outdir",
+            ".",
+            "--target",
+            "browser",
+        ]),
+        cancel,
+    )
+}
+
+fn bundle_product(root: &Path, output: &Path, backend: &Path, cancel: &Cancel) -> Result<()> {
+    for file in ["browser.ts", "index.html"] {
+        fs::copy(
+            root.join("tests/crates/ffi-web/product").join(file),
+            output.join(file),
+        )?;
+    }
+    let generated = output.join("generated/kithara_ffi.ts");
+    let source = fs::read_to_string(&generated)?;
+    let original = "import * as wasmBundle from \"./wasm-bindgen/index.js\";";
+    ensure!(
+        source.matches(original).count() == 1,
+        "product UniFFI generated Wasm import changed"
+    );
+    fs::write(
+        &generated,
+        source.replace(
+            original,
+            "const wasmBundle = await import(new URL(\"./generated/wasm-bindgen/index.js\", import.meta.url).href);",
+        ),
+    )?;
+    let config = json!({ "compilerOptions": {
+        "paths": { "@ubjs/core": [backend.join("typescript/src/index.ts")] },
+        "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
+        "strict": true, "noEmit": true, "allowImportingTsExtensions": true,
+        "lib": ["ES2022", "ESNext.Disposable", "DOM"], "types": []
+    }, "include": ["*.ts", "generated/**/*.ts"] });
+    fs::write(
+        output.join("tsconfig.json"),
+        serde_json::to_string_pretty(&config)?,
+    )?;
+    run_command(
+        Command::new("npm")
+            .current_dir(backend.join("typescript"))
+            .args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]),
+        cancel,
+    )?;
+    run_command(
+        Command::new("node")
+            .arg(backend.join("typescript/node_modules/typescript/bin/tsc"))
+            .arg("--project")
+            .arg(output.join("tsconfig.json")),
+        cancel,
+    )?;
+    run_command(
+        Command::new("bun").current_dir(output).args([
+            "build",
+            "browser.ts",
             "--outdir",
             ".",
             "--target",

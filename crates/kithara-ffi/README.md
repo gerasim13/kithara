@@ -12,7 +12,7 @@
 
 # kithara-ffi
 
-Cross-platform FFI adapter for the kithara audio player. Not published — consumed by Apple (Swift via UniFFI), Android (Kotlin via UniFFI / JNI), and browser (wasm-bindgen) build flows.
+Cross-platform FFI adapter for the kithara audio player. Not published — consumed by Apple (Swift via UniFFI), Android (Kotlin via UniFFI / JNI), and browser build flows. Browser host configuration also has generated UniFFI TypeScript bindings; the player adapter still uses wasm-bindgen.
 
 ## Usage
 
@@ -21,6 +21,7 @@ See the workspace tooling for end-to-end builds:
 - `just platform apple xcframework` — builds the Apple XCFramework (release).
 - `just platform android aar` — builds Android AARs (release).
 - `just platform wasm build` — builds the browser demo via Trunk (output in `dist/`).
+- `just test sdk-product-web <backend> <headless-shell>` — builds and exercises generated browser host configuration bindings.
 - `just tooling xtask wasm postbuild` — post-build patches for the wasm output.
 
 Apple and Android builds use the `standard` feature set unless
@@ -44,7 +45,7 @@ analysis or UI. UI backends keep their own target support constraints.
 - Exposes a stable, language-agnostic surface over `kithara-play` so platform shims (`kithara/apple`, `kithara/android`, and the browser demo) can talk to the engine without depending on internal Rust types.
 - Owns the UniFFI definitions used by `just platform apple xcframework` and `just platform android aar`.
 - Exposes native Rust-owned `FfiAssetLayoutRegistry` and `FfiAssetStore` objects. The store snapshots protocol layouts, owns the cache root and runtime resources, and is injected through the single `FfiPlayerConfig.store` field.
-- Owns the wasm-bindgen / Web Worker glue under [`src/web/`](src/web/) and the Trunk-driven demo (`index.html` + `Trunk.toml`).
+- Owns the generated UniFFI browser host configuration, wasm-bindgen / Web Worker glue under [`src/web/`](src/web/), and the Trunk-driven demo (`index.html` + `Trunk.toml`).
 
 Do not depend on this crate directly from application code — use the platform-specific shims (`kithara/apple`, `kithara/android`).
 

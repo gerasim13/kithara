@@ -15,4 +15,3 @@ mod storage;
 pub(crate) use bridge::{event_bridge, item_bridge};
 pub(crate) use inner::Inner;
 pub(crate) use runtime::FFI_RUNTIME;
-pub use session::initialize_host;

@@ -8,7 +8,7 @@ import { extname, join, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 // The xtask parent owns the process group, wall deadline, and sampled RSS limit.
-const [directory, executable] = process.argv.slice(2);
+const [directory, executable, expectedPrefix = "PASS main+worker", expectedSuffix = "cross-thread-wake PASS"] = process.argv.slice(2);
 const root = await realpath(directory);
 const profile = await mkdtemp(join(tmpdir(), "kithara-sdk-"));
 const types = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm" };
@@ -89,7 +89,7 @@ try {
     });
     const body = result.result.value ?? "";
     assert(!body.startsWith("FAIL"), body);
-    if (body.startsWith("PASS main+worker") && body.endsWith("cross-thread-wake PASS")) {
+    if (body.startsWith(expectedPrefix) && body.endsWith(expectedSuffix)) {
       console.log(body);
       passed = true;
       break;

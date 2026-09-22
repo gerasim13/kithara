@@ -487,3 +487,9 @@ rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests 
 sdk-web BACKEND BROWSER:
     just _xtask wasm sdk-build --backend "$1"
     just _xtask wasm sdk-test --directory target/config-protocol/sdk --browser "$2"
+
+# Product host configuration through generated UniFFI Web bindings.
+[positional-arguments]
+sdk-product-web BACKEND BROWSER:
+    just _xtask wasm sdk-product-build --backend "$1"
+    just _xtask wasm sdk-test --directory target/config-protocol/product-sdk --browser "$2" --expect-prefix "PASS product-host" --expect-suffix ""

@@ -9595,6 +9595,18 @@ public func defaultHostConfig() -> FfiHostConfig  {
 })
 }
 /**
+ * Initialize the platform host through the generated SDK surface.
+ *
+ * # Errors
+ * Returns a typed lifecycle or host-construction error.
+ */
+public func initializeHost(config: FfiHostConfig)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_func_initialize_host(
+        FfiConverterTypeFfiHostConfig_lower(config),$0
+    )
+}
+}
+/**
  * Create a Rust-owned query-aware layout.
  *
  * Register the returned layout through the ordinary asset-layout registry
@@ -9631,18 +9643,6 @@ public func drmLowercaseHexSalt() -> String  {
     )
 })
 }
-/**
- * Initialize the process-wide audio host exactly once.
- *
- * # Errors
- * Returns a typed lifecycle or host-construction error.
- */
-public func initializeHost(config: FfiHostConfig)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_func_initialize_host(
-        FfiConverterTypeFfiHostConfig_lower(config),$0
-    )
-}
-}
 
 private enum InitializationResult {
     case ok
@@ -9662,6 +9662,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_default_host_config() != 64921) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 32440) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9672,9 +9675,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 1992) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_add_observer() != 24047) {

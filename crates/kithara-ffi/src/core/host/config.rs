@@ -30,7 +30,10 @@ impl TryFrom<FfiLimiterConfig> for LimiterConfig {
 
 /// Settings fixed for the lifetime of the process-wide audio host.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct FfiHostConfig {
     /// Initial device sample-rate hint in hertz.
@@ -75,13 +78,29 @@ impl FfiHostConfig {
 
 /// Return canonical host defaults without initializing runtime resources.
 #[must_use]
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 #[cfg_attr(
     target_arch = "wasm32",
     wasm_bindgen::prelude::wasm_bindgen(js_name = defaultHostConfig)
 )]
 pub fn default_host_config() -> FfiHostConfig {
     FfiHostConfig::default()
+}
+
+/// Initialize the platform host through the generated SDK surface.
+///
+/// # Errors
+/// Returns a typed lifecycle or host-construction error.
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
+pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native::session::initialize_host(config)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::web::bridge::initialize_host_domain(config)
+    }
 }
 
 #[cfg(test)]

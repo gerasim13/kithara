@@ -15,8 +15,7 @@ static HOST: LazyLock<Lifecycle<FfiHost>> = LazyLock::new(Lifecycle::default);
 ///
 /// # Errors
 /// Returns a typed lifecycle or host-construction error.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
+pub(crate) fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
     HOST.initialize(|| FfiHost::new(config.into_domain()?).map_err(FfiError::from))
 }
 

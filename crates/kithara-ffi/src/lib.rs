@@ -2,12 +2,13 @@
 //!
 //! Wraps `kithara-play` types behind an FFI-friendly API. Native targets
 //! (Apple / Android) use `UniFFI` to generate Swift / Kotlin bindings; wasm32
-//! uses wasm-bindgen under `web`. `src/lib.rs` is the single
+//! uses the generated `UniFFI` configuration surface alongside the existing
+//! wasm-bindgen player adapter under `web`. `src/lib.rs` is the single
 //! structural boundary where target-conditional `cfg` gates live: shared
 //! FFI data types live in `core`, native-only bridges/runtime in `native`,
 //! and the wasm surface in `web`.
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 uniffi::setup_scaffolding!();
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
@@ -28,11 +29,9 @@ pub mod web;
 pub(crate) use core::registry;
 pub use core::{
     FfiEqBandConfig, FfiEqFilterKind, FfiHostConfig, FfiLimiterConfig, analysis,
-    default_host_config, item, layout, observer, types,
+    default_host_config, host::initialize_host, item, layout, observer, types,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::initialize_host;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::{FFI_RUNTIME, Inner, event_bridge};
 #[cfg(not(target_arch = "wasm32"))]

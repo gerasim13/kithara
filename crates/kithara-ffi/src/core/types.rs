@@ -21,7 +21,7 @@ use kithara_hls::{KeyFailureStage, KeySource};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Error))]
 pub enum FfiError {
     #[error("Kithara host is not initialized")]
     NotInitialized,

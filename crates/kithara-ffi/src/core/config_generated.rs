@@ -41,7 +41,10 @@ impl From<FfiEqBandConfig> for EqBandConfig {
 
 /// Output ceiling and gain recovery of one `PeakLimiter`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct FfiLimiterConfig {
     /// Linear peak the output never exceeds, in `(0.0, 1.0]`.

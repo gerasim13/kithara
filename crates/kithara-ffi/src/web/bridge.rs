@@ -50,24 +50,26 @@ pub(crate) fn require_initialized() -> Result<(), JsValue> {
 
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = initializeHost)]
 pub fn initialize_host(config: FfiHostConfig) -> Result<(), JsValue> {
-    host_channel()
-        .initialize(|| {
-            let host_config = config.into_domain()?;
-            let pools = build_pools().map_err(|error| crate::types::FfiError::Internal {
-                description: format!("pool construction failed: {error}"),
-            })?;
-            let host = FfiHost::new(host_config)?;
-            let (sender, receiver) = wasm::worker_host_channel(&host)?;
-            play_wasm::spawn_webcodecs_probe(pools.clone());
-            wasm::warm_up_audio(&host)?;
-            Ok(HostChannel {
-                receiver,
-                _host: host,
-                pools,
-                sender,
-            })
+    initialize_host_domain(config).map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+pub(crate) fn initialize_host_domain(config: FfiHostConfig) -> Result<(), crate::types::FfiError> {
+    host_channel().initialize(|| {
+        let host_config = config.into_domain()?;
+        let pools = build_pools().map_err(|error| crate::types::FfiError::Internal {
+            description: format!("pool construction failed: {error}"),
+        })?;
+        let host = FfiHost::new(host_config)?;
+        let (sender, receiver) = wasm::worker_host_channel(&host)?;
+        play_wasm::spawn_webcodecs_probe(pools.clone());
+        wasm::warm_up_audio(&host)?;
+        Ok(HostChannel {
+            receiver,
+            _host: host,
+            pools,
+            sender,
         })
-        .map_err(|error| JsValue::from_str(&error.to_string()))
+    })
 }
 
 pub(crate) fn tick_and_poll() {

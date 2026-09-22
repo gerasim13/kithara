@@ -80,7 +80,9 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
         writeln!(output, "/// {}", ffi_doc_line(line))?;
     }
     output.push_str("#[derive(Clone, Copy, Debug, PartialEq)]\n");
-    output.push_str("#[cfg_attr(feature = \"uniffi\", derive(uniffi::Record))]\n");
+    output.push_str(
+        "#[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n",
+    );
     output.push_str("#[cfg_attr(target_arch = \"wasm32\", wasm_bindgen::prelude::wasm_bindgen)]\n");
     writeln!(output, "pub struct Ffi{} {{", registration.owner)?;
     for field in fields {

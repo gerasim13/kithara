@@ -16,6 +16,8 @@ pub(crate) enum WasmCommand {
     SdkTest(browser::Args),
     /// Generate and build the source-controlled `UniFFI` SDK fixture.
     SdkBuild(sdk::Args),
+    /// Generate and build the product host configuration `UniFFI` Web SDK.
+    SdkProductBuild(sdk::Args),
     /// Build WASM demo app via Trunk.
     Build {
         /// Build profile.
@@ -41,6 +43,7 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     let tools = &ctx.config.tools;
     match cmd {
         WasmCommand::SdkBuild(args) => sdk::run(args, ctx),
+        WasmCommand::SdkProductBuild(args) => sdk::run_product(args, ctx),
         WasmCommand::SdkTest(args) => browser::run(args, ctx),
         WasmCommand::Build { profile } => run_build(profile, tools),
         WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
