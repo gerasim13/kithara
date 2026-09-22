@@ -38,7 +38,7 @@ pub(crate) use shared::shared;
 pub use wasm::TestServerHelper;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use crate::test_server_state::{Content, Delivery, FixtureBehavior};
+pub use crate::test_server_state::{Content, Delivery, FixtureBehavior, NetworkMode};
 
 #[derive(Debug, Error)]
 pub enum CreateHlsError {

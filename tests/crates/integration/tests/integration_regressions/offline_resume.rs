@@ -3,23 +3,27 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    audio::AudioEvent,
     download::{Downloader, DownloaderConfig, DownloaderEvent},
     hls::HlsConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
-    platform::{CancelToken, sync::Arc, time::Duration},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        time::{self, Duration},
+    },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
-    bufpool_ext::pools,
+    bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
+    test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::hls::long_plain;
@@ -57,12 +61,15 @@ const SEGMENT_CHUNK_BYTES: usize = 3 * 1024;
 const SEGMENT_CHUNK_DELAY_MS: u64 = 250;
 const PLAY_BEFORE_OUTAGE_SECS: f64 = 1.0;
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
+/// Far enough past the buffered window that the landing segment has to be
+/// fetched, which during an outage means fetched and failed.
+const SEEK_AHEAD_SECS: f64 = 30.0;
 
 struct NetworkRestore<'a>(&'a PrivateTestServer);
 
 impl Drop for NetworkRestore<'_> {
     fn drop(&mut self) {
-        self.0.set_network_online(true);
+        self.0.set_network_mode(NetworkMode::Online);
     }
 }
 
@@ -71,8 +78,44 @@ async fn playback_resumes_after_network_returns(
     temp_dir: TestTempDir,
     #[future(awt)] offline_source: (PrivateTestServer, String),
 ) {
+    // A private server: this test takes the network down, and the switch covers
+    // every data route on whichever server it runs against.
     let (server, url) = offline_source;
-    resumes_after_outage(temp_dir, &server, url, LOOK_AHEAD_BYTES).await;
+    resumes_after_outage(
+        temp_dir,
+        &server,
+        url,
+        LOOK_AHEAD_BYTES,
+        NetworkMode::Unavailable,
+        None,
+    )
+    .await;
+}
+
+/// The same contract against the error class a device actually produces.
+///
+/// [`playback_resumes_after_network_returns`] takes the network down as a
+/// reachable server answering `503`. Airplane mode is not that: there is no
+/// server to answer, so every fetch dies in the transport and surfaces as
+/// `NetError::Network` / `Timeout` rather than an HTTP status. Both classes are
+/// transient — the segment is obtainable the moment the radio is back — so
+/// resumption must not depend on which one the outage produced. This test is
+/// that one with the class swapped and nothing else changed.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+async fn playback_resumes_after_transport_failure(
+    temp_dir: TestTempDir,
+    #[future(awt)] offline_source: (PrivateTestServer, String),
+) {
+    let (server, url) = offline_source;
+    resumes_after_outage(
+        temp_dir,
+        &server,
+        url,
+        LOOK_AHEAD_BYTES,
+        NetworkMode::TransportFailure,
+        None,
+    )
+    .await;
 }
 
 /// The same contract, with the segments arriving at the rate they are played
@@ -91,7 +134,41 @@ async fn playback_resumes_after_network_returns_with_paced_segments(
     #[future(awt)] paced_source: (PrivateTestServer, String),
 ) {
     let (server, url) = paced_source;
-    resumes_after_outage(temp_dir, &server, url, PACED_LOOK_AHEAD_BYTES).await;
+    resumes_after_outage(
+        temp_dir,
+        &server,
+        url,
+        PACED_LOOK_AHEAD_BYTES,
+        NetworkMode::Unavailable,
+        None,
+    )
+    .await;
+}
+
+/// A seek issued while the network is down must not cost the track its
+/// recovery.
+///
+/// This is the move the report describes: the listener drags the playhead during
+/// an outage, playback stops at the new position, and connectivity coming back
+/// leaves it stopped — only a second seek or a track switch revives it. The seek
+/// lands past the buffered window, so the segments it needs are asked for while
+/// the network is down and every one of them fails. Resumption must not depend on
+/// whether a seek happened in between.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+async fn playback_resumes_after_seek_during_outage(
+    temp_dir: TestTempDir,
+    #[future(awt)] paced_source: (PrivateTestServer, String),
+) {
+    let (server, url) = paced_source;
+    resumes_after_outage(
+        temp_dir,
+        &server,
+        url,
+        PACED_LOOK_AHEAD_BYTES,
+        NetworkMode::TransportFailure,
+        Some(SEEK_AHEAD_SECS),
+    )
+    .await;
 }
 
 /// Re-serve the packaged variant with every media segment throttled to roughly
@@ -156,11 +233,54 @@ fn paced_master(server: &PrivateTestServer) -> String {
     handle.child_url("master.m3u8").to_string()
 }
 
+/// Wait until playback has genuinely run dry, reported as the position it
+/// stopped at.
+///
+/// `AudioEvent::UnderrunStarted` cannot serve as this precondition: a terminal
+/// read error short-circuits the underrun bookkeeping, so a track written off by
+/// the outage never publishes it — the defect under test would erase the very
+/// fact the test rests on. A position that stops advancing is observable either
+/// way.
+async fn wait_for_stalled_position(
+    queue: &QueueControl<TestPools>,
+    timeout: Duration,
+) -> Result<f64, String> {
+    /// Below one PCM callback's worth of media time: real playback advances by
+    /// far more between polls, so this separates "stopped" from "slow".
+    const PROGRESS_EPSILON_SECS: f64 = 0.01;
+    const POLL: Duration = Duration::from_millis(200);
+    /// Two seconds of stillness. A single unchanged pair can straddle one
+    /// scheduling gap; a run of them cannot.
+    const STILL_POLLS: u32 = 10;
+
+    let polls = (timeout.as_millis() / POLL.as_millis()).max(1);
+    let mut furthest = queue.position_seconds().unwrap_or(0.0);
+    let mut still = 0;
+    for _ in 0..polls {
+        time::sleep(POLL).await;
+        let now = queue.position_seconds().unwrap_or(0.0);
+        if now > furthest + PROGRESS_EPSILON_SECS {
+            furthest = now;
+            still = 0;
+        } else {
+            still += 1;
+            if still >= STILL_POLLS {
+                return Ok(furthest);
+            }
+        }
+    }
+    Err(format!(
+        "playback kept advancing for {timeout:?}, reaching {furthest:.3}s"
+    ))
+}
+
 async fn resumes_after_outage(
     temp_dir: TestTempDir,
     server: &PrivateTestServer,
     url: String,
     look_ahead_bytes: u64,
+    outage: NetworkMode,
+    seek_ahead: Option<f64>,
 ) {
     let pools = pools();
     let net = NetOptions::builder()
@@ -233,7 +353,7 @@ async fn resumes_after_outage(
     .await
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
-    server.set_network_online(false);
+    server.set_network_mode(outage);
     let _network_restore = NetworkRestore(&server);
     wait_for_event(
         &mut rx,
@@ -258,32 +378,35 @@ async fn resumes_after_outage(
         )
     });
 
+    // The seek belongs here: the outage is already observed, so the segments the
+    // new position needs are asked for with the network down.
+    let seek_target = if let Some(ahead) = seek_ahead {
+        let target = queue.position_seconds().unwrap_or(0.0) + ahead;
+        queue
+            .run(move |q| q.seek(target))
+            .await
+            .expect("seek during an outage must be accepted");
+        Some(target)
+    } else {
+        None
+    };
+
     // Resumption is only meaningful once playback has genuinely run dry.
     // Without this the buffered look-ahead carries the position past the
     // resume target on its own and the assertion below passes vacuously.
-    let mut starved_at = 0.0;
-    wait_for_event(
-        &mut rx,
-        "playback starving on the exhausted buffer",
-        |event| {
-            let TestEvent::Audio(AudioEvent::UnderrunStarted { position_ms, .. }) = event else {
-                return false;
-            };
-            starved_at = *position_ms as f64 / 1000.0;
-            true
-        },
-        Duration::from_secs(60),
-    )
-    .await
-    .unwrap_or_else(|error| {
-        panic!(
-            "precondition: {error}; the buffer never ran dry while the network was \
-             down, so there was nothing for the recovery to resume from"
-        )
-    });
-    server.set_network_online(true);
+    let starved_at = wait_for_stalled_position(&queue, Duration::from_secs(60))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "precondition: {error}; the buffer never ran dry while the network was \
+                 down, so there was nothing for the recovery to resume from"
+            )
+        });
+    server.set_network_mode(NetworkMode::Online);
 
-    let resume_target = starved_at + MIN_RESUME_PROGRESS_SECS;
+    // After a seek the position the outage left behind says nothing about where
+    // playback must continue: the landing point does.
+    let resume_target = seek_target.unwrap_or(starved_at) + MIN_RESUME_PROGRESS_SECS;
     let resumed_at =
         wait_for_position_event(&mut rx, &queue, resume_target, Duration::from_secs(30))
             .await
@@ -299,7 +422,7 @@ async fn resumes_after_outage(
          (starved at {starved_at:.3}s, outage began at {before_outage:.3}s)"
     );
 
-    queue.clear();
+    queue.run(|q| q.clear()).await;
     ticker.stop().await;
     queue.close().await;
 }

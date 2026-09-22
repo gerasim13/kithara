@@ -19,7 +19,7 @@ mod runtime;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
 
-pub use audio::{Audio, PreparedAudio, SeekHandle};
+pub use audio::{Audio, PreparedAudio, SeekHandle, event::map_decode_error_kind};
 pub use event::{
     AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
     DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,

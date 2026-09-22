@@ -162,10 +162,12 @@ where
         player.set_prefetch_duration(prefetch_duration);
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
+        let player_runtime = player.runtime().cloned();
         let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             player_control.clone(),
+            player_runtime,
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),

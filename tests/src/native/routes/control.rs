@@ -1,24 +1,29 @@
+use std::io;
+
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Request, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::post,
 };
 use base64::{Engine as _, prelude::BASE64_STANDARD};
+use bytes::Bytes;
+use futures::stream;
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{Mp3Shape, assets::by_name, hls::long_plain};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    test_server_state::{Content, Delivery, FixtureBehavior, TestServerState},
+    test_server_state::{Content, Delivery, FixtureBehavior, NetworkMode, TestServerState},
     token_store::TokenResponse,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct NetworkRequest {
-    pub online: bool,
+    pub mode: NetworkMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +80,7 @@ async fn set_network(
     State(state): State<Arc<TestServerState>>,
     Json(request): Json<NetworkRequest>,
 ) -> impl IntoResponse {
-    state.set_network_online(request.online);
+    state.set_network_mode(request.mode);
     StatusCode::NO_CONTENT
 }
 
@@ -164,7 +169,8 @@ async fn create_behavior(
     }
 }
 
-/// Reject every data route while the global network switch is offline.
+/// Fail every data route while the global network switch is offline, in the
+/// shape the active [`NetworkMode`] asks for.
 ///
 /// `/control/*` remains reachable so callers can restore the network,
 /// `/health` remains available for process-level liveness checks, and
@@ -179,10 +185,40 @@ pub(crate) async fn network_guard(
         || path == "/health"
         || path == "/store"
         || path.starts_with("/store/");
-    if !exempt && !state.network_online() {
-        return (StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response();
+    if exempt {
+        return next.run(request).await;
     }
-    next.run(request).await
+    match state.network_mode() {
+        NetworkMode::Online => next.run(request).await,
+        NetworkMode::Unavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response()
+        }
+        NetworkMode::TransportFailure => severed_response(),
+    }
+}
+
+/// Announce a body and then fail it, so the client reports a transport failure
+/// rather than an HTTP status.
+///
+/// The body stream yields an error before its first byte, which aborts the
+/// message mid-flight and closes the connection short of the advertised
+/// `Content-Length` — what a client sees when the radio goes away under an
+/// established connection. Ending the stream quietly instead would leave the
+/// message merely unfinished: a reader with an inactivity budget eventually
+/// gives up, but one that just drains the body (the playlist path) waits
+/// forever, so the outage would read as a hang rather than a failure.
+///
+/// The content type stays absent: `text/html` is separately rejected as a
+/// captive-portal page (`reject_html_response`), which would substitute a fatal
+/// error class for the transport one being modelled.
+fn severed_response() -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, "1")
+        .body(Body::from_stream(stream::once(async {
+            Err::<Bytes, io::Error>(io::Error::other("network severed"))
+        })))
+        .expect("severed response")
 }
 
 #[cfg(test)]
@@ -193,19 +229,30 @@ mod tests {
     #[kithara::test]
     fn network_starts_online() {
         let state = TestServerState::new();
-        assert!(state.network_online(), "server must start reachable");
+        assert_eq!(
+            state.network_mode(),
+            NetworkMode::Online,
+            "server must start reachable"
+        );
     }
 
     #[kithara::test]
-    fn network_switch_flips_both_ways() {
+    #[case::unavailable(NetworkMode::Unavailable)]
+    #[case::transport_failure(NetworkMode::TransportFailure)]
+    fn network_switch_flips_both_ways(#[case] offline: NetworkMode) {
         let state = TestServerState::new();
-        state.set_network_online(false);
-        assert!(
-            !state.network_online(),
+        state.set_network_mode(offline);
+        assert_eq!(
+            state.network_mode(),
+            offline,
             "switch must take the server offline"
         );
-        state.set_network_online(true);
-        assert!(state.network_online(), "switch must bring the server back");
+        state.set_network_mode(NetworkMode::Online);
+        assert_eq!(
+            state.network_mode(),
+            NetworkMode::Online,
+            "switch must bring the server back"
+        );
     }
 
     /// Both shapes come off the same generated body, so the client never

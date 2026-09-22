@@ -7,6 +7,7 @@ use super::{
     types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
 use crate::{
+    attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
 };
@@ -121,14 +122,21 @@ where
         self.player.play();
 
         let _apply = self.lock_select_apply();
+        let pending = match *self.lock_pending_select_mut() {
+            SelectPhase::Pending(pending) => Some(pending),
+            SelectPhase::Idle => None,
+        };
         let index = self.player.current_index();
-        if self.player.item_has_resource(index) {
+        if pending.is_none() && self.player.item_has_resource(index) {
             return;
         }
         let current = {
             let guard = self.lock_tracks();
-            guard
-                .get(index)
+            pending
+                .map_or_else(
+                    || guard.get(index),
+                    |pending| guard.iter().find(|entry| entry.id == pending.id),
+                )
                 .map(|entry| (entry.id, entry.status.clone()))
         };
         let Some((id, status)) = current else {
@@ -137,18 +145,28 @@ where
         match status {
             TrackStatus::Loaded => self.set_status(id, TrackStatus::Consumed),
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
-                if matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_)) {
+                self.override_pending_select(pending.unwrap_or_else(|| PendingSelect {
+                    id,
+                    settings: Transition::None.settings(self.crossfade_settings()),
+                    playback: kithara_play::SelectionPlayback::Play,
+                    reason: AdvanceReason::UserSelect,
+                }));
+                self.promote_pending_load(id);
+            }
+            TrackStatus::Failed(_) => {
+                let Some(source) = self.tracks.source(id) else {
                     return;
-                }
+                };
                 self.override_pending_select(PendingSelect {
                     id,
                     settings: Transition::None.settings(self.crossfade_settings()),
                     playback: kithara_play::SelectionPlayback::Play,
                     reason: AdvanceReason::UserSelect,
                 });
-                self.promote_pending_load(id);
+                self.set_status(id, TrackStatus::Pending);
+                self.spawn_apply_after_load(id, source, LoadClass::Interactive);
             }
-            TrackStatus::Failed(_) | TrackStatus::Consumed | TrackStatus::Cancelled => {}
+            TrackStatus::Consumed | TrackStatus::Cancelled => {}
         }
     }
 
@@ -283,10 +301,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        event::QueueEvent,
+        event::{QueueEvent, TrackStatus},
         queue::{
             state::tests::make_queue,
-            types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
+            types::{CrossfadeArm, PlaybackTime, SelectPhase, should_arm_crossfade},
         },
     };
 
@@ -352,6 +370,41 @@ mod tests {
         )
         .await;
         assert!(!saw_ended, "stale EOF must not duplicate QueueEnded");
+    }
+
+    #[kithara::test(tokio)]
+    async fn play_retries_the_current_track_after_its_prefetch_failed() {
+        let queue = make_queue();
+        let id = queue
+            .append("https://example.com/a.mp3")
+            .expect("open queue accepts a track");
+        queue.set_status(id, TrackStatus::Failed("network offline".into()));
+
+        queue.play_inner();
+
+        let SelectPhase::Pending(pending) = *queue.lock_pending_select_mut() else {
+            panic!("play must retain selection while retrying the failed track")
+        };
+        assert_eq!(pending.id, id);
+        assert_eq!(pending.playback, kithara_play::SelectionPlayback::Play);
+    }
+
+    #[kithara::test(tokio)]
+    #[case::append(false)]
+    #[case::insert(true)]
+    async fn play_promotes_the_initial_pending_prefetch(#[case] insert: bool) {
+        let queue = make_queue();
+        let id = if insert {
+            queue.insert("https://example.com/a.mp3", None)
+        } else {
+            queue.append("https://example.com/a.mp3")
+        }
+        .expect("open queue accepts a track");
+        assert!(!queue.tracks.attempt_selected(id));
+
+        queue.play();
+
+        assert!(queue.tracks.attempt_selected(id));
     }
 
     #[kithara::test]

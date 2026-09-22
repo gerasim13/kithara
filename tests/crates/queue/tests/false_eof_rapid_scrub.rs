@@ -217,7 +217,7 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let TestEvent::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                if let TestEvent::Player(PlayerEvent::ItemDidFail { item, .. }) = &ev
                     && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);

@@ -145,8 +145,21 @@ enum TestServerFixture {
         }
     }
 
+    /// How the server answers data routes while the outage switch is thrown.
+    ///
+    /// The modes differ in the error class the client observes. `unavailable` is
+    /// a reachable server saying "not now"; `transportFailure` is the shape a
+    /// device sees in airplane mode, where nothing answers at all. A recovery
+    /// contract can hold for one class and fail for the other, so a test has to
+    /// name the one it means.
+    enum NetworkMode: String, Encodable, Sendable {
+        case online
+        case unavailable
+        case transportFailure = "transport_failure"
+    }
+
     private struct NetworkRequest: Encodable {
-        let online: Bool
+        let mode: NetworkMode
     }
 
     private struct TokenResponse: Decodable {
@@ -289,9 +302,9 @@ enum TestServerFixture {
         return text
     }
 
-    static func setNetwork(online: Bool) async throws {
+    static func setNetwork(_ mode: NetworkMode) async throws {
         _ = try await post(
-            NetworkRequest(online: online),
+            NetworkRequest(mode: mode),
             to: "control/network",
             expectedStatus: 204
         )

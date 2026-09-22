@@ -2471,6 +2471,8 @@ open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
     }
     /**
      * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     * An absent root uses Documents/Files/Kithara on iOS, excluded from backup
+     * when supported. Other platforms retain their native storage default.
      *
      * # Panics
      *
@@ -9479,7 +9481,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 56225) {
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 63503) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {

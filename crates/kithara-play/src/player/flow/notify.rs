@@ -258,9 +258,12 @@ pub(crate) fn player_event_from_notification(
             ..
         } => Some(PlayerEvent::ItemDidPlayToEnd { item }),
         PlayerNotification::PlaybackStopped {
-            reason: TrackPlaybackStopReason::Failed,
+            reason: TrackPlaybackStopReason::Failed(fault),
             ..
-        } => Some(PlayerEvent::ItemDidFail { item }),
+        } => Some(PlayerEvent::ItemDidFail {
+            item,
+            fault: *fault,
+        }),
         _ => None,
     }
 }
@@ -308,13 +311,14 @@ fn publish_notification<S>(
 
 #[cfg(test)]
 mod tests {
+    use kithara_audio::DecodeErrorKind;
     use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig, PlaybackFault,
         api::PlayerEvent,
         mock,
         player::{
@@ -420,14 +424,17 @@ mod tests {
             &stop_notification(
                 Items::OUTGOING,
                 "leading.mp3",
-                TrackPlaybackStopReason::Failed,
+                TrackPlaybackStopReason::Failed(PlaybackFault::Decode(
+                    DecodeErrorKind::InvalidData,
+                )),
             ),
             ItemRole::Background(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(matches!(
             event,
             Some(PlayerEvent::ItemDidFail {
-                item: ItemRole::Background(_)
+                item: ItemRole::Background(_),
+                fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData)
             })
         ));
     }

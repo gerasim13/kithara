@@ -8,7 +8,7 @@ extension IntegrationRegressionsIOS {
     @MainActor
     @Test("Stop then radio playback matches AVQueuePlayer")
     func stopThenRadioPlaybackMatchesAVQueuePlayer() async throws {
-        try await TestServerFixture.setNetwork(online: true)
+        try await TestServerFixture.setNetwork(.online)
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)
         try audioSession.setActive(true)

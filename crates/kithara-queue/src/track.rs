@@ -181,16 +181,36 @@ where
 
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
     /// one that is already cancelled but still unwinding.
-    pub(crate) fn begin_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
+    pub(crate) fn begin_attempt(
+        &self,
+        id: TrackId,
+        cancel: CancelToken,
+        selected: bool,
+    ) -> Option<Ticket> {
         let mut guard = self.lock();
         let ticket = match guard.iter_mut().find(|r| r.id == id) {
             Some(record) if record.load.as_ref().is_none_or(AttemptGuard::is_cancelled) => {
-                Some(install(record, &self.next_generation, cancel))
+                Some(install(record, &self.next_generation, cancel, selected))
             }
             _ => None,
         };
         drop(guard);
         ticket
+    }
+
+    /// Whether the user's selection wants this track's live attempt.
+    ///
+    /// Read by the attempt itself, so it reflects a selection that arrived
+    /// after the attempt started.
+    pub(crate) fn attempt_selected(&self, id: TrackId) -> bool {
+        let guard = self.lock();
+        let selected = guard
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.load.as_ref())
+            .is_some_and(|a| a.selected);
+        drop(guard);
+        selected
     }
 
     /// Attempt finished. Disarms and removes the guard this ticket owns
@@ -286,9 +306,16 @@ where
                     .as_ref()
                     .is_some_and(|a| a.waiting || a.is_cancelled()) =>
             {
-                Some(install(record, &self.next_generation, cancel))
+                Some(install(record, &self.next_generation, cancel, true))
             }
-            _ => None,
+            // Already running: no lane to move it to, but the attempt reads being wanted.
+            Some(record) => {
+                if let Some(attempt) = record.load.as_mut() {
+                    attempt.selected = true;
+                }
+                None
+            }
+            None => None,
         };
         drop(guard);
         ticket
@@ -326,13 +353,20 @@ where
     }
 }
 
-fn install<S>(record: &mut TrackRecord<S>, generations: &AtomicU64, cancel: CancelToken) -> Ticket
+fn install<S>(
+    record: &mut TrackRecord<S>,
+    generations: &AtomicU64,
+    cancel: CancelToken,
+    selected: bool,
+) -> Ticket
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     let generation = generations.fetch_add(1, Ordering::Relaxed);
+    let mut attempt = AttemptGuard::new(generation, cancel);
+    attempt.selected = selected;
     // WHY: Replacing the guard drops the old one armed, cancelling the
-    record.load = Some(AttemptGuard::new(generation, cancel));
+    record.load = Some(attempt);
     Ticket {
         generation,
         id: record.id,
@@ -470,8 +504,8 @@ mod tests {
     #[kithara::test]
     fn begin_dedupes_live_attempt() {
         let tracks = tracks_with(TrackId(1));
-        assert!(tracks.begin_attempt(TrackId(1), token()).is_some());
-        assert!(tracks.begin_attempt(TrackId(1), token()).is_none());
+        assert!(tracks.begin_attempt(TrackId(1), token(), false).is_some());
+        assert!(tracks.begin_attempt(TrackId(1), token(), false).is_none());
     }
 
     #[kithara::test]
@@ -479,12 +513,12 @@ mod tests {
         let tracks = tracks_with(TrackId(1));
         let first_cancel = token();
         let first = tracks
-            .begin_attempt(TrackId(1), first_cancel.clone())
+            .begin_attempt(TrackId(1), first_cancel.clone(), false)
             .expect("BUG: vacant record must accept an attempt");
         tracks.set_status(TrackId(1), TrackStatus::Cancelled);
         assert!(first_cancel.is_cancelled(), "Cancelled must abort the load");
         let second = tracks
-            .begin_attempt(TrackId(1), token())
+            .begin_attempt(TrackId(1), token(), false)
             .expect("cancelled attempt must be replaceable");
         assert!(!tracks.mark_loading(&first), "replaced ticket loses claim");
         assert!(tracks.mark_loading(&second));
@@ -498,7 +532,7 @@ mod tests {
     fn a_loaded_track_is_not_failed_by_the_attempt_it_outlived() {
         let tracks = tracks_with(TrackId(1));
         let attempt = tracks
-            .begin_attempt(TrackId(1), token())
+            .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");
 
         tracks.set_status(TrackId(1), TrackStatus::Loaded);
@@ -512,7 +546,7 @@ mod tests {
         let tracks = tracks_with(TrackId(1));
         let parked_cancel = token();
         let parked = tracks
-            .begin_attempt(TrackId(1), parked_cancel.clone())
+            .begin_attempt(TrackId(1), parked_cancel.clone(), false)
             .expect("BUG: vacant record must accept an attempt");
         let promoted = tracks
             .promote_attempt(TrackId(1), token())
@@ -526,7 +560,7 @@ mod tests {
     fn promote_keeps_attempt_holding_permit() {
         let tracks = tracks_with(TrackId(1));
         let loading = tracks
-            .begin_attempt(TrackId(1), token())
+            .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");
         assert!(tracks.mark_loading(&loading));
         assert!(
@@ -546,7 +580,7 @@ mod tests {
         let tracks = tracks_with(TrackId(1));
         let first_cancel = token();
         let old = tracks
-            .begin_attempt(TrackId(1), first_cancel)
+            .begin_attempt(TrackId(1), first_cancel, false)
             .expect("BUG: vacant record must accept an attempt");
         let new = tracks
             .promote_attempt(TrackId(1), token())
@@ -555,7 +589,7 @@ mod tests {
         assert!(tracks.mark_loading(&new), "stale finish must not evict");
         tracks.finish_attempt(&new, None);
         assert!(
-            tracks.begin_attempt(TrackId(1), token()).is_some(),
+            tracks.begin_attempt(TrackId(1), token(), false).is_some(),
             "finished attempt must leave the record vacant"
         );
     }
@@ -565,7 +599,7 @@ mod tests {
         let tracks = tracks_with(TrackId(1));
         let cancel = token();
         let _ticket = tracks
-            .begin_attempt(TrackId(1), cancel.clone())
+            .begin_attempt(TrackId(1), cancel.clone(), false)
             .expect("BUG: vacant record must accept an attempt");
         tracks.lock().clear();
         assert!(cancel.is_cancelled(), "dropping the record aborts the load");
@@ -575,7 +609,7 @@ mod tests {
     fn finish_with_failure_sets_failed_once() {
         let tracks = tracks_with(TrackId(1));
         let ticket = tracks
-            .begin_attempt(TrackId(1), token())
+            .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");
         tracks.finish_attempt(&ticket, Some("boom".into()));
         let status = tracks.lock()[0].status.clone();

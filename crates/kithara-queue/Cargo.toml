@@ -40,6 +40,7 @@ kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
+kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-sync = { workspace = true, default-features = false }

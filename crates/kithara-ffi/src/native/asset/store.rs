@@ -29,8 +29,10 @@ pub struct FfiAssetStore {
 
 impl FfiAssetStore {
     fn build(root: Option<String>, layouts: AssetLayoutRegistry) -> Result<Self, PoolError> {
-        let backend = root.map_or_else(StorageBackend::default, |root| StorageBackend::Disk {
-            root: PathBuf::from(root),
+        let backend = root.map_or_else(super::super::storage::default_backend, |root| {
+            StorageBackend::Disk {
+                root: PathBuf::from(root),
+            }
         });
         Self::build_with_backend(backend, layouts)
     }
@@ -69,6 +71,8 @@ impl FfiAssetStore {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl FfiAssetStore {
     /// Create an asset store rooted at `root` with a snapshot of `layouts`.
+    /// An absent root uses Documents/Files/Kithara on iOS, excluded from backup
+    /// when supported. Other platforms retain their native storage default.
     ///
     /// # Panics
     ///
@@ -184,16 +188,6 @@ mod tests {
         );
 
         assert_eq!(store.handle().root_dir(), dir.path());
-    }
-
-    #[kithara::test]
-    fn platform_default_root_is_preserved() {
-        let store = FfiAssetStore::for_test();
-        let StorageBackend::Disk { root } = StorageBackend::default() else {
-            panic!("native storage defaults to disk");
-        };
-
-        assert_eq!(store.handle().root_dir(), root);
     }
 
     #[kithara::test]

@@ -59,11 +59,6 @@ impl TryFrom<&ItemBusEvent> for FfiError {
             ItemBusEvent::Hls(HlsEvent::Error { error }) => Ok(Self::ItemFailed {
                 reason: error.to_string(),
             }),
-            ItemBusEvent::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
-                Ok(Self::ItemFailed {
-                    reason: error.to_string(),
-                })
-            }
             _ => Err(NotForwarded),
         }
     }
@@ -547,7 +542,7 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::VolumeChanged { volume } => Self::VolumeChanged { volume: *volume },
             PlayerEvent::MuteChanged { muted } => Self::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => Self::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item } => Self::ItemDidFail {
+            PlayerEvent::ItemDidFail { item, .. } => Self::ItemDidFail {
                 item_id: Some(item.id()),
             },
             PlayerEvent::PlaybackStarted { .. }
@@ -626,7 +621,7 @@ mod tests {
         events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
         play::{
-            DjEvent, EngineEvent, ItemRole, MediaTime, PlayerEvent, PlayerStatus,
+            DjEvent, EngineEvent, ItemRole, MediaTime, PlaybackFault, PlayerEvent, PlayerStatus,
             RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
             TimeControlStatus, TrackRef,
         },
@@ -1240,6 +1235,7 @@ mod tests {
             (
                 PlayerEvent::ItemDidFail {
                     item: item_role(11),
+                    fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
                 },
                 |event| matches!(event, FfiPlayerEvent::ItemDidFail { item_id: Some(id) } if *id == TrackId::from(11_u64)),
             ),
@@ -1596,6 +1592,7 @@ mod tests {
                 SlotId::new(0),
                 "src".into(),
             )),
+            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
         };
 
         assert!(matches!(
@@ -1619,16 +1616,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn event_to_ffi_error_maps_request_failed() {
+    fn event_to_ffi_error_skips_request_failed() {
         let event = ItemBusEvent::Downloader(DownloaderEvent::RequestFailed {
             request_id: request_id(13),
             error: kithara::net::NetError::Network("boom".into()),
             retryable: false,
         });
 
-        assert!(matches!(
-            FfiError::try_from(&event),
-            Ok(FfiError::ItemFailed { reason }) if reason == "Network error: boom"
-        ));
+        assert!(matches!(FfiError::try_from(&event), Err(NotForwarded)));
     }
 }

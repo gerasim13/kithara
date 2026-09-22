@@ -26,6 +26,10 @@ pub(crate) struct AttemptGuard {
     pub(crate) generation: u64,
     /// `None` = disarmed: the token now belongs to the built `Resource`.
     cancel: Option<CancelToken>,
+    /// The user's selection wants this track. Set when the track is selected,
+    /// which can happen while a background prefetch attempt is already running:
+    /// the lane the attempt was spawned into is fixed, being wanted is not.
+    pub(crate) selected: bool,
 }
 
 impl AttemptGuard {
@@ -34,6 +38,7 @@ impl AttemptGuard {
             generation,
             waiting: true,
             cancel: Some(cancel),
+            selected: false,
         }
     }
 

@@ -419,7 +419,9 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
                 }
             }
             TrackReadOutcome::Full { .. } => {}
-            TrackReadOutcome::Failed => panic!("unexpected Failed in this scenario"),
+            TrackReadOutcome::Failed(fault) => {
+                panic!("unexpected Failed in this scenario: {fault}")
+            }
         }
 
         eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);

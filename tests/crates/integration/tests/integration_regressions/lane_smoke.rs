@@ -30,7 +30,7 @@ async fn network_switch_is_reachable_over_http() {
 
     let offline = client
         .post(control.clone())
-        .json(&serde_json::json!({ "online": false }))
+        .json(&serde_json::json!({ "mode": "unavailable" }))
         .send()
         .await
         .expect("control endpoint must answer");
@@ -56,7 +56,7 @@ async fn network_switch_is_reachable_over_http() {
 
     let online = client
         .post(control)
-        .json(&serde_json::json!({ "online": true }))
+        .json(&serde_json::json!({ "mode": "online" }))
         .send()
         .await
         .expect("control endpoint must stay reachable while offline");

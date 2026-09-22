@@ -18,7 +18,8 @@ use crate::{
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{
-        Content, DelayGate, Delivery, FixtureBehavior, InitGate, SegmentGate, TestServerState,
+        Content, DelayGate, Delivery, FixtureBehavior, InitGate, NetworkMode, SegmentGate,
+        TestServerState,
     },
 };
 
@@ -241,8 +242,8 @@ impl PrivateTestServer {
     /// Lower or raise this server's reachability switch.
     ///
     /// In-process counterpart of `POST /control/network`.
-    pub fn set_network_online(&self, online: bool) {
-        self.state.set_network_online(online);
+    pub fn set_network_mode(&self, mode: NetworkMode) {
+        self.state.set_network_mode(mode);
     }
 }
 

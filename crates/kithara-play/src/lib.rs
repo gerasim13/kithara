@@ -33,10 +33,10 @@ pub use api::{
     TransportRevision, WaitingReason,
 };
 pub use bridge::{
-    AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
-    PlayerLevel, PlayerNotification, Reply, SessionBinding, SessionDispatcher, SessionError,
-    SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason, TrackState,
-    TrackTransition,
+    AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
+    PlayerId, PlayerLevel, PlayerNotification, Reply, SessionBinding, SessionDispatcher,
+    SessionError, SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason,
+    TrackState, TrackTransition,
 };
 pub use effects::eq::EqBandConfig;
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};

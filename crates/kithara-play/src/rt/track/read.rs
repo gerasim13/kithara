@@ -10,7 +10,9 @@ use super::{
     PlayerTrack, ReadOutcome, RtSink,
     triggers::{TrackTriggers, TriggerInput, TriggerTrack},
 };
-use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
+use crate::bridge::{
+    PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
+};
 
 struct TrackReadContext<'a> {
     range: Range<usize>,
@@ -46,8 +48,9 @@ pub enum TrackReadOutcome {
     },
     /// No frames were written because the track is already finished.
     Eof,
-    /// The source reported a non-recoverable error mid-stream.
-    Failed,
+    /// The source reported a non-recoverable error mid-stream, or the render
+    /// context could not serve this track. The payload names which.
+    Failed(PlaybackFault),
 }
 
 impl PlayerTrack {
@@ -71,7 +74,11 @@ impl PlayerTrack {
         triggers.check(notification_tx, track, input);
     }
 
-    fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
+    fn handle_failed_end(
+        &mut self,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+        fault: PlaybackFault,
+    ) {
         if self.state == TrackState::Finished {
             return;
         }
@@ -80,7 +87,7 @@ impl PlayerTrack {
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id,
-                reason: TrackPlaybackStopReason::Failed,
+                reason: TrackPlaybackStopReason::Failed(fault),
                 seek_epoch: self.seek_epoch,
             })
             .ok();
@@ -293,7 +300,7 @@ impl PlayerTrack {
                 duration: resource.duration(),
             },
             ReadOutcome::Eof => TrackReadOutcome::Eof,
-            ReadOutcome::Failed => TrackReadOutcome::Failed,
+            ReadOutcome::Failed(kind) => TrackReadOutcome::Failed(PlaybackFault::Decode(kind)),
         }
     }
 
@@ -333,9 +340,9 @@ impl PlayerTrack {
                 self.handle_natural_end(sink.notifications, sink.seek_epoch);
                 TrackReadOutcome::Eof
             }
-            TrackReadOutcome::Failed => {
-                self.handle_failed_end(sink.notifications);
-                TrackReadOutcome::Failed
+            TrackReadOutcome::Failed(fault) => {
+                self.handle_failed_end(sink.notifications, fault);
+                TrackReadOutcome::Failed(fault)
             }
         }
     }
@@ -368,13 +375,15 @@ impl PlayerTrack {
         };
         if context.output().sample_rate().get() != self.sample_rate {
             self.resource.clear_render();
-            self.handle_failed_end(sink.notifications);
-            return TrackReadOutcome::Failed;
+            let fault = PlaybackFault::OutputRateMismatch;
+            self.handle_failed_end(sink.notifications, fault);
+            return TrackReadOutcome::Failed(fault);
         }
         let Some(context) = context.for_output_range(range.clone()) else {
             self.resource.clear_render();
-            self.handle_failed_end(sink.notifications);
-            return TrackReadOutcome::Failed;
+            let fault = PlaybackFault::OutputRangeUnavailable;
+            self.handle_failed_end(sink.notifications, fault);
+            return TrackReadOutcome::Failed(fault);
         };
         if let Some(source) = self
             .resource

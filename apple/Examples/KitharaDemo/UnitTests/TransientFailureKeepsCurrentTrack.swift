@@ -6,10 +6,10 @@ import Testing
 extension IntegrationRegressionsIOS {
     @Test("A transient network failure does not kill the current track")
     func transientFailureKeepsCurrentTrack() async throws {
-        try await TestServerFixture.setNetwork(online: true)
+        try await TestServerFixture.setNetwork(.online)
         defer {
             Task {
-                _ = try? await TestServerFixture.setNetwork(online: true)
+                _ = try? await TestServerFixture.setNetwork(.online)
             }
         }
 
@@ -59,12 +59,12 @@ extension IntegrationRegressionsIOS {
         }
 
         let failureBeganAt = player.currentTime
-        try await TestServerFixture.setNetwork(online: false)
+        try await TestServerFixture.setNetwork(.unavailable)
         try await waitForTransientFailureFact("the offline HLS fetch to report HTTP 503") {
             observation.receivedUnavailableFetch
         }
         let positionAtRestore = player.currentTime
-        try await TestServerFixture.setNetwork(online: true)
+        try await TestServerFixture.setNetwork(.online)
 
         #expect(
             observation.matches(target),

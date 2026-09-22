@@ -1,6 +1,7 @@
 mod abr_auto_no_infinite_buffering;
 mod cache_commit_grows;
 mod commands_survive_switch_storm;
+mod first_sound_after_outage;
 mod lane_smoke;
 mod loaded_ranges_absolute;
 mod offline_resume;

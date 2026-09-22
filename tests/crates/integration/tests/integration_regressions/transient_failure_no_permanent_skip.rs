@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
+    test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
@@ -52,7 +53,7 @@ struct NetworkRestore<'a>(&'a PrivateTestServer);
 
 impl Drop for NetworkRestore<'_> {
     fn drop(&mut self) {
-        self.0.set_network_online(true);
+        self.0.set_network_mode(NetworkMode::Online);
     }
 }
 
@@ -159,7 +160,7 @@ async fn transient_failure_does_not_kill_the_track(
 
     // A blip, not an outage: the server goes away only long enough for one
     // in-flight segment fetch to fail, then comes straight back.
-    server.set_network_online(false);
+    server.set_network_mode(NetworkMode::Unavailable);
     let restore = NetworkRestore(&server);
     wait_for_event(
         &mut rx,
