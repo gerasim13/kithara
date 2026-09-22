@@ -13,6 +13,7 @@ members = [
     "crates/kithara-blob",
     "crates/kithara-broadcast",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
@@ -83,6 +84,7 @@ default-members = [
     "crates/kithara-broadcast",
     "crates/kithara-blob",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-drm",
     "crates/kithara-encode",
@@ -269,6 +271,7 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
 kithara-blob = { path = "crates/kithara-blob", version = "0.0.1-alpha4" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha4", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
+kithara-config = { path = "crates/kithara-config", version = "0.0.1-alpha4" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4", default-features = false }
@@ -635,6 +638,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-config-uniffi-probe]
 opt-level = 1
 
 [profile.test-release.package.kithara-core-test-fixtures]

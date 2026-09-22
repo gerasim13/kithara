@@ -4675,6 +4675,7 @@ dependencies = [
  "bon",
  "hex",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-dylib",
@@ -4784,10 +4785,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-config"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "fieldwork",
+ "kithara-derive",
+]
+
+[[package]]
 name = "kithara-config-uniffi-probe"
 version = "0.0.1-alpha4"
 dependencies = [
  "futures",
+ "kithara-config",
+ "kithara-test-utils",
  "uniffi",
  "wasm-bindgen-futures",
 ]
@@ -5725,6 +5737,7 @@ dependencies = [
  "fieldwork",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",

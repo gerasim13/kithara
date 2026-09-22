@@ -15,10 +15,12 @@ mod backends;
 
 mod elastic;
 pub use elastic::{
-    BungeeConfig, BungeeConfigPatch, ElasticBackendConfig, ElasticBackendConfigPatch,
-    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError,
-    ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan, ElasticSpanRequest, SignalsmithConfig, SignalsmithConfigPatch,
+    BungeeConfig, BungeeConfigPatch, BungeeConfigValues, ElasticBackendConfig,
+    ElasticBackendConfigPatch, ElasticBackendConfigValues, ElasticCapabilities, ElasticConfig,
+    ElasticConfigValues, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticRateEnvelope, ElasticRequest, ElasticShapeValues, ElasticSpan, ElasticSpanConfig,
+    ElasticSpanConfigValues, ElasticSpanPlan, ElasticSpanRequest, SignalsmithConfig,
+    SignalsmithConfigPatch, SignalsmithConfigValues,
 };
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
