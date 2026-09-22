@@ -81,8 +81,8 @@ to the single `decoder` field.
   resident `WarpConfig`, including its shared `StretchControls`; speed,
   key-lock, and backend changes apply live, mid-track. Render quantum and rate
   smoothing remain optional frame-based Warp settings. Player resolves an
-  unspecified render quantum to 32 frames. `response_budget_frames` is an
-  optional application constraint; explicit budgets retain admission checks
+  unspecified render quantum to 32 frames when `response_budget_frames` is
+  supplied. This optional application constraint retains admission checks
   against the actual Host output shape.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `EngineEvent`,

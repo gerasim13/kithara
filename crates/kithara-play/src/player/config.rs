@@ -117,7 +117,7 @@ pub struct PlayerConfig<S> {
     #[debug(skip)]
     pub(crate) track_grid_id: BeatGridId,
     /// Optional application deadline for control-to-presented-audio response, in output frames.
-    /// Without a deadline, session geometry still determines bounded playback buffers.
+    /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
     #[field(get, copy)]
     pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Shared ABR controller. When `None`, a default one is created.

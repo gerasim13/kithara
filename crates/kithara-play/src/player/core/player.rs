@@ -42,7 +42,8 @@ impl<S> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
-        if config.warp.render_quantum_frames().is_none() {
+        if config.response_budget_frames.is_some() && config.warp.render_quantum_frames().is_none()
+        {
             let mut patch = WarpConfigPatch::default();
             patch.render_quantum_frames = NonZeroUsize::new(32);
             config.warp.apply(patch);
