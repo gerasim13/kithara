@@ -3,6 +3,7 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiHostConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
@@ -30,7 +31,10 @@ class KitharaInitTest {
         val store = Kithara.defaultStore
 
         assertThrows(KitharaError.AlreadyInitialized::class.java) {
-            Kithara.initialize(context)
+            Kithara.initialize(
+                context,
+                hostConfig = FfiHostConfig(sampleRateHint = 0u, outputBlockFrames = null),
+            )
         }
 
         assertSame(store, Kithara.defaultStore)
