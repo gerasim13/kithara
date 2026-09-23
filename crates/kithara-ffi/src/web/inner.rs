@@ -94,7 +94,7 @@ impl WasmInner {
     /// Default crossfade window in seconds, matching the worker default.
     const DEFAULT_CROSSFADE_SECONDS: f32 = kithara::play::DEFAULT_CROSSFADE_DURATION;
     /// Default target playback rate.
-    const DEFAULT_PLAYING_RATE: f32 = 1.0;
+    const DEFAULT_PLAYING_RATE: f32 = kithara::play::DEFAULT_PLAYING_RATE;
     /// Default output volume, matching the legacy wasm player.
     const DEFAULT_VOLUME: f32 = 0.5;
     /// Milliseconds per second.

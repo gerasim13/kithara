@@ -85,9 +85,6 @@ pub(crate) fn worker_main(
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
 ) {
-    /// Default crossfade window, in seconds. Mirrors the legacy worker.
-    const CROSSFADE_SECONDS: f32 = 5.0;
-
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
     // the Worker, killing the command + tick loops.
@@ -117,11 +114,6 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: CROSSFADE_SECONDS,
-            ..Default::default()
-        });
-
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(queue.clone());
