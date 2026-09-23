@@ -36,7 +36,7 @@ impl Check for CommentHygiene {
             let macro_spans = collect_macro_spans(&file);
             let new_src = apply_category_fix(&src, &comments, &macro_spans, &file, cfg);
             if let Some(new_src) = new_src {
-                std::fs::write(path, new_src)?;
+                ctx.scan.write(path, new_src)?;
                 outcome.writes += 1;
             }
         }

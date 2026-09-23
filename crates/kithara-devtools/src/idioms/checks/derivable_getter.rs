@@ -84,7 +84,7 @@ impl Check for DerivableGetter {
                 rewriter.replace(edit.range, edit.text);
             }
             let rewritten = rewriter.finish().context("apply derivable getter edits")?;
-            fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
+            ctx.scan.write(path, rewritten)?;
             outcome.writes += 1;
             if let Some(manifest) = crate_manifest(ctx.workspace_root, path) {
                 manifests.insert(manifest);

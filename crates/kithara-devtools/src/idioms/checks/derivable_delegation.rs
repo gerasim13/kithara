@@ -83,7 +83,7 @@ impl Check for DerivableDelegation {
                 continue;
             }
             let rewritten = rewriter.finish().context("apply delegation edits")?;
-            fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
+            ctx.scan.write(path, rewritten)?;
             outcome.writes += 1;
             if let Some(manifest) = crate_manifest(ctx.workspace_root, path) {
                 manifests.insert(manifest);

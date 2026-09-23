@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    fs,
     ops::Range,
     path::{Path as FsPath, PathBuf},
 };
@@ -221,7 +220,7 @@ pub(super) fn fix(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<FixOut
             continue;
         }
         let rewritten = rewriter.finish().context("apply derive-collapse edits")?;
-        fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
+        ctx.scan.write(path, rewritten)?;
         outcome.writes += 1;
     }
     Ok(outcome)

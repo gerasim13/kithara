@@ -77,7 +77,7 @@ impl Check for StructInitOrder {
                 let new_src = rw
                     .finish()
                     .with_context(|| format!("{ID} fix failed for {rel}"))?;
-                std::fs::write(path, new_src)?;
+                ctx.scan.write(path, new_src)?;
                 wrote = true;
             }
             outcome.writes += usize::from(wrote);

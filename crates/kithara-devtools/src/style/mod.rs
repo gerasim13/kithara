@@ -276,3 +276,38 @@ fn validate(args: &StyleArgs) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_fix_edits_the_text_the_previous_fix_left() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/demo/src");
+        fs::create_dir_all(&src).expect("mkdir");
+        let path = src.join("lib.rs");
+        fs::write(
+            &path,
+            "pub struct S {\n    b: u8,\n    a: u8,\n}\n\nimpl S {\n    fn b(&self) {}\n\n    fn a(&self) {}\n}\n",
+        )
+        .expect("write");
+        let config = StyleConfig::default();
+        let scan = Scan::new(dir.path());
+        let scope = Scope::default();
+        let ctx = Context {
+            workspace_root: dir.path(),
+            scan: &scan,
+            scope: &scope,
+            config: &config,
+        };
+        let filter = Some(HashSet::from(["struct_field_order", "trait_item_order"]));
+
+        run_fix(&registry(), &filter, &ctx, true).expect("fix");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read"),
+            "pub struct S {\n    a: u8,\n    b: u8,\n}\n\nimpl S {\n    fn a(&self) {}\n\n    fn b(&self) {}\n}\n",
+        );
+    }
+}
