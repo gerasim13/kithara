@@ -131,17 +131,6 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
-/// Queue behavior after the current item reaches its end.
-public enum RepeatMode: Sendable, Equatable {
-    case off
-    case one
-    case all
-    /// A mode this version of the framework does not model. Reading it means
-    /// the queue gained a mode the Swift surface has not caught up with;
-    /// assigning it is rejected rather than silently treated as ``off``.
-    case unknown
-}
-
 public enum PlaybackOrder: Sendable, Equatable {
     case sequential
     case shuffle
@@ -252,7 +241,6 @@ public enum PlayerEvent: Sendable, Equatable {
     case crossfadeSettingsChanged(settings: CrossfadeSettings)
     case playbackOrderChanged(order: PlaybackOrder)
     case actionAtItemEndChanged(action: ActionAtItemEnd)
-    case repeatModeChanged(mode: RepeatMode)
 }
 
 // MARK: - Transition
@@ -347,34 +335,6 @@ extension DuckingMode {
             .soft
         case .hard:
             .hard
-        }
-    }
-}
-
-extension RepeatMode {
-    init(ffi: FfiRepeatMode) {
-        switch ffi {
-        case .off:
-            self = .off
-        case .one:
-            self = .one
-        case .all:
-            self = .all
-        case .unknown:
-            self = .unknown
-        }
-    }
-
-    var ffi: FfiRepeatMode {
-        switch self {
-        case .off:
-            .off
-        case .one:
-            .one
-        case .all:
-            .all
-        case .unknown:
-            .unknown
         }
     }
 }
