@@ -6,7 +6,10 @@ use toml::Value;
 use tracing::warn;
 
 use crate::{
-    ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
+    ci::{
+        cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
+        run::PipelineKind,
+    },
     config::{
         CiLaneConfig, CiLanePin, PIN_PREFIX, ROOT_PLACEHOLDER, SELF_PROGRAM, TARGET_PLACEHOLDER,
     },
@@ -186,14 +189,15 @@ fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
 }
 
 /// Record what the lane ended up with, once its steps have fetched whatever
-/// the restored layer did not carry. The default branch is the only publisher
-/// because the trusted scope is the only one the bucket policy lets write.
+/// the restored layer did not carry. Only the default branch in the trusted
+/// scope publishes, because that scope is the only one the bucket policy lets
+/// write.
 ///
-/// This fails the lane. The defect this repairs is that it did not: the
-/// publish was refused on every run for weeks and the lane stayed green, so
-/// the layer read as a working cache that happened to always miss.
+/// A publisher's failure fails the lane. The defect this repairs is that it did
+/// not: the publish was refused on every run for weeks and the lane stayed
+/// green, so the layer read as a working cache that happened to always miss.
 fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> Result<()> {
-    if kind != PipelineKind::Main.name() {
+    if !is_source_publisher(kind, CacheTrust::from_environment()?) {
         return Ok(());
     }
     let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
@@ -212,6 +216,12 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
         }
     }
     published
+}
+
+/// A default-branch run in another scope holds that scope's keys: a fork's
+/// `main` runs as `review`, and its publish was refused on every push.
+fn is_source_publisher(kind: &str, trust: CacheTrust) -> bool {
+    kind == PipelineKind::Main.name() && trust == CacheTrust::Trusted
 }
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
@@ -287,5 +297,23 @@ fn pin(pins: &CiPins, key: &str) -> Result<String> {
             other.type_str()
         ),
         None => bail!("{key} is not a pin in .config/ci-pins.toml"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_trusted_default_branch_publishes_the_source_layer() {
+        let main = PipelineKind::Main.name();
+
+        assert!(is_source_publisher(main, CacheTrust::Trusted));
+        assert!(!is_source_publisher(main, CacheTrust::Review));
+        assert!(!is_source_publisher(main, CacheTrust::Quarantine));
+        assert!(!is_source_publisher(
+            PipelineKind::Branch.name(),
+            CacheTrust::Trusted
+        ));
     }
 }

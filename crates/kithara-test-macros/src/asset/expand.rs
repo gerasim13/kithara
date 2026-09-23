@@ -28,6 +28,10 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let embed = args.embed;
     let env = &args.env;
     let ext = &args.ext;
+    let format = args
+        .format
+        .as_ref()
+        .map_or_else(|| quote! { None }, |format| quote! { Some(#format) });
     let optional = args.optional;
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
@@ -61,6 +65,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                     embed: #embed,
                     env: &[#(#env),*],
                     ext: #ext,
+                    format: #format,
                     func: #fn_name_literal,
                     optional: #optional,
                 }

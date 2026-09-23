@@ -216,6 +216,9 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         else {
             continue;
         };
+        if metadata.file_type().is_dir() && is_hidden(&path) {
+            continue;
+        }
         if !metadata.file_type().is_dir() {
             if metadata.file_type().is_file()
                 && path.file_name() == Some(OsStr::new(TARGET_HEARTBEAT_FILE))
@@ -241,6 +244,16 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         }
     }
     Ok(contents)
+}
+
+/// Cargo writes no hidden directory at the top of a build directory, so one
+/// there belongs to something else. On the Linux fleet it is the CI cache root,
+/// Cargo home included, which the per-runner build directory carries: evicted
+/// as the oldest entry, it took every running job's registry sources and git
+/// checkouts with it on each two-hourly pass.
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
 }
 
 fn scan_directory(path: &Path) -> Result<DirectoryScan> {
@@ -666,6 +679,22 @@ mod tests {
             .collect();
 
         assert_eq!(paths, ["a", "b"].map(PathBuf::from));
+    }
+
+    #[test]
+    fn a_cargo_home_inside_a_build_directory_is_never_evicted() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let sources = target.join(".kithara-ci/review/linux-x86_64/cargo/registry/src");
+        fs::create_dir_all(&sources).unwrap();
+        fs::write(sources.join("lib.rs"), vec![0_u8; 100_000]).unwrap();
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(target.join("debug/artifact"), vec![0_u8; 100_000]).unwrap();
+
+        enforce_budget(std::slice::from_ref(&target), 0).unwrap();
+
+        assert!(sources.join("lib.rs").is_file());
+        assert!(!target.join("debug").exists());
     }
 
     /// Each checkout under the budget while the host they share is out of room

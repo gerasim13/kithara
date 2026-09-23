@@ -103,6 +103,7 @@ fn library_flac(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = super::rhythm::analysis_format,
     depends_on = ["library_flac_{case}"],
     env = ["KITHARA_REMOTE_FIXTURES"],
     optional
@@ -186,6 +187,7 @@ fn library_mp3(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = super::rhythm::analysis_format,
     depends_on = ["library_mp3_{case}"],
     env = ["KITHARA_REMOTE_FIXTURES"],
     optional

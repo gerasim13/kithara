@@ -73,7 +73,10 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
             seen.insert(name.clone()),
             "kithara-test-fixtures: two asset cases share the accessor name `{name}`",
         );
-        let id = store::asset_id(def.func, def.case);
+        let id = def.format.map_or_else(
+            || store::asset_id(def.func, def.case),
+            |format| store::formatted_asset_id(def.func, def.case, &format()),
+        );
         resolved.push((name, id, *def));
     }
     resolved.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));

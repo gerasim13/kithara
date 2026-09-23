@@ -137,6 +137,7 @@ fn rhythm_wav_scenario_1_origin_zero_pickup_long(style: Style) -> Vec<u8> {
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_{case}"]
 )]
 #[case::ambient_dub_62_aligned(Style::AmbientDub, Control::Aligned)]
@@ -173,6 +174,7 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_{case}"]
 )]
 #[case::downtempo_96_left_only(Style::Downtempo)]
@@ -188,6 +190,7 @@ fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_2_{case}"]
 )]
 #[case::house_124_right_only_pickup(Style::House)]
@@ -201,6 +204,7 @@ fn rhythm_expected_analysis_scenario_2(_inputs: &[&[u8]], style: Style) -> Vec<u
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_{case}"]
 )]
 #[case::house_124_left_only(Style::House)]
@@ -219,6 +223,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero(_inputs: &[&[u8]], style: Sty
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_long_{case}"]
 )]
 #[case::house_124_left_only(Style::House)]
@@ -241,6 +246,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_long(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_listening_{case}"]
 )]
 #[case::downtempo_96_stereo_45s(Style::Downtempo)]
@@ -262,6 +268,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_listening(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_listening_long_{case}"]
 )]
 #[case::downtempo_96_stereo_55s(Style::Downtempo)]
@@ -283,6 +290,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_listening_long(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_pickup_listening_{case}"]
 )]
 #[case::downtempo_96_stereo_45s(Style::Downtempo)]
@@ -304,6 +312,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_pickup_listening(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_scenario_1_origin_zero_pickup_long_{case}"]
 )]
 #[case::house_124_left_only(Style::House)]
@@ -326,6 +335,7 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_pickup_long(
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
+    format = analysis_format,
     depends_on = ["rhythm_wav_{case}"]
 )]
 #[case::ambient_dub_62_aligned()]
@@ -359,6 +369,14 @@ fn rhythm_analyzed_analysis(inputs: &[&[u8]]) -> Vec<u8> {
                 .first()
                 .expect("invariant: the declared rhythm WAV dependency is present"),
         ),
+        Consts::RHYTHM_FRAMES,
+    )
+}
+
+/// One analysis file in the format every analysis fixture is written in.
+pub(in crate::defs) fn analysis_format() -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth(Style::House, Control::Aligned)),
         Consts::RHYTHM_FRAMES,
     )
 }
