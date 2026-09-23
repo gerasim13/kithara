@@ -20,11 +20,20 @@ pub enum CrossfadeCurve {
     EqualPower,
 }
 
+#[kithara_config::config(builder = false, sdk)]
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 pub struct CrossfadeSettings {
+    /// Duration of the overlap in seconds.
+    #[config(value)]
     pub duration: f32,
+    /// Gain curve used during the overlap.
+    #[config(value)]
     pub curve: CrossfadeCurve,
+    /// Fraction of the full crossfade applied, from zero to one.
+    #[config(value)]
     pub depth: f32,
+    /// Center of the overlap, strictly between zero and one.
+    #[config(value)]
     pub position: f32,
 }
 

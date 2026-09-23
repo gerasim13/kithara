@@ -42,6 +42,60 @@ impl From<FfiEqBandConfig> for EqBandConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
+pub struct FfiCrossfadeSettings {
+    /// Duration of the overlap in seconds.
+    pub duration: f32,
+    /// Gain curve used during the overlap.
+    pub curve: crate::types::FfiCrossfadeCurve,
+    /// Fraction of the full crossfade applied, from zero to one.
+    pub depth: f32,
+    /// Center of the overlap, strictly between zero and one.
+    pub position: f32,
+}
+
+impl From<kithara::play::CrossfadeSettings> for FfiCrossfadeSettings {
+    fn from(value: kithara::play::CrossfadeSettings) -> Self {
+        let values = kithara_config::Config::values(&value);
+        Self {
+            duration: values.duration,
+            curve: match values.curve {
+                kithara::play::CrossfadeCurve::Linear => crate::types::FfiCrossfadeCurve::Linear,
+                kithara::play::CrossfadeCurve::EqualPower => {
+                    crate::types::FfiCrossfadeCurve::EqualPower
+                }
+                _ => crate::types::FfiCrossfadeCurve::Unknown,
+            },
+            depth: values.depth,
+            position: values.position,
+        }
+    }
+}
+
+impl TryFrom<FfiCrossfadeSettings> for kithara::play::CrossfadeSettings {
+    type Error = crate::types::FfiError;
+
+    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {
+        let curve = match value.curve {
+            crate::types::FfiCrossfadeCurve::Linear => kithara::play::CrossfadeCurve::Linear,
+            crate::types::FfiCrossfadeCurve::EqualPower => {
+                kithara::play::CrossfadeCurve::EqualPower
+            }
+            crate::types::FfiCrossfadeCurve::Unknown => {
+                return Err(crate::types::FfiError::InvalidArgument {
+                    reason: "unknown crossfade curve".into(),
+                });
+            }
+        };
+        Self::new(value.duration, curve, value.depth, value.position)
+            .map_err(crate::types::FfiError::from)
+    }
+}
+
 /// Output ceiling and gain recovery of one `PeakLimiter`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(

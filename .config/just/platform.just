@@ -210,7 +210,7 @@ apple MODE="xcframework" *ARGS:
         fi
         ;;
       doc)
-        just _xtask apple docgen
+        just _xtask apple docgen || exit $?
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \

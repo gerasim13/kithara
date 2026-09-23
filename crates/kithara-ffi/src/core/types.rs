@@ -4,8 +4,8 @@ use kithara::{
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        CrossfadeCurve, CrossfadeSettings, InterruptionKind, ItemStatus, PlayError, PlayerStatus,
-        RouteChangeReason, SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
+        InterruptionKind, ItemStatus, PlayError, PlayerStatus, RouteChangeReason,
+        SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
     },
     queue::{
         ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueRepeatMode, RepeatMode, Transition,
@@ -285,52 +285,14 @@ pub enum FfiActionAtItemEnd {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiCrossfadeCurve {
     Linear,
     EqualPower,
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FfiCrossfadeSettings {
-    pub duration: f32,
-    pub curve: FfiCrossfadeCurve,
-    pub depth: f32,
-    pub position: f32,
-}
-
-impl From<CrossfadeSettings> for FfiCrossfadeSettings {
-    fn from(value: CrossfadeSettings) -> Self {
-        Self {
-            duration: value.duration,
-            curve: match value.curve {
-                CrossfadeCurve::Linear => FfiCrossfadeCurve::Linear,
-                CrossfadeCurve::EqualPower => FfiCrossfadeCurve::EqualPower,
-                _ => FfiCrossfadeCurve::Unknown,
-            },
-            depth: value.depth,
-            position: value.position,
-        }
-    }
-}
-
-impl TryFrom<FfiCrossfadeSettings> for CrossfadeSettings {
-    type Error = FfiError;
-    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {
-        let curve = match value.curve {
-            FfiCrossfadeCurve::Linear => CrossfadeCurve::Linear,
-            FfiCrossfadeCurve::EqualPower => CrossfadeCurve::EqualPower,
-            FfiCrossfadeCurve::Unknown => {
-                return Err(FfiError::InvalidArgument {
-                    reason: "unknown crossfade curve".into(),
-                });
-            }
-        };
-        Self::new(value.duration, curve, value.depth, value.position).map_err(FfiError::from)
-    }
-}
+pub use super::config_generated::FfiCrossfadeSettings;
 
 impl TryFrom<FfiPlaybackOrder> for PlaybackOrder {
     type Error = FfiError;
@@ -1020,6 +982,8 @@ pub struct FfiPlayerSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use ::kithara::play::CrossfadeSettings;
+
     use super::*;
 
     #[kithara::test]

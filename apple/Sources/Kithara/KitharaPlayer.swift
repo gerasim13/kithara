@@ -350,10 +350,15 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
+        /// Token merged into player-wide network request headers.
         public var authToken: String
+        /// Initial playback rate; 1.0 is normal speed.
         public var playingRate: Float
+        /// Initial track traversal order.
         public var playbackOrder: PlaybackOrder
+        /// Initial behavior when an item ends.
         public var actionAtItemEnd: ActionAtItemEnd
+        /// Initial crossfade duration, curve, depth, and position.
         public var crossfadeSettings: CrossfadeSettings
 
         /// Construct a player config. All parameters have sensible
@@ -783,26 +788,32 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    /// Crossfade settings currently held by the player queue.
     public var crossfadeSettings: CrossfadeSettings {
         CrossfadeSettings(ffi: _inner.crossfadeSettings())
     }
 
+    /// Current track traversal order.
     public var playbackOrder: PlaybackOrder {
         PlaybackOrder(ffi: _inner.playbackOrder())
     }
 
+    /// Current behavior when an item ends.
     public var actionAtItemEnd: ActionAtItemEnd {
         ActionAtItemEnd(ffi: _inner.actionAtItemEnd())
     }
 
+    /// Validate and submit crossfade settings to the player queue.
     public func setCrossfadeSettings(_ settings: CrossfadeSettings) throws {
         try _inner.setCrossfadeSettings(settings: settings.ffi)
     }
 
+    /// Change the track traversal order.
     public func setPlaybackOrder(_ order: PlaybackOrder) throws {
         try _inner.setPlaybackOrder(order: order.ffi)
     }
 
+    /// Change the behavior applied when an item ends.
     public func setActionAtItemEnd(_ action: ActionAtItemEnd) throws {
         try _inner.setActionAtItemEnd(action: action.ffi)
     }
@@ -816,6 +827,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         try _inner.advanceToNextItem()
     }
 
+    /// Select the preceding item in the queue, if one exists.
     public func previous() throws {
         try _inner.returnToPreviousItem()
     }

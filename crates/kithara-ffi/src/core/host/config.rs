@@ -81,7 +81,7 @@ pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
 
 #[cfg(test)]
 mod tests {
-    use kithara::play::effects::LimiterConfig;
+    use ::kithara::play::effects::LimiterConfig;
     use kithara_test_utils::kithara;
 
     use super::*;

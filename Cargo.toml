@@ -455,7 +455,7 @@ rten-tensor = "0.24"
 # and fall back to building compiler-rt from source with cmake.
 rtsan-standalone = "0.3.0"
 rubato = "5.0"
-rustdoc-types = "0.60.0"
+rustdoc-types = "0.57.0"
 rustls-platform-verifier = "0.7.0"
 send_wrapper = "0.6"
 serde = { version = "1.0", features = ["derive"] }

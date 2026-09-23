@@ -3803,14 +3803,38 @@ public func FfiConverterTypeFfiCacheIdentityRule_lower(_ value: FfiCacheIdentity
 
 
 public struct FfiCrossfadeSettings: Equatable, Hashable {
+    /**
+     * Duration of the overlap in seconds.
+     */
     public let duration: Float
+    /**
+     * Gain curve used during the overlap.
+     */
     public let curve: FfiCrossfadeCurve
+    /**
+     * Fraction of the full crossfade applied, from zero to one.
+     */
     public let depth: Float
+    /**
+     * Center of the overlap, strictly between zero and one.
+     */
     public let position: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(duration: Float, curve: FfiCrossfadeCurve, depth: Float, position: Float) {
+    public init(
+        /**
+         * Duration of the overlap in seconds.
+         */duration: Float,
+        /**
+         * Gain curve used during the overlap.
+         */curve: FfiCrossfadeCurve,
+        /**
+         * Fraction of the full crossfade applied, from zero to one.
+         */depth: Float,
+        /**
+         * Center of the overlap, strictly between zero and one.
+         */position: Float) {
         self.duration = duration
         self.curve = curve
         self.depth = depth
@@ -9766,7 +9790,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 23497) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 44588) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
@@ -9880,7 +9904,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 50899) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 1044) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {

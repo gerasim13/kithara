@@ -2369,6 +2369,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-audio",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-file",

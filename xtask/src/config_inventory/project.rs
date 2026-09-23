@@ -75,6 +75,22 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
         "empty SDK config: {}",
         registration.owner
     );
+    if registration.owner == "CrossfadeSettings" {
+        ensure!(
+            registration.package == "kithara-play"
+                && fields
+                    .iter()
+                    .map(|field| field.name.as_str())
+                    .collect::<Vec<_>>()
+                    == ["duration", "curve", "depth", "position"]
+                && fields
+                    .iter()
+                    .map(|field| compact(&field.rust_type))
+                    .collect::<Vec<_>>()
+                    == ["f32", "CrossfadeCurve", "f32", "f32"],
+            "CrossfadeSettings SDK conversion requires duration: f32, curve: CrossfadeCurve, depth: f32, position: f32"
+        );
+    }
     output.push('\n');
     for line in &registration.docs {
         writeln!(output, "/// {}", ffi_doc_line(line))?;
@@ -83,7 +99,11 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
     output.push_str(
         "#[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n",
     );
-    output.push_str("#[cfg_attr(target_arch = \"wasm32\", wasm_bindgen::prelude::wasm_bindgen)]\n");
+    if registration.owner != "CrossfadeSettings" {
+        output.push_str(
+            "#[cfg_attr(target_arch = \"wasm32\", wasm_bindgen::prelude::wasm_bindgen)]\n",
+        );
+    }
     writeln!(output, "pub struct Ffi{} {{", registration.owner)?;
     for field in &fields {
         for line in &field.docs {
@@ -91,7 +111,9 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
         }
         let wire_type = ffi_type(field)?;
         ensure!(
-            matches!(wire_type, "f32" | "u32" | "i32" | "bool"),
+            matches!(wire_type, "f32" | "u32" | "i32" | "bool")
+                || registration.owner == "CrossfadeSettings"
+                    && wire_type == "crate::types::FfiCrossfadeCurve",
             "SDK config field {}.{} needs a scalar Web mapping",
             registration.owner,
             field.name
@@ -99,6 +121,9 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
         writeln!(output, "    pub {}: {wire_type},", field.name)?;
     }
     output.push_str("}\n");
+    if registration.owner == "CrossfadeSettings" {
+        output.push_str("\nimpl From<kithara::play::CrossfadeSettings> for FfiCrossfadeSettings {\n    fn from(value: kithara::play::CrossfadeSettings) -> Self {\n        let values = kithara_config::Config::values(&value);\n        Self {\n            duration: values.duration,\n            curve: match values.curve {\n                kithara::play::CrossfadeCurve::Linear => crate::types::FfiCrossfadeCurve::Linear,\n                kithara::play::CrossfadeCurve::EqualPower => {\n                    crate::types::FfiCrossfadeCurve::EqualPower\n                }\n                _ => crate::types::FfiCrossfadeCurve::Unknown,\n            },\n            depth: values.depth,\n            position: values.position,\n        }\n    }\n}\n\nimpl TryFrom<FfiCrossfadeSettings> for kithara::play::CrossfadeSettings {\n    type Error = crate::types::FfiError;\n\n    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {\n        let curve = match value.curve {\n            crate::types::FfiCrossfadeCurve::Linear => kithara::play::CrossfadeCurve::Linear,\n            crate::types::FfiCrossfadeCurve::EqualPower => {\n                kithara::play::CrossfadeCurve::EqualPower\n            }\n            crate::types::FfiCrossfadeCurve::Unknown => {\n                return Err(crate::types::FfiError::InvalidArgument {\n                    reason: \"unknown crossfade curve\".into(),\n                });\n            }\n        };\n        Self::new(value.duration, curve, value.depth, value.position)\n            .map_err(crate::types::FfiError::from)\n    }\n}\n");
+    }
     if registration.package == "kithara-play" && registration.owner == "LimiterConfig" {
         output.push_str("\nimpl Default for FfiLimiterConfig {\n    fn default() -> Self {\n        let config = kithara::play::effects::LimiterConfig::default();\n        Self {\n");
         for field in &fields {
@@ -160,6 +185,7 @@ fn ffi_type(field: &RegisteredField) -> Result<&'static str> {
     match compact(&field.rust_type).as_str() {
         "FilterKind" => Ok("FfiEqFilterKind"),
         "GainDb" | "f32" => Ok("f32"),
+        "CrossfadeCurve" => Ok("crate::types::FfiCrossfadeCurve"),
         other => bail!("no FFI type mapping for {other}"),
     }
 }
@@ -250,6 +276,43 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("scalar Web mapping")
+        );
+    }
+
+    #[test]
+    fn crossfade_projection_rejects_unmapped_fields() {
+        let source = r#"
+            #[kithara_config::config(builder = false, sdk)]
+            struct CrossfadeSettings {
+                #[config(value)] duration: f32,
+                #[config(value)] curve: CrossfadeCurve,
+                #[config(value)] depth: f32,
+                #[config(value)] position: f32,
+            }
+            impl PlayerControl {
+                #[kithara_config::config(delegate = "eq_layout", sdk)]
+                fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
+            }
+            #[kithara_config::config]
+            struct EqBandConfig { #[config(value)] frequency: f32 }
+        "#;
+        let registered = registrations("crates/kithara-play/src/api/crossfade.rs", source).unwrap();
+        let generated = render(&registered).unwrap();
+        assert!(generated.contains("let values = kithara_config::Config::values(&value)"));
+        assert!(
+            generated.contains("Self::new(value.duration, curve, value.depth, value.position)")
+        );
+
+        let extra = source.replace(
+            "#[config(value)] position: f32,",
+            "#[config(value)] position: f32, #[config(value)] offset: f32,",
+        );
+        let registered = registrations("crates/kithara-play/src/api/crossfade.rs", &extra).unwrap();
+        assert!(
+            render(&registered)
+                .unwrap_err()
+                .to_string()
+                .contains("CrossfadeSettings SDK conversion requires")
         );
     }
 }

@@ -4,10 +4,14 @@ import KitharaFFI
 public enum KitharaHost {
     /// Settings fixed for the lifetime of the process audio host.
     public struct Configuration: Sendable {
+        /// Initial output sample-rate hint in hertz.
         public var sampleRateHint: UInt32
+        /// Optional output callback size in frames.
         public var outputBlockFrames: UInt32?
+        /// Output limiter settings validated when the host initializes.
         public var limiter: FfiLimiterConfig
 
+        /// Create host settings from Rust defaults with optional overrides.
         public init(
             sampleRateHint: UInt32 = defaultHostConfig().sampleRateHint,
             outputBlockFrames: UInt32? = defaultHostConfig().outputBlockFrames,
