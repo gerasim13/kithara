@@ -111,14 +111,16 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut analysis_rx = runner.analyze(
-        waveform_cfg,
-        "shared-download-track".into(),
-        RATE,
-        0,
-        AnalysisDemand::ALL,
-        drop,
-    );
+    let mut analysis_rx = runner
+        .analyze(
+            waveform_cfg,
+            "shared-download-track".into(),
+            RATE,
+            0,
+            AnalysisDemand::ALL,
+            drop,
+        )
+        .expect("the pass opens");
 
     let player = worker.open(player_cfg).await.expect("open player audio");
     let player_drain = spawn_blocking(move || {
