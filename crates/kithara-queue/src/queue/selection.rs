@@ -40,25 +40,39 @@ where
         })
     }
 
-    pub(super) fn select_with_reason(
+    pub(in crate::queue) fn select_loaded_item(
         &self,
+        index: usize,
         id: TrackId,
-        transition: Transition,
+        crossfade: kithara_play::CrossfadeSettings,
         reason: AdvanceReason,
+        playback: SelectionPlayback,
     ) -> Result<(), QueueError> {
-        let playback = if matches!(
+        let was_playing = self.player.is_playing();
+        if was_playing && crossfade.duration > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                settings: crossfade,
+            });
+        }
+        self.player.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                playback,
+                crossfade,
+            },
+        )?;
+        let ids = self
+            .tracks()
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<SmallVec<[_; 16]>>();
+        self.lock_navigation_mut().select(id, &ids);
+        self.bus.publish(QueueEvent::CurrentTrackAdvance {
             reason,
-            AdvanceReason::NaturalEof
-                | AdvanceReason::TrackFailed
-                | AdvanceReason::CrossfadePreArm
-                | AdvanceReason::Repeat
-        ) || self.player.is_playing()
-        {
-            SelectionPlayback::Play
-        } else {
-            SelectionPlayback::Pause
-        };
-        self.select_with(id, transition, reason, playback)
+            id: Some(id),
+        });
+        self.set_status(id, TrackStatus::Consumed);
+        Ok(())
     }
 
     pub(super) fn select_with(
@@ -86,6 +100,27 @@ where
         // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
+    }
+
+    pub(super) fn select_with_reason(
+        &self,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+    ) -> Result<(), QueueError> {
+        let playback = if matches!(
+            reason,
+            AdvanceReason::NaturalEof
+                | AdvanceReason::TrackFailed
+                | AdvanceReason::CrossfadePreArm
+                | AdvanceReason::Repeat
+        ) || self.player.is_playing()
+        {
+            SelectionPlayback::Play
+        } else {
+            SelectionPlayback::Pause
+        };
+        self.select_with(id, transition, reason, playback)
     }
 
     pub(super) fn select_with_reason_locked(
@@ -155,10 +190,10 @@ where
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
                 self.override_pending_select(PendingSelect {
-                    id,
+                    reason,
                     settings,
                     playback,
-                    reason,
+                    id,
                 });
                 self.promote_pending_load(id);
                 Ok(())
@@ -166,51 +201,16 @@ where
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
                 let source = self.tracks.source(id).ok_or(QueueError::NotReady(id))?;
                 self.override_pending_select(PendingSelect {
-                    id,
+                    reason,
                     settings,
                     playback,
-                    reason,
+                    id,
                 });
                 self.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
             }
         }
-    }
-
-    pub(in crate::queue) fn select_loaded_item(
-        &self,
-        index: usize,
-        id: TrackId,
-        crossfade: kithara_play::CrossfadeSettings,
-        reason: AdvanceReason,
-        playback: SelectionPlayback,
-    ) -> Result<(), QueueError> {
-        let was_playing = self.player.is_playing();
-        if was_playing && crossfade.duration > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                settings: crossfade,
-            });
-        }
-        self.player.select_item_with_crossfade(
-            index,
-            SelectTransition {
-                playback,
-                crossfade,
-            },
-        )?;
-        let ids = self
-            .tracks()
-            .into_iter()
-            .map(|track| track.id)
-            .collect::<SmallVec<[_; 16]>>();
-        self.lock_navigation_mut().select(id, &ids);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
-            reason,
-            id: Some(id),
-        });
-        self.set_status(id, TrackStatus::Consumed);
-        Ok(())
     }
 }
 

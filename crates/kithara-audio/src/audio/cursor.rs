@@ -69,8 +69,8 @@ impl ChunkCursor {
         let output_frames =
             u64::try_from(output.remaining_frames(written, channels)?).map_err(|_| {
                 DecodeError::SampleCountOverflow {
-                    frames: u64::MAX,
                     channels,
+                    frames: u64::MAX,
                 }
             })?;
         let take_frames = remaining_frames.min(output_frames);
@@ -90,8 +90,8 @@ impl ChunkCursor {
             chunk.spec(),
             FrameCount::new(usize::try_from(take_frames).map_err(|_| {
                 DecodeError::SampleCountOverflow {
-                    frames: take_frames,
                     channels,
+                    frames: take_frames,
                 }
             })?),
         )?;
@@ -275,21 +275,6 @@ impl ReadBuffer<'_, '_> {
         }
     }
 
-    fn remaining_frames(&self, written: usize, channels: u64) -> Result<usize, DecodeError> {
-        let remaining = self.capacity()?.saturating_sub(written);
-        match self {
-            Self::Interleaved(_) => {
-                let channels =
-                    usize::try_from(channels).map_err(|_| DecodeError::SampleCountOverflow {
-                        frames: 0,
-                        channels,
-                    })?;
-                Ok(remaining / channels)
-            }
-            Self::Planar(_) => Ok(remaining),
-        }
-    }
-
     fn copy_from(
         &mut self,
         source: InterleavedView<'_>,
@@ -310,6 +295,21 @@ impl ReadBuffer<'_, '_> {
                 spread_leading_channel(filled, unfilled, range);
                 Ok(source.frames().get())
             }
+        }
+    }
+
+    fn remaining_frames(&self, written: usize, channels: u64) -> Result<usize, DecodeError> {
+        let remaining = self.capacity()?.saturating_sub(written);
+        match self {
+            Self::Interleaved(_) => {
+                let channels =
+                    usize::try_from(channels).map_err(|_| DecodeError::SampleCountOverflow {
+                        channels,
+                        frames: 0,
+                    })?;
+                Ok(remaining / channels)
+            }
+            Self::Planar(_) => Ok(remaining),
         }
     }
 }

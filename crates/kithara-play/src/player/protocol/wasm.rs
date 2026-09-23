@@ -16,13 +16,6 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
-    pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
-        let owned = self.owned.take()?;
-        self.grid = owned.snapshot();
-        self.topology = owned.topology();
-        self.status = owned.status();
-        Some(owned)
-    }
     pub(crate) fn owning(
         id: BeatGridId,
         sample_rate: NonZeroU32,
@@ -36,6 +29,13 @@ impl PlayerSync {
             status: owned.status(),
             owned: Some(owned),
         }
+    }
+    pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
+        let owned = self.owned.take()?;
+        self.grid = owned.snapshot();
+        self.topology = owned.topology();
+        self.status = owned.status();
+        Some(owned)
     }
 }
 

@@ -8,8 +8,6 @@ use super::{
     view::DiagramModel,
 };
 
-const CONTOUR_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Debug, Serialize)]
 pub(crate) struct ContourSnapshot {
     contours: Vec<ContourRecord>,
@@ -70,6 +68,8 @@ pub(crate) fn snapshot(
     model: &DiagramModel,
     filter: &ArchitectureFilter,
 ) -> ContourSnapshot {
+    const CONTOUR_SCHEMA_VERSION: u32 = 1;
+
     let index = ContourIndex::new(graph);
     let visible = model
         .nodes

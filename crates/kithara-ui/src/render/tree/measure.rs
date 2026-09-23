@@ -141,6 +141,11 @@ impl<'a> Flex<'a> {
         Self::weighted(Axis::Horizontal, children)
     }
 
+    pub(super) fn spacing(mut self, spacing: f32) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
     fn weighted(
         axis: Axis,
         children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
@@ -153,11 +158,6 @@ impl<'a> Flex<'a> {
                     (child, Some(declared), None, Some(main_weight), band)
                 }),
         )
-    }
-
-    pub(super) fn spacing(mut self, spacing: f32) -> Self {
-        self.spacing = spacing;
-        self
     }
 
     pub(super) fn width(mut self, width: Length) -> Self {

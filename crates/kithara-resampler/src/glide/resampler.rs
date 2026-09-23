@@ -65,6 +65,35 @@ impl GlideResampler {
         })
     }
 
+    fn can_passthrough(&self) -> bool {
+        self.glide.remaining == 0
+            && (self.current_ratio - 1.0).abs() <= self.options.passthrough_tolerance
+    }
+
+    fn consume_frames(&mut self, input: &[&[f32]], input_frames: usize, produced: usize) -> usize {
+        if self.can_passthrough() {
+            self.store_previous(input, produced);
+            return produced;
+        }
+        let consumed = self
+            .cursor
+            .floor()
+            .to_usize()
+            .unwrap_or(usize::MAX)
+            .min(input_frames.saturating_sub(1));
+        self.store_previous(input, consumed);
+        self.cursor -= consumed.to_f64().unwrap_or(0.0);
+        consumed
+    }
+
+    fn output_ratio(&self) -> f64 {
+        if self.glide.remaining > 0 {
+            self.current_ratio.min(self.glide.target)
+        } else {
+            self.current_ratio
+        }
+    }
+
     /// Render one exact source/output span without backend buffering.
     ///
     /// # Errors
@@ -129,35 +158,6 @@ impl GlideResampler {
         Ok(())
     }
 
-    fn can_passthrough(&self) -> bool {
-        self.glide.remaining == 0
-            && (self.current_ratio - 1.0).abs() <= self.options.passthrough_tolerance
-    }
-
-    fn consume_frames(&mut self, input: &[&[f32]], input_frames: usize, produced: usize) -> usize {
-        if self.can_passthrough() {
-            self.store_previous(input, produced);
-            return produced;
-        }
-        let consumed = self
-            .cursor
-            .floor()
-            .to_usize()
-            .unwrap_or(usize::MAX)
-            .min(input_frames.saturating_sub(1));
-        self.store_previous(input, consumed);
-        self.cursor -= consumed.to_f64().unwrap_or(0.0);
-        consumed
-    }
-
-    fn output_ratio(&self) -> f64 {
-        if self.glide.remaining > 0 {
-            self.current_ratio.min(self.glide.target)
-        } else {
-            self.current_ratio
-        }
-    }
-
     fn render_interpolated(
         &mut self,
         input: &[&[f32]],
@@ -201,6 +201,19 @@ impl GlideResampler {
         }
     }
 
+    fn seed_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I]) {
+        if self.previous_valid {
+            return;
+        }
+        self.previous[..self.channels.get()]
+            .iter_mut()
+            .zip(&input[..self.channels.get()])
+            .for_each(|(previous, input)| {
+                previous[0] = input.deref().first().copied().unwrap_or(0.0);
+            });
+        self.previous_valid = true;
+    }
+
     fn store_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I], consumed: usize) {
         if consumed == 0 {
             return;
@@ -212,19 +225,6 @@ impl GlideResampler {
             .zip(&input[..channels])
             .for_each(|(previous, input)| {
                 previous[0] = input.deref()[frame];
-            });
-        self.previous_valid = true;
-    }
-
-    fn seed_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I]) {
-        if self.previous_valid {
-            return;
-        }
-        self.previous[..self.channels.get()]
-            .iter_mut()
-            .zip(&input[..self.channels.get()])
-            .for_each(|(previous, input)| {
-                previous[0] = input.deref().first().copied().unwrap_or(0.0);
             });
         self.previous_valid = true;
     }

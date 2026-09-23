@@ -61,9 +61,9 @@ pub(crate) mod thin_wrapper_economy;
 
 pub(crate) struct Context<'a> {
     pub(crate) config: &'a IdiomsConfig,
-    pub(crate) scan: &'a Scan,
     pub(crate) metadata: &'a Metadata,
     pub(crate) workspace_root: &'a Path,
+    pub(crate) scan: &'a Scan,
     pub(crate) scope: &'a Scope,
 }
 
@@ -74,15 +74,15 @@ pub(crate) enum CheckPolicy {
 }
 
 impl CheckPolicy {
+    pub(crate) const fn keeps_source_findings(self) -> bool {
+        matches!(self, Self::WorkspaceSources)
+    }
+
     pub(crate) fn scope(self, scope: &Scope) -> Scope {
         match self {
             Self::Default => scope.clone(),
             Self::WorkspaceSources => scope.clone().with_workspace_sources(),
         }
-    }
-
-    pub(crate) const fn keeps_source_findings(self) -> bool {
-        matches!(self, Self::WorkspaceSources)
     }
 }
 
@@ -90,6 +90,7 @@ pub(crate) trait Check: Sync {
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
     }
+    fn id(&self) -> &'static str;
     fn policy(&self) -> CheckPolicy {
         if self.id().starts_with("derivable_") {
             CheckPolicy::WorkspaceSources
@@ -97,7 +98,6 @@ pub(crate) trait Check: Sync {
             CheckPolicy::Default
         }
     }
-    fn id(&self) -> &'static str;
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
 }

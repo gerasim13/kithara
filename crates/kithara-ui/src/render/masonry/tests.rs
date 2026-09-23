@@ -2156,18 +2156,6 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
     }
 }
 
-/// The strip whose scope picker the retained host has to draw.
-const SCOPE_STRIP: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-    ContextBar(
-        id: "context",
-        size: Some((w: Fill, h: Fixed(26.0))),
-        read: Model(id: "library.breadcrumb"),
-        write: Model(id: "library.scope"),
-        scope_items: ["ZVUK", "LOCAL"],
-        scope: Model(id: "library.scope"),
-    ),
-])"#;
-
 /// A press that opens a menu nobody draws answers with nothing on screen, and
 /// no assertion about the engine can tell that apart from a menu that appeared:
 /// the open flag is set either way. So the pointer is driven onto the closed
@@ -2208,6 +2196,18 @@ fn dismissing_the_scope_menu_takes_its_drawing_off_again() {
 /// The strip mounted on the retained host, with the centre of its closed scope
 /// face — the one point on the strip that opens the menu.
 fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
+    /// The strip whose scope picker the retained host has to draw.
+    const SCOPE_STRIP: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+    ContextBar(
+        id: "context",
+        size: Some((w: Fill, h: Fixed(26.0))),
+        read: Model(id: "library.breadcrumb"),
+        write: Model(id: "library.scope"),
+        scope_items: ["ZVUK", "LOCAL"],
+        scope: Model(id: "library.scope"),
+    ),
+])"#;
+
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &registry);
@@ -3459,14 +3459,6 @@ mod gesture_census {
             )
     }
 
-    /// The interior of a box, in fractions of its own width and height.
-    ///
-    /// A control is not uniformly live: a strip answers on its crumbs and not
-    /// in the gap between them, and a table answers on a row. Aiming at one
-    /// point measures where the aim landed, not what the control takes, so
-    /// every point gets its own root and the control answers if any does.
-    const AIMS: &[f64] = &[0.25, 0.5, 0.75];
-
     /// Whether the press alone keeps this promise.
     ///
     /// `HostLayer::handle` answers `Down` and nothing else, because
@@ -3504,6 +3496,14 @@ mod gesture_census {
     }
 
     fn driven(named: Named, control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Answer {
+        /// The interior of a box, in fractions of its own width and height.
+        ///
+        /// A control is not uniformly live: a strip answers on its crumbs and not
+        /// in the gap between them, and a table answers on a row. Aiming at one
+        /// point measures where the aim landed, not what the control takes, so
+        /// every point gets its own root and the control answers if any does.
+        const AIMS: &[f64] = &[0.25, 0.5, 0.75];
+
         let ui = driven_document(control, registry);
         let mut answer = Answer::default();
         for across in AIMS {
@@ -3570,12 +3570,6 @@ mod gesture_census {
         }
     }
 
-    /// How far apart the points the immediate census drives are.
-    ///
-    /// Four pixels is under the smallest box any control in the census was
-    /// laid out into, so a control that answers anywhere is reached.
-    const SWEEP: f32 = 4.0;
-
     /// Plays one gesture at one point and says what the document did with it.
     ///
     /// A drag is measured by its travel, not by the press that starts it: a
@@ -3635,6 +3629,12 @@ mod gesture_census {
         registry: &dyn EndpointRegistry,
         skin: &Skin,
     ) -> Answer {
+        /// How far apart the points the immediate census drives are.
+        ///
+        /// Four pixels is under the smallest box any control in the census was
+        /// laid out into, so a control that answers anywhere is reached.
+        const SWEEP: f32 = 4.0;
+
         let ui = driven_document(control, registry);
         let (width, height): (f32, f32) = (DRIVEN_WIDTH.as_(), DRIVEN_HEIGHT.as_());
         let mut y = SWEEP / 2.0;
@@ -4168,12 +4168,6 @@ fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> T
         .transform()
 }
 
-/// A module id the facade hands to an engine, so the control inside it is
-/// mounted as `InputOwner::Engine` and the engine stands on the module rather
-/// than on the control. Every other fixture here names an id of its own, which
-/// is the shape where the two are the same node.
-const HOSTED_MODULE: &str = "gallery-table-tab";
-
 const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
     Object(
         id: "travel",
@@ -4312,6 +4306,12 @@ fn a_mounted_table_repaints_the_row_under_the_pointer() {
 /// other, so a repaint aimed anywhere else leaves the list standing still.
 #[kithara::test]
 fn a_mounted_table_repaints_after_scrolling_under_a_hosted_engine() {
+    /// A module id the facade hands to an engine, so the control inside it is
+    /// mounted as `InputOwner::Engine` and the engine stands on the module rather
+    /// than on the control. Every other fixture here names an id of its own, which
+    /// is the shape where the two are the same node.
+    const HOSTED_MODULE: &str = "gallery-table-tab";
+
     let registry = fixture_registry();
     let ui = fixture_ui(
         HOSTED_MODULE,

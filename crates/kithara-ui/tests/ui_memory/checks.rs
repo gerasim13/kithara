@@ -30,15 +30,9 @@ use crate::{capture::Shot, fixture::Consts};
 struct Budget;
 
 impl Budget {
-    /// Frames drawn before the pool is read, so the reading is of a settled
-    /// host rather than of one still building its pipelines and atlases.
-    const WARMUP: usize = 4;
     /// Frames drawn after the reading. Long enough that a per-frame cost shows
     /// as a multiple of the slack rather than as noise.
     const DRAWS: usize = 24;
-    /// What the pool may drift by across [`Self::DRAWS`] unchanged frames.
-    /// Not zero: a driver is free to round and to keep its own scratch.
-    const SLACK_KIB: usize = 512;
     /// Everything the immediate host holds for a settled page. Measured at
     /// 28_064 KiB, and rounded up to leave room for a driver that rounds
     /// differently.
@@ -53,6 +47,12 @@ impl Budget {
     /// tile grid now, and what the pages actually need of them is held down by
     /// the `ui_buffers` binary beside this one.
     const RETAINED_KIB: u64 = 16_384;
+    /// What the pool may drift by across [`Self::DRAWS`] unchanged frames.
+    /// Not zero: a driver is free to round and to keep its own scratch.
+    const SLACK_KIB: usize = 512;
+    /// Frames drawn before the pool is read, so the reading is of a settled
+    /// host rather than of one still building its pipelines and atlases.
+    const WARMUP: usize = 4;
 }
 
 /// Bytes the graphics device holds, or `None` where the platform cannot say.
@@ -75,16 +75,16 @@ fn physical() -> (u32, u32) {
 /// bought the memory, which is the difference between a number to argue about
 /// and a place to go and fix.
 struct Stages {
-    /// Before anything of ours exists: the graphics device alone.
-    device: u64,
-    /// The renderer and its pipelines, before any page is drawn.
-    renderer: u64,
-    /// After the first frame, which is where atlases and pipelines are filled.
-    first: u64,
-    /// After the warmup, which is the reading the budget is written against.
-    settled: u64,
     /// After more frames of a page that did not change.
     after: u64,
+    /// Before anything of ours exists: the graphics device alone.
+    device: u64,
+    /// After the first frame, which is where atlases and pipelines are filled.
+    first: u64,
+    /// The renderer and its pipelines, before any page is drawn.
+    renderer: u64,
+    /// After the warmup, which is the reading the budget is written against.
+    settled: u64,
 }
 
 impl Stages {
@@ -256,11 +256,11 @@ mod immediate {
             draw(&mut renderer, &mut cache);
         }
         Stages {
-            after: read(),
             device,
             first,
-            renderer: renderer_bytes,
             settled,
+            after: read(),
+            renderer: renderer_bytes,
         }
     }
 
@@ -359,11 +359,11 @@ mod retained {
             draw(&mut ui, &mut off, &mut rgba);
         }
         Stages {
-            after: read(),
             device,
             first,
-            renderer: renderer_bytes,
             settled,
+            after: read(),
+            renderer: renderer_bytes,
         }
     }
 

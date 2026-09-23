@@ -52,13 +52,13 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
     /// each `Frame` carries its own `AudioStreamPacketDescription`.
     cbr_batch_packets: Option<u32>,
+    prepared: Option<PreparedPacket>,
     total_packets: Option<u64>,
     track_info: TrackInfo,
     last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
     frames_per_packet: u32,
     next_packet: u64,
     last_read_len: usize,
-    prepared: Option<PreparedPacket>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -319,24 +319,22 @@ impl Demuxer for AppleAudioFileDemuxer {
         self.track_info.duration
     }
 
-    fn prepare_frame(&mut self) -> DecodeResult<()> {
-        if self.prepared.is_none() {
-            self.prepared = Some(self.read_frame()?.into());
-        }
-        Ok(())
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
     }
 
     fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         Ok(match self.prepared.take() {
             Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
+                pts,
+                duration,
                 data: &self.read_buf[..self.last_read_len],
                 packet_desc: if self.cbr_batch_packets.is_some() {
                     &[]
                 } else {
                     &self.last_packet_desc_blob
                 },
-                pts,
-                duration,
             }),
             Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
             Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
@@ -344,9 +342,11 @@ impl Demuxer for AppleAudioFileDemuxer {
         })
     }
 
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.prepare_frame()?;
-        self.next_frame_prepared()
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_none() {
+            self.prepared = Some(self.read_frame()?.into());
+        }
+        Ok(())
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
@@ -1091,8 +1091,8 @@ mod tests {
     /// fixed file length (the realistic case where `Content-Length` is known
     /// at open), so a correct decoder needs the size exactly once.
     struct CountingSource {
-        end_seeks: Arc<AtomicUsize>,
         calls: Arc<AtomicUsize>,
+        end_seeks: Arc<AtomicUsize>,
         inner: Cursor<Vec<u8>>,
     }
 

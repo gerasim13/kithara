@@ -23,15 +23,15 @@ pub enum AndroidBackendError {
 
 impl AndroidBackendError {
     #[must_use]
-    pub const fn status(operation: &'static str, status: i32) -> Self {
-        Self::Status { operation, status }
-    }
-
-    #[must_use]
     pub fn operation<D: Into<String>>(operation: &'static str, details: D) -> Self {
         Self::Operation {
             operation,
             details: details.into(),
         }
+    }
+
+    #[must_use]
+    pub const fn status(operation: &'static str, status: i32) -> Self {
+        Self::Status { operation, status }
     }
 }

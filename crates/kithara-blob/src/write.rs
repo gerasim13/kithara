@@ -31,6 +31,14 @@ impl<'a> Writer<'a> {
         self.write_u64(value.unwrap_or(0));
     }
 
+    /// Write a length-prefixed `f32` series.
+    pub fn write_samples(&mut self, samples: &[f32]) {
+        self.write_len(samples.len());
+        for sample in samples {
+            self.write_f32(*sample);
+        }
+    }
+
     /// # Errors
     ///
     /// Errors if the written section is longer than a `u64` can measure.
@@ -45,14 +53,6 @@ impl<'a> Writer<'a> {
         let len = u64::try_from(self.0.len() - section_offset).map_err(|_| BlobError::TooLarge)?;
         self.0[len_offset..section_offset].copy_from_slice(&len.to_le_bytes());
         Ok(())
-    }
-
-    /// Write a length-prefixed `f32` series.
-    pub fn write_samples(&mut self, samples: &[f32]) {
-        self.write_len(samples.len());
-        for sample in samples {
-            self.write_f32(*sample);
-        }
     }
 
     /// # Errors

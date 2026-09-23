@@ -20,7 +20,6 @@ use serde_json::Value;
 
 use super::shared::{HangDump, NoContext};
 
-const MAX_FILENAME_LABEL_CHARS: usize = 96;
 const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NEXTEST_FIELD_BYTES: usize = 8 * 1024;
 const MAX_LABEL_BYTES: usize = 8 * 1024;
@@ -28,7 +27,6 @@ const MAX_DIAGNOSTIC_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_BYTES: usize = 192 * 1024;
 const MAX_FLASH_BYTES: usize = 256 * 1024;
 const MAX_FLIGHT_CHANNEL_BYTES: usize = 32 * 1024;
-const MAX_FALLBACK_LOG_BYTES: usize = 64 * 1024;
 const MAX_JSON_EXPANSION: usize = 6;
 const ENVELOPE_OVERHEAD_BYTES: usize = 16 * 1024;
 const MAX_BOUNDED_INPUT_BYTES: usize = 12 * MAX_NEXTEST_FIELD_BYTES
@@ -47,6 +45,8 @@ static NEXT_DUMP_ID: AtomicU64 = AtomicU64::new(0);
 /// Sanitize and bound a label for use in a dump filename.
 #[must_use]
 pub(crate) fn sanitize_label(label: &str) -> String {
+    const MAX_FILENAME_LABEL_CHARS: usize = 96;
+
     let sanitized: String = label
         .chars()
         .take(MAX_FILENAME_LABEL_CHARS)
@@ -334,6 +334,8 @@ pub(crate) fn resolve_dump_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, diag: &str) {
+    const MAX_FALLBACK_LOG_BYTES: usize = 64 * 1024;
+
     let label = bounded_excerpt(label, MAX_LABEL_BYTES);
     let diagnostic = bounded_excerpt(diag, MAX_DIAGNOSTIC_BYTES);
     let context = bounded_context(ctx.dump_json());

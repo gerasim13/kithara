@@ -5,12 +5,12 @@ use crate::{EncodeConfig, EncodeError, EncodeResult, EncodedAccessUnit};
 /// Continuous encoder from interleaved `f32` PCM to access units.
 #[derive(derive_more::Debug)]
 pub struct EncoderSession {
-    channels: usize,
-    next_frame: u64,
-    packet_frames: u32,
-    packet_samples: usize,
     #[debug("{:?}", self.pending_samples.len())]
     pending_samples: Vec<f32>,
+    packet_frames: u32,
+    next_frame: u64,
+    channels: usize,
+    packet_samples: usize,
 }
 
 impl EncoderSession {

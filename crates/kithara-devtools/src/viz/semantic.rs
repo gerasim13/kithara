@@ -16,8 +16,6 @@ use super::{
 
 mod lsp;
 
-const SEMANTIC_SYMBOL_BUDGET: usize = 64;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SemanticState {
@@ -80,6 +78,8 @@ pub(crate) struct EnrichRequest<'a> {
 }
 
 pub(crate) fn enrich(graph: &mut EvidenceGraph, request: &EnrichRequest<'_>) -> SemanticSummary {
+    const SEMANTIC_SYMBOL_BUDGET: usize = 64;
+
     let eligible = select_symbols(
         graph,
         request.package,

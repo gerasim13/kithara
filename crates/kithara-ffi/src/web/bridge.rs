@@ -164,12 +164,6 @@ impl WorkerBridge {
         wasm::bridge_process_calls()
     }
 
-    /// Underruns the audio thread has recorded so far.
-    pub(crate) fn underruns(&self) -> u64 {
-        let _ = self;
-        wasm::bridge_underruns()
-    }
-
     /// Forward a command to the worker.
     ///
     /// # Errors
@@ -187,5 +181,11 @@ impl WorkerBridge {
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
         tx.send(cmd)
             .map_err(|_| JsValue::from_str("worker channel closed"))
+    }
+
+    /// Underruns the audio thread has recorded so far.
+    pub(crate) fn underruns(&self) -> u64 {
+        let _ = self;
+        wasm::bridge_underruns()
     }
 }

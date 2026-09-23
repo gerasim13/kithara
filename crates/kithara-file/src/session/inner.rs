@@ -22,6 +22,7 @@ use url::Url;
 
 use super::segments::FileSegmentIndex;
 use crate::{FileError, FileEvent, TotalBytesSource, coord::FileCoord};
+use std::io::Error;
 
 const CODEC_SNIFF_BYTES: usize = 16;
 
@@ -70,7 +71,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        self.reader.read_at(offset, buf).map_err(io::Error::other)
+        self.reader.read_at(offset, buf).map_err(Error::other)
     }
 }
 

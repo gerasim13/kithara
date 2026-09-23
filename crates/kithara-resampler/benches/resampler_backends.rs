@@ -16,15 +16,6 @@ use kithara_resampler::{
 };
 use num_traits::cast::ToPrimitive;
 
-const RATIOS: &[(u32, u32)] = &[
-    (44_100, 48_000),
-    (48_000, 44_100),
-    (44_100, 22_050),
-    (48_000, 48_000),
-];
-const CHANNELS: &[usize] = &[1, 2];
-const BLOCKS: &[usize] = &[1_024, 4_096];
-
 pool_schema! {
     pub(crate) BenchPools {
         samples: f32,
@@ -39,6 +30,17 @@ fn pools() -> PoolRegion<BenchPools> {
 }
 
 fn resampler_backends(c: &mut Criterion) {
+    const RATIOS: &[(u32, u32)] = &[
+        (44_100, 48_000),
+        (48_000, 44_100),
+        (44_100, 22_050),
+        (48_000, 48_000),
+    ];
+
+    const CHANNELS: &[usize] = &[1, 2];
+
+    const BLOCKS: &[usize] = &[1_024, 4_096];
+
     let mut group = c.benchmark_group("resampler_backends");
     for &(source_rate, target_rate) in RATIOS {
         for &channels in CHANNELS {

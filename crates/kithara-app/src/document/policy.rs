@@ -10,9 +10,6 @@ use rand::{Rng as _, RngExt as _, distr::Alphanumeric};
 
 use super::schema::{Drm, DrmProvider, SeedAlphabet, SeedSpec};
 
-/// Header the key request generates per fetch; a document must not set it.
-const GENERATED_HEADER: &str = "X-Encrypted-Key";
-
 /// A provider a document declared in a way no policy can honour.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -60,6 +57,9 @@ pub(crate) fn drm_policy(drm: &Drm) -> Result<DomainKeyPolicy, PolicyError> {
 }
 
 fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
+    /// Header the key request generates per fetch; a document must not set it.
+    const GENERATED_HEADER: &str = "X-Encrypted-Key";
+
     if provider.headers.contains_key(GENERATED_HEADER) {
         return Err(PolicyError::ReservedHeader {
             provider: provider.name.clone(),

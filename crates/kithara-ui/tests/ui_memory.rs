@@ -26,9 +26,9 @@ mod host;
 #[path = "../examples/gallery/sections.rs"]
 mod sections;
 
-// A sibling in `tests/` would be a test binary of its own, and this one
-// carries the gallery modules the checks are written against. Under this
-// directory cargo leaves it alone and only this binary claims it.
+/// A sibling in `tests/` would be a test binary of its own, and this one
+/// carries the gallery modules the checks are written against. Under this
+/// directory cargo leaves it alone and only this binary claims it.
 #[path = "ui_memory/checks.rs"]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod checks;

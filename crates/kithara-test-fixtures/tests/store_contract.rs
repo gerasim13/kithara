@@ -322,6 +322,10 @@ mod process_config {
     }
 
     impl OriginServer {
+        fn finish(self) -> HashMap<String, usize> {
+            self.handle.join().expect("origin thread")
+        }
+
         fn serve(routes: HashMap<String, (u16, Vec<u8>)>, requests: usize) -> Self {
             let server = Server::http("127.0.0.1:0").expect("bind origin");
             let url = format!("http://{}", server.server_addr());
@@ -349,10 +353,6 @@ mod process_config {
                 counts
             });
             Self { handle, url }
-        }
-
-        fn finish(self) -> HashMap<String, usize> {
-            self.handle.join().expect("origin thread")
         }
     }
 

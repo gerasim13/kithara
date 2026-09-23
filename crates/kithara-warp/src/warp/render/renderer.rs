@@ -36,11 +36,11 @@ const SPEED_SMOOTHING_SPAN: f32 = 2.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
-    pub(super) source_start: u64,
     pub(super) activation: Option<PreparedActivation>,
     pub(super) projection: Option<ProjectedQuantum>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
+    pub(super) source_start: u64,
     pub(super) active_frames: usize,
     pub(super) frames: usize,
 }
@@ -65,8 +65,6 @@ impl PreparedActivation {
 pub struct WarpRenderer<S> {
     pub(super) controls: Arc<StretchControls>,
     pub(super) plan_slot: Arc<WarpPlanSlot>,
-    pub(super) projection: ProjectionState,
-    pub(super) residency: Option<super::renderer_residency::SourceResidency>,
     pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
@@ -103,6 +101,7 @@ pub struct WarpRenderer<S> {
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
     pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
+    pub(super) residency: Option<super::renderer_residency::SourceResidency>,
     /// Engine displaced by a checked render failure. The scheduler shell
     /// drops it from `prepare`, outside `produce_tick_rt`.
     pub(super) retired_engine: Option<Box<dyn ElasticEngine>>,
@@ -110,14 +109,15 @@ pub struct WarpRenderer<S> {
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(super) scratch: Option<SampleBuffer>,
     pub(super) pools: PoolRegion<S>,
+    pub(super) projection: ProjectionState,
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
-    pub(super) current_keylock: bool,
-    pub(super) backend_transition_pending: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
+    pub(super) backend_transition_pending: bool,
+    pub(super) current_keylock: bool,
     /// One scheduler-shell rebuild requested after a checked engine failure.
     /// The intent is consumed even when preparation fails.
     pub(super) rebuild_pending: bool,
@@ -277,6 +277,30 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.region = None;
     }
 
+    /// The single place a render becomes the committed one, so every committed
+    /// render publishes the session axis it fixed regardless of the path that
+    /// produced it.
+    pub(super) fn commit(
+        &mut self,
+        committed: RenderSnapshot,
+        output_start: i64,
+        source_start: u64,
+    ) {
+        kithara::probe_event!(
+            render_committed,
+            session_epoch = u64::from(committed.context().output().session_epoch()),
+            transport_revision = committed
+                .context()
+                .output()
+                .transport_revision()
+                .map_or(0, u64::from),
+            output_start,
+            source_start,
+            source_end = committed.frontier().source()
+        );
+        self.committed = Some(committed);
+    }
+
     pub(super) fn commit_rate_render(
         &mut self,
         snapshot: Option<RenderSnapshot>,
@@ -340,30 +364,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return;
         };
         self.commit(committed, output_start, source_start);
-    }
-
-    /// The single place a render becomes the committed one, so every committed
-    /// render publishes the session axis it fixed regardless of the path that
-    /// produced it.
-    pub(super) fn commit(
-        &mut self,
-        committed: RenderSnapshot,
-        output_start: i64,
-        source_start: u64,
-    ) {
-        kithara::probe_event!(
-            render_committed,
-            session_epoch = u64::from(committed.context().output().session_epoch()),
-            transport_revision = committed
-                .context()
-                .output()
-                .transport_revision()
-                .map_or(0, u64::from),
-            output_start,
-            source_start,
-            source_end = committed.frontier().source()
-        );
-        self.committed = Some(committed);
     }
 
     pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {

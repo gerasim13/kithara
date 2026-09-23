@@ -1,11 +1,12 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Ident, Member, parse_macro_input};
+use syn::Error;
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive(&input)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 

@@ -13,6 +13,7 @@ use crate::{
         state::ensure_ctx,
     },
 };
+use firewheel_web_audio::WebAudioBackend;
 
 thread_local! {
     static BRIDGE_PLAYBACK: RefCell<Option<Arc<PlaybackShared>>> = const { RefCell::new(None) };
@@ -123,10 +124,10 @@ pub(crate) fn warm_up_audio<S>(
 pub(super) fn start_stream_web_audio(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
-) -> Result<firewheel_web_audio::WebAudioBackend, String> {
+) -> Result<WebAudioBackend, String> {
     let config = firewheel_web_audio::WebAudioConfig {
         sample_rate: NonZeroU32::new(sample_rate),
         request_input: false,
     };
-    firewheel_web_audio::WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
+    WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
 }

@@ -31,11 +31,6 @@ use crate::{
     traits::BoxedSource,
 };
 
-const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
-    Some(bytes) => bytes,
-    None => unreachable!(),
-};
-
 #[cfg(not(any(
     feature = "symphonia",
     all(feature = "apple", any(target_os = "macos", target_os = "ios")),
@@ -278,6 +273,11 @@ impl DecoderFactory {
     /// `media_info`, for the kithara-audio readiness gate.
     #[must_use]
     pub fn reader_profile(media_info: &MediaInfo, byte_map: Option<&dyn ByteMap>) -> ReaderProfile {
+        const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
+            Some(bytes) => bytes,
+            None => unreachable!(),
+        };
+
         let input = match byte_map {
             Some(_)
                 if media_info
@@ -1088,9 +1088,9 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
-        pcm: Vec<f32>,
         spec: AudioSpec,
         track_info: DecoderTrackInfo,
+        pcm: Vec<f32>,
         frames_per_call: u32,
     }
 
@@ -1258,8 +1258,8 @@ mod apple_factory_tests {
             source_rate: SOURCE_RATE,
         };
         let codec = OutputDomainCodec {
-            pcm: trim_silence,
             frames_per_call,
+            pcm: trim_silence,
             spec: AudioSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             track_info: DecoderTrackInfo {
                 gapless: Some(output_gapless),

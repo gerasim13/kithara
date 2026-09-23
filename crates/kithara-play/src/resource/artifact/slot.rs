@@ -18,8 +18,8 @@ pub struct PreparedGrid {
 
 #[derive(Default)]
 struct Held {
-    generation: u64,
     model: Option<Arc<BeatGridModel>>,
+    generation: u64,
 }
 
 impl PreparedGrid {
@@ -34,17 +34,17 @@ impl PreparedGrid {
         }
     }
 
-    /// Which model this slot holds, and the generation it holds it at.
-    #[must_use]
-    pub fn read(&self) -> (u64, Option<Arc<BeatGridModel>>) {
-        let held = self.held.lock();
-        (held.generation, held.model.clone())
-    }
-
     /// Hand this load the model its source answered with.
     pub fn put(&self, model: Arc<BeatGridModel>) {
         let mut held = self.held.lock();
         held.generation = held.generation.wrapping_add(1);
         held.model = Some(model);
+    }
+
+    /// Which model this slot holds, and the generation it holds it at.
+    #[must_use]
+    pub fn read(&self) -> (u64, Option<Arc<BeatGridModel>>) {
+        let held = self.held.lock();
+        (held.generation, held.model.clone())
     }
 }

@@ -13,6 +13,7 @@ pub(crate) struct DeckTransport {
     loop_region: Option<[f32; 2]>,
     #[field(get, vis = "pub(crate)")]
     cues: Vec<f32>,
+    zoom: Zoom,
     #[field(get, vis = "pub(crate)")]
     playing: bool,
     #[field(get, vis = "pub(crate)")]
@@ -22,7 +23,6 @@ pub(crate) struct DeckTransport {
     duration_secs: f64,
     #[field(get, vis = "pub(crate)")]
     position_secs: f64,
-    zoom: Zoom,
 }
 
 impl DeckTransport {
@@ -105,10 +105,6 @@ impl DeckTransport {
         self.zoom = zoom_from_f64(zoom);
     }
 
-    pub(crate) fn zoom(&self) -> f64 {
-        f64::from(f32::from(self.zoom))
-    }
-
     fn toggle_loop(&mut self) {
         if self.loop_region.take().is_some() {
             return;
@@ -123,6 +119,10 @@ impl DeckTransport {
 
     pub(crate) const fn toggle_play(&mut self) {
         self.playing = !self.playing;
+    }
+
+    pub(crate) fn zoom(&self) -> f64 {
+        f64::from(f32::from(self.zoom))
     }
 }
 

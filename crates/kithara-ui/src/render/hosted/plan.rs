@@ -117,9 +117,9 @@ pub(crate) enum HostedControlPlan {
 /// on screen when the deck was mounted.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct HeroWindow {
+    scale: Zoom,
     end: f32,
     progress: f32,
-    scale: Zoom,
     start: f32,
     wheel_non_positive: f32,
     wheel_positive: f32,

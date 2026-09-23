@@ -35,10 +35,10 @@ pub(crate) struct Wave {
 pub(crate) struct Drawn {
     pub(crate) overlay: Option<OverlayData>,
     pub(crate) waveform: Option<WaveformData>,
+    pub(crate) zoom: Zoom,
     /// How far the host says the track is held, as a share of its length.
     pub(crate) cached: f32,
     pub(crate) progress: f32,
-    pub(crate) zoom: Zoom,
 }
 
 impl Wave {

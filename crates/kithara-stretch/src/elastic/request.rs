@@ -10,12 +10,12 @@ pub struct ElasticRequest {
     /// Number of output frames filled by this request.
     #[field(get, copy)]
     output_frames: usize,
-    /// Number of source frames consumed by this request.
-    #[field(get, copy)]
-    source_frames: usize,
     /// Source-frame advance represented by the emitted output interval.
     #[field(get, copy)]
     output_source_frames: usize,
+    /// Number of source frames consumed by this request.
+    #[field(get, copy)]
+    source_frames: usize,
 }
 
 impl ElasticRequest {
@@ -36,6 +36,18 @@ impl ElasticRequest {
         })
     }
 
+    pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {
+        let source_frames = self
+            .source_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_frames = self
+            .output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok(source_frames / output_frames)
+    }
+
     /// Sets the source advance of the audible interval independently of input admission.
     /// The ordinary constructor uses the admitted source count for both spans.
     ///
@@ -47,17 +59,5 @@ impl ElasticRequest {
         }
         self.output_source_frames = frames;
         Ok(self)
-    }
-
-    pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {
-        let source_frames = self
-            .source_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_frames = self
-            .output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        Ok(source_frames / output_frames)
     }
 }

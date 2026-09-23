@@ -261,9 +261,9 @@ struct FrameHeader {
 ))]
 #[derive(Debug, Clone, Copy)]
 struct Timing {
+    padded: bool,
     bitrate: u32,
     sample_rate: u32,
-    padded: bool,
 }
 
 fn parse_header(word: u32) -> Option<FrameHeader> {

@@ -12,11 +12,6 @@ use num_traits::cast::ToPrimitive;
 
 const MIN_F: f64 = 0.85;
 
-/// Tempo ratios that put the grid on a metrical level of its own.
-const MULTIPLES: [f64; 6] = [0.5, 2.0 / 3.0, 0.75, 4.0 / 3.0, 1.5, 2.0];
-/// How close to a ratio counts as being on that level.
-const NEAR: f64 = 0.05;
-
 struct Pass;
 
 impl Pass {
@@ -105,6 +100,12 @@ fn shown(value: Option<f64>, digits: usize) -> String {
 }
 
 fn offender(windows: &[Window], golden: &[f32]) -> Option<(f64, f64, f64)> {
+    /// Tempo ratios that put the grid on a metrical level of its own.
+    const MULTIPLES: [f64; 6] = [0.5, 2.0 / 3.0, 0.75, 4.0 / 3.0, 1.5, 2.0];
+
+    /// How close to a ratio counts as being on that level.
+    const NEAR: f64 = 0.05;
+
     let mut found = None;
     for window in windows {
         let reference = tempo(&between(golden, window.at, window.until));

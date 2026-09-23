@@ -286,9 +286,9 @@ pub enum FfiCrossfadeCurve {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiCrossfadeSettings {
-    pub duration: f32,
     pub curve: FfiCrossfadeCurve,
     pub depth: f32,
+    pub duration: f32,
     pub position: f32,
 }
 

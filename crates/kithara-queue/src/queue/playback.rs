@@ -11,6 +11,7 @@ use crate::{
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
 };
+use kithara_play::SelectionPlayback;
 
 impl<S> QueueControl<S>
 where
@@ -81,24 +82,13 @@ where
         self.command(|queue| queue.player.notify_interruption(kind));
     }
 
-    /// Lower or restore the whole session output under a competing sound,
-    /// such as a call or a navigation prompt.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError`] when the session rejects the change.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), QueueError> {
-        self.with_open_result(|queue| queue.player.set_session_ducking(mode))?;
-        Ok(())
-    }
-
     /// Pause playback and freeze the queue-visible head position.
     pub fn pause(&self) {
         self.command(|queue| {
             queue.player.pause();
             let mut phase = queue.lock_pending_select_mut();
             if let SelectPhase::Pending(mut pending) = *phase {
-                pending.playback = kithara_play::SelectionPlayback::Pause;
+                pending.playback = SelectionPlayback::Pause;
                 *phase = SelectPhase::Pending(pending);
             }
             drop(phase);
@@ -115,7 +105,7 @@ where
     fn play_inner(&self) {
         let mut phase = self.lock_pending_select_mut();
         if let SelectPhase::Pending(mut pending) = *phase {
-            pending.playback = kithara_play::SelectionPlayback::Play;
+            pending.playback = SelectionPlayback::Play;
             *phase = SelectPhase::Pending(pending);
         }
         drop(phase);
@@ -148,7 +138,7 @@ where
                 self.override_pending_select(pending.unwrap_or_else(|| PendingSelect {
                     id,
                     settings: Transition::None.settings(self.crossfade_settings()),
-                    playback: kithara_play::SelectionPlayback::Play,
+                    playback: SelectionPlayback::Play,
                     reason: AdvanceReason::UserSelect,
                 }));
                 self.promote_pending_load(id);
@@ -160,7 +150,7 @@ where
                 self.override_pending_select(PendingSelect {
                     id,
                     settings: Transition::None.settings(self.crossfade_settings()),
-                    playback: kithara_play::SelectionPlayback::Play,
+                    playback: SelectionPlayback::Play,
                     reason: AdvanceReason::UserSelect,
                 });
                 self.set_status(id, TrackStatus::Pending);
@@ -213,6 +203,17 @@ where
             self.write_cached_position(CachedPosition::known(landed_at.as_secs_f64()));
         }
         Ok(outcome)
+    }
+
+    /// Lower or restore the whole session output under a competing sound,
+    /// such as a call or a navigation prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError`] when the session rejects the change.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), QueueError> {
+        self.with_open_result(|queue| queue.player.set_session_ducking(mode))?;
+        Ok(())
     }
 
     pub(super) fn tick_player(&self) -> Result<(), PlayError> {

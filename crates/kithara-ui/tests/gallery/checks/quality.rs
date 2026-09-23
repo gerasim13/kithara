@@ -6,8 +6,6 @@ use kithara_ui::render::ReadValue;
 use crate::demo::quality::QualityState;
 
 const CELL: &str = "modules/deck/transport/stream/cell";
-const POP: &str = "modules/deck/transport/stream/pop";
-
 fn text(state: &QualityState, endpoint: &str) -> String {
     match state.get(endpoint) {
         Some(ReadValue::Text(value)) => value.to_owned(),
@@ -53,6 +51,8 @@ fn picking_a_variant_leaves_auto_and_closes_the_menu() {
 
 #[kithara::test]
 fn the_popover_path_closes_the_menu_and_the_cell_toggles_it() {
+    const POP: &str = "modules/deck/transport/stream/pop";
+
     let mut state = QualityState::default();
 
     state.activate(CELL);

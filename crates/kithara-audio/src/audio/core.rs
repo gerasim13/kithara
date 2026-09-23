@@ -130,26 +130,6 @@ impl<S> Audio<S> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
-    /// Prime the first chunk from what the producer has already delivered.
-    ///
-    /// Never parks: the preload latch this serves also opens when the producer
-    /// parks upstream, so a parking prime would wait on a fetch that
-    /// construction neither owns nor bounds.
-    pub(crate) fn prime_buffer(&mut self) -> bool {
-        let recv = recv_ctx(&self.session, &self.runtime);
-        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
-        let filled = self.ring.fill(&mut self.cursor, recv, Wait::Never);
-        self.events.fill_result(
-            filled,
-            was_playing,
-            self.ring.phase.is_terminal(),
-            self.session.playhead.position(),
-            self.ring.validator.epoch,
-        );
-        self.wake_for_events();
-        filled
-    }
-
     #[must_use]
     /// Reports whether non-blocking reads have been enabled.
     pub const fn is_preloaded(&self) -> bool {
@@ -183,6 +163,26 @@ impl<S> Audio<S> {
             }
         }
         Ok(())
+    }
+
+    /// Prime the first chunk from what the producer has already delivered.
+    ///
+    /// Never parks: the preload latch this serves also opens when the producer
+    /// parks upstream, so a parking prime would wait on a fetch that
+    /// construction neither owns nor bounds.
+    pub(crate) fn prime_buffer(&mut self) -> bool {
+        let recv = recv_ctx(&self.session, &self.runtime);
+        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
+        let filled = self.ring.fill(&mut self.cursor, recv, Wait::Never);
+        self.events.fill_result(
+            filled,
+            was_playing,
+            self.ring.phase.is_terminal(),
+            self.session.playhead.position(),
+            self.ring.validator.epoch,
+        );
+        self.wake_for_events();
+        filled
     }
 
     /// Reads interleaved PCM samples into `buf`.
@@ -476,9 +476,9 @@ mod tests {
                 trash_tx,
                 epoch,
                 consumer_wake_mode,
+                block_on_underrun,
                 audio_rx: data_rx,
                 reader_wake: Arc::new(ThreadWake::default()),
-                block_on_underrun,
             });
             let seek_state = Arc::new(SeekState::new());
             let seek: Arc<dyn SeekControl> = seek_state.clone();

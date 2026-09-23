@@ -29,9 +29,9 @@ type RingSetup =
 #[non_exhaustive]
 pub(crate) struct ManualRingConfig {
     pub(crate) session_rate: NonZeroU32,
+    pub(crate) layout: RingLayout,
     pub(crate) block_frames: u32,
     pub(crate) capacity_blocks: usize,
-    pub(crate) layout: RingLayout,
 }
 
 impl ManualRingConfig {
@@ -115,83 +115,22 @@ pub(crate) struct ManualRingSession {
     cmd_tx: Mutex<Option<mpsc::Sender<RingMsg>>>,
     credit_gate: Mutex<()>,
     lifecycle_gate: Mutex<()>,
-    probe: RingBackendProbe,
     reader: Mutex<RingReader>,
     snapshot: Mutex<RingSnapshot>,
     terminal_error: Mutex<Option<RingSessionError>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    probe: RingBackendProbe,
 }
 
 impl ManualRingSession {
-    pub(crate) fn start(config: ManualRingConfig) -> Result<Self, RingSessionError> {
-        Self::start_with(config, |_| Ok(()))
-    }
-
-    /// `no_block`: startup waits for the dedicated ring-session worker to finish arming.
-    #[kithara::allow_block]
-    pub(crate) fn start_with<F>(
-        config: ManualRingConfig,
-        setup: F,
-    ) -> Result<Self, RingSessionError>
-    where
-        F: FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static,
-    {
-        let (writer, reader) = MasterRing::open(config.block_frames, config.capacity_blocks);
-        let probe = RingBackendProbe::default();
-        let backend_config = RingBackendConfig::new(config.session_rate, config.layout, writer)
-            .with_probe(probe.clone());
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let starter_probe = probe.clone();
-        let worker = spawn_named("kithara-engine-manual-ring", move || {
-            ring_session_thread(
-                &cmd_rx,
-                &ready_tx,
-                backend_config,
-                config.session_rate,
-                starter_probe,
-                Box::new(setup),
-            );
-        });
-        let session = Self {
-            cmd_tx: Mutex::new(Some(cmd_tx)),
-            credit_gate: Mutex::new(()),
-            lifecycle_gate: Mutex::new(()),
-            probe,
-            reader: Mutex::new(reader),
-            snapshot: Mutex::new(RingSnapshot::default()),
-            terminal_error: Mutex::new(None),
-            worker: Mutex::new(Some(worker)),
-        };
-        match ready_rx.recv() {
-            Ok(Ok(snapshot)) => {
-                *session.snapshot.lock() = snapshot;
-                Ok(session)
-            }
-            Ok(Err(error)) => {
-                session.cmd_tx.lock().take();
-                let _ = session.join_worker();
-                Err(error)
-            }
-            Err(_) => session.worker_failure(),
-        }
-    }
-
-    /// Synchronous command-reply bridge; call from a blocking control thread.
-    pub(crate) fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
+    pub(crate) fn clock_samples(&self) -> Result<u64, RingSessionError> {
         self.ensure_available()?;
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
-            return self.worker_failure();
-        };
-        let sent = cmd_tx.send(RingMsg::Cmd { cmd, reply_tx });
-        if sent.is_err() {
-            return self.worker_failure();
-        }
-        match reply_rx.recv() {
-            Ok(reply) => Ok(reply),
-            Err(_) => self.worker_failure(),
-        }
+        Ok(self.snapshot.lock().clock_samples)
+    }
+
+    pub(crate) fn committed_frames(&self) -> Result<u64, RingSessionError> {
+        self.ensure_available()?;
+        Ok(self.snapshot.lock().committed_frames)
     }
 
     /// `no_block`: sync credit-reply bridge to the dedicated ring-session worker.
@@ -224,19 +163,52 @@ impl ManualRingSession {
         Ok(self.reader.lock().drain(frames))
     }
 
-    pub(crate) fn committed_frames(&self) -> Result<u64, RingSessionError> {
-        self.ensure_available()?;
-        Ok(self.snapshot.lock().committed_frames)
+    fn ensure_available(&self) -> Result<(), RingSessionError> {
+        if let Some(error) = self.terminal_error.lock().clone() {
+            return Err(error);
+        }
+        let worker_finished = self
+            .worker
+            .lock()
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished);
+        if worker_finished {
+            return self.worker_failure();
+        }
+        let worker_missing = self.worker.lock().is_none();
+        let sender_missing = self.cmd_tx.lock().is_none();
+        if worker_missing || sender_missing {
+            return self.worker_failure();
+        }
+        Ok(())
     }
 
-    pub(crate) fn clock_samples(&self) -> Result<u64, RingSessionError> {
+    /// Synchronous command-reply bridge; call from a blocking control thread.
+    pub(crate) fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
-        Ok(self.snapshot.lock().clock_samples)
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
+            return self.worker_failure();
+        };
+        let sent = cmd_tx.send(RingMsg::Cmd { cmd, reply_tx });
+        if sent.is_err() {
+            return self.worker_failure();
+        }
+        match reply_rx.recv() {
+            Ok(reply) => Ok(reply),
+            Err(_) => self.worker_failure(),
+        }
     }
 
-    pub(crate) fn start_count(&self) -> Result<usize, RingSessionError> {
-        self.ensure_available()?;
-        Ok(self.probe.start_count())
+    fn join_worker(&self) -> Result<(), RingSessionError> {
+        let Some(worker) = self.worker.lock().take() else {
+            return Ok(());
+        };
+        worker
+            .join()
+            .map_err(|payload| RingSessionError::WorkerPanicked {
+                message: panic_message(payload.as_ref()),
+            })
     }
 
     pub(crate) fn pre_arm_error(&self) -> Result<Option<RingRenderError>, RingSessionError> {
@@ -269,35 +241,63 @@ impl ManualRingSession {
         }
     }
 
-    fn ensure_available(&self) -> Result<(), RingSessionError> {
-        if let Some(error) = self.terminal_error.lock().clone() {
-            return Err(error);
-        }
-        let worker_finished = self
-            .worker
-            .lock()
-            .as_ref()
-            .is_some_and(JoinHandle::is_finished);
-        if worker_finished {
-            return self.worker_failure();
-        }
-        let worker_missing = self.worker.lock().is_none();
-        let sender_missing = self.cmd_tx.lock().is_none();
-        if worker_missing || sender_missing {
-            return self.worker_failure();
-        }
-        Ok(())
+    pub(crate) fn start(config: ManualRingConfig) -> Result<Self, RingSessionError> {
+        Self::start_with(config, |_| Ok(()))
     }
 
-    fn join_worker(&self) -> Result<(), RingSessionError> {
-        let Some(worker) = self.worker.lock().take() else {
-            return Ok(());
+    pub(crate) fn start_count(&self) -> Result<usize, RingSessionError> {
+        self.ensure_available()?;
+        Ok(self.probe.start_count())
+    }
+
+    /// `no_block`: startup waits for the dedicated ring-session worker to finish arming.
+    #[kithara::allow_block]
+    pub(crate) fn start_with<F>(
+        config: ManualRingConfig,
+        setup: F,
+    ) -> Result<Self, RingSessionError>
+    where
+        F: FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static,
+    {
+        let (writer, reader) = MasterRing::open(config.block_frames, config.capacity_blocks);
+        let probe = RingBackendProbe::default();
+        let backend_config = RingBackendConfig::new(config.session_rate, config.layout, writer)
+            .with_probe(probe.clone());
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let starter_probe = probe.clone();
+        let worker = spawn_named("kithara-engine-manual-ring", move || {
+            ring_session_thread(
+                &cmd_rx,
+                &ready_tx,
+                backend_config,
+                config.session_rate,
+                starter_probe,
+                Box::new(setup),
+            );
+        });
+        let session = Self {
+            probe,
+            cmd_tx: Mutex::new(Some(cmd_tx)),
+            credit_gate: Mutex::new(()),
+            lifecycle_gate: Mutex::new(()),
+            reader: Mutex::new(reader),
+            snapshot: Mutex::new(RingSnapshot::default()),
+            terminal_error: Mutex::new(None),
+            worker: Mutex::new(Some(worker)),
         };
-        worker
-            .join()
-            .map_err(|payload| RingSessionError::WorkerPanicked {
-                message: panic_message(payload.as_ref()),
-            })
+        match ready_rx.recv() {
+            Ok(Ok(snapshot)) => {
+                *session.snapshot.lock() = snapshot;
+                Ok(session)
+            }
+            Ok(Err(error)) => {
+                session.cmd_tx.lock().take();
+                let _ = session.join_worker();
+                Err(error)
+            }
+            Err(_) => session.worker_failure(),
+        }
     }
 
     fn worker_failure<T>(&self) -> Result<T, RingSessionError> {
@@ -316,13 +316,13 @@ impl ManualRingSession {
 }
 
 impl SessionDispatcher<TestPools> for ManualRingSession {
-    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-        Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
-    }
-
     /// The ring backend drives the device callback's processor.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+        Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
     }
 }
 
@@ -392,8 +392,8 @@ fn bootstrap(
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };
     match state.exec(Cmd::StartPlayer {
-        master_volume: 1.0,
         player_id,
+        master_volume: 1.0,
         render_quantum_frames: None,
         response_budget_frames: NonZeroUsize::new(448),
         sample_rate: session_rate.get(),

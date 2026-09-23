@@ -47,8 +47,8 @@ struct ActiveTask {
 /// therefore attach the producer to playback before it asynchronously opens
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
-    token: AnalysisToken,
     demand: AnalysisDemand,
+    token: AnalysisToken,
     cancel: CancelToken,
     rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
@@ -263,8 +263,8 @@ impl AnalysisWorker {
             rate,
             token,
             revision,
-            demand: AnalysisDemand::ALL,
             tx,
+            demand: AnalysisDemand::ALL,
             cancel: self.scope.token().child(),
             resume: Some(progress),
         };
@@ -286,6 +286,7 @@ impl AnalysisWorker {
             resume,
         } = pass;
         self.submit(Job {
+            demand,
             token,
             reader,
             cancel,
@@ -294,7 +295,6 @@ impl AnalysisWorker {
             ingest,
             tx,
             revision,
-            demand,
         });
     }
 

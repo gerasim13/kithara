@@ -8,6 +8,7 @@ use crate::{
     common::{parse::self_ty_name, violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
+use syn::visit;
 
 pub(crate) struct DerivableViewControl;
 
@@ -70,7 +71,7 @@ impl<'ast> Visit<'ast> for ViewControlVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

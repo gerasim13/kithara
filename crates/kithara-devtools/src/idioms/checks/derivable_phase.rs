@@ -8,6 +8,7 @@ use crate::{
     common::{parse::self_ty_name, violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
+use syn::visit;
 
 pub(crate) struct DerivablePhase;
 
@@ -63,7 +64,7 @@ impl<'ast> Visit<'ast> for PhaseVisitor {
             .and_then(|(path, _)| path.segments.last())
             .map(|segment| segment.ident.to_string())
         else {
-            syn::visit::visit_item_impl(self, implementation);
+            visit::visit_item_impl(self, implementation);
             return;
         };
         let supported = match trait_name.as_str() {
@@ -78,7 +79,7 @@ impl<'ast> Visit<'ast> for PhaseVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

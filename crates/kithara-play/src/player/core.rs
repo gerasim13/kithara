@@ -54,6 +54,10 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) gapless_mode: GaplessMode,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
+    /// Where the current item must start when it reaches a processor.
+    /// Set by a seek that arrives before the player holds a slot, consumed
+    /// by the load that starts playback.
+    pub(crate) start_position: Mutex<Option<Duration>>,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
@@ -61,15 +65,11 @@ pub(crate) struct PlayerCore<S> {
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker<S>,
     pub(crate) params: PlayerParams,
-    /// Where the current item must start when it reaches a processor.
-    /// Set by a seek that arrives before the player holds a slot, consumed
-    /// by the load that starts playback.
-    pub(crate) start_position: Mutex<Option<Duration>>,
+    /// Geometry this player publishes for the track it holds.
+    pub(crate) track_grid: TrackGrid,
     pub(crate) warp: WarpConfig,
     /// Player-level underrun policy copied into every prepared resource.
     pub(crate) block_on_underrun: bool,
-    /// Geometry this player publishes for the track it holds.
-    pub(crate) track_grid: TrackGrid,
 }
 
 /// Concrete Player implementation managing items queue.

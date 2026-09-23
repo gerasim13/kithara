@@ -26,6 +26,15 @@ impl<E: Event> TopicReceiver<E> {
         }
     }
 
+    /// Whether this channel has reported `Closed`.
+    ///
+    /// `EventSet::recv` reads this to disable a dead branch of its `select!`
+    /// instead of spinning on it.
+    #[must_use]
+    pub const fn is_closed(&self) -> bool {
+        self.closed
+    }
+
     /// Waits for the next event.
     ///
     /// # Errors
@@ -52,15 +61,6 @@ impl<E: Event> TopicReceiver<E> {
             self.closed = true;
         }
         received
-    }
-
-    /// Whether this channel has reported `Closed`.
-    ///
-    /// `EventSet::recv` reads this to disable a dead branch of its `select!`
-    /// instead of spinning on it.
-    #[must_use]
-    pub const fn is_closed(&self) -> bool {
-        self.closed
     }
 }
 

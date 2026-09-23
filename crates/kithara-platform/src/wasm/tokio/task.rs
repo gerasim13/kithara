@@ -116,8 +116,8 @@ where
 
 /// Handle to a spawned async task.
 pub struct JoinHandle<T> {
-    rx: oneshot::Receiver<Result<T, JoinError>>,
     abort_handle: futures::future::AbortHandle,
+    rx: oneshot::Receiver<Result<T, JoinError>>,
 }
 
 impl<T> JoinHandle<T> {

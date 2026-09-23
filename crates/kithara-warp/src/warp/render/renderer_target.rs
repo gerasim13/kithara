@@ -13,10 +13,10 @@ use super::{renderer::WarpRenderer, renderer_residency::SourceResidency};
 
 #[derive(Default)]
 pub(super) struct PreparedTarget {
-    pub(super) residency: Option<SourceResidency>,
     pub(super) activation_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     pub(super) pending_source: Option<SampleBuffer>,
+    pub(super) residency: Option<SourceResidency>,
     pub(super) scratch: Option<SampleBuffer>,
 }
 

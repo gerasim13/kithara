@@ -93,14 +93,14 @@ pub struct OutputContext {
     /// The sample rate defining [`Self::output_frames`].
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// The committed transport revision, including paused transport.
+    #[field(get, copy)]
+    transport_revision: Option<TransportRevision>,
     /// The exact half-open session-output frame range.
     output_frames: Range<SessionFrame>,
     /// The generation of the session frame axis.
     #[field(get, copy)]
     session_epoch: SessionEpoch,
-    /// The committed transport revision, including paused transport.
-    #[field(get, copy)]
-    transport_revision: Option<TransportRevision>,
 }
 
 impl OutputContext {
@@ -114,21 +114,10 @@ impl OutputContext {
     ) -> Option<Self> {
         (output_frames.start <= output_frames.end).then_some(Self {
             sample_rate,
+            transport_revision,
             output_frames,
             session_epoch,
-            transport_revision,
         })
-    }
-
-    /// Returns the frames this pass covers, or `None` when the span is not representable.
-    #[must_use]
-    pub fn frame_count(&self) -> Option<usize> {
-        let span = self
-            .output_frames
-            .end
-            .0
-            .checked_sub(self.output_frames.start.0)?;
-        usize::try_from(span).ok()
     }
 
     /// Derives the same axis for a half-open range relative to this output block.
@@ -146,6 +135,17 @@ impl OutputContext {
             self.session_epoch,
             self.transport_revision,
         )
+    }
+
+    /// Returns the frames this pass covers, or `None` when the span is not representable.
+    #[must_use]
+    pub fn frame_count(&self) -> Option<usize> {
+        let span = self
+            .output_frames
+            .end
+            .0
+            .checked_sub(self.output_frames.start.0)?;
+        usize::try_from(span).ok()
     }
 }
 

@@ -8,6 +8,7 @@ use crate::{
     common::{parse::self_ty_name, violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
+use syn::visit;
 
 pub(crate) struct DerivableSerialize;
 
@@ -54,16 +55,16 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
         })
         .collect();
     let mut visitor = SerializeVisitor {
-        findings: Vec::new(),
         unit_structs,
+        findings: Vec::new(),
     };
     visitor.visit_file(&file);
     visitor.findings
 }
 
 struct SerializeVisitor {
-    findings: Vec<(String, usize)>,
     unit_structs: BTreeSet<String>,
+    findings: Vec<(String, usize)>,
 }
 
 impl<'ast> Visit<'ast> for SerializeVisitor {
@@ -84,7 +85,7 @@ impl<'ast> Visit<'ast> for SerializeVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

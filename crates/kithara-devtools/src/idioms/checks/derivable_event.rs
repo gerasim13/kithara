@@ -21,12 +21,12 @@ const EXPLANATION: &str = "Every event type must be reachable from the FFI surfa
 pub(crate) struct DerivableEvent;
 
 impl Check for DerivableEvent {
-    fn policy(&self) -> super::CheckPolicy {
-        super::CheckPolicy::Default
-    }
-
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn policy(&self) -> super::CheckPolicy {
+        super::CheckPolicy::Default
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -92,12 +92,6 @@ struct Census {
 }
 
 impl<'ast> Visit<'ast> for Census {
-    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        if !attrs_have_cfg_test(&node.attrs) {
-            visit::visit_item_mod(self, node);
-        }
-    }
-
     fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
         if attrs_have_cfg_test(&node.attrs) {
             return;
@@ -120,12 +114,6 @@ impl<'ast> Visit<'ast> for Census {
         visit::visit_item_enum(self, node);
     }
 
-    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
-        if !attrs_have_cfg_test(&node.attrs) && derives(&node.attrs, "Event") {
-            self.events.push((node.ident.to_string(), node.span()));
-        }
-    }
-
     fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
         if !attrs_have_cfg_test(&node.attrs)
             && node.trait_.as_ref().is_some_and(|(path, _)| {
@@ -136,6 +124,18 @@ impl<'ast> Visit<'ast> for Census {
             && let Some(name) = self_ty_name(&node.self_ty)
         {
             self.manual.push((name, node.span()));
+        }
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        if !attrs_have_cfg_test(&node.attrs) {
+            visit::visit_item_mod(self, node);
+        }
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
+        if !attrs_have_cfg_test(&node.attrs) && derives(&node.attrs, "Event") {
+            self.events.push((node.ident.to_string(), node.span()));
         }
     }
 }

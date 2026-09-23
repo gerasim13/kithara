@@ -22,10 +22,10 @@ use crate::{
 };
 
 pub(super) struct AvailabilityPersist {
+    file: IndexFile,
     /// One writer at a time for `availability.bin`: the snapshot and the
     /// atomic rename that publishes it are one step.
     writing: Mutex<()>,
-    file: IndexFile,
 }
 
 impl AvailabilityIndex {
@@ -40,8 +40,8 @@ impl AvailabilityIndex {
             tracing::debug!("read existing availability.bin failed: {e}");
         }
         let _ = self.inner.persist.set(AvailabilityPersist {
-            writing: Mutex::new(()),
             file,
+            writing: Mutex::new(()),
         });
     }
 

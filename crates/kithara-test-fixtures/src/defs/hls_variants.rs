@@ -36,13 +36,6 @@ impl DelayPaddedPcm<'_> {
 }
 
 impl PcmSource for DelayPaddedPcm<'_> {
-    delegate::delegate! {
-        to self.inner {
-            fn channels(&self) -> u16;
-            fn sample_rate(&self) -> u32;
-        }
-    }
-
     fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
         let Some(total_len) = self.total_byte_len() else {
             return 0;
@@ -80,6 +73,13 @@ impl PcmSource for DelayPaddedPcm<'_> {
                 .saturating_add(self.encoder_delay_bytes())
                 .saturating_add(self.trailing_delay_bytes())
         })
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn channels(&self) -> u16;
+            fn sample_rate(&self) -> u32;
+        }
     }
 }
 
@@ -170,24 +170,24 @@ fn hls_variants(context: &BuildContext<'_>) -> Vec<u8> {
 }
 
 struct Profile {
-    codecs: Vec<AudioCodec>,
-    segments: usize,
-    seconds: f64,
-    sample_rate: u32,
-    signal: Wave,
-    bit_rates: Vec<u64>,
-    start_frame: usize,
-    encoder_delay: u32,
-    trailing_delay: u32,
     gapless: GaplessEncoding,
+    bit_rates: Vec<u64>,
+    codecs: Vec<AudioCodec>,
+    signal: Wave,
+    seconds: f64,
+    encoder_delay: u32,
+    sample_rate: u32,
+    trailing_delay: u32,
+    segments: usize,
+    start_frame: usize,
 }
 
 impl Profile {
     fn new(codecs: &[AudioCodec], segments: usize, seconds: f64) -> Self {
         Self {
-            codecs: codecs.to_vec(),
             segments,
             seconds,
+            codecs: codecs.to_vec(),
             sample_rate: 44_100,
             signal: Wave::Sawtooth,
             bit_rates: vec![

@@ -29,6 +29,7 @@ use crate::{
     effects::eq::{EqBandConfig, GainDb},
     rt::{LimiterNode, MasterEqNode},
 };
+use firewheel::node::AudioNode;
 
 #[derive(Debug)]
 pub(super) struct SlotNodes {
@@ -48,8 +49,8 @@ pub(super) struct Deck<S> {
     pub(super) player_id: PlayerId,
     pub(super) pools: PoolRegion<S>,
     pub(super) shared_eq: SharedEq,
-    pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) gate_smoothing: SmootherConfig,
+    pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
     pub(super) master_volume: f32,
@@ -150,10 +151,10 @@ pub(super) enum MixTap {
 }
 
 struct RootSnapshot {
-    sample_rate: SessionSampleRate,
-    stream_shape: Option<StreamShape>,
     grid: BeatGridSnapshot,
+    stream_shape: Option<StreamShape>,
     topology: Result<SyncGroupSnapshot, SyncError>,
+    sample_rate: SessionSampleRate,
     status: SyncStatusSnapshot,
 }
 
@@ -210,22 +211,22 @@ impl RootView {
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
+    pub(super) limiter: LimiterConfig,
     pub(super) ctx: Option<FirewheelContext>,
-    pub(super) stream: Option<T>,
     pub(super) mix_tap: Option<MixTap>,
-    pub(super) requested_max_block_frames: Option<NonZeroU32>,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
     pub(super) requested_declick_frames: Option<NonZeroU32>,
+    pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
-    pub(super) limiter: LimiterConfig,
     pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_ducking: SessionDuckingMode,
     pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
+    pub(super) stream: Option<T>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
+    pub(super) session_ducking: SessionDuckingMode,
     pub(super) transport: SessionTransportState,
     pub(super) start_stream_fn: StartStreamFn<T>,
     pub(super) stream_needs_restart: bool,
@@ -301,7 +302,7 @@ impl<T, S> SessionState<T, S> {
 /// Adds a node to the graph, turning the rejection Firewheel now reports into
 /// the session's own graph error. A node the graph refuses is a wiring bug, not
 /// a runtime condition the session can route around.
-pub(super) fn add_graph_node<N: firewheel::node::AudioNode + 'static>(
+pub(super) fn add_graph_node<N: AudioNode + 'static>(
     ctx: &mut FirewheelContext,
     node: N,
 ) -> Result<NodeID, SessionError> {

@@ -257,22 +257,22 @@ mod probed {
 
     /// Source that always produces, so its node competes for every pass.
     struct EndlessSource {
-        pools: Pools,
         seek_obs: Arc<dyn SeekObserve>,
         /// Time each step holds the shared worker thread before producing.
         step: Duration,
+        pools: Pools,
     }
 
     impl AudioSource for EndlessSource {
         type Chunk = AudioChunk;
 
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
+        }
+
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             thread::sleep(self.step);
             TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
         }
     }
 
@@ -286,13 +286,13 @@ mod probed {
     impl AudioSource for WaitingSource {
         type Chunk = AudioChunk;
 
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
+        }
+
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             thread::sleep(self.step);
             TrackStep::Blocked(WaitingReason::Waiting)
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
         }
     }
 
@@ -507,8 +507,8 @@ mod probed {
         let _id_a = register(&handle, node_a);
         let (node_b, _pop_b, _) = make_node(
             WaitingSource {
-                seek_obs: new_seek(),
                 step,
+                seek_obs: new_seek(),
             },
             32,
             0,
@@ -534,9 +534,9 @@ mod probed {
         let _id_a = register(&handle, node_a);
         let (node_b, mut pop_b, _) = make_node(
             EndlessSource {
+                step,
                 pools: pools.clone(),
                 seek_obs: new_seek(),
-                step,
             },
             32,
             0,

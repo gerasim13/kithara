@@ -17,10 +17,10 @@ pub struct Sample {
     /// [`ReadAt`] over one segment buffer makes these offsets into that
     /// buffer.
     pub byte_range: Range<u64>,
-    /// Absolute decode time in the track's media ticks.
-    pub decode_ticks: u64,
     /// Sample duration in media ticks.
     pub duration_ticks: u32,
+    /// Absolute decode time in the track's media ticks.
+    pub decode_ticks: u64,
 }
 
 /// Walk every `(moof, mdat)` pair of a body that carries no `moov` - an fMP4
@@ -39,6 +39,9 @@ pub fn read_samples<R: ReadAt>(
     total: u64,
     track_id: u32,
 ) -> Result<Vec<Sample>, Mp4Error> {
+    /// Bytes of a plain box header, which is what a size must at least cover.
+    const BOX_HEADER_BYTES: u64 = 8;
+
     let mut cursor = ReadAtCursor::new(source, total);
     let mut samples: Vec<Sample> = Vec::new();
 
@@ -73,9 +76,6 @@ pub fn read_samples<R: ReadAt>(
 
     Ok(samples)
 }
-
-/// Bytes of a plain box header, which is what a size must at least cover.
-const BOX_HEADER_BYTES: u64 = 8;
 
 /// Append the samples one `moof` addresses, resolving each `trun`'s base
 /// offset the way the `tfhd` flags ask for.
@@ -126,9 +126,9 @@ fn collect_samples(
             }
 
             out.push(Sample {
-                byte_range: byte_cursor..end,
                 decode_ticks,
                 duration_ticks,
+                byte_range: byte_cursor..end,
             });
 
             byte_cursor = end;

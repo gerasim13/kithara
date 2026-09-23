@@ -27,6 +27,7 @@ use crate::{
     },
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
+use kithara::play::CrossfadeSettings;
 
 struct Consts;
 
@@ -45,10 +46,10 @@ impl Consts {
 /// and each track build snapshots it into a [`FfiResourceConfig`].
 struct BuildState {
     store: FfiStore,
+    worker: FfiWorker,
     headers: HashMap<String, String>,
     keys: KeyOptions,
     pools: Pools,
-    worker: FfiWorker,
 }
 
 impl BuildState {
@@ -62,9 +63,9 @@ impl BuildState {
         Self {
             pools,
             store,
+            worker,
             headers: HashMap::new(),
             keys: KeyOptions::default(),
-            worker,
         }
     }
 }
@@ -117,7 +118,7 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(kithara::play::CrossfadeSettings {
+        let _ = queue.set_crossfade_settings(CrossfadeSettings {
             duration: CROSSFADE_SECONDS,
             ..Default::default()
         });

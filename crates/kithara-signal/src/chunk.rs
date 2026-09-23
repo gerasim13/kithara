@@ -20,6 +20,8 @@ pub struct AudioChunkInfo {
     pub end_timestamp: Duration,
     /// Media-timeline position of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
+    pub mapping_revision: Option<NonZeroU64>,
     /// Opaque source segment index reported by the decoder, when available.
     pub segment_index: Option<u32>,
     /// Absolute byte offset reported by the decoder when available.
@@ -34,8 +36,6 @@ pub struct AudioChunkInfo {
     pub frame_offset: u64,
     /// Opaque producer render revision represented by this chunk.
     pub render_revision: u64,
-    /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
-    pub mapping_revision: Option<NonZeroU64>,
     /// Source bytes that produced this chunk, or zero when unknown.
     pub source_bytes: u64,
 }

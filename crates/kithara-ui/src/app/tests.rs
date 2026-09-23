@@ -1160,30 +1160,6 @@ const MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align
     content: Pressable(id: "inside", press: Command(id: "fixture.pick"),
         child: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0))))))"#;
 
-/// The burger the shipped app bar carries: a menu whose surface is a column of
-/// rows, one of them a group heading that opens the block under it.
-const GROUPED_MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align: Start,
-    anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
-        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
-    content: Column(id: "surface", size: (w: Fixed(140.0), h: Shrink), gap: 0.0, children: [
-        Pressable(id: "head", press: Command(id: "fixture.pick"),
-            child: Row(size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
-                Text(id: "head-caret", style: MicroLabel, label: ">"),
-                Text(id: "head-label", size: (w: Fill, h: Fill), style: MicroLabel,
-                    label: "MODULES"),
-            ])),
-        Optional(id: "block", hidden: Model(id: "fixture.group_hidden"),
-            child: Spacer(id: "body", size: Some((w: Fill, h: Fixed(40.0))))),
-        Row(id: "tail", size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
-            Text(id: "tail-label", size: (w: Fill, h: Fill), style: MicroLabel,
-                label: "SAVED"),
-        ]),
-    ]))"#;
-
-/// The same burger with no menu on it, which is the picture a shut menu owes.
-const NO_MENU: &str = r#"Pressable(id: "burger", press: Command(id: "fixture.toggle"),
-    child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))))"#;
-
 /// Mounts one of the menu documents and hands it to the check.
 fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
     let endpoints = menu_endpoints();
@@ -1393,6 +1369,10 @@ fn menu_pictures() -> [u32; 3] {
 
 #[kithara::test]
 fn a_menu_the_document_holds_shut_draws_nothing_of_its_own() {
+    /// The same burger with no menu on it, which is the picture a shut menu owes.
+    const NO_MENU: &str = r#"Pressable(id: "burger", press: Command(id: "fixture.toggle"),
+    child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))))"#;
+
     let mut shut = 0;
     let mut bare = 0;
     with_document(MENU, |mut ui| shut = drawn_shapes(&mut ui));
@@ -1495,6 +1475,26 @@ fn a_press_inside_an_open_menu_reaches_the_application() {
 /// Mounts the grouped menu in a window with room for the whole surface and
 /// opens it, so the check starts from a menu a person is looking at.
 fn with_grouped_menu(check: impl FnOnce(Ui<'_, Menu>)) {
+    /// The burger the shipped app bar carries: a menu whose surface is a column of
+    /// rows, one of them a group heading that opens the block under it.
+    const GROUPED_MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align: Start,
+    anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Column(id: "surface", size: (w: Fixed(140.0), h: Shrink), gap: 0.0, children: [
+        Pressable(id: "head", press: Command(id: "fixture.pick"),
+            child: Row(size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
+                Text(id: "head-caret", style: MicroLabel, label: ">"),
+                Text(id: "head-label", size: (w: Fill, h: Fill), style: MicroLabel,
+                    label: "MODULES"),
+            ])),
+        Optional(id: "block", hidden: Model(id: "fixture.group_hidden"),
+            child: Spacer(id: "body", size: Some((w: Fill, h: Fixed(40.0))))),
+        Row(id: "tail", size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
+            Text(id: "tail-label", size: (w: Fill, h: Fill), style: MicroLabel,
+                label: "SAVED"),
+        ]),
+    ]))"#;
+
     let endpoints = menu_endpoints();
     let resolver = one_control(GROUPED_MENU);
     let mut ui = Ui::new(
@@ -1576,11 +1576,6 @@ fn opening_a_group_puts_its_block_in_the_open_menu() {
     });
 }
 
-/// A deck's hero wave, which carries the strip of track information across its
-/// top the way the shipped decks do.
-const HERO_WAVE: &str = r#"Wave(id: "wave", style: Hero, badge: Some("A"),
-    size: Some((w: Fill, h: Fill)))"#;
-
 /// An application with nothing loaded, for the documents that read nothing.
 #[derive(Default)]
 struct Bare;
@@ -1616,6 +1611,11 @@ impl App for Bare {
 /// hand leaves the strip standing over what the hand came for.
 #[kithara::test]
 fn a_hand_over_the_hero_wave_takes_its_information_strip_out_of_the_picture() {
+    /// A deck's hero wave, which carries the strip of track information across its
+    /// top the way the shipped decks do.
+    const HERO_WAVE: &str = r#"Wave(id: "wave", style: Hero, badge: Some("A"),
+    size: Some((w: Fill, h: Fill)))"#;
+
     let endpoints = menu_endpoints();
     let resolver = one_control(HERO_WAVE);
     let mut ui = Ui::new(
@@ -1648,13 +1648,6 @@ fn a_hand_over_the_hero_wave_takes_its_information_strip_out_of_the_picture() {
         "a hand resting on the hero wave must take its information strip out of the picture"
     );
 }
-
-/// The tempo block of a deck: a row of readings that is itself the surface a
-/// wheel detent steps the tempo on.
-const WHEEL_ROW: &str = r#"Row(id: "tempo", gap: 7.0, pad_x: 11.0,
-    size: (w: Fill, h: Fill), write: Parameter(id: "fixture.rate"), children: [
-        Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
-    ])"#;
 
 /// An application that remembers every step a wheel published.
 #[derive(Default)]
@@ -1699,6 +1692,13 @@ impl App for Stepped {
 /// readings and not the surface draws a tempo nobody can change.
 #[kithara::test]
 fn a_wheel_over_a_writing_row_steps_the_value_it_names() {
+    /// The tempo block of a deck: a row of readings that is itself the surface a
+    /// wheel detent steps the tempo on.
+    const WHEEL_ROW: &str = r#"Row(id: "tempo", gap: 7.0, pad_x: 11.0,
+    size: (w: Fill, h: Fill), write: Parameter(id: "fixture.rate"), children: [
+        Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+    ])"#;
+
     let endpoints = menu_endpoints();
     let resolver = one_control(WHEEL_ROW);
     let mut ui = Ui::new(

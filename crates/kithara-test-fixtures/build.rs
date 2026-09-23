@@ -59,9 +59,6 @@ use registry::{AssetBuild, AssetDef};
 #[cfg(feature = "native-fixtures")]
 use self::context::BuildContext;
 
-#[cfg(feature = "native-fixtures")]
-const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
-
 /// Rejects two cases that would produce one accessor, before either is written.
 #[cfg(feature = "native-fixtures")]
 fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef)> {
@@ -182,6 +179,9 @@ fn materialize_one(
     unavailable: &HashMap<String, String>,
     refresh: &HashSet<String>,
 ) -> Option<(String, String)> {
+    #[cfg(feature = "native-fixtures")]
+    const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
+
     let (name, id, def) = &resolved[index];
     // A fetching family cannot be produced again without hydration, so a
     // refresh never reaches one: the store keeps what it already holds.

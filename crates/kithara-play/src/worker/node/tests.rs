@@ -87,8 +87,8 @@ struct OneChunkSource {
 struct CommitSource {
     commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
     seek: Arc<SeekState>,
-    leading_chunk: Option<AudioChunk>,
     chunk: Option<AudioChunk>,
+    leading_chunk: Option<AudioChunk>,
     source_end: SourceEnd,
 }
 

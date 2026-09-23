@@ -7,34 +7,34 @@ use crate::{assets, fixtures::samples};
 /// Build-time PCM banks for elastic-engine conformance tests.
 #[non_exhaustive]
 pub struct StretchPcm {
-    /// Prepared square samples.
-    pub square: Vec<f32>,
-    /// Prepared impulses samples.
-    pub impulses: Vec<f32>,
-    /// Prepared continuous samples.
-    pub continuous: Vec<f32>,
-    /// Prepared short samples.
-    pub short: Vec<f32>,
-    /// Prepared indexed samples.
-    pub indexed: Vec<f32>,
-    /// Prepared ramp samples.
-    pub ramp: Vec<f32>,
     /// Prepared bungee samples.
     pub bungee: Vec<f32>,
-    /// Prepared mono samples.
-    pub mono: Vec<f32>,
-    /// Prepared silence samples.
-    pub silence: Vec<f32>,
-    /// Prepared quarter samples.
-    pub quarter: Vec<f32>,
-    /// Prepared nine samples.
-    pub nine: Vec<f32>,
+    /// Prepared continuous samples.
+    pub continuous: Vec<f32>,
     /// Prepared fifth samples.
     pub fifth: Vec<f32>,
-    /// Prepared half samples.
-    pub half: Vec<f32>,
     /// Prepared four fifths samples.
     pub four_fifths: Vec<f32>,
+    /// Prepared half samples.
+    pub half: Vec<f32>,
+    /// Prepared impulses samples.
+    pub impulses: Vec<f32>,
+    /// Prepared indexed samples.
+    pub indexed: Vec<f32>,
+    /// Prepared mono samples.
+    pub mono: Vec<f32>,
+    /// Prepared nine samples.
+    pub nine: Vec<f32>,
+    /// Prepared quarter samples.
+    pub quarter: Vec<f32>,
+    /// Prepared ramp samples.
+    pub ramp: Vec<f32>,
+    /// Prepared short samples.
+    pub short: Vec<f32>,
+    /// Prepared silence samples.
+    pub silence: Vec<f32>,
+    /// Prepared square samples.
+    pub square: Vec<f32>,
     /// Phase-aligned landmark and terminal marker tones.
     pub tones: Vec<Vec<f32>>,
 }

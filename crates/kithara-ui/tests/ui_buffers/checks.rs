@@ -22,28 +22,6 @@ use crate::{
     host::{self, Gallery},
 };
 
-/// Twice what the heaviest page was measured to take, per buffer, in the order
-/// the renderer reports them.
-///
-/// What the pages ask for, pinned apart from what the renderer lays on for
-/// them: the sizes are derived from the frame's tile grid, and a check written
-/// against that same arithmetic would pass for any arithmetic at all.
-const WATERMARKS: [(&str, u32); 7] = [
-    ("binning", 8_192),
-    ("ptcl", 262_144),
-    ("tile", 65_536),
-    ("seg_counts", 65_536),
-    ("segments", 65_536),
-    ("blend", 8_192),
-    ("lines", 65_536),
-];
-
-/// The one page this cannot draw: its image arrives empty from the test
-/// resolver, so the renderer refuses the scene before any buffer is touched.
-/// Named rather than skipped by catching the failure, so that a second page
-/// going the same way is a failure rather than a silence.
-const UNDRAWABLE: &str = "shader";
-
 /// Every page draws inside the renderer's buffers, with headroom left.
 ///
 /// The memory budget beside this says what the buffers cost; this says whether
@@ -58,6 +36,28 @@ const UNDRAWABLE: &str = "shader";
 /// watermark per buffer, which fails while there is still room to spare.
 #[kithara::test]
 fn every_page_leaves_the_renderer_room_to_spare() {
+    /// Twice what the heaviest page was measured to take, per buffer, in the order
+    /// the renderer reports them.
+    ///
+    /// What the pages ask for, pinned apart from what the renderer lays on for
+    /// them: the sizes are derived from the frame's tile grid, and a check written
+    /// against that same arithmetic would pass for any arithmetic at all.
+    const WATERMARKS: [(&str, u32); 7] = [
+        ("binning", 8_192),
+        ("ptcl", 262_144),
+        ("tile", 65_536),
+        ("seg_counts", 65_536),
+        ("segments", 65_536),
+        ("blend", 8_192),
+        ("lines", 65_536),
+    ];
+
+    /// The one page this cannot draw: its image arrives empty from the test
+    /// resolver, so the renderer refuses the scene before any buffer is touched.
+    /// Named rather than skipped by catching the failure, so that a second page
+    /// going the same way is a failure rather than a silence.
+    const UNDRAWABLE: &str = "shader";
+
     let (width, height) = physical();
     let endpoints = demo::registry();
     let resolver = resolver();
@@ -125,9 +125,9 @@ fn every_page_leaves_the_renderer_room_to_spare() {
                 frame.scene(),
                 &view,
                 &RenderParams {
-                    base_color: Color::TRANSPARENT,
                     width,
                     height,
+                    base_color: Color::TRANSPARENT,
                     antialiasing_method: AaConfig::Area,
                 },
                 DebugLayers::none(),

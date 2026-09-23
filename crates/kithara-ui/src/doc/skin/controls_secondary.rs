@@ -23,9 +23,9 @@ pub struct MenuSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct MenuPatch {
-    pub icon_color: Option<ColorRole>,
     pub burger_icon_size: Option<f32>,
     pub cell_icon_size: Option<f32>,
+    pub icon_color: Option<ColorRole>,
     pub icon_size: Option<f32>,
     pub small_icon_size: Option<f32>,
 }
@@ -48,9 +48,9 @@ pub struct SegmentedSkin {
     pub active_background: ColorRole,
     pub active_text: ColorRole,
     pub background: ColorRole,
-    pub text: TextRoleSkin,
     pub frame: FrameSkin,
     pub size: SizeSpec,
+    pub text: TextRoleSkin,
     pub padding_x: f32,
 }
 
@@ -62,10 +62,10 @@ pub struct SegmentedPatch {
     pub active_background: Option<ColorRole>,
     pub active_text: Option<ColorRole>,
     pub background: Option<ColorRole>,
-    pub text: Option<TextRoleSkin>,
     pub frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub padding_x: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub text: Option<TextRoleSkin>,
 }
 
 impl SegmentedSkin {
@@ -87,9 +87,9 @@ impl SegmentedSkin {
 pub struct SelectSkin {
     pub background: ColorRole,
     pub chevron_color: ColorRole,
-    pub text: TextRoleSkin,
     pub frame: FrameSkin,
     pub size: SizeSpec,
+    pub text: TextRoleSkin,
     pub chevron_size: f32,
     pub padding_x: f32,
     pub padding_y: f32,
@@ -102,12 +102,12 @@ pub struct SelectSkin {
 pub struct SelectPatch {
     pub background: Option<ColorRole>,
     pub chevron_color: Option<ColorRole>,
-    pub text: Option<TextRoleSkin>,
-    pub frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub chevron_size: Option<f32>,
+    pub frame: Option<FrameSkin>,
     pub padding_x: Option<f32>,
     pub padding_y: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub text: Option<TextRoleSkin>,
 }
 
 impl SelectSkin {
@@ -128,9 +128,9 @@ impl SelectSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct StatusDotSkin {
-    pub tones: ToneColors,
-    pub text: TextRoleSkin,
     pub size: SizeSpec,
+    pub text: TextRoleSkin,
+    pub tones: ToneColors,
     pub dot_size: f32,
     pub gap: f32,
 }
@@ -140,11 +140,11 @@ pub struct StatusDotSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct StatusDotPatch {
-    pub tones: Option<ToneColors>,
-    pub text: Option<TextRoleSkin>,
-    pub size: Option<SizeSpec>,
     pub dot_size: Option<f32>,
     pub gap: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub text: Option<TextRoleSkin>,
+    pub tones: Option<ToneColors>,
 }
 
 impl StatusDotSkin {
@@ -176,13 +176,13 @@ pub struct SwatchSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SwatchPatch {
-    pub frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
-    pub hex: Option<TextRoleSkin>,
-    pub label: Option<TextRoleSkin>,
     pub box_height: Option<f32>,
     pub box_label_gap: Option<f32>,
+    pub frame: Option<FrameSkin>,
+    pub hex: Option<TextRoleSkin>,
+    pub label: Option<TextRoleSkin>,
     pub label_hex_gap: Option<f32>,
+    pub size: Option<SizeSpec>,
 }
 
 impl SwatchSkin {
@@ -218,9 +218,9 @@ pub struct CellPatch {
     pub background: Option<ColorRole>,
     pub frame: Option<FrameSkin>,
     pub highlighted_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub label_gap: Option<f32>,
     pub label_height: Option<f32>,
+    pub size: Option<SizeSpec>,
 }
 
 impl CellSkin {
@@ -247,11 +247,11 @@ pub struct FaderSkin {
     pub segment_dim: ColorRole,
     pub segment_lit: ColorRole,
     pub tick_color: ColorRole,
-    pub label: TextRoleSkin,
     pub handle_frame: FrameSkin,
     pub rail_frame: FrameSkin,
     pub strip_frame: FrameSkin,
     pub size: SizeSpec,
+    pub label: TextRoleSkin,
     pub content_gap: f32,
     pub control_height: f32,
     pub control_padding_x: f32,
@@ -279,39 +279,39 @@ pub struct FaderSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct FaderPatch {
-    pub handle_color: Option<ColorRole>,
-    pub icon_color: Option<ColorRole>,
-    pub panel_color: Option<ColorRole>,
-    pub rail_empty: Option<ColorRole>,
-    pub rail_filled: Option<ColorRole>,
-    pub segment_dim: Option<ColorRole>,
-    pub segment_lit: Option<ColorRole>,
-    pub tick_color: Option<ColorRole>,
-    pub label: Option<TextRoleSkin>,
-    pub handle_frame: Option<FrameSkin>,
-    pub rail_frame: Option<FrameSkin>,
-    pub strip_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub content_gap: Option<f32>,
     pub control_height: Option<f32>,
     pub control_padding_x: Option<f32>,
     pub control_padding_y: Option<f32>,
+    pub handle_color: Option<ColorRole>,
+    pub handle_frame: Option<FrameSkin>,
+    pub handle_width: Option<u16>,
+    pub icon_color: Option<ColorRole>,
     pub icon_size: Option<f32>,
     pub icon_width: Option<f32>,
+    pub label: Option<TextRoleSkin>,
     pub label_width: Option<f32>,
+    pub panel_color: Option<ColorRole>,
+    pub rail_empty: Option<ColorRole>,
+    pub rail_filled: Option<ColorRole>,
+    pub rail_frame: Option<FrameSkin>,
     pub rail_width: Option<f32>,
+    pub segment_count: Option<usize>,
+    pub segment_dim: Option<ColorRole>,
     pub segment_gap: Option<f32>,
     pub segment_height: Option<f32>,
+    pub segment_lit: Option<ColorRole>,
+    pub size: Option<SizeSpec>,
     pub slider_height: Option<f32>,
+    pub step: Option<f64>,
+    pub strip_frame: Option<FrameSkin>,
     pub strip_height: Option<f32>,
     pub strip_padding: Option<f32>,
+    pub tick_color: Option<ColorRole>,
     pub tick_height: Option<f32>,
     pub tick_step: Option<f32>,
     pub tick_width: Option<f32>,
     pub ticks_height: Option<f32>,
-    pub step: Option<f64>,
-    pub handle_width: Option<u16>,
-    pub segment_count: Option<usize>,
 }
 
 impl FaderSkin {

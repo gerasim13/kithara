@@ -7,8 +7,8 @@
 //! `kithara-ffi`.
 
 mod error;
-// The media bindings carry `#[link(name = "mediandk")]`, which reaches the
-// link of every artifact that compiles them.
+/// The media bindings carry `#[link(name = "mediandk")]`, which reaches the
+/// link of every artifact that compiles them.
 #[cfg(target_os = "android")]
 pub mod media;
 mod runtime;

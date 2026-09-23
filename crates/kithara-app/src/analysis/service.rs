@@ -27,11 +27,6 @@ use crate::{
     waveform::TrackAnalysisRunner,
 };
 
-/// How many artifact answers may queue before a reading task waits. One track
-/// answers at most twice, so this only ever bounds a burst of re-pointed
-/// entries.
-const LOAD_REPLIES: usize = 16;
-
 pub(crate) struct AnalysisService {
     pub(super) owner: Owner,
     cancel: CancelToken,
@@ -43,14 +38,14 @@ pub(super) struct Owner {
     pub(super) config: AppConfig,
     pub(super) active: Option<Activity>,
     pub(super) axis: Option<NonZeroU32>,
+    pub(super) replies: mpsc::Receiver<LoadReply>,
+    /// Where an artifact read hands its answer back to the one task that owns
+    /// the entries, and where that task takes it.
+    pub(super) loads: mpsc::Sender<LoadReply>,
     pub(super) cache: TrackAnalysisCache,
     pub(super) runner: TrackAnalysisRunner,
     pub(super) entries: Vec<Entry>,
     pub(super) pending: VecDeque<usize>,
-    /// Where an artifact read hands its answer back to the one task that owns
-    /// the entries, and where that task takes it.
-    pub(super) loads: mpsc::Sender<LoadReply>,
-    pub(super) replies: mpsc::Receiver<LoadReply>,
 }
 
 impl AnalysisService {
@@ -59,6 +54,11 @@ impl AnalysisService {
         persistence: AnalysisPersistence,
         cancel: CancelToken,
     ) -> (Self, AnalysisHandle) {
+        /// How many artifact answers may queue before a reading task waits. One track
+        /// answers at most twice, so this only ever bounds a burst of re-pointed
+        /// entries.
+        const LOAD_REPLIES: usize = 16;
+
         let (handle, rx) = AnalysisHandle::channel();
         let runner = TrackAnalysisRunner::new(
             &cancel,

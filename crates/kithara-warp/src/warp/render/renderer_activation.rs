@@ -244,13 +244,13 @@ where
                     .checked_add(active_frames)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
-                    source_start: meta.frame_offset,
-                    projection: None,
                     activation,
                     rate,
                     speed,
                     active_frames,
                     frames,
+                    source_start: meta.frame_offset,
+                    projection: None,
                 })
             });
         match result {

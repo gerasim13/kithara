@@ -51,10 +51,10 @@ impl Transition {
 /// [`Transition`] the caller asked for. Stored until loading finishes.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PendingSelect {
-    pub(super) id: TrackId,
+    pub(super) reason: crate::AdvanceReason,
     pub(super) settings: CrossfadeSettings,
     pub(super) playback: SelectionPlayback,
-    pub(super) reason: crate::AdvanceReason,
+    pub(super) id: TrackId,
 }
 
 /// Crossfade-arm coordination state. Replaces the `u64::MAX` sentinel
@@ -138,6 +138,16 @@ impl AtomicTrackId {
             .is_ok()
     }
 
+    const fn decode(bits: u64) -> CrossfadeArm {
+        if bits == Self::NONE_BITS {
+            CrossfadeArm::Disarmed
+        } else {
+            CrossfadeArm::Armed {
+                for_track: TrackId(bits),
+            }
+        }
+    }
+
     /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
     /// `track` was the armed id.
     pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
@@ -149,16 +159,6 @@ impl AtomicTrackId {
                 Ordering::Acquire,
             )
             .is_ok()
-    }
-
-    const fn decode(bits: u64) -> CrossfadeArm {
-        if bits == Self::NONE_BITS {
-            CrossfadeArm::Disarmed
-        } else {
-            CrossfadeArm::Armed {
-                for_track: TrackId(bits),
-            }
-        }
     }
 
     pub(super) const fn disarmed() -> Self {

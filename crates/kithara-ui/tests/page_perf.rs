@@ -95,22 +95,9 @@ use self::{demo::DemoReads, fixture::Consts};
 /// own capture; iced's engine is built for a surface format, which is the sRGB
 /// pair.
 const IMMEDIATE_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-const RETAINED_FORMAT: vello_wgpu::TextureFormat = vello_wgpu::TextureFormat::Rgba8Unorm;
-
 /// Frames discarded before measuring. The first carries the mount, the layout,
 /// the shaping caches and every pipeline either host compiles lazily.
 const WARMUP: usize = 3;
-
-/// How many frames one direction lasts, for a wheel and for a drag alike. Both
-/// run into an end and stop consuming there, which is a different code path: a
-/// monotonic scroll measures a clamped no-op after about six frames, and a
-/// monotonic drag measures a fader pinned at one end of its rail.
-const REVERSAL: usize = 20;
-
-/// How far one pointer move carries a drag, in page points. Small enough that a
-/// frame's worth of moves stays on the rail at every sweep step, and large
-/// enough that each one lands on a different pixel of it.
-const DRAG_STEP: f32 = 1.5;
 
 /// The harness's own page, mounting the one list the gallery scrolls together
 /// with the visualiser, so a scroll slope measured with a visualiser on the page
@@ -1266,6 +1253,8 @@ struct RetainedGpu {
 
 impl RetainedGpu {
     fn new() -> Result<Self, String> {
+        const RETAINED_FORMAT: vello_wgpu::TextureFormat = vello_wgpu::TextureFormat::Rgba8Unorm;
+
         let instance = vello_wgpu::Instance::new(&vello_wgpu::InstanceDescriptor {
             backends: vello_wgpu::Backends::PRIMARY,
             ..vello_wgpu::InstanceDescriptor::default()
@@ -1812,6 +1801,17 @@ fn measure<'run>(
 }
 
 fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tally {
+    /// How many frames one direction lasts, for a wheel and for a drag alike. Both
+    /// run into an end and stop consuming there, which is a different code path: a
+    /// monotonic scroll measures a clamped no-op after about six frames, and a
+    /// monotonic drag measures a fader pinned at one end of its rail.
+    const REVERSAL: usize = 20;
+
+    /// How far one pointer move carries a drag, in page points. Small enough that a
+    /// frame's worth of moves stays on the rail at every sweep step, and large
+    /// enough that each one lands on a different pixel of it.
+    const DRAG_STEP: f32 = 1.5;
+
     let mut tally = Tally::default();
     let dragging = run.moves() > 0;
     if dragging {

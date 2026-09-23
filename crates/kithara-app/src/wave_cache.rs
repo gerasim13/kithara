@@ -204,13 +204,13 @@ mod tests {
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
     use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
 
-    const BEAT_TAG: &str = "beat:test:v1";
-
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::new(Some(beat), Some(wave))
     }
 
     fn fp() -> AnalysisFingerprint {
+        const BEAT_TAG: &str = "beat:test:v1";
+
         fingerprint("wave:native:max1500:v1", BEAT_TAG)
     }
 

@@ -1577,9 +1577,6 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
 
     /// Where a launched lane records what repeat count it was handed.
     const REPEATS_RECORD_ENV: &str = "DEVTOOLS_STRESS_REPEATS_RECORD";
-    const SUITE: &str = "kithara-integration-tests::rtsan";
-    const CASE: &str = "audio::mix_tap";
-
     /// Runs a lane whose command is this test binary, and reports what
     /// `KITHARA_STRESS_REPEATS` held on each launch.
     fn recorded_repeats(mode: &StressModeConfig, count: usize) -> Vec<String> {
@@ -1713,6 +1710,10 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     fn measured_case() -> (String, String) {
+        const SUITE: &str = "kithara-integration-tests::rtsan";
+
+        const CASE: &str = "audio::mix_tap";
+
         (SUITE.to_owned(), CASE.to_owned())
     }
 

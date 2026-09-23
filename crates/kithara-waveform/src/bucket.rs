@@ -73,16 +73,16 @@ impl Waveform {
     /// Bytes per serialized bucket: three little-endian `f32` band heights.
     const BUCKET_BYTES: usize = Band::COUNT * size_of::<f32>();
 
-    #[must_use]
-    pub fn buckets(&self) -> &[Bucket] {
-        &self.0
-    }
-
     /// Take buckets this crate's own analyzer produced: it normalizes every
     /// band into `[0, 1]` before it fills one, so the check a caller's
     /// waveform goes through has nothing left to reject here.
     pub(crate) fn analysed(buckets: Vec<Bucket>) -> Self {
         Self(Arc::from(buckets))
+    }
+
+    #[must_use]
+    pub fn buckets(&self) -> &[Bucket] {
+        &self.0
     }
 
     /// Append the versioned waveform encoding to caller-owned storage.

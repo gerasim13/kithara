@@ -5,12 +5,12 @@ use std::num::{NonZeroU32, NonZeroU64};
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceEnd {
-    /// Opaque immutable mapping revision represented by this boundary.
-    #[field(get, copy, with)]
-    mapping_revision: Option<NonZeroU64>,
     /// Sample rate of the decoded source coordinate.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Opaque immutable mapping revision represented by this boundary.
+    #[field(get, copy, with)]
+    mapping_revision: Option<NonZeroU64>,
     /// Exclusive decoded source frame.
     #[field(get, copy)]
     frame: u64,

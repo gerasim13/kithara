@@ -5,9 +5,6 @@ use rangemap::RangeSet;
 
 use super::FrameSpan;
 
-/// Bytes one run occupies in the blob: its start frame and its length.
-const RUN_BYTES: usize = 2 * size_of::<u64>();
-
 /// Reading frame coverage out of a byte blob. The framing itself knows nothing
 /// about frames, so the run list is read and validated here, where the meaning
 /// of a run lives.
@@ -32,6 +29,9 @@ pub trait CoverageWrite {
 
 impl CoverageRead for Reader<'_> {
     fn read_coverage(&mut self) -> Result<RangeSet<u64>, BlobError> {
+        /// Bytes one run occupies in the blob: its start frame and its length.
+        const RUN_BYTES: usize = 2 * size_of::<u64>();
+
         let count = self.read_count(RUN_BYTES)?;
         let mut coverage = RangeSet::new();
         let mut previous_end = None;

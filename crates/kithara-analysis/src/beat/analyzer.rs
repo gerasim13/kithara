@@ -23,8 +23,6 @@ use crate::{
     slots::{Intake, Opens},
 };
 
-const BUDGET_RUNS: usize = 4;
-
 #[derive(Clone, Copy)]
 struct WindowMeta {
     full: bool,
@@ -94,6 +92,8 @@ where
     where
         S: HasPool<f32>,
     {
+        const BUDGET_RUNS: usize = 4;
+
         let BeatPassConfig {
             source_rate,
             params,

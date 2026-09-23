@@ -106,6 +106,10 @@ where
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
+    /// The prepared beat grid of this load. Empty for a track opened without
+    /// one, and empty until the read answers for a track opened with a source.
+    #[field(get, deref = false)]
+    beat_grid: Arc<PreparedGrid>,
     #[field(get, deref = false)]
     src: Arc<str>,
     #[field(get = event_bus)]
@@ -114,10 +118,6 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
-    /// The prepared beat grid of this load. Empty for a track opened without
-    /// one, and empty until the read answers for a track opened with a source.
-    #[field(get, deref = false)]
-    beat_grid: Arc<PreparedGrid>,
     reader: ReaderOwner,
 }
 

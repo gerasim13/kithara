@@ -66,8 +66,8 @@ impl Drop for PollScope {
 
 #[must_use]
 pub struct Pause {
-    cpu_start: Option<ThreadTime>,
     start: Instant,
+    cpu_start: Option<ThreadTime>,
     _not_send: PhantomData<*mut ()>,
 }
 

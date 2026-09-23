@@ -1,3 +1,6 @@
+use kithara_bufpool::Percent;
+use kithara_bufpool::PoolConfig;
+
 struct Consts;
 
 impl Consts {
@@ -23,8 +26,8 @@ impl TestPools {
     /// Returns an error when either pool config or eager allocation is invalid.
     pub fn region(
         overall_budget: kithara_bufpool::OverallBudget,
-        bytes: kithara_bufpool::PoolConfig,
-        samples: kithara_bufpool::PoolConfig,
+        bytes: PoolConfig,
+        samples: PoolConfig,
     ) -> Result<kithara_bufpool::PoolRegion<Self>, kithara_bufpool::PoolError> {
         Self::builder(overall_budget)
             .bytes(bytes)
@@ -56,8 +59,8 @@ pub fn pools_with_budget(overall_bytes: usize) -> Pools {
 #[must_use]
 pub fn pools_with(
     overall_bytes: usize,
-    bytes: kithara_bufpool::PoolConfig,
-    samples: kithara_bufpool::PoolConfig,
+    bytes: PoolConfig,
+    samples: PoolConfig,
 ) -> Pools {
     TestPools::region(
         kithara_bufpool::OverallBudget(overall_bytes),
@@ -87,19 +90,19 @@ pub fn byte_buffer(pools: &Pools) -> kithara_bufpool::ByteBuffer {
     pools.get::<u8>()
 }
 
-fn byte_config() -> kithara_bufpool::PoolConfig {
-    kithara_bufpool::PoolConfig::builder()
+fn byte_config() -> PoolConfig {
+    PoolConfig::builder()
         .max_buffers(Consts::BYTE_MAX_BUFFERS)
         .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
-        .max_share(kithara_bufpool::Percent::MAX)
+        .max_share(Percent::MAX)
         .build()
 }
 
-fn sample_config() -> kithara_bufpool::PoolConfig {
-    kithara_bufpool::PoolConfig::builder()
+fn sample_config() -> PoolConfig {
+    PoolConfig::builder()
         .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
         .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
-        .max_share(kithara_bufpool::Percent::MAX)
+        .max_share(Percent::MAX)
         .build()
 }
 

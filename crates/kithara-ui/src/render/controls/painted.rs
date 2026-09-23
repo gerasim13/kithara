@@ -7,7 +7,7 @@ use iced::{
         graphics::geometry::Renderer as _,
         layout::{self, Layout},
         renderer,
-        widget::{self, Tree},
+        widget::{{tree::State, tree::Tag}, Tree},
     },
     mouse::{self, Cursor},
     widget::canvas::Action,
@@ -39,6 +39,8 @@ use crate::{
     shaping::{TextContext, TextResources},
     solve,
 };
+use iced::advanced::layout::Node;
+use iced::event::Status;
 
 /// One neutral painter drawn straight into an iced canvas.
 ///
@@ -49,10 +51,10 @@ pub(crate) struct Paint<'skin, Painter>
 where
     Painter: ControlPainter,
 {
-    data: Painter::Data,
-    painter: Painter,
-    pools: Option<DrawBuffers>,
     text_resources: &'skin TextResources,
+    data: Painter::Data,
+    pools: Option<DrawBuffers>,
+    painter: Painter,
     transform: Transform,
 }
 
@@ -80,9 +82,9 @@ pub(crate) enum Visual {
 /// fields than there are.
 #[derive(PartialEq)]
 pub(crate) struct PaintKey<Painter, Data> {
-    bounds: Rect,
     data: Data,
     painter: Painter,
+    bounds: Rect,
     transform: Transform,
     visual: Visual,
 }
@@ -154,16 +156,6 @@ where
         self.marks.mark(probe, build)
     }
 
-    /// The shaping context this widget keeps between frames, made on first ask.
-    pub(crate) fn shaped<T>(
-        &self,
-        resources: &TextResources,
-        with: impl FnOnce(&mut TextContext) -> T,
-    ) -> T {
-        let mut text = self.text.borrow_mut();
-        with(text.get_or_insert_with(|| resources.into()))
-    }
-
     /// Replays the kept picture at `bounds`, tessellating it only when the
     /// geometry behind it was dropped. Nothing at all before the first
     /// [`Self::mark`].
@@ -193,6 +185,16 @@ where
             });
         });
     }
+
+    /// The shaping context this widget keeps between frames, made on first ask.
+    pub(crate) fn shaped<T>(
+        &self,
+        resources: &TextResources,
+        with: impl FnOnce(&mut TextContext) -> T,
+    ) -> T {
+        let mut text = self.text.borrow_mut();
+        with(text.get_or_insert_with(|| resources.into()))
+    }
 }
 
 impl<'skin, Painter> Paint<'skin, Painter>
@@ -208,6 +210,153 @@ where
             pools: None,
             text_resources: skin.text_resources(),
             transform: Transform::IDENTITY,
+        }
+    }
+
+    fn build_draw_list(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        draw: impl FnOnce(&mut DrawListBuilder, &mut TextContext),
+    ) -> DrawList {
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let mut builder = self
+            .pools
+            .as_ref()
+            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
+        builder.transformed(self.transform, |builder| draw(builder, text));
+        builder.finish()
+    }
+
+    pub(crate) fn draw_list(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        bounds: Rect,
+        visual: VisualState,
+    ) -> DrawList {
+        self.build_draw_list(state, |builder, text| {
+            self.painter.draw(builder, text, &self.data, bounds, visual);
+        })
+    }
+
+    /// The part of the box the pointer works, as the painter carves it.
+    fn grip_bounds(&self, bounds: Rect) -> Rect {
+        self.painter.grip_bounds(&self.data, bounds)
+    }
+
+    fn index_at(&self, hit: &Hit, count: usize) -> Option<usize> {
+        self.painter.index_at(&self.data, hit, count)
+    }
+
+    pub(crate) fn indexed_draw_list(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        bounds: Rect,
+        visual: IndexedVisual,
+    ) -> DrawList {
+        self.build_draw_list(state, |builder, text| {
+            self.painter
+                .draw_indexed(builder, text, &self.data, bounds, visual);
+        })
+    }
+
+    /// The arguments this painter is about to draw from, named whole so that
+    /// the next frame can ask whether any of them moved. Borrowed rather than
+    /// copied: the frame that holds must not pay for what it drew from just to
+    /// learn that it held.
+    fn key(&self, bounds: Rect, visual: Visual) -> ControlProbe<'_, Painter> {
+        PaintKey {
+            bounds,
+            visual,
+            data: &self.data,
+            painter: &self.painter,
+            transform: self.transform,
+        }
+    }
+
+    /// The box the painter asks for, in the toolkit's own words.
+    ///
+    /// Shaping a word to measure it needs a context the mounted widget does not
+    /// have yet, so this builds one. It is the same cost the button paid before
+    /// it reached this adapter, and only the painters that measure their word
+    /// pay it at all.
+    fn length(&self) -> (Length, Length) {
+        let size = self
+            .painter
+            .length(&mut self.text_resources.into(), &self.data);
+        (iced_length(size.width), iced_length(size.height))
+    }
+
+    /// The box the toolkit settles on: what the painter asks for, resolved
+    /// against the room it is offered and the size it measures for itself.
+    fn node(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        limits: &layout::Limits,
+    ) -> Node {
+        let (width, height) = self.length();
+        let mut text = state.text.borrow_mut();
+        let text = text.get_or_insert_with(|| self.text_resources.into());
+        let measured = self.painter.measure(text, &self.data);
+        Node::new(limits.resolve(
+            width,
+            height,
+            IcedSize::new(measured.width, measured.height),
+        ))
+    }
+
+    #[kithara::measure(label = "iced.control.paint")]
+    fn paint_indexed_into(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        visual: IndexedVisual,
+    ) {
+        if bounds.width < 1.0 || bounds.height < 1.0 {
+            return;
+        }
+        let bounds = snapped(bounds);
+        let local = local(bounds);
+        state.mark(self.key(local, Visual::Indexed(visual)), || {
+            self.indexed_draw_list(state, local, visual)
+        });
+        self.replay_into(state, renderer, bounds);
+    }
+
+    /// Replays the painter into the renderer at the box the layout gave it.
+    ///
+    /// The kept geometry is dropped only when the drawn list changed, so a
+    /// control that did not change is not tessellated again.
+    #[kithara::measure(label = "iced.control.paint")]
+    fn paint_into(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        visual: VisualState,
+    ) {
+        if bounds.width < 1.0 || bounds.height < 1.0 {
+            return;
+        }
+        let bounds = snapped(bounds);
+        let local = local(bounds);
+        state.mark(self.key(local, Visual::Whole(visual)), || {
+            self.draw_list(state, local, visual)
+        });
+        self.replay_into(state, renderer, bounds);
+    }
+
+    fn paint_visual_into(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        visual: Visual,
+    ) {
+        match visual {
+            Visual::Indexed(visual) => self.paint_indexed_into(state, renderer, bounds, visual),
+            Visual::Whole(visual) => self.paint_into(state, renderer, bounds, visual),
         }
     }
 
@@ -234,171 +383,6 @@ where
         self
     }
 
-    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        Element::new(self)
-    }
-
-    /// The box the painter asks for, in the toolkit's own words.
-    ///
-    /// Shaping a word to measure it needs a context the mounted widget does not
-    /// have yet, so this builds one. It is the same cost the button paid before
-    /// it reached this adapter, and only the painters that measure their word
-    /// pay it at all.
-    fn length(&self) -> (Length, Length) {
-        let size = self
-            .painter
-            .length(&mut self.text_resources.into(), &self.data);
-        (iced_length(size.width), iced_length(size.height))
-    }
-
-    /// The box the toolkit settles on: what the painter asks for, resolved
-    /// against the room it is offered and the size it measures for itself.
-    fn node(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let (width, height) = self.length();
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let measured = self.painter.measure(text, &self.data);
-        layout::Node::new(limits.resolve(
-            width,
-            height,
-            IcedSize::new(measured.width, measured.height),
-        ))
-    }
-
-    /// The part of the box the pointer works, as the painter carves it.
-    fn grip_bounds(&self, bounds: Rect) -> Rect {
-        self.painter.grip_bounds(&self.data, bounds)
-    }
-
-    fn index_at(&self, hit: &Hit, count: usize) -> Option<usize> {
-        self.painter.index_at(&self.data, hit, count)
-    }
-
-    /// The arguments this painter is about to draw from, named whole so that
-    /// the next frame can ask whether any of them moved. Borrowed rather than
-    /// copied: the frame that holds must not pay for what it drew from just to
-    /// learn that it held.
-    fn key(&self, bounds: Rect, visual: Visual) -> ControlProbe<'_, Painter> {
-        PaintKey {
-            bounds,
-            data: &self.data,
-            painter: &self.painter,
-            transform: self.transform,
-            visual,
-        }
-    }
-
-    pub(crate) fn draw_list(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        bounds: Rect,
-        visual: VisualState,
-    ) -> DrawList {
-        self.build_draw_list(state, |builder, text| {
-            self.painter.draw(builder, text, &self.data, bounds, visual);
-        })
-    }
-
-    pub(crate) fn indexed_draw_list(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        bounds: Rect,
-        visual: IndexedVisual,
-    ) -> DrawList {
-        self.build_draw_list(state, |builder, text| {
-            self.painter
-                .draw_indexed(builder, text, &self.data, bounds, visual);
-        })
-    }
-
-    fn build_draw_list(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        draw: impl FnOnce(&mut DrawListBuilder, &mut TextContext),
-    ) -> DrawList {
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = self
-            .pools
-            .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
-        builder.transformed(self.transform, |builder| draw(builder, text));
-        builder.finish()
-    }
-
-    fn paint_visual_into(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        renderer: &mut Renderer,
-        bounds: Rectangle,
-        visual: Visual,
-    ) {
-        match visual {
-            Visual::Indexed(visual) => self.paint_indexed_into(state, renderer, bounds, visual),
-            Visual::Whole(visual) => self.paint_into(state, renderer, bounds, visual),
-        }
-    }
-
-    /// Replays the painter into the renderer at the box the layout gave it.
-    ///
-    /// The kept geometry is dropped only when the drawn list changed, so a
-    /// control that did not change is not tessellated again.
-    #[kithara::measure(label = "iced.control.paint")]
-    fn paint_into(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        renderer: &mut Renderer,
-        bounds: Rectangle,
-        visual: VisualState,
-    ) {
-        if bounds.width < 1.0 || bounds.height < 1.0 {
-            return;
-        }
-        let bounds = snapped(bounds);
-        let local = local(bounds);
-        state.mark(self.key(local, Visual::Whole(visual)), || {
-            self.draw_list(state, local, visual)
-        });
-        self.replay_into(state, renderer, bounds);
-    }
-
-    #[kithara::measure(label = "iced.control.paint")]
-    fn paint_indexed_into(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        renderer: &mut Renderer,
-        bounds: Rectangle,
-        visual: IndexedVisual,
-    ) {
-        if bounds.width < 1.0 || bounds.height < 1.0 {
-            return;
-        }
-        let bounds = snapped(bounds);
-        let local = local(bounds);
-        state.mark(self.key(local, Visual::Indexed(visual)), || {
-            self.indexed_draw_list(state, local, visual)
-        });
-        self.replay_into(state, renderer, bounds);
-    }
-
-    fn replay_into(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        renderer: &mut Renderer,
-        bounds: Rectangle,
-    ) {
-        state.replay(
-            renderer,
-            bounds,
-            |list| self.region(bounds.size(), list),
-            self.text_resources,
-        );
-    }
-
     /// Where this control may put ink, in the coordinates its box was handed.
     ///
     /// A painter draws inside its box, so a control no object moved is clipped
@@ -423,6 +407,24 @@ where
             x: region.x,
             y: region.y,
         }
+    }
+
+    fn replay_into(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+    ) {
+        state.replay(
+            renderer,
+            bounds,
+            |list| self.region(bounds.size(), list),
+            self.text_resources,
+        );
+    }
+
+    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
+        Element::new(self)
     }
 }
 
@@ -463,31 +465,6 @@ where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
 {
-    fn size(&self) -> IcedSize<Length> {
-        let (width, height) = self.length();
-        IcedSize::new(width, height)
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<ControlKey<Painter>>>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<ControlKey<Painter>>::default())
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.node(
-            tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
-            limits,
-        )
-    }
-
     fn draw(
         &self,
         tree: &Tree,
@@ -505,6 +482,31 @@ where
             bounds,
             Visual::Whole(hovered(Painter::READS_POINTER, bounds, cursor)),
         );
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> Node {
+        self.node(
+            tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
+            limits,
+        )
+    }
+
+    fn size(&self) -> IcedSize<Length> {
+        let (width, height) = self.length();
+        IcedSize::new(width, height)
+    }
+
+    fn state(&self) -> State {
+        State::new(PaintState::<ControlKey<Painter>>::default())
+    }
+
+    fn tag(&self) -> Tag {
+        Tag::of::<PaintState<ControlKey<Painter>>>()
     }
 }
 
@@ -527,8 +529,8 @@ where
     Painter: ControlPainter,
 {
     paint: Paint<'skin, Painter>,
-    path: String,
     recognize: Recognize<Painter::Data>,
+    path: String,
 }
 
 /// What the pointer means to a control: a press it activates on, or a drag
@@ -549,8 +551,8 @@ enum Recognize<Data> {
 /// A mounted scalar drag: the recognizer, and the description it was built from
 /// — which is what says how the published value is rounded.
 struct Dragging {
-    recognizer: Scalar,
     spec: Drag,
+    recognizer: Scalar,
 }
 
 /// What a gesturing canvas keeps between frames: the gesture, and the shaping
@@ -561,10 +563,10 @@ where
     Painter: ControlPainter,
 {
     crossing: Crossing,
-    drag: ScalarState,
+    index: IndexPress,
     paint: PaintState<ControlKey<Painter>>,
     press: Press,
-    index: IndexPress,
+    drag: ScalarState,
     span: SpanState,
 }
 
@@ -573,14 +575,6 @@ where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
 {
-    pub(crate) fn press(path: &str, paint: Paint<'skin, Painter>) -> Self {
-        Self {
-            paint,
-            path: path.to_owned(),
-            recognize: Recognize::Press,
-        }
-    }
-
     pub(crate) fn command(
         path: &str,
         paint: Paint<'skin, Painter>,
@@ -591,6 +585,32 @@ where
             path: path.to_owned(),
             recognize: Recognize::Command(event),
         }
+    }
+
+    pub(crate) fn drag(path: &str, paint: Paint<'skin, Painter>, drag: Drag) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Drag(Box::new(Dragging {
+                recognizer: drag.recognizer(),
+                spec: drag,
+            })),
+        }
+    }
+
+    #[cfg(all(test, feature = "masonry"))]
+    pub(crate) fn gestures(&self) -> Gestures {
+        match &self.recognize {
+            Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
+            Recognize::Drag(drag) => drag.spec.gestures(),
+            Recognize::Span(_) => Gestures::DRAG,
+        }
+    }
+
+    /// The gesture is measured against the part of the box the painter says the
+    /// pointer works, which for most controls is all of it.
+    fn gripped(&self, hit: Hit) -> Hit {
+        Hit::new(hit.at(), self.paint.grip_bounds(hit.area()))
     }
 
     pub(crate) fn index(
@@ -606,54 +626,22 @@ where
         }
     }
 
-    pub(crate) fn drag(path: &str, paint: Paint<'skin, Painter>, drag: Drag) -> Self {
-        Self {
-            paint,
-            path: path.to_owned(),
-            recognize: Recognize::Drag(Box::new(Dragging {
-                recognizer: drag.recognizer(),
-                spec: drag,
-            })),
-        }
+    fn indexed_cursor(&self, hit: &Hit, count: usize) -> CursorShape {
+        self.paint
+            .index_at(hit, count)
+            .map_or(CursorShape::None, |_| CursorShape::Pointer)
     }
 
-    pub(crate) fn span(path: &str, paint: Paint<'skin, Painter>, span: Span) -> Self {
-        Self {
-            paint,
-            path: path.to_owned(),
-            recognize: Recognize::Span(Box::new(span.recognizer())),
-        }
-    }
-
-    /// Mounts the gesture described by a control, returning the untouched
-    /// painter when the control does not own input.
-    pub(crate) fn with_grip(
-        path: &str,
-        paint: Paint<'skin, Painter>,
-        grip: Grip,
-        index_event: Option<IndexEvent<Painter::Data>>,
-    ) -> Result<Self, Paint<'skin, Painter>> {
-        match grip {
-            Grip::None => Err(paint),
-            Grip::Press => Ok(Self::press(path, paint)),
-            Grip::Command(event) => Ok(Self::command(path, paint, event)),
-            Grip::Drag(drag) => Ok(Self::drag(path, paint, drag)),
-            Grip::Index { count } => Ok(Self::index(path, paint, count, index_event)),
-            Grip::Span(span) => Ok(Self::span(path, paint, span)),
-        }
-    }
-
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match &self.recognize {
-            Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
-            Recognize::Drag(drag) => drag.spec.gestures(),
-            Recognize::Span(_) => Gestures::DRAG,
-        }
-    }
-
-    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
-        Element::new(self)
+    fn indexed_input(
+        &self,
+        state: &mut GestureState<Painter>,
+        input: Input<'_>,
+        hit: &Hit,
+        count: usize,
+        map: Option<IndexEvent<Painter::Data>>,
+    ) -> (bool, Outcome<UiEvent>) {
+        let index = self.paint.index_at(hit, count);
+        Indexing::new(&self.paint.data, &self.path, map).on_input(&mut state.index, input, index)
     }
 
     /// What one input means to this control, and whether the picture moved.
@@ -695,28 +683,42 @@ where
         action.or_else(|| repaint.then(Action::request_redraw))
     }
 
-    fn indexed_input(
-        &self,
-        state: &mut GestureState<Painter>,
-        input: Input<'_>,
-        hit: &Hit,
-        count: usize,
-        map: Option<IndexEvent<Painter::Data>>,
-    ) -> (bool, Outcome<UiEvent>) {
-        let index = self.paint.index_at(hit, count);
-        Indexing::new(&self.paint.data, &self.path, map).on_input(&mut state.index, input, index)
+    pub(crate) fn press(path: &str, paint: Paint<'skin, Painter>) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Press,
+        }
     }
 
-    fn indexed_cursor(&self, hit: &Hit, count: usize) -> CursorShape {
-        self.paint
-            .index_at(hit, count)
-            .map_or(CursorShape::None, |_| CursorShape::Pointer)
+    pub(crate) fn span(path: &str, paint: Paint<'skin, Painter>, span: Span) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Span(Box::new(span.recognizer())),
+        }
     }
 
-    /// The gesture is measured against the part of the box the painter says the
-    /// pointer works, which for most controls is all of it.
-    fn gripped(&self, hit: Hit) -> Hit {
-        Hit::new(hit.at(), self.paint.grip_bounds(hit.area()))
+    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
+        Element::new(self)
+    }
+
+    /// Mounts the gesture described by a control, returning the untouched
+    /// painter when the control does not own input.
+    pub(crate) fn with_grip(
+        path: &str,
+        paint: Paint<'skin, Painter>,
+        grip: Grip,
+        index_event: Option<IndexEvent<Painter::Data>>,
+    ) -> Result<Self, Paint<'skin, Painter>> {
+        match grip {
+            Grip::None => Err(paint),
+            Grip::Press => Ok(Self::press(path, paint)),
+            Grip::Command(event) => Ok(Self::command(path, paint, event)),
+            Grip::Drag(drag) => Ok(Self::drag(path, paint, drag)),
+            Grip::Index { count } => Ok(Self::index(path, paint, count, index_event)),
+            Grip::Span(span) => Ok(Self::span(path, paint, span)),
+        }
     }
 }
 
@@ -725,30 +727,6 @@ where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
 {
-    fn size(&self) -> IcedSize<Length> {
-        IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<GestureState<Painter>>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(GestureState::<Painter>::default())
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.paint.node(
-            &tree.state.downcast_ref::<GestureState<Painter>>().paint,
-            limits,
-        )
-    }
-
     fn draw(
         &self,
         tree: &Tree,
@@ -766,6 +744,18 @@ where
         };
         self.paint
             .paint_visual_into(&state.paint, renderer, layout.bounds(), visual);
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> Node {
+        self.paint.node(
+            &tree.state.downcast_ref::<GestureState<Painter>>().paint,
+            limits,
+        )
     }
 
     fn mouse_interaction(
@@ -791,6 +781,18 @@ where
         }
     }
 
+    fn size(&self) -> IcedSize<Length> {
+        IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
+    }
+
+    fn state(&self) -> State {
+        State::new(GestureState::<Painter>::default())
+    }
+
+    fn tag(&self) -> Tag {
+        Tag::of::<GestureState<Painter>>()
+    }
+
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -811,7 +813,7 @@ where
         if let Some(message) = message {
             shell.publish(message);
         }
-        if status == iced::event::Status::Captured {
+        if status == Status::Captured {
             shell.capture_event();
         }
     }
@@ -1240,8 +1242,8 @@ mod tests {
             for active in [false, true] {
                 let data = || NavData {
                     active,
-                    label: "BUTTONS".to_owned(),
                     mark,
+                    label: "BUTTONS".to_owned(),
                 };
                 let iced = Paint::new(NavItem::new(skin), data(), skin).draw_list(
                     &PaintState::default(),
@@ -1370,8 +1372,8 @@ mod tests {
             for active in [false, true] {
                 let data = || GlyphData {
                     active,
-                    active_mark: None,
                     mark,
+                    active_mark: None,
                 };
                 let iced = Paint::new(painter(), data(), skin).draw_list(
                     &PaintState::default(),
@@ -1910,7 +1912,7 @@ mod indexed {
 /// What a press on the shared adapter means, for every control that grips one.
 #[cfg(test)]
 mod pressed {
-    use iced::{Point, event, mouse, window::RedrawRequest};
+    use iced::{Point, event::Status, mouse, window::RedrawRequest};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -1937,9 +1939,9 @@ mod pressed {
         let paint = Paint::new(
             NavItem::new(skin),
             NavData {
+                mark,
                 active: false,
                 label: "BUTTONS".to_owned(),
-                mark,
             },
             skin,
         );
@@ -1966,7 +1968,7 @@ mod pressed {
                     action: ControlAction::Activate,
                 }),
                 RedrawRequest::Wait,
-                event::Status::Captured,
+                Status::Captured,
             )
         );
     }
@@ -2004,7 +2006,7 @@ mod pressed {
             (
                 Some(UiEvent::OpenSettings),
                 RedrawRequest::Wait,
-                event::Status::Captured,
+                Status::Captured,
             )
         );
     }

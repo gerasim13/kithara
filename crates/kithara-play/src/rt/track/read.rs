@@ -13,6 +13,7 @@ use super::{
 use crate::bridge::{
     PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
 };
+use kithara_warp::WarpMapRevision;
 
 struct TrackReadContext<'a> {
     range: Range<usize>,
@@ -394,7 +395,7 @@ impl PlayerTrack {
                 presentation_frontier(&context, source.frame()).with_warp_map(
                     source
                         .mapping_revision()
-                        .map(kithara_warp::WarpMapRevision::from),
+                        .map(WarpMapRevision::from),
                 ),
             );
         } else {

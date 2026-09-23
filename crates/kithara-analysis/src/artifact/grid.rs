@@ -57,6 +57,10 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
         let downbeats = bars(snapshot, &placed, rate, duration);
         let meter = meter(&downbeats);
         Ok(Self::try_from(RawBeatGrid {
+            duration,
+            bpm,
+            downbeats,
+            meter,
             schema_version: SCHEMA_VERSION,
             model_id: analysis.token().as_str().to_owned(),
             revision: analysis.revision(),
@@ -64,11 +68,7 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
                 BeatState::Final => BeatGridState::Final,
                 BeatState::Provisional => BeatGridState::Provisional,
             },
-            duration,
-            bpm,
             beats: placed.iter().map(|(_, beat)| *beat).collect(),
-            downbeats,
-            meter,
         })?)
     }
 }

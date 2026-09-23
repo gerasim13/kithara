@@ -67,9 +67,9 @@ impl GridProjection {
             return Err(GridProjectionError::Unalignable);
         }
         Ok(Self {
-            offset: f64::from(*alignment.target().value()) - f64::from(*alignment.source().value()),
             source,
             target,
+            offset: f64::from(*alignment.target().value()) - f64::from(*alignment.source().value()),
         })
     }
 

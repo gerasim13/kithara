@@ -16,8 +16,6 @@ use crate::{
     store,
 };
 
-const DOWNLOADS: usize = 4;
-
 type KeyProcessor = Box<dyn Fn(Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>;
 
 pub(crate) struct KeyPolicy {
@@ -372,6 +370,8 @@ pub(crate) fn hydrate(
     master_url: &Url,
     options: &Options,
 ) -> Result<Vec<u8>, HydrateError> {
+    const DOWNLOADS: usize = 4;
+
     let deadline = Deadline::new(options.timeout);
     let client = Client::builder()
         .build()

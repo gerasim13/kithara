@@ -55,17 +55,6 @@ where
             .with_open_result(|runtime| runtime.invalidate_audio_route(reason))
     }
 
-    /// Record that the platform interrupted, or released, the audio output.
-    pub fn notify_interruption(&self, kind: InterruptionKind) {
-        self.command(|runtime| runtime.notify_interruption(kind));
-    }
-
-    /// Lower or restore the whole session output under a competing sound.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_session_ducking(mode))
-    }
-
     /// Whether playback is explicitly paused.
     #[must_use]
     pub fn is_paused(&self) -> bool {
@@ -78,13 +67,9 @@ where
         !self.runtime.is_closed() && self.runtime.is_playing()
     }
 
-    /// Register deck controls without starting the output stream.
-    ///
-    /// # Errors
-    /// Returns a registration or response geometry error.
-    pub fn prepare(&self) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.core.engine.prepare())
+    /// Record that the platform interrupted, or released, the audio output.
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        self.command(|runtime| runtime.notify_interruption(kind));
     }
 
     /// Pause playback unless the owning player is closed.
@@ -95,6 +80,15 @@ where
     /// Start or resume playback unless the owning player is closed.
     pub fn play(&self) {
         self.command(PlayerRuntime::play);
+    }
+
+    /// Register deck controls without starting the output stream.
+    ///
+    /// # Errors
+    /// Returns a registration or response geometry error.
+    pub fn prepare(&self) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.core.engine.prepare())
     }
 
     /// Prepare one resource for this player's runtime.
@@ -198,6 +192,12 @@ where
     /// Update live playback rate unless the owning player is closed.
     pub fn set_rate(&self, rate: f32) {
         self.command(|runtime| runtime.set_rate(rate));
+    }
+
+    /// Lower or restore the whole session output under a competing sound.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_session_ducking(mode))
     }
 
     /// Update output volume unless the owning player is closed.

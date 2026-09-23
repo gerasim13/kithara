@@ -26,6 +26,7 @@ use crate::{
 };
 
 pub(crate) struct Job {
+    pub(crate) demand: AnalysisDemand,
     pub(crate) token: AnalysisToken,
     pub(crate) reader: Box<dyn AudioReader>,
     pub(crate) cancel: CancelToken,
@@ -34,7 +35,6 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) revision: u64,
-    pub(crate) demand: AnalysisDemand,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +58,7 @@ pub(crate) struct AnalysisTask<B, S>
 where
     B: ResamplerBackend,
 {
+    demand: AnalysisDemand,
     token: AnalysisToken,
     reader: Box<dyn AudioReader>,
     #[field(get = cancel_token, vis = "pub(crate)")]
@@ -77,7 +78,6 @@ where
     publish_frames: u64,
     published_at: u64,
     revision: u64,
-    demand: AnalysisDemand,
     producer_drain_limit: usize,
 }
 

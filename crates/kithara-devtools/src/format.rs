@@ -17,8 +17,6 @@ use crate::{
     verdict::ChildFailure,
 };
 
-const CHUNK_SIZE: usize = 128;
-
 const GIT_LISTING_ARGS: [&str; 4] = ["ls-files", "--cached", "--others", "--exclude-standard"];
 
 #[derive(Debug, Args)]
@@ -414,6 +412,8 @@ fn run_status(program: &str, args: &[&str]) -> Result<()> {
 }
 
 fn run_path_status(program: &str, args: &[&str], files: &[PathBuf]) -> Result<()> {
+    const CHUNK_SIZE: usize = 128;
+
     if files.is_empty() {
         return Ok(());
     }

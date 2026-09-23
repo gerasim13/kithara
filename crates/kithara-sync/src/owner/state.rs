@@ -41,6 +41,27 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
     }
 
+    /// Creates a group that owns `member` from birth, with a session-axis
+    /// grid that is not available yet.
+    ///
+    /// The member is the group's own rather than one a caller attached, so
+    /// there is no topology transaction to reject: it is admitted under the
+    /// kind it already is, and it carries no alignment to restamp. A group
+    /// whose one member is its own stable grid never changes topology, which
+    /// is what lets that grid state a later revision on every load.
+    #[must_use]
+    pub fn owning(
+        id: BeatGridId,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+        member: SyncMember<G>,
+    ) -> Self {
+        let member_kind = member.kind();
+        let mut group = Self::unavailable(id, sample_rate, epoch, member_kind);
+        group.members.push(member);
+        group
+    }
+
     /// Publishes a later immutable grid snapshot for this stable owner.
     ///
     /// # Errors
@@ -147,27 +168,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             ),
             member_kind,
         )
-    }
-
-    /// Creates a group that owns `member` from birth, with a session-axis
-    /// grid that is not available yet.
-    ///
-    /// The member is the group's own rather than one a caller attached, so
-    /// there is no topology transaction to reject: it is admitted under the
-    /// kind it already is, and it carries no alignment to restamp. A group
-    /// whose one member is its own stable grid never changes topology, which
-    /// is what lets that grid state a later revision on every load.
-    #[must_use]
-    pub fn owning(
-        id: BeatGridId,
-        sample_rate: NonZeroU32,
-        epoch: SessionEpoch,
-        member: SyncMember<G>,
-    ) -> Self {
-        let member_kind = member.kind();
-        let mut group = Self::unavailable(id, sample_rate, epoch, member_kind);
-        group.members.push(member);
-        group
     }
 
     /// Executes `dispatch` against one direct nested group without exposing a

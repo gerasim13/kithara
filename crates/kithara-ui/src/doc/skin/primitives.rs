@@ -126,9 +126,9 @@ pub struct LayoutSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct LayoutPatch {
-    pub page_background: Option<ColorRole>,
     pub grid_gap: Option<f32>,
     pub grid_pad: Option<f32>,
+    pub page_background: Option<ColorRole>,
 }
 
 impl LayoutSkin {
@@ -158,10 +158,10 @@ pub struct ScrollSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ScrollPatch {
-    pub thumb: Option<ColorRole>,
-    pub track: Option<ColorRole>,
     pub inset: Option<f32>,
     pub min_length: Option<f32>,
+    pub thumb: Option<ColorRole>,
+    pub track: Option<ColorRole>,
     pub width: Option<f32>,
 }
 
@@ -189,9 +189,6 @@ pub struct ChromeSkin {
     pub inner_line: ColorRole,
     pub panel_background: ColorRole,
     pub title_background: ColorRole,
-    pub chip_text: TextRoleSkin,
-    pub footer_text: TextRoleSkin,
-    pub title_text: TextRoleSkin,
     pub chevron_frame: FrameSkin,
     pub chip_frame: FrameSkin,
     pub footer_frame: FrameSkin,
@@ -199,6 +196,9 @@ pub struct ChromeSkin {
     pub header_frame: FrameSkin,
     pub secondary_frame: FrameSkin,
     pub title_frame: FrameSkin,
+    pub chip_text: TextRoleSkin,
+    pub footer_text: TextRoleSkin,
+    pub title_text: TextRoleSkin,
     pub chevron_icon_size: f32,
     pub chevron_size: f32,
     pub chevron_stroke_width: f32,
@@ -218,35 +218,35 @@ pub struct ChromeSkin {
 #[non_exhaustive]
 pub struct ChromePatch {
     pub chevron_color: Option<ColorRole>,
-    pub chip_background: Option<ColorRole>,
-    pub corner_color: Option<ColorRole>,
-    pub drop_zone_color: Option<ColorRole>,
-    pub footer_background: Option<ColorRole>,
-    pub header_background: Option<ColorRole>,
-    pub inner_line: Option<ColorRole>,
-    pub panel_background: Option<ColorRole>,
-    pub title_background: Option<ColorRole>,
-    pub chip_text: Option<TextRoleSkin>,
-    pub footer_text: Option<TextRoleSkin>,
-    pub title_text: Option<TextRoleSkin>,
     pub chevron_frame: Option<FrameSkin>,
-    pub chip_frame: Option<FrameSkin>,
-    pub footer_frame: Option<FrameSkin>,
-    pub frame: Option<FrameSkin>,
-    pub header_frame: Option<FrameSkin>,
-    pub secondary_frame: Option<FrameSkin>,
-    pub title_frame: Option<FrameSkin>,
     pub chevron_icon_size: Option<f32>,
     pub chevron_size: Option<f32>,
     pub chevron_stroke_width: Option<f32>,
+    pub chip_background: Option<ColorRole>,
+    pub chip_frame: Option<FrameSkin>,
     pub chip_pad: Option<f32>,
+    pub chip_text: Option<TextRoleSkin>,
+    pub corner_color: Option<ColorRole>,
     pub corner_offset: Option<f32>,
     pub corner_size: Option<f32>,
     pub corner_width: Option<f32>,
+    pub drop_zone_color: Option<ColorRole>,
+    pub footer_background: Option<ColorRole>,
+    pub footer_frame: Option<FrameSkin>,
     pub footer_height: Option<f32>,
     pub footer_pad: Option<f32>,
+    pub footer_text: Option<TextRoleSkin>,
+    pub frame: Option<FrameSkin>,
+    pub header_background: Option<ColorRole>,
+    pub header_frame: Option<FrameSkin>,
     pub header_height: Option<f32>,
+    pub inner_line: Option<ColorRole>,
     pub inner_line_width: Option<f32>,
+    pub panel_background: Option<ColorRole>,
+    pub secondary_frame: Option<FrameSkin>,
+    pub title_background: Option<ColorRole>,
+    pub title_frame: Option<FrameSkin>,
+    pub title_text: Option<TextRoleSkin>,
 }
 
 impl ChromeSkin {
@@ -292,11 +292,11 @@ pub struct WindowSkin {
     pub icon_color: ColorRole,
     pub icon_hover_color: ColorRole,
     pub titlebar_text: TextRoleSkin,
-    pub standard: WindowControlSkin,
-    pub compact: WindowControlSkin,
-    pub close_wide: WindowControlSkin,
-    pub close_micro: WindowControlSkin,
     pub close_framed: WindowControlSkin,
+    pub close_micro: WindowControlSkin,
+    pub close_wide: WindowControlSkin,
+    pub compact: WindowControlSkin,
+    pub standard: WindowControlSkin,
     pub icon_stroke_width: f32,
     /// Thickness of the drag zones framing a window that draws its own chrome.
     pub resize_edge: f32,
@@ -309,18 +309,18 @@ pub struct WindowSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct WindowPatch {
+    pub close_framed: Option<WindowControlSkin>,
+    pub close_micro: Option<WindowControlSkin>,
+    pub close_wide: Option<WindowControlSkin>,
+    pub compact: Option<WindowControlSkin>,
     pub icon_color: Option<ColorRole>,
     pub icon_hover_color: Option<ColorRole>,
-    pub titlebar_text: Option<TextRoleSkin>,
-    pub standard: Option<WindowControlSkin>,
-    pub compact: Option<WindowControlSkin>,
-    pub close_wide: Option<WindowControlSkin>,
-    pub close_micro: Option<WindowControlSkin>,
-    pub close_framed: Option<WindowControlSkin>,
     pub icon_stroke_width: Option<f32>,
     pub resize_edge: Option<f32>,
+    pub standard: Option<WindowControlSkin>,
     pub titlebar_height: Option<f32>,
     pub titlebar_padding_x: Option<f32>,
+    pub titlebar_text: Option<TextRoleSkin>,
 }
 
 impl WindowSkin {

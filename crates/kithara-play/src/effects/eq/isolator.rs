@@ -13,10 +13,10 @@ use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::Gain
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
-    bypass: MixDSP,
-    silence: MixDSP,
     filters: CrossoverFilters,
     gains: GainBank,
+    bypass: MixDSP,
+    silence: MixDSP,
 }
 
 impl IsolatorEq {

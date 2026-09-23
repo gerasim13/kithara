@@ -82,24 +82,24 @@ struct ParsedFile {
 }
 
 struct FileFindings {
-    findings: Vec<Finding>,
     path: PathBuf,
     rel: String,
+    findings: Vec<Finding>,
 }
 
 /// One const that a single owner keeps to itself.
 struct Finding {
-    locality: Locality,
     /// Source lines inside a multi-line literal of the const, which a move
     /// must carry verbatim rather than re-indent.
     literal_lines: BTreeSet<usize>,
+    locality: Locality,
+    vis: Option<Range<usize>>,
     item: Range<usize>,
+    key: String,
+    name: String,
     /// Where the container holding the const opens: the file start, or just
     /// past the `{` of the inline module.
     container: usize,
-    vis: Option<Range<usize>>,
-    key: String,
-    name: String,
 }
 
 impl Finding {
@@ -147,12 +147,12 @@ fn analyze(ctx: &Context<'_>) -> Result<Vec<FileFindings>> {
         let mut collector = NameCollector { names: &mut names };
         collector.visit_file(&file);
         files.push(ParsedFile {
-            in_scope: scoped.contains(path),
-            path: path.clone(),
             file,
             names,
             crate_key,
             rel,
+            in_scope: scoped.contains(path),
+            path: path.clone(),
         });
     }
 
@@ -167,9 +167,9 @@ fn analyze(ctx: &Context<'_>) -> Result<Vec<FileFindings>> {
         let findings = analyze_file(&pf.rel, &pf.file, &external);
         if !findings.is_empty() {
             out.push(FileFindings {
+                findings,
                 path: pf.path.clone(),
                 rel: pf.rel.clone(),
-                findings,
             });
         }
     }
@@ -225,8 +225,8 @@ fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>) -> Vec<Fi
             format!("{}::", site.mod_path.join("::"))
         };
         findings.push(Finding {
-            key: format!("{rel}::{mod_prefix}{}", site.name),
             locality,
+            key: format!("{rel}::{mod_prefix}{}", site.name),
             literal_lines: site.literal_lines,
             item: site.item,
             container: site.container,
@@ -239,11 +239,11 @@ fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>) -> Vec<Fi
 
 struct ConstSite {
     literal_lines: BTreeSet<usize>,
-    item: Range<usize>,
-    container: usize,
     vis: Option<Range<usize>>,
+    item: Range<usize>,
     name: String,
     mod_path: Vec<String>,
+    container: usize,
 }
 
 fn collect_consts(
@@ -255,12 +255,12 @@ fn collect_consts(
     for item in items {
         match item {
             Item::Const(c) if is_intra_crate(&c.vis) => out.push(ConstSite {
+                container,
                 literal_lines: literal_lines(c),
                 item: c.span().byte_range(),
                 vis: (!matches!(c.vis, Visibility::Inherited)).then(|| c.vis.span().byte_range()),
                 name: c.ident.to_string(),
                 mod_path: mod_path.clone(),
-                container,
             }),
             Item::Mod(m) => {
                 if let Some((brace, inner)) = &m.content {

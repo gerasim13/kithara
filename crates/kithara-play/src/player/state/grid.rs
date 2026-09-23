@@ -30,10 +30,10 @@ struct Owner {
 
 struct Held {
     axis: AssetAxis,
+    published: BeatGridSnapshot,
     /// The loaded track's slot, and the generation of it already published.
     /// `None` between loads, which is what makes the grid unavailable.
     source: Option<(Arc<PreparedGrid>, u64)>,
-    published: BeatGridSnapshot,
 }
 
 impl TrackGrid {
@@ -83,6 +83,22 @@ impl TrackGrid {
 }
 
 impl Owner {
+    fn materialize(
+        &self,
+        held: &mut Held,
+        revision: BeatGridRevision,
+    ) -> Result<BeatGridSnapshot, BeatGridModelError> {
+        let Some((prepared, published)) = held.source.as_mut() else {
+            return Ok(unavailable(self.id, revision, held.axis));
+        };
+        let (generation, model) = prepared.read();
+        *published = generation;
+        model.map_or_else(
+            || Ok(unavailable(self.id, revision, held.axis)),
+            |model| BeatGridSnapshot::model(self.id, revision, &model, held.axis),
+        )
+    }
+
     /// Rebuild what this grid publishes from what it now holds.
     ///
     /// A model that cannot be expressed on the decoded axis leaves the grid
@@ -100,22 +116,6 @@ impl Owner {
                 unavailable(self.id, revision, held.axis)
             }
         };
-    }
-
-    fn materialize(
-        &self,
-        held: &mut Held,
-        revision: BeatGridRevision,
-    ) -> Result<BeatGridSnapshot, BeatGridModelError> {
-        let Some((prepared, published)) = held.source.as_mut() else {
-            return Ok(unavailable(self.id, revision, held.axis));
-        };
-        let (generation, model) = prepared.read();
-        *published = generation;
-        model.map_or_else(
-            || Ok(unavailable(self.id, revision, held.axis)),
-            |model| BeatGridSnapshot::model(self.id, revision, &model, held.axis),
-        )
     }
 }
 

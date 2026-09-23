@@ -107,6 +107,18 @@ impl Scan {
         read
     }
 
+    /// The tracked text files under `scope`, walked once per distinct scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the walk fails, the same one the underlying walker
+    /// would have returned to the first caller.
+    pub fn text_files(&self, scope: &Scope) -> Result<Arc<Vec<PathBuf>>> {
+        Self::memoise(&self.text_files, scope, || {
+            workspace_text_files_scoped(&self.workspace_root, scope)
+        })
+    }
+
     /// Write `contents` to `path` and make it the text every later reader of
     /// this scan sees.
     ///
@@ -123,18 +135,6 @@ impl Scan {
             map.insert(path.to_path_buf(), Some(Arc::new(contents)));
         }
         Ok(())
-    }
-
-    /// The tracked text files under `scope`, walked once per distinct scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the walk fails, the same one the underlying walker
-    /// would have returned to the first caller.
-    pub fn text_files(&self, scope: &Scope) -> Result<Arc<Vec<PathBuf>>> {
-        Self::memoise(&self.text_files, scope, || {
-            workspace_text_files_scoped(&self.workspace_root, scope)
-        })
     }
 }
 

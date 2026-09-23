@@ -21,9 +21,9 @@ use crate::{
 };
 
 struct Source {
-    cursor: Cursor<Vec<u8>>,
-    remaining: Arc<AtomicUsize>,
     reads: Arc<AtomicUsize>,
+    remaining: Arc<AtomicUsize>,
+    cursor: Cursor<Vec<u8>>,
 }
 
 impl Read for Source {
@@ -72,9 +72,9 @@ fn reader_for(
 ) -> Box<dyn FormatReader> {
     let asset = by_name(signal.name()).expect("signal fixture");
     let source = Source {
-        cursor: Cursor::new(asset.bytes().to_vec()),
         remaining,
         reads,
+        cursor: Cursor::new(asset.bytes().to_vec()),
     };
     let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();

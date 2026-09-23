@@ -27,16 +27,20 @@ impl OwnedFormat {
         Ok(Self { raw })
     }
 
+    /// Borrow a byte-buffer property, valid until the format drops.
     #[must_use]
-    pub fn get_str(&self, key: &CStr) -> Option<&CStr> {
-        let mut value = std::ptr::null();
-        // SAFETY: the format and key are live; value is a writable out-parameter.
-        let found = unsafe { sys::AMediaFormat_getString(self.raw(), key.as_ptr(), &mut value) };
-        if !found || value.is_null() {
+    pub fn get_buffer(&self, key: &CStr) -> Option<&[u8]> {
+        let mut data = std::ptr::null_mut();
+        let mut size = 0;
+        // SAFETY: the format and key are live; both out-parameters are writable.
+        let found =
+            unsafe { sys::AMediaFormat_getBuffer(self.raw(), key.as_ptr(), &mut data, &mut size) };
+        if !found || data.is_null() || size == 0 {
             return None;
         }
-        // SAFETY: the successful query returns a NUL-terminated string owned by this format.
-        Some(unsafe { CStr::from_ptr(value) })
+        // SAFETY: the successful query returned `size` readable bytes owned by
+        // this format.
+        Some(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) })
     }
 
     #[must_use]
@@ -53,20 +57,16 @@ impl OwnedFormat {
         unsafe { sys::AMediaFormat_getInt64(self.raw(), key.as_ptr(), &mut value) }.then_some(value)
     }
 
-    /// Borrow a byte-buffer property, valid until the format drops.
     #[must_use]
-    pub fn get_buffer(&self, key: &CStr) -> Option<&[u8]> {
-        let mut data = std::ptr::null_mut();
-        let mut size = 0;
-        // SAFETY: the format and key are live; both out-parameters are writable.
-        let found =
-            unsafe { sys::AMediaFormat_getBuffer(self.raw(), key.as_ptr(), &mut data, &mut size) };
-        if !found || data.is_null() || size == 0 {
+    pub fn get_str(&self, key: &CStr) -> Option<&CStr> {
+        let mut value = std::ptr::null();
+        // SAFETY: the format and key are live; value is a writable out-parameter.
+        let found = unsafe { sys::AMediaFormat_getString(self.raw(), key.as_ptr(), &mut value) };
+        if !found || value.is_null() {
             return None;
         }
-        // SAFETY: the successful query returned `size` readable bytes owned by
-        // this format.
-        Some(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) })
+        // SAFETY: the successful query returns a NUL-terminated string owned by this format.
+        Some(unsafe { CStr::from_ptr(value) })
     }
 
     /// # Errors
@@ -105,16 +105,6 @@ impl OwnedFormat {
         self.raw.as_ptr()
     }
 
-    pub fn set_i32(&mut self, key: &CStr, value: i32) {
-        // SAFETY: `raw` is live and exclusively borrowed; `key` is NUL-terminated.
-        unsafe { sys::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) };
-    }
-
-    pub fn set_str(&mut self, key: &CStr, value: &CStr) {
-        // SAFETY: `raw` is live and exclusively borrowed; both strings are NUL-terminated.
-        unsafe { sys::AMediaFormat_setString(self.raw(), key.as_ptr(), value.as_ptr()) };
-    }
-
     pub fn set_buffer(&mut self, key: &CStr, value: &[u8]) {
         // SAFETY: `raw` is live and exclusively borrowed; setBuffer copies the
         // readable bytes and `key` is NUL-terminated.
@@ -126,6 +116,16 @@ impl OwnedFormat {
                 value.len(),
             );
         }
+    }
+
+    pub fn set_i32(&mut self, key: &CStr, value: i32) {
+        // SAFETY: `raw` is live and exclusively borrowed; `key` is NUL-terminated.
+        unsafe { sys::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) };
+    }
+
+    pub fn set_str(&mut self, key: &CStr, value: &CStr) {
+        // SAFETY: `raw` is live and exclusively borrowed; both strings are NUL-terminated.
+        unsafe { sys::AMediaFormat_setString(self.raw(), key.as_ptr(), value.as_ptr()) };
     }
 }
 

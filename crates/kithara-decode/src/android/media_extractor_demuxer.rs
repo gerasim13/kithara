@@ -19,10 +19,10 @@ use crate::{
 /// position. Segmented sources resolve packet metadata through their byte map.
 pub(crate) struct AndroidMediaExtractorDemuxer {
     extractor: AndroidMediaExtractor,
-    track_info: TrackInfo,
-    read_buf: Vec<u8>,
     byte_map: Option<Arc<dyn ByteMap>>,
     segment: Option<SegmentDescriptor>,
+    track_info: TrackInfo,
+    read_buf: Vec<u8>,
 }
 
 impl AndroidMediaExtractorDemuxer {
@@ -62,8 +62,8 @@ impl AndroidMediaExtractorDemuxer {
             Self {
                 extractor,
                 track_info,
-                read_buf: vec![0u8; 64 * 1024],
                 byte_map,
+                read_buf: vec![0u8; 64 * 1024],
                 segment: None,
             },
             format,
@@ -72,17 +72,6 @@ impl AndroidMediaExtractorDemuxer {
 }
 
 impl Demuxer for AndroidMediaExtractorDemuxer {
-    delegate::delegate! {
-        to self.segment {
-            #[expr($.map(|segment| segment.segment_index))]
-            #[call(as_ref)]
-            fn current_segment_index(&self) -> Option<u32>;
-            #[expr($.map(|segment| segment.variant_index))]
-            #[call(as_ref)]
-            fn current_variant_index(&self) -> Option<usize>;
-        }
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }
@@ -136,5 +125,16 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
+    }
+
+    delegate::delegate! {
+        to self.segment {
+            #[expr($.map(|segment| segment.segment_index))]
+            #[call(as_ref)]
+            fn current_segment_index(&self) -> Option<u32>;
+            #[expr($.map(|segment| segment.variant_index))]
+            #[call(as_ref)]
+            fn current_variant_index(&self) -> Option<usize>;
+        }
     }
 }

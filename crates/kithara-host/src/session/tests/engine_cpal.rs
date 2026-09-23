@@ -62,6 +62,10 @@ impl Drop for CpalGraphSession {
 }
 
 impl SessionDispatcher<TestPools> for CpalGraphSession {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
@@ -73,10 +77,6 @@ impl SessionDispatcher<TestPools> for CpalGraphSession {
         reply_rx.recv().map_err(|_| PlayError::SessionGone {
             reason: "cpal contract session dropped its reply channel",
         })
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

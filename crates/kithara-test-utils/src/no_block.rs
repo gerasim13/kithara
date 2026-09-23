@@ -143,8 +143,6 @@ mod tests {
 
     const BUDGET_MS: u64 = 5;
     const SLEEP_MS: u64 = 1;
-    const SPIN_MS: u64 = 50;
-
     fn run<F: Future<Output = ()>>(fut: F) {
         let rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
             .build()
@@ -168,6 +166,8 @@ mod tests {
 
     #[kithara::no_block(budget_ms = 5)]
     async fn no_block_spin_panics() {
+        const SPIN_MS: u64 = 50;
+
         spin_for(Duration::from_millis(SPIN_MS));
     }
 

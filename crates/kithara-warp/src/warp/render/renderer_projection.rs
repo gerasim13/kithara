@@ -9,19 +9,19 @@ use crate::{AssetFrame, BeatGridQuery, MapAxis, SessionAxis, SessionFrame, WarpP
 
 #[derive(Clone, Copy)]
 pub(super) struct ProjectedQuantum {
-    pub(super) output_offset: usize,
     pub(super) output_start: SessionFrame,
     pub(super) end: crate::WarpCursor,
     pub(super) output_frames: usize,
+    pub(super) output_offset: usize,
 }
 
 #[derive(Default)]
 pub(super) struct ProjectionState {
-    pub(super) selected: Option<Arc<WarpPlan>>,
     pub(super) active: Option<Arc<WarpPlan>>,
+    pub(super) cursor: Option<crate::WarpCursor>,
     pub(super) prepared: Option<Arc<WarpPlan>>,
     pub(super) retired: Option<Arc<WarpPlan>>,
-    pub(super) cursor: Option<crate::WarpCursor>,
+    pub(super) selected: Option<Arc<WarpPlan>>,
     pub(super) output_frames: usize,
 }
 
@@ -194,6 +194,64 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// A finite source endpoint can map between session frames. Invert that
+    /// covered endpoint before rounding to the engine lattice; do not extend
+    /// geometry or manufacture a rate beyond it.
+    pub(super) fn projected_endpoint(
+        plan: &WarpPlan,
+        output: SessionFrame,
+        source_limit: u64,
+    ) -> Result<u64, ElasticError> {
+        match plan.source_at(output) {
+            BeatGridQuery::Resolved(source) => Self::source_frame(source),
+            BeatGridQuery::OutsideDomain => {
+                let source = AssetFrame::new(
+                    source_limit
+                        .to_f64()
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                )
+                .map_err(|_| ElasticError::SampleCountOverflow)?;
+                match plan.map().output_at(source) {
+                    BeatGridQuery::Resolved(end) if end == output => Ok(source_limit),
+                    _ => Err(ElasticError::EmptyOutput),
+                }
+            }
+            _ => Err(ElasticError::EnginePreparation(
+                "projected source endpoint is uncovered",
+            )),
+        }
+    }
+
+    pub(super) fn projected_output_offset(
+        &self,
+        plan: &WarpPlan,
+        output: SessionFrame,
+    ) -> Result<usize, ElasticError> {
+        let axis = plan.output_axis().ok_or(ElasticError::EnginePreparation(
+            "projected output axis is unavailable",
+        ))?;
+        let frames = i64::from(output)
+            .checked_sub(i64::from(plan.activation().output()))
+            .and_then(|frames| frames.to_f64())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        (frames * f64::from(self.spec.sample_rate.get()) / f64::from(axis.sample_rate().get()))
+            .round()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    pub(super) fn projected_source(
+        plan: &WarpPlan,
+        output: SessionFrame,
+    ) -> Result<u64, ElasticError> {
+        match plan.source_at(output) {
+            BeatGridQuery::Resolved(source) => Self::source_frame(source),
+            _ => Err(ElasticError::EnginePreparation(
+                "projected source endpoint is uncovered",
+            )),
+        }
+    }
+
     pub(super) fn projected_span(
         &self,
         plan: &WarpPlan,
@@ -332,8 +390,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .ok_or(ElasticError::SampleCountOverflow)?;
         if !capabilities.rate_envelope().contains_rate(rate) {
             return Err(ElasticError::RateOutsideEnvelope {
-                source_frames: frames,
                 output_frames,
+                source_frames: frames,
             });
         }
         let speed = rate.to_f32().ok_or(ElasticError::SampleCountOverflow)?;
@@ -342,14 +400,33 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             activation: None,
             projection: Some(ProjectedQuantum {
                 output_offset,
+                output_frames,
                 output_start: start,
                 end: plan.map().reanchor(source_end, end),
-                output_frames,
             }),
             rate: self.controls.rate_target(),
             speed,
             active_frames: frames,
             frames,
+        })
+    }
+
+    pub(super) fn projected_tail_cursor(&self, output_frames: usize) -> Option<ProjectedQuantum> {
+        let plan = self.projection.active.as_ref()?;
+        let previous = self.projection.cursor?.output();
+        let sample_rate = plan.output_axis()?.sample_rate();
+        let total_frames = self.projection.output_frames.checked_add(output_frames)?;
+        let frames = (total_frames.to_f64()? * f64::from(sample_rate.get())
+            / f64::from(self.spec.sample_rate.get()))
+        .round()
+        .to_i64()?;
+        let output = SessionFrame::new(i64::from(plan.activation().output()).checked_add(frames)?);
+        let (source, _) = self.rendered_source_end?;
+        Some(ProjectedQuantum {
+            output_frames,
+            output_offset: self.projection.output_frames,
+            output_start: previous,
+            end: plan.map().reanchor(source, output),
         })
     }
 
@@ -428,97 +505,20 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         if !capabilities.rate_envelope().contains_rate(rate) {
             return Err(ElasticError::RateOutsideEnvelope {
-                source_frames: frames,
                 output_frames,
+                source_frames: frames,
             });
         }
         prepared.frames = frames;
         prepared.active_frames = frames;
         prepared.speed = rate.to_f32().ok_or(ElasticError::SampleCountOverflow)?;
         prepared.projection = Some(ProjectedQuantum {
+            output_frames,
             output_offset: projection.output_offset,
             output_start: projection.output_start,
             end: plan.map().reanchor(source_end, end),
-            output_frames,
         });
         Ok(prepared)
-    }
-
-    pub(super) fn projected_output_offset(
-        &self,
-        plan: &WarpPlan,
-        output: SessionFrame,
-    ) -> Result<usize, ElasticError> {
-        let axis = plan.output_axis().ok_or(ElasticError::EnginePreparation(
-            "projected output axis is unavailable",
-        ))?;
-        let frames = i64::from(output)
-            .checked_sub(i64::from(plan.activation().output()))
-            .and_then(|frames| frames.to_f64())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        (frames * f64::from(self.spec.sample_rate.get()) / f64::from(axis.sample_rate().get()))
-            .round()
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)
-    }
-
-    pub(super) fn projected_tail_cursor(&self, output_frames: usize) -> Option<ProjectedQuantum> {
-        let plan = self.projection.active.as_ref()?;
-        let previous = self.projection.cursor?.output();
-        let sample_rate = plan.output_axis()?.sample_rate();
-        let total_frames = self.projection.output_frames.checked_add(output_frames)?;
-        let frames = (total_frames.to_f64()? * f64::from(sample_rate.get())
-            / f64::from(self.spec.sample_rate.get()))
-        .round()
-        .to_i64()?;
-        let output = SessionFrame::new(i64::from(plan.activation().output()).checked_add(frames)?);
-        let (source, _) = self.rendered_source_end?;
-        Some(ProjectedQuantum {
-            output_offset: self.projection.output_frames,
-            output_start: previous,
-            end: plan.map().reanchor(source, output),
-            output_frames,
-        })
-    }
-
-    // A finite source endpoint can map between session frames. Invert that
-    // covered endpoint before rounding to the engine lattice; do not extend
-    // geometry or manufacture a rate beyond it.
-    pub(super) fn projected_endpoint(
-        plan: &WarpPlan,
-        output: SessionFrame,
-        source_limit: u64,
-    ) -> Result<u64, ElasticError> {
-        match plan.source_at(output) {
-            BeatGridQuery::Resolved(source) => Self::source_frame(source),
-            BeatGridQuery::OutsideDomain => {
-                let source = AssetFrame::new(
-                    source_limit
-                        .to_f64()
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
-                .map_err(|_| ElasticError::SampleCountOverflow)?;
-                match plan.map().output_at(source) {
-                    BeatGridQuery::Resolved(end) if end == output => Ok(source_limit),
-                    _ => Err(ElasticError::EmptyOutput),
-                }
-            }
-            _ => Err(ElasticError::EnginePreparation(
-                "projected source endpoint is uncovered",
-            )),
-        }
-    }
-
-    pub(super) fn projected_source(
-        plan: &WarpPlan,
-        output: SessionFrame,
-    ) -> Result<u64, ElasticError> {
-        match plan.source_at(output) {
-            BeatGridQuery::Resolved(source) => Self::source_frame(source),
-            _ => Err(ElasticError::EnginePreparation(
-                "projected source endpoint is uncovered",
-            )),
-        }
     }
     fn source_frame(source: AssetFrame) -> Result<u64, ElasticError> {
         f64::from(source)

@@ -402,9 +402,9 @@ async fn preemption_commits_a_checkpoint_before_starting_the_next_track(
 
 struct HeldRun {
     target: AnalysisTarget,
-    host: OffThread<(AppHost, AppQueueControl)>,
     queue: AppQueueControl,
     source: AppTrackSource,
+    host: OffThread<(AppHost, AppQueueControl)>,
     owner: Owner,
     rx: watch::Receiver<Option<TrackArtifacts>>,
     track_id: TrackId,
@@ -427,13 +427,13 @@ async fn close_run(cancel: &CancelToken, url: &str, value: Option<AnalysisProgre
     drop(tx);
     owner.drive().await;
     HeldRun {
-        queue,
-        owner,
-        track_id,
-        source,
         target,
-        rx,
+        queue,
+        source,
         host,
+        owner,
+        rx,
+        track_id,
     }
 }
 
@@ -769,6 +769,8 @@ async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String)
 }
 
 async fn the_source_gave_everything_it_can(url: &str) {
+    const HEAD_TOLERANCE_FRAMES: u64 = 2 * MPEG_FRAME_SAMPLES;
+
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
@@ -818,8 +820,6 @@ async fn the_source_gave_everything_it_can(url: &str) {
 }
 
 const MPEG_FRAME_SAMPLES: u64 = 1152;
-const HEAD_TOLERANCE_FRAMES: u64 = 2 * MPEG_FRAME_SAMPLES;
-
 #[kithara::test(native, tokio)]
 async fn a_track_opened_with_every_artifact_is_not_analysed(tone_mp3: String) {
     let cancel = CancelToken::root();

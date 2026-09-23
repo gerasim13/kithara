@@ -25,7 +25,6 @@ use crate::{
 };
 
 pub(crate) const ID: &str = "derivable_delegation";
-const MAX_RAW_STRING_HASHES: usize = 255;
 const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
 const UNSUPPORTED_DELEGATE_SYNTAX: &str = "existing delegate! block has unsupported syntax";
 
@@ -1095,6 +1094,8 @@ fn block_doc_attribute(attr: &syn::Attribute) -> Option<String> {
 }
 
 fn raw_string_literal(value: &str) -> Option<String> {
+    const MAX_RAW_STRING_HASHES: usize = 255;
+
     for count in 0..=MAX_RAW_STRING_HASHES {
         let hashes = "#".repeat(count);
         if !value.contains(&format!("\"{hashes}")) {

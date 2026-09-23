@@ -97,6 +97,7 @@ impl<S> PlayerImpl<S> {
         let core = PlayerCore {
             engine,
             params,
+            track_grid,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
             warp: config.warp,
@@ -106,7 +107,6 @@ impl<S> PlayerImpl<S> {
             status: Mutex::default(),
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),
-            track_grid,
         };
         Self {
             sync,
