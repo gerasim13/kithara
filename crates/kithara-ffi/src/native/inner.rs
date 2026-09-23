@@ -206,6 +206,9 @@ impl NativeInner {
             action_at_item_end,
             crossfade_settings,
         } = config;
+        // The engine and the queue loader capture the ambient runtime at
+        // creation; the host constructs the player from its own thread.
+        let _rt = crate::FFI_RUNTIME.enter();
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
         let worker = FfiWorker::new(
@@ -257,6 +260,21 @@ impl NativeInner {
         inner.setup_network(auth_token);
         inner.set_playing_rate(playing_rate);
         Ok(inner)
+    }
+
+    pub(crate) fn notify_interruption(&self, kind: InterruptionKind) {
+        let _rt = crate::FFI_RUNTIME.enter();
+        self.queue.notify_interruption(kind);
+    }
+
+    pub(crate) fn pause(&self) {
+        let _rt = crate::FFI_RUNTIME.enter();
+        self.queue.pause();
+    }
+
+    pub(crate) fn play(&self) {
+        let _rt = crate::FFI_RUNTIME.enter();
+        self.queue.play();
     }
 
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
@@ -613,9 +631,6 @@ impl NativeInner {
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
             pub(crate) fn is_muted(&self) -> bool;
-            pub(crate) fn notify_interruption(&self, kind: InterruptionKind);
-            pub(crate) fn pause(&self);
-            pub(crate) fn play(&self);
             #[call(default_rate)]
             pub(crate) fn playing_rate(&self) -> f32;
             pub(crate) fn rate(&self) -> f32;
