@@ -77,18 +77,32 @@ mod tests {
     use kithara_test_utils::{bufpool::pools as test_pools, kithara};
 
     use super::{DownloaderConfig, DownloaderConfigPatch};
+    use crate::Downloader;
 
     #[kithara::test(native, flash(false))]
     fn a_snapshot_keeps_policy_and_excludes_resources() {
         let config = DownloaderConfig::for_client(client())
             .max_concurrent(7)
-            .abr_settings(AbrSettings::builder().max_bandwidth_bps(500_000).build())
+            .cancel(CancelToken::never())
+            .abr_settings(
+                AbrSettings::builder()
+                    .max_bandwidth_bps(500_000)
+                    .cancel(CancelToken::never())
+                    .build(),
+            )
             .build();
 
         let values = kithara_config::Config::values(&config);
         assert_eq!(values.max_concurrent, 7);
         assert_eq!(values.abr_settings.max_bandwidth_bps, Some(500_000));
         assert_eq!(values.soft_timeout, Duration::from_secs(2));
+
+        let downloader = Downloader::new(config);
+        let retained = kithara_config::Config::values(downloader.config());
+        assert_eq!(retained.max_concurrent, 7);
+        assert_eq!(retained.abr_settings.max_bandwidth_bps, Some(500_000));
+        assert!(downloader.config().cancel.is_none());
+        assert!(downloader.config().abr_settings.cancel.is_none());
     }
 
     fn client() -> HttpClient {
