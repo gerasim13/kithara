@@ -391,24 +391,24 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(handoffs)
     }
 
-    /// Drops every decision whose member left the group, and every issued or
-    /// installed preparation whose member no longer holds the grid it was
-    /// projected from. What is armed or applied already sounds, so a
-    /// replaced member keeps it.
+    /// Drops, on a topology change, every decision whose member left the
+    /// group and every issued or installed preparation: each was stamped with
+    /// the topology being replaced, and an execution receipt is never
+    /// restamped past a new fence. What is armed or applied already sounds,
+    /// so a member that stays keeps it.
     pub(super) fn retain_current_pending(&mut self) {
         let pending = std::mem::take(&mut self.pending);
         self.pending = pending
             .into_iter()
             .filter(|held| {
-                self.direct_grid(held.member())
-                    .is_some_and(|member| match held {
+                self.direct_grid(held.member()).is_some()
+                    && !matches!(
+                        held,
                         Pending::Prepared {
-                            preparation,
                             phase: Phase::Issued | Phase::Installed,
                             ..
-                        } => member.stamp() == preparation.stamp().member(),
-                        Pending::Prepared { .. } | Pending::Waiting { .. } => true,
-                    })
+                        }
+                    )
             })
             .collect();
         let applied = std::mem::take(&mut self.applied);

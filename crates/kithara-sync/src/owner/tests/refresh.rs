@@ -138,9 +138,12 @@ pub(super) fn pending_members(group: &Group) -> Vec<BeatGridId> {
 
 #[kithara::test]
 fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
-    let (mut group, parent, first) = prepared_deck();
-    let second = BeatGridId::allocate().expect("grid id");
+    let parent = BeatGridId::allocate().expect("grid id");
+    let mut group = host_deck(parent, anchor_at_rate(2.0, 48_000));
+    let [first, second] = [(); 2].map(|()| BeatGridId::allocate().expect("grid id"));
+    attach_grid(&mut group, asset_grid(first, 480_000, 24_000));
     attach_grid(&mut group, asset_grid(second, 480_000, 20_000));
+    let _ = prepare(&mut group, first, frontier(30_000, 30_000), 0);
     let _ = prepare(&mut group, second, frontier(10_000, 30_000), 0);
     let before = [prepared(&group, first), prepared(&group, second)];
 

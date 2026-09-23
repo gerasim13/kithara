@@ -1,21 +1,27 @@
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, SessionAxis, WarpMapRevision,
-    WarpPlan,
+    BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
+    BeatGridState, PresentationFrontier, SessionAxis, WarpMapRevision, WarpPlan,
 };
 use num_traits::ToPrimitive;
 
 use super::{
-    modes::{Group, attach_group, group_in, nested, rate, sync_at, synced_deck, tempo_at},
-    preparation::{asset_grid, attach_grid, cue, prepare, prepare_in, replace_grid, window},
+    modes::{
+        Group, attach_group, group_in, nested, rate, sync_at, synced_deck, tempo_at,
+        transport_unavailable,
+    },
+    preparation::{
+        asset_grid, asset_segments_from, attach_grid, cue, prepare, prepare_in, replace_grid,
+        window,
+    },
     refresh::{pending_members, prepared},
 };
 use crate::{
     AlignmentSource, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncEffect, SyncError,
     SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
     SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot,
-    TopologyOperation,
+    TopologyOperation, TopologyRevision, TopologyStamp,
 };
 
 /// A deck at 120 BPM holding one track grid.
@@ -127,7 +133,7 @@ fn free_at(group: &mut Group, frame: i64) -> SyncAdmission {
 }
 
 #[kithara::test]
-fn a_preparation_is_installed_armed_and_presented_before_it_locks() {
+fn entering_arms_the_member_that_reached_presentation() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let (warp_map, activation) = preparation.activation();
@@ -262,7 +268,7 @@ fn a_receipt_under_other_facts_or_an_older_operation_commits_nothing() {
 }
 
 #[kithara::test]
-fn a_receipt_for_a_member_that_left_the_group_is_refused() {
+fn arming_an_absent_member_is_rejected() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let base = group.topology().expect("topology").stamp();
@@ -315,11 +321,20 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
 }
 
 #[kithara::test]
-fn a_sounding_member_cannot_launch_again() {
+fn an_armed_member_refuses_a_second_entry() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
-    let _ = sound(&mut group, &preparation);
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(preparation.stamp()));
+    let _ = acknowledge(&mut group, SyncReceipt::Armed(preparation.stamp()));
 
+    assert_eq!(
+        prepare_in(&mut group, track, cue(0), window(0, i64::MAX)),
+        Err(SyncError::ArmedOperation {
+            member_id: track,
+            operation: preparation.stamp().operation(),
+        })
+    );
+    let _ = acknowledge(&mut group, presented(&preparation));
     assert_eq!(
         prepare_in(&mut group, track, cue(0), window(0, i64::MAX)),
         Err(SyncError::MemberAudible { member_id: track })
@@ -341,7 +356,7 @@ fn a_sounding_member_cannot_launch_again() {
 }
 
 #[kithara::test]
-fn an_audible_retarget_continues_the_recording_its_map_plays() {
+fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
@@ -369,6 +384,7 @@ fn an_audible_retarget_continues_the_recording_its_map_plays() {
         panic!("a retarget is a projection");
     };
     assert_eq!(*replaces, Some(map(&preparation)));
+    assert!(next.activation().revision() > map(&preparation));
     assert_eq!(next.activation().output(), SessionFrame::new(96_000));
     assert_eq!(
         next.activation().source(),
@@ -403,7 +419,7 @@ fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
 }
 
 #[kithara::test]
-fn a_tempo_commit_retargets_every_sounding_member_and_carries_the_silent_one() {
+fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
     let mut group = synced_deck();
     let tracks: Vec<BeatGridId> = (0..3)
         .map(|_| BeatGridId::allocate().expect("grid id"))
@@ -440,6 +456,7 @@ fn a_tempo_commit_retargets_every_sounding_member_and_carries_the_silent_one() {
             panic!("a retarget is a projection");
         };
         assert_eq!(*replaces, Some(map(applied)));
+        assert!(next.activation().revision() > map(applied));
         assert_eq!(next.activation().output(), SessionFrame::new(96_000));
         assert_eq!(next.activation().source(), source_at(plan(applied), 96_000));
     }
@@ -496,14 +513,61 @@ fn an_armed_preparation_survives_a_tempo_commit_and_then_converges() {
 }
 
 #[kithara::test]
-fn a_late_receipt_of_a_moved_preparation_does_not_complete_its_successor() {
+fn stale_host_seek_topology_commits_nothing() {
+    let (mut group, track) = deck_with_track();
+    let preparation = launched(&mut group, track, 0);
+    attach_grid(
+        &mut group,
+        asset_grid(BeatGridId::allocate().expect("grid id"), 960_000, 24_000),
+    );
+    let held = group.pending.clone();
+    let status = group.status();
+    let topology = group.topology().expect("topology").stamp();
+    assert_ne!(topology, preparation.stamp().topology());
+
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Installed(preparation.stamp())),
+        Err(SyncError::NoPreparedOperation)
+    );
+    assert_eq!(group.pending, held);
+    assert_eq!(group.status(), status);
+    assert_eq!(group.topology().expect("topology").stamp(), topology);
+}
+
+#[kithara::test]
+fn stale_host_seek_member_grid_stamp_commits_nothing() {
+    let (mut group, track) = deck_with_track();
+    let preparation = launched(&mut group, track, 0);
+    let revised = BeatGridSnapshot::segments(
+        track,
+        BeatGridRevision::first().checked_next().expect("revision"),
+        BeatGridState::Complete,
+        asset_segments_from(960_000, 960_000, 24_000, 12_000, None),
+    )
+    .expect("the revised grid is valid");
+    replace_grid(&mut group, revised);
+    let held = group.pending.clone();
+    let status = group.status();
+
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Installed(preparation.stamp())),
+        Err(SyncError::NoPreparedOperation)
+    );
+    assert_eq!(group.pending, held);
+    assert_eq!(group.status(), status);
+}
+
+#[kithara::test]
+fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 200_000);
     let _ = acknowledge(&mut group, SyncReceipt::Installed(preparation.stamp()));
     let _ = commit_tempo(&mut group);
     let moved = prepared(&group, track);
     assert_eq!(moved.stamp().operation(), preparation.stamp().operation());
+    assert_eq!(moved.stamp().topology(), preparation.stamp().topology());
     let held = group.pending.clone();
+    let status = group.status();
 
     assert_eq!(
         group.acknowledge(SyncReceipt::Armed(preparation.stamp())),
@@ -513,10 +577,15 @@ fn a_late_receipt_of_a_moved_preparation_does_not_complete_its_successor() {
         })
     );
     assert_eq!(group.pending, held);
+    assert_eq!(group.status(), status);
+    assert_eq!(
+        group.topology().expect("topology").stamp(),
+        preparation.stamp().topology()
+    );
 }
 
 #[kithara::test]
-fn replacing_a_member_grid_keeps_what_already_sounds_or_is_armed() {
+fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
@@ -538,7 +607,7 @@ fn replacing_a_member_grid_keeps_what_already_sounds_or_is_armed() {
 }
 
 #[kithara::test]
-fn leaving_the_timeline_hands_every_sounding_member_off_where_its_map_plays() {
+fn free_leaves_the_beat_timeline() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
@@ -546,6 +615,11 @@ fn leaving_the_timeline_hands_every_sounding_member_off_where_its_map_plays() {
     let admission = free_at(&mut group, 96_000);
 
     let handoff = prepared(&group, track);
+    assert_ne!(
+        (handoff.stamp().operation(), handoff.activation().0),
+        (preparation.stamp().operation(), preparation.activation().0)
+    );
+    assert_eq!(pending_members(&group), [track]);
     assert_eq!(handoff.stamp().operation(), operation(&admission));
     assert_eq!(handoff.stamp().group(), group.snapshot().stamp());
     let SyncEffect::Handoff {
@@ -581,10 +655,15 @@ fn leaving_the_timeline_hands_every_sounding_member_off_where_its_map_plays() {
         }
     );
     assert!(group.applied_of(track).is_none());
+    let id = group.id();
+    let rejected = group
+        .transact(tempo_at(id, 126.0, SessionFrame::new(120_000)))
+        .expect_err("a free group has no tempo owner");
+    assert_eq!(*rejected.error(), transport_unavailable());
 }
 
 #[kithara::test]
-fn a_rejected_handoff_drops_only_itself() {
+fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
@@ -595,7 +674,7 @@ fn a_rejected_handoff_drops_only_itself() {
         &mut group,
         SyncReceipt::Rejected {
             stamp: handoff.stamp(),
-            reason: SyncExecutionReject::Late,
+            reason: SyncExecutionReject::Geometry,
         },
     );
 
@@ -607,12 +686,92 @@ fn a_rejected_handoff_drops_only_itself() {
 }
 
 #[kithara::test]
-fn a_handoff_receipt_is_consumed_once_and_goes_stale_after_the_next_release() {
+fn installed_free_receipt_is_consumed_once() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
     let _ = free_at(&mut group, 96_000);
     let handoff = prepared(&group, track);
+    let stamp = handoff.stamp();
+    let foreign = BeatGridId::allocate().expect("grid id");
+    let foreign_grid = BeatGridStamp::new(foreign, BeatGridRevision::first());
+    let with = |member, group, topology, load| {
+        SyncExecutionStamp::new(
+            stamp.operation(),
+            member,
+            group,
+            topology,
+            load,
+            stamp.transport(),
+        )
+    };
+    let reject = |group: &mut Group, given| {
+        let held = group.pending.clone();
+        let refusal = group.acknowledge(SyncReceipt::Rejected {
+            stamp: given,
+            reason: SyncExecutionReject::Geometry,
+        });
+        assert_eq!(group.pending, held);
+        refusal
+    };
+
+    assert_eq!(
+        reject(
+            &mut group,
+            with(foreign_grid, stamp.group(), stamp.topology(), stamp.load())
+        ),
+        Err(SyncError::MemberNotFound {
+            group_id: group.id(),
+            member_id: foreign,
+        })
+    );
+    assert_eq!(
+        reject(
+            &mut group,
+            with(stamp.member(), foreign_grid, stamp.topology(), stamp.load())
+        ),
+        Err(SyncError::GroupNotFound { group_id: foreign })
+    );
+    for given in [
+        with(
+            BeatGridStamp::new(
+                track,
+                stamp.member().revision().checked_next().expect("revision"),
+            ),
+            stamp.group(),
+            stamp.topology(),
+            stamp.load(),
+        ),
+        with(
+            stamp.member(),
+            BeatGridStamp::new(
+                stamp.group().grid_id(),
+                stamp.group().revision().checked_next().expect("revision"),
+            ),
+            stamp.topology(),
+            stamp.load(),
+        ),
+        with(
+            stamp.member(),
+            stamp.group(),
+            TopologyStamp::new(foreign, TopologyRevision::first()),
+            stamp.load(),
+        ),
+        with(
+            stamp.member(),
+            stamp.group(),
+            stamp.topology(),
+            stamp.load().checked_next().expect("load"),
+        ),
+    ] {
+        assert_eq!(
+            reject(&mut group, given),
+            Err(SyncError::ReceiptMismatch {
+                expected: Box::new(stamp),
+                given: Box::new(given),
+            })
+        );
+    }
     let _ = acknowledge(&mut group, SyncReceipt::Installed(handoff.stamp()));
     let other = restamped(
         handoff.stamp(),
@@ -647,6 +806,40 @@ fn a_handoff_receipt_is_consumed_once_and_goes_stale_after_the_next_release() {
             given: handoff.stamp().operation(),
         })
     );
+    let successor = prepared(&group, track);
+    assert_ne!(successor.stamp(), handoff.stamp());
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(successor.stamp()));
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Installed(successor.stamp())),
+        Err(SyncError::DuplicateAcknowledgement {
+            operation: successor.stamp().operation(),
+        })
+    );
+}
+
+#[kithara::test]
+fn worker_handoff_geometry_derives_source_output_and_beat_together() {
+    let handoff_at = |frame| {
+        let (mut group, track) = deck_with_track();
+        let preparation = launched(&mut group, track, 0);
+        let _ = sound(&mut group, &preparation);
+        let _ = free_at(&mut group, frame);
+        let SyncEffect::Handoff {
+            source, activation, ..
+        } = *prepared(&group, track).effect()
+        else {
+            panic!("leaving the timeline hands the member off");
+        };
+        let played = f64::from(source).round().to_u64();
+        assert_eq!(played, Some(source_at(plan(&preparation), frame)));
+        (played, activation)
+    };
+
+    assert_ne!(
+        handoff_at(96_000),
+        handoff_at(120_000),
+        "a later handoff boundary must not reuse an earlier activation"
+    );
 }
 
 #[kithara::test]
@@ -672,7 +865,7 @@ fn an_armed_member_keeps_the_timeline_from_being_left() {
 }
 
 #[kithara::test]
-fn a_new_session_epoch_drops_every_decision_and_applied_map() {
+fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);

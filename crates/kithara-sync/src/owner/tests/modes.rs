@@ -98,7 +98,7 @@ pub(super) fn tempo_at(
     }
 }
 
-fn transport_unavailable() -> SyncError {
+pub(super) fn transport_unavailable() -> SyncError {
     SyncError::CapabilityUnavailable {
         capability: SyncCapability::Transport,
     }
