@@ -1,8 +1,8 @@
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
-use re_mp4::{BoxHeader, BoxType, MoofBox, Mp4, ReadBox, StsdBoxContent, TfhdBox, TrunBox};
+use re_mp4::{BoxHeader, BoxType, Mp4, StsdBoxContent};
 
 use crate::error::{DecodeError, DecodeResult};
 
@@ -406,167 +406,64 @@ fn read_box_size(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u64> {
 
 /// Walk a media segment's `(moof, mdat)` pairs and emit per-frame
 /// descriptors. The returned offsets are relative to `segment_bytes`.
+///
+/// The box walk itself belongs to `kithara-mp4`; what stays here is the
+/// projection of its samples onto the buffer-relative view the demuxer
+/// slices frames out of.
 pub(crate) fn parse_segment_frames(
     init: &Fmp4InitInfo,
     segment_bytes: &[u8],
 ) -> DecodeResult<Vec<Fmp4Frame>> {
-    let total = segment_bytes.len() as u64;
-    let mut cursor = Cursor::new(segment_bytes);
-    let mut frames = Vec::new();
-
-    while cursor.position() < total {
-        let box_start = cursor.position();
-        let (box_type, size) = read_header(&mut cursor)?;
-        if size < 8 {
-            return Err(DecodeError::InvalidData {
-                detail: "invalid box size in init segment",
-            });
-        }
-        let box_end = box_start + size;
-
-        if box_type == BoxType::MoofBox {
-            let moof = MoofBox::read_box(&mut cursor, size)
-                .map_err(|e| DecodeError::parse("re_mp4", e))?;
-            cursor
-                .seek(SeekFrom::Start(box_end))
-                .map_err(|e| DecodeError::parse("seek after moof", e))?;
-
-            let mdat_start = cursor.position();
-            let (mdat_type, mdat_size) = read_header(&mut cursor)?;
-            if mdat_type != BoxType::MdatBox {
-                return Err(DecodeError::InvalidData {
-                    detail: "expected mdat box after moof",
-                });
-            }
-            cursor
-                .seek(SeekFrom::Start(mdat_start + mdat_size))
-                .map_err(|e| DecodeError::parse("seek past mdat", e))?;
-
-            collect_frames(
-                &SegmentParse {
-                    init,
-                    segment_bytes,
-                    moof: &moof,
-                    moof_start: box_start,
-                },
-                &mut frames,
-            )?;
-            continue;
-        }
-
-        cursor
-            .seek(SeekFrom::Start(box_end))
-            .map_err(|e| DecodeError::parse("skip top-level box", e))?;
+    let total = u64::try_from(segment_bytes.len()).map_err(|_| DecodeError::InvalidData {
+        detail: "segment length overflows u64",
+    })?;
+    let samples = kithara_mp4::read_samples(&SegmentBytes(segment_bytes), total, init.track_id)
+        .map_err(|error| DecodeError::InvalidData {
+            detail: error.detail(),
+        })?;
+    // Presized and filled by hand: collecting into a `Result<Vec<_>>`
+    // loses the exact capacity, and a segment must cost one allocation.
+    let mut frames: Vec<Fmp4Frame> = Vec::with_capacity(samples.len());
+    for sample in &samples {
+        frames.push(frame_from_sample(sample)?);
     }
-
     Ok(frames)
 }
 
-/// Inputs for parsing one fMP4 segment's frames: the track `init`, the
-/// parsed `moof` box with its byte offset `moof_start` inside the segment,
-/// and the raw `segment_bytes`.
-#[derive(Clone, Copy)]
-struct SegmentParse<'a> {
-    init: &'a Fmp4InitInfo,
-    moof: &'a MoofBox,
-    segment_bytes: &'a [u8],
-    moof_start: u64,
+/// Random-access view of one media segment already held in memory. The walk
+/// takes a [`kithara_mp4::ReadAt`] because it is written for sources it must
+/// not pull whole; a segment buffer simply answers from the slice it is.
+struct SegmentBytes<'a>(&'a [u8]);
+
+impl kithara_mp4::ReadAt for SegmentBytes<'_> {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        let start = usize::try_from(offset).map_err(io::Error::other)?;
+        let Some(tail) = self.0.get(start..) else {
+            return Ok(0);
+        };
+        let n = tail.len().min(buf.len());
+        buf[..n].copy_from_slice(&tail[..n]);
+        Ok(n)
+    }
 }
 
-fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResult<()> {
-    let SegmentParse {
-        init,
-        moof,
-        moof_start,
-        segment_bytes,
-    } = *parse;
-    let traf = moof
-        .trafs
-        .iter()
-        .find(|t| t.tfhd.track_id == init.track_id)
-        .or_else(|| moof.trafs.first())
-        .ok_or_else(|| DecodeError::InvalidData {
-            detail: "moof has no traf",
+/// Project one walked sample onto the segment buffer the demuxer slices.
+fn frame_from_sample(sample: &kithara_mp4::Sample) -> DecodeResult<Fmp4Frame> {
+    let offset =
+        usize::try_from(sample.byte_range.start).map_err(|_| DecodeError::InvalidData {
+            detail: "frame offset overflows usize",
         })?;
-
-    let tfhd = &traf.tfhd;
-    let default_base_is_moof = (tfhd.flags & TfhdBox::FLAG_DEFAULT_BASE_IS_MOOF) != 0;
-    let mut decode_time = traf.tfdt.as_ref().map_or(0, |t| t.base_media_decode_time);
-
-    let sample_total: usize = traf
-        .truns
-        .iter()
-        .map(|trun| usize::try_from(trun.sample_count).unwrap_or(0))
-        .sum();
-    out.reserve(sample_total);
-
-    for trun in &traf.truns {
-        let data_offset_i32 = trun.data_offset.unwrap_or(0);
-        let base = if default_base_is_moof {
-            moof_start
-        } else {
-            tfhd.base_data_offset.unwrap_or(moof_start)
-        };
-        let mut byte_cursor = if data_offset_i32 < 0 {
-            base.saturating_sub(u64::from(data_offset_i32.unsigned_abs()))
-        } else {
-            base.saturating_add(u64::try_from(data_offset_i32).unwrap_or(0))
-        };
-
-        for sample_idx in 0..trun.sample_count as usize {
-            let size = sample_size_for(trun, tfhd, sample_idx)?;
-            let duration = sample_duration_for(trun, tfhd, sample_idx);
-
-            let start = usize::try_from(byte_cursor).map_err(|_| DecodeError::InvalidData {
-                detail: "frame offset overflows usize",
-            })?;
-            let end = start
-                .checked_add(size as usize)
-                .ok_or_else(|| DecodeError::InvalidData {
-                    detail: "sample byte range overflow",
-                })?;
-            if end > segment_bytes.len() {
-                return Err(DecodeError::InvalidData {
-                    detail: "sample byte range past segment end",
-                });
-            }
-
-            out.push(Fmp4Frame {
-                decode_time,
-                duration,
-                offset: start,
-                size: size as usize,
-            });
-
-            byte_cursor = byte_cursor.saturating_add(u64::from(size));
-            decode_time = decode_time.saturating_add(u64::from(duration));
+    let size = usize::try_from(sample.byte_range.end - sample.byte_range.start).map_err(|_| {
+        DecodeError::InvalidData {
+            detail: "frame size overflows usize",
         }
-    }
-
-    Ok(())
-}
-
-fn sample_size_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> DecodeResult<u32> {
-    if (trun.flags & TrunBox::FLAG_SAMPLE_SIZE) != 0 {
-        return trun
-            .sample_sizes
-            .get(idx)
-            .copied()
-            .ok_or_else(|| DecodeError::InvalidData {
-                detail: "missing trun sample_size",
-            });
-    }
-    tfhd.default_sample_size
-        .ok_or_else(|| DecodeError::InvalidData {
-            detail: "no default_sample_size",
-        })
-}
-
-fn sample_duration_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> u32 {
-    if (trun.flags & TrunBox::FLAG_SAMPLE_DURATION) != 0 {
-        return trun.sample_durations.get(idx).copied().unwrap_or(0);
-    }
-    tfhd.default_sample_duration.unwrap_or(0)
+    })?;
+    Ok(Fmp4Frame {
+        decode_time: sample.decode_ticks,
+        duration: sample.duration_ticks,
+        offset,
+        size,
+    })
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

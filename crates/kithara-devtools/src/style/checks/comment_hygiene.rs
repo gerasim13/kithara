@@ -6,12 +6,7 @@ use syn::{File, ImplItem, Item, TraitItem, spanned::Spanned, visit, visit::Visit
 
 use super::{Check, Context};
 use crate::{
-    common::{
-        fix::FixOutcome,
-        parse::parse_file,
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
+    common::{fix::FixOutcome, violation::Violation, walker::relative_to},
     style::config::CommentHygieneConfig,
 };
 
@@ -24,24 +19,24 @@ impl Check for CommentHygiene {
         let cfg = &ctx.config.thresholds.comment_hygiene;
         let excludes = compile_excludes(&cfg.exclude_paths);
         let mut outcome = FixOutcome::default();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             if path_excluded(&excludes, &rel) {
                 continue;
             }
-            let Ok(src) = std::fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
-            let Ok(file) = parse_file(&path) else {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
             let comments = scan_comments(&src);
             let macro_spans = collect_macro_spans(&file);
             let new_src = apply_category_fix(&src, &comments, &macro_spans, &file, cfg);
             if let Some(new_src) = new_src {
-                std::fs::write(&path, new_src)?;
+                std::fs::write(path, new_src)?;
                 outcome.writes += 1;
             }
         }
@@ -61,17 +56,17 @@ impl Check for CommentHygiene {
         let cfg = &ctx.config.thresholds.comment_hygiene;
         let excludes = compile_excludes(&cfg.exclude_paths);
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             if path_excluded(&excludes, &rel) {
                 continue;
             }
-            let Ok(src) = std::fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
-            let Ok(file) = parse_file(&path) else {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
             scan_file(cfg, &rel, &src, &file, &mut violations);

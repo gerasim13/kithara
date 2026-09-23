@@ -184,36 +184,48 @@ mod tests {
 
     #[kithara::test(wasm, flash(false))]
     async fn abort_stops_the_task_and_the_join_reports_cancelled() {
-        let counter = Rc::new(Cell::new(0u32));
-        let ticks = Rc::clone(&counter);
+        for runtime in [None, Some(Handle)] {
+            let counter = Rc::new(Cell::new(0u32));
+            let ticks = Rc::clone(&counter);
 
-        let handle = spawn(async move {
-            loop {
+            let future = async move {
+                loop {
+                    sleep(TICK).await;
+                    ticks.set(ticks.get() + 1);
+                }
+            };
+            let handle = match runtime {
+                Some(runtime) => spawn_on(&runtime, future),
+                None => spawn(future),
+            };
+
+            while counter.get() == 0 {
                 sleep(TICK).await;
-                ticks.set(ticks.get() + 1);
             }
-        });
 
-        while counter.get() == 0 {
-            sleep(TICK).await;
+            handle.abort();
+            let stopped_at = counter.get();
+            sleep(TICK * 4).await;
+
+            assert_eq!(counter.get(), stopped_at);
+            let err = handle.await.expect_err("aborted task joins with an error");
+            assert!(err.is_cancelled());
         }
-
-        handle.abort();
-        let stopped_at = counter.get();
-        sleep(TICK * 4).await;
-
-        assert_eq!(counter.get(), stopped_at);
-        let err = handle.await.expect_err("aborted task joins with an error");
-        assert!(err.is_cancelled());
     }
 
     #[kithara::test(wasm, flash(false))]
     async fn abort_after_completion_still_yields_the_value() {
-        let handle = spawn(async { 7u32 });
+        for runtime in [None, Some(Handle)] {
+            let future = async { 7u32 };
+            let handle = match runtime {
+                Some(runtime) => spawn_on(&runtime, future),
+                None => spawn(future),
+            };
 
-        sleep(TICK * 4).await;
-        handle.abort();
+            sleep(TICK * 4).await;
+            handle.abort();
 
-        assert_eq!(handle.await.expect("finished task yields its value"), 7);
+            assert_eq!(handle.await.expect("finished task yields its value"), 7);
+        }
     }
 }

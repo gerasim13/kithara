@@ -26,7 +26,7 @@ use crate::{
         fix::{FixOutcome, SourceRewriter},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
+        walker::relative_to,
     },
     idioms::config::{DerivableSeverity, QualifiedDerefRemap},
 };
@@ -45,14 +45,14 @@ impl Check for DerivableGetter {
             crate::arch::redundant_accessor_keys(ctx.metadata, ctx.workspace_root, ctx.scope)?;
         let mut outcome = FixOutcome::default();
         let mut manifests = BTreeSet::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = fs::read_to_string(&path) else {
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let Ok(file) = syn::parse_file(&src) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             let analysis = analyze(
@@ -84,9 +84,9 @@ impl Check for DerivableGetter {
                 rewriter.replace(edit.range, edit.text);
             }
             let rewritten = rewriter.finish().context("apply derivable getter edits")?;
-            fs::write(&path, rewritten).with_context(|| format!("write {}", path.display()))?;
+            fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
             outcome.writes += 1;
-            if let Some(manifest) = crate_manifest(ctx.workspace_root, &path) {
+            if let Some(manifest) = crate_manifest(ctx.workspace_root, path) {
                 manifests.insert(manifest);
             }
         }
@@ -121,14 +121,14 @@ impl Check for DerivableGetter {
         let redundant =
             crate::arch::redundant_accessor_keys(ctx.metadata, ctx.workspace_root, ctx.scope)?;
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = fs::read_to_string(&path) else {
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let Ok(file) = syn::parse_file(&src) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             let analysis = analyze(

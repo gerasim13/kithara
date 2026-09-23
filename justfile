@@ -45,6 +45,16 @@ export PKG_CONFIG_PATH := ```
     printf '%s' "$keg:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
 ```
 
+# Whether Cargo fetches a git dependency with the system git rather than its
+# own client. The system git is much faster on a large history - `btls-sys`
+# carries `boringssl`, measured at 25.6 minutes on the Apple host (GitLab job
+# 9811155) - but it fetches with whatever credentials the machine has, and a
+# Linux container has none: GitHub answered its anonymous request with a
+# challenge and git, having no terminal, failed the job outright. Cargo's own
+# client asks anonymously and never prompts. So the faster path is taken only
+# on the hosts it was measured on and where it works.
+export CARGO_NET_GIT_FETCH_WITH_CLI := if os() == "macos" { "true" } else { "false" }
+
 # sccache refuses incremental compilations, so a wrapper without this is never
 # hit. `check clippy` opts back in on a workstation, where the dependencies are
 # already built and incremental turns 15s into 2.4s, and leaves the shared cache
@@ -72,7 +82,7 @@ help:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; build_target="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$system-$arch-$owner"; fi; fi; mkdir -p "$build_target"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; build_target="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$system-$arch-$owner"; fi; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -93,17 +103,30 @@ _xtask-ready:
     @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
 
 # The one build with no caches of its own. Their variables are normally produced
-# by `CiEnvironment`, inside the binary this build is compiling. Keep both in the
-# bootstrap namespace the host cleaner owns; Cargo's source cache is split by
-# platform because Cargo also installs native tools below the same home. A
-# daemon keeps the cache directory it started with, so an executor-provided
-# socket gets a distinct bootstrap endpoint when the directory changes.
+# by `CiEnvironment`, inside the binary this build is compiling. Its target and
+# compiler cache stay in the bootstrap namespace the host cleaner owns, but its
+# `CARGO_HOME` is the job's own: this build is what fetches the git
+# dependencies, and giving it a home of its own made the lane fetch the same
+# submodules a second time minutes later. `_xtask` names that home, and
+# `CiEnvironment` refuses to disagree with it. A daemon keeps the cache
+# directory it started with, so an executor-provided socket gets a distinct
+# bootstrap endpoint when the directory changes.
 [no-exit-message]
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-$trust-$system-$arch-$owner.sock"; fi; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-$trust-$system-$arch-$owner.sock"; fi; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
+# The pointer to the active generation lives beside the generations it names,
+# inside the Git directory. A CI runner cleans the working tree before every
+# job, which used to remove a pointer kept there while leaving the generations
+# themselves intact: the cached binary was present and unreachable, so every
+# job rebuilt it from source and paid the full dependency fetch to do so.
+#
+# The Git directory is resolved by reading `.git` rather than by running Git,
+# because this transport must stay free of both Cargo and Git - a test asserts
+# it. A linked worktree spells `.git` as a file naming the real directory.
+#
 # A generation path is accepted as absolute or as a drive letter, and the
 # drive letter is read two characters at a time rather than matched against a
 # pattern holding a backslash: the bash the Windows guest runs mangles one
@@ -129,7 +152,13 @@ _xtask-cached MODE *ARGS:
         printf 'error: cached xtask transport is unavailable\n' >&2; \
         exit 1; \
       }; \
-      pointer="$PWD/xtask/.xtask-cache"; \
+      if [ -d "$PWD/.git" ]; then git_dir="$PWD/.git"; \
+      elif [ -f "$PWD/.git" ]; then \
+        git_dir=$(sed -n 's/^gitdir: //p' "$PWD/.git") || unavailable; \
+        [ -n "$git_dir" ] || unavailable; \
+        case "$git_dir" in /*) ;; *) git_dir="$PWD/$git_dir" ;; esac; \
+      else unavailable; fi; \
+      pointer="$git_dir/xtask-cache/active"; \
       [ -f "$pointer" ] && [ ! -L "$pointer" ] && [ -r "$pointer" ] || unavailable; \
       size=$(wc -c < "$pointer") || unavailable; \
       { [ "$size" -ge 1 ] 2>/dev/null && [ "$size" -le 4096 ] 2>/dev/null; } || unavailable; \

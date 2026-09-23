@@ -8,9 +8,8 @@ use super::{Check, Context};
 use crate::{
     common::{
         fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
-        parse::parse_file,
         violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
+        walker::relative_to,
     },
     style::config::StructFieldOrderConfig,
 };
@@ -23,21 +22,21 @@ impl Check for StructFieldOrder {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_field_order;
         let mut outcome = FixOutcome::default();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(src) = std::fs::read_to_string(&path) else {
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let Ok(file) = syn::parse_file(&src) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             let mut rw = SourceRewriter::new(&src);
             fix_items(cfg, &rel, &src, &file.items, &mut rw, &mut outcome.skipped);
             if !rw.is_empty() {
                 let new_src = rw.finish()?;
-                std::fs::write(&path, new_src)?;
+                std::fs::write(path, new_src)?;
                 outcome.writes += 1;
             }
         }
@@ -51,11 +50,11 @@ impl Check for StructFieldOrder {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.struct_field_order;
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);

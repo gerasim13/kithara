@@ -8,12 +8,14 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
+use rayon::prelude::*;
 
 mod checks;
 mod config;
@@ -26,8 +28,9 @@ use crate::common::{
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
     project::ProjectConfig,
     report,
+    scan::Scan,
     scope::Scope,
-    violation::Report,
+    violation::{Report, Violation},
 };
 
 #[derive(Debug, Default, Args)]
@@ -60,6 +63,9 @@ pub struct StyleArgs {
     #[arg(long)]
     pub json: bool,
     /// Re-write baseline.toml from current observations (does not fail on regressions).
+    /// Print each check's wall time to stderr, slowest first.
+    #[arg(long)]
+    pub timings: bool,
     #[arg(long = "update-baseline")]
     pub update_baseline: bool,
 }
@@ -72,10 +78,12 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
     let config = StyleConfig::load(&args.config_dir)?;
     let scope = Scope::new(args.crates.clone(), args.paths.clone());
 
+    let fix_scan = Scan::new(&workspace_root);
     let ctx = Context {
         workspace_root: &workspace_root,
         config: &config,
         scope: &scope,
+        scan: &fix_scan,
     };
     let project = ProjectConfig::load(&workspace_root)?;
 
@@ -97,28 +105,29 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
         run_fix(&registry, &filter, &ctx, args.allow_dirty)?;
     }
 
+    let scan = Scan::new(&workspace_root);
+    let ctx = Context { scan: &scan, ..ctx };
+
+    let selected: Vec<&dyn Check> = registry
+        .iter()
+        .map(Box::as_ref)
+        .filter(|check| filter.as_ref().is_none_or(|ids| ids.contains(check.id())))
+        .collect();
+    let ran: Vec<&'static str> = selected.iter().map(|check| check.id()).collect();
+
+    let outcomes = run_checks(&selected, &ctx, &project, &workspace_root)?;
+
+    if args.timings {
+        let rows: Vec<_> = ran
+            .iter()
+            .copied()
+            .zip(outcomes.iter().map(|(elapsed, _)| *elapsed))
+            .collect();
+        report::print_timings("style", &rows);
+    }
+
     let mut report = Report::default();
-    let mut ran: Vec<&'static str> = Vec::new();
-    for check in &registry {
-        if let Some(filter) = &filter
-            && !filter.contains(check.id())
-        {
-            continue;
-        }
-        ran.push(check.id());
-        let mut violations = check.run(&ctx)?;
-        if check.uses_global_lint_excludes() {
-            let mut check_report = Report::default();
-            check_report.extend(violations);
-            apply_path_excludes(&mut check_report, &project.lint_exclude.paths);
-            apply_cfg_test_exclusion(&mut check_report, &workspace_root);
-            apply_module_excludes(
-                &mut check_report,
-                &project.lint_exclude.modules,
-                &workspace_root,
-            );
-            violations = check_report.violations;
-        }
+    for (_, violations) in outcomes {
         report.extend(violations);
     }
 
@@ -190,6 +199,41 @@ fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
         new = diff.new_violations.len(),
         n = ran.len(),
     );
+}
+
+/// Runs each selected check, returning its wall time and its violations in
+/// registry order.
+///
+/// Eleven of the twelve checks walked the tree themselves, so the namespace
+/// scanned the workspace eleven times on one core. The shared scan does that
+/// once and the checks spread over the machine; `collect` preserves registry
+/// order, so the merged report is the one the sequential loop produced.
+fn run_checks(
+    selected: &[&dyn Check],
+    ctx: &Context<'_>,
+    project: &ProjectConfig,
+    workspace_root: &Path,
+) -> Result<Vec<(Duration, Vec<Violation>)>> {
+    selected
+        .par_iter()
+        .map(|check| {
+            let started = Instant::now();
+            let mut violations = check.run(ctx)?;
+            if check.uses_global_lint_excludes() {
+                let mut check_report = Report::default();
+                check_report.extend(violations);
+                apply_path_excludes(&mut check_report, &project.lint_exclude.paths);
+                apply_cfg_test_exclusion(&mut check_report, workspace_root);
+                apply_module_excludes(
+                    &mut check_report,
+                    &project.lint_exclude.modules,
+                    workspace_root,
+                );
+                violations = check_report.violations;
+            }
+            Ok((started.elapsed(), violations))
+        })
+        .collect()
 }
 
 fn run_fix(

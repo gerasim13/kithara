@@ -23,7 +23,7 @@ use crate::common::{
     fix::SourceRewriter,
     scope::Scope,
     violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+    walker::relative_to,
 };
 
 pub(crate) const ID: &str = "thin_wrapper_economy";
@@ -148,12 +148,12 @@ impl Finding {
 
 fn load_sources(ctx: &Context<'_>) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
-    for path in workspace_rs_files_scoped(ctx.workspace_root, &Scope::default())? {
-        let rel = relative_to(ctx.workspace_root, &path)
+    for path in ctx.scan.rs_files(&Scope::default())?.iter() {
+        let rel = relative_to(ctx.workspace_root, path)
             .to_string_lossy()
             .replace('\\', "/");
         let source =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let syntax =
             syn::parse_file(&source).with_context(|| format!("parse {}", path.display()))?;
         files.push(SourceFile {

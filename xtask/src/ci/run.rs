@@ -228,28 +228,55 @@ fn retire_sccache_server(process: &Process, tools: &ToolsConfig) -> Result<()> {
     )
 }
 
+/// Run the lane's work, then say where its time went.
+///
+/// The summary is printed whether the lane passed or failed: a lane that ran
+/// out of its hour is exactly the one whose breakdown is worth reading.
 fn execute_lane(
     process: &Process,
     tools: &ToolsConfig,
     uses_sccache: bool,
+    lane: &str,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    if uses_sccache {
-        retire_sccache_server(process, tools)?;
-        process.run(
-            tools.program("sccache"),
-            &["--start-server"],
-            "start the compiler cache",
-        )?;
-    }
+    journalled(process, lane, || {
+        if uses_sccache {
+            retire_sccache_server(process, tools)?;
+            process.run(
+                tools.program("sccache"),
+                &["--start-server"],
+                "start the compiler cache",
+            )?;
+        }
+        let result = dispatch();
+        if uses_sccache {
+            process.best_effort(
+                tools.program("sccache"),
+                &["--show-stats"],
+                "sccache statistics",
+            );
+        }
+        result
+    })
+}
+
+/// Run a lane's work with the evidence of its caches around it: where this
+/// xtask itself came from, before anything else is asked, and what every step
+/// and every cache layer cost, after the last one has answered.
+///
+/// Both entry points a job can take need this. `ci run` prepares the
+/// environment itself; `ci lane` is handed one by the executor and dispatches
+/// the lane directly, and a journal reported from only one of them describes
+/// whichever half of the fleet happens to use it.
+pub(crate) fn journalled(
+    process: &Process,
+    lane: &str,
+    dispatch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let (event, detail) = crate::self_cache::provenance();
+    process.note_cache("xtask self-cache", event, detail);
     let result = dispatch();
-    if uses_sccache {
-        process.best_effort(
-            tools.program("sccache"),
-            &["--show-stats"],
-            "sccache statistics",
-        );
-    }
+    process.report_journal(lane);
     result
 }
 
@@ -321,30 +348,36 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    let outcome = execute_lane(&process, &ctx.config.tools, uses_sccache, || match lane {
-        Lane::ReleaseXcframework => {
-            super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
-        }
-        Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
-        Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
-        Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-        Lane::Verdict => verdict::lane(
-            &ctx.root,
-            environment.shared_root(),
-            args.kind,
-            &ext.ci.verdict.id_aliases,
-        ),
-        ref lane => command_lane(
-            lane,
-            args.kind,
-            &process,
-            &ci_config,
-            &ctx.config.tools,
-            &swiftpm_cache,
-            &ext.ci.lanes,
-        ),
-    });
+    let outcome = execute_lane(
+        &process,
+        &ctx.config.tools,
+        uses_sccache,
+        &args.lane,
+        || match lane {
+            Lane::ReleaseXcframework => {
+                super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
+            }
+            Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
+            Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
+            Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
+            Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
+            Lane::Verdict => verdict::lane(
+                &ctx.root,
+                environment.shared_root(),
+                args.kind,
+                &ext.ci.verdict.id_aliases,
+            ),
+            ref lane => command_lane(
+                lane,
+                args.kind,
+                &process,
+                &ci_config,
+                &ctx.config.tools,
+                &swiftpm_cache,
+                &ext.ci.lanes,
+            ),
+        },
+    );
     let settled = environment.settle_lane_build(outcome.is_ok());
     outcome.and(settled)
 }
@@ -852,12 +885,18 @@ mod tests {
             }
             let process = Process::new(directory.path(), vars);
 
-            let outcome = execute_lane(&process, &ToolsConfig::default(), uses_sccache, || {
-                let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
-                sequence.push_str("lane\n");
-                fs::write(&trace, sequence)?;
-                Ok(())
-            });
+            let outcome = execute_lane(
+                &process,
+                &ToolsConfig::default(),
+                uses_sccache,
+                "recorded",
+                || {
+                    let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
+                    sequence.push_str("lane\n");
+                    fs::write(&trace, sequence)?;
+                    Ok(())
+                },
+            );
 
             let succeeds = !scenario.ends_with("failure");
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");

@@ -248,7 +248,7 @@ impl<'a> ServiceInstaller<'a> {
         let cleanup = launchd(
             "com.zvuk.kithara-ci.cleanup",
             &[
-                &binary, "ci", "host", "--config", &config, "--pins", &pins, "cleanup",
+                &binary, "ci", "host", "mac", "--config", &config, "--pins", &pins, "cleanup",
             ],
             &logs.join("cleanup.log"),
             &path,
@@ -266,7 +266,7 @@ impl<'a> ServiceInstaller<'a> {
         let health = launchd(
             "com.zvuk.kithara-ci.health",
             &[
-                &binary, "ci", "host", "--config", &config, "--pins", &pins, "health",
+                &binary, "ci", "host", "mac", "--config", &config, "--pins", &pins, "health",
             ],
             &logs.join("health.log"),
             &path,
@@ -537,8 +537,41 @@ fn bridge_launchd(binary: &str, config: &str, log: &Path, path: &str, user: &str
 mod tests {
     use std::collections::BTreeMap;
 
+    use clap::Parser;
+
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::{
+        Cli,
+        ci::{config::fixture, process::Recording},
+    };
+
+    #[test]
+    fn periodic_agent_commands_are_accepted_by_the_host_cli() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut config = fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let process = Process::recording(directory.path(), Recording::default());
+        let services = ServiceInstaller::new(&config, &process);
+        fs::create_dir_all(services.agent_root())?;
+        services.install_maintenance_agents()?;
+
+        for name in ["cleanup", "health"] {
+            let path = services
+                .agent_root()
+                .join(format!("com.zvuk.kithara-ci.{name}.plist"));
+            let plist = plist::Value::from_file(path)?;
+            let arguments = plist
+                .as_dictionary()
+                .and_then(|dictionary| dictionary.get("ProgramArguments"))
+                .and_then(plist::Value::as_array)
+                .context("agent command arguments")?
+                .iter()
+                .map(|value| value.as_string().context("string command argument"))
+                .collect::<Result<Vec<_>>>()?;
+            Cli::try_parse_from(arguments)?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn generated_agent_escapes_paths() {

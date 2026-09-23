@@ -6,6 +6,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
+    process::Output,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -676,10 +677,12 @@ impl<'a> HostStorage<'a> {
         }
         self.process
             .command("/usr/sbin/lsof")
+            .arg("-t")
             .arg("+D")
             .arg(path)
             .output()
-            .is_ok_and(|output| output.status.success())
+            .as_ref()
+            .is_ok_and(reports_open_files)
     }
 
     fn lease_directory_active(&self, leases: &Path) -> bool {
@@ -1198,6 +1201,12 @@ fn unix_time() -> Result<u64> {
         .as_secs())
 }
 
+/// `lsof -t` can report owners and still exit with a search error. Those PIDs
+/// keep the directory live regardless of the exit status.
+fn reports_open_files(output: &Output) -> bool {
+    !output.stdout.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
@@ -1223,6 +1232,23 @@ mod tests {
     mod free {
         pub(super) const NORMAL: u64 = 100;
         pub(super) const AGGRESSIVE: u64 = 20;
+    }
+
+    #[test]
+    fn reported_open_files_survive_lsof_search_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let lsof = install_double(directory.path(), "lsof");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        for (stdout, active) in [("86343\n", true), ("", false)] {
+            let output = process
+                .command(&lsof)
+                .env("KITHARA_TEST_RULES", "*:*:*=1")
+                .env("KITHARA_TEST_STDOUT", stdout)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(reports_open_files(&output), active);
+        }
     }
 
     #[test]

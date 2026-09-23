@@ -2202,6 +2202,13 @@ timeout_minutes = 90
 # GitLab already runs its own equivalents of these six under other names; the
 # GitHub fleet's own gate has no such lane yet, so each is reachable only by
 # name until a kind schedules it.
+# This lane records the dependency source layer every other lane restores. It
+# is the right one: a Linux runner is handed `KITHARA_CACHE_TRUST` and the
+# matching cache credentials together, so on the default branch its scope and
+# its keys agree. A Mac host carries one credential set for every lane it runs,
+# which is why publishing from `apple-lint` wrote the trusted bucket with
+# review keys and was refused on every run. Sources are platform-independent,
+# so one object serves both fleets.
 [ext.ci.lanes.linux-lint]
 cache_group = "linux"
 label = "Linux"
@@ -2209,6 +2216,7 @@ os = "linux"
 fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
+publishes_sources = true
 steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
 role = "gate"
 kinds_github = ["main", "branch"]

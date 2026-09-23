@@ -6,10 +6,7 @@ use syn::{Attribute, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
-    common::{
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
+    common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
 
@@ -28,9 +25,9 @@ impl Check for DerivablePatch {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let source = fs::read_to_string(&path)?;
-            let relative = relative_to(ctx.workspace_root, &path).to_string_lossy();
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let source = fs::read_to_string(path)?;
+            let relative = relative_to(ctx.workspace_root, path).to_string_lossy();
             for line in check_source(&source) {
                 let key = format!("{relative}:{line}:0");
                 let message = "verbose humantime patch attribute: use #[patch(humantime)]";

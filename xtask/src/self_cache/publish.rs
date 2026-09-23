@@ -151,8 +151,8 @@ fn reserve(cache: &Path, stamp: &str) -> Result<(PathBuf, PathBuf, String)> {
 }
 
 fn activate(root: &Path, generation: &Path, suffix: &str) -> Result<()> {
-    let locator = layout::locator(root);
-    let temporary = locator.with_file_name(format!(".xtask-cache.{suffix}"));
+    let locator = layout::locator(root)?;
+    let temporary = locator.with_file_name(format!("active.{suffix}"));
     let body = format!("{}\n", shell_readable(generation));
     let result = (|| -> Result<()> {
         write_new(&temporary, body.as_bytes())?;
@@ -266,13 +266,13 @@ fn cleanup_temporaries(cache: &Path, grace: Duration) -> Result<()> {
 }
 
 fn cleanup_locator_temporaries(root: &Path, grace: Duration) -> Result<()> {
-    let directory = root.join("xtask");
+    let directory = layout::cache_dir(root)?;
     for entry in fs::read_dir(&directory)
         .with_context(|| format!("read self-cache locator directory {}", directory.display()))?
     {
         let entry = entry?;
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with(".xtask-cache.") {
+        if !name.to_string_lossy().starts_with("active.") {
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path()).with_context(|| {
@@ -359,7 +359,7 @@ generation_grace_secs = 3600
         fs::write(&old, b"old")?;
         fs::write(&new, b"new")?;
         publish(&root, &old, &manifest)?;
-        let locator = layout::locator(&root);
+        let locator = layout::locator(&root)?;
         let before = fs::read(&locator)?;
         let activation_called = Cell::new(false);
 
@@ -371,6 +371,37 @@ generation_grace_secs = 3600
         assert!(result.is_err());
         assert!(activation_called.get());
         assert_eq!(fs::read(locator)?, before);
+        Ok(())
+    }
+
+    /// A CI runner cleans the working tree before every job.
+    ///
+    /// The generations live in the Git directory, which the clean spares. A
+    /// pointer kept in the working tree did not survive it, so the cached
+    /// binary was present and unreachable and every job rebuilt it - the
+    /// whole dependency fetch included. Here the working tree is emptied the
+    /// way the runner empties it, and the generation must still be found.
+    #[test]
+    fn the_active_generation_survives_a_working_tree_clean() -> Result<()> {
+        let (_temp, root, manifest) = fixture()?;
+        let source = root.join("source");
+        fs::write(&source, b"binary")?;
+        publish(&root, &source, &manifest)?;
+
+        for entry in fs::read_dir(&root)? {
+            let entry = entry?;
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?;
+            } else {
+                fs::remove_file(entry.path())?;
+            }
+        }
+
+        let generation = layout::active(&root)?;
+        assert_eq!(fs::read(generation.binary)?, b"binary");
         Ok(())
     }
 
@@ -394,7 +425,7 @@ generation_grace_secs = 3600
         let (_temp, root, manifest) = fixture()?;
         let source = root.join("source");
         fs::write(&source, b"binary")?;
-        let locator = layout::locator(&root);
+        let locator = layout::locator(&root)?;
 
         let result = publish_with_activation(&root, &source, &manifest, |_, generation, _| {
             fs::write(&locator, format!("{}\n", generation.display()))?;

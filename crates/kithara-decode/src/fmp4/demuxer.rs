@@ -8,7 +8,7 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    codec::{CodecPriming, access_unit_frames},
+    codec::{CodecPriming, access_unit_frames, seek_warmup_access_units},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
@@ -35,6 +35,17 @@ pub(crate) struct Fmp4SegmentDemuxer<S> {
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
     seek_target: Option<SegmentDescriptor>,
+    /// Decode time the landing segment must be advanced to after a seek.
+    ///
+    /// A segment is the smallest unit the layout can address, so a seek lands
+    /// on its first frame however far into it the target sits. Decoding the
+    /// frames in between only to drop them costs a whole segment of codec work
+    /// per seek and publishes nothing while it runs. The frame table parsed
+    /// with the segment already carries each frame's decode time, so the
+    /// cursor starts at the frame covering the target instead — backed off by
+    /// the codec's own declared pre-roll, which is what [`warmup_backoff`]
+    /// subtracts. Cleared by the first segment parsed after the seek.
+    seek_skip_to: Option<Duration>,
     pending: Option<PendingReason>,
     /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
@@ -106,10 +117,10 @@ where
         )?;
         if matches!(status, FillStatus::Ready) {
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
-            cursor.frames = Some(DecodedFrames {
-                frames,
-                next_index: 0,
+            let next_index = self.seek_skip_to.take().map_or(0, |skip| {
+                frame_at_or_before(&frames, skip, self.init.timescale)
             });
+            cursor.frames = Some(DecodedFrames { frames, next_index });
         }
         Ok(status)
     }
@@ -161,6 +172,7 @@ where
             next_segment_index: 0,
             cursor: None,
             seek_target: None,
+            seek_skip_to: None,
             pending: Some(PendingReason::Retry),
         })
     }
@@ -276,6 +288,7 @@ where
         if let Some(duration) = self.track_info.duration
             && desc.decode_time >= duration
         {
+            self.seek_skip_to = None;
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
         let landed_byte = desc.byte_range.start;
@@ -296,6 +309,13 @@ where
             None if segment_index == 0 => PrerollHint::FirstSegment,
             None => PrerollHint::NotNeeded,
         };
+        let skip_to = intra_segment_landing(
+            seek_target,
+            &priming,
+            self.track_info.codec,
+            self.track_info.sample_rate,
+        );
+        self.seek_skip_to = skip_to.filter(|skip| *skip > landed_at);
         self.seek_target = Some(desc);
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
@@ -326,6 +346,35 @@ where
 /// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
 /// from the codec's pre-roll packet count. `None` when no pre-roll is
 /// required (`packets == 0`) or the codec has no fixed access-unit size.
+/// Where inside the landing segment the decode run may start, or `None` when
+/// it must start at the segment's first frame.
+///
+/// Starting at the frame covering the target — rather than replaying the
+/// whole segment to reach it — is only the demuxer's call to make for a codec
+/// that asks for no back-off of its own. A codec that declares
+/// [`CodecPriming`] states its pre-roll in packets and bytes *of the
+/// container*, and `warmup_backoff` already spends it by landing in an
+/// earlier segment; feeding such a codec from an arbitrary frame instead
+/// breaks the contract it declared, and the Apple HE-AACv2 path answers with
+/// audible phase drift. A codec that declares none primes itself, and needs
+/// only the generic run-up of [`seek_warmup_access_units`].
+fn intra_segment_landing(
+    seek_target: Duration,
+    priming: &CodecPriming,
+    codec: AudioCodec,
+    sample_rate: u32,
+) -> Option<Duration> {
+    if priming.packets != 0 || priming.byte_margin != 0 || priming.frames != 0 {
+        return None;
+    }
+    let frames = seek_warmup_access_units(codec).saturating_mul(access_unit_frames(codec));
+    if frames == 0 {
+        return None;
+    }
+    let warmup = Duration::from_secs_f64(f64::from(frames) / f64::from(sample_rate.max(1)));
+    Some(seek_target.saturating_sub(warmup))
+}
+
 fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -> Option<Duration> {
     if priming.packets == 0 {
         return None;
@@ -380,6 +429,21 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
 fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
     Some(last.decode_time.saturating_add(last.duration))
+}
+
+/// Index of the first frame whose decode time covers `skip`.
+///
+/// Frames are in decode order, so the answer is the last frame that starts at
+/// or before `skip`: starting one frame later would drop audio the caller
+/// asked for. A `skip` past the segment's last frame keeps that last frame,
+/// leaving the cursor with something to emit rather than an empty segment.
+fn frame_at_or_before(frames: &[Fmp4Frame], skip: Duration, timescale: u32) -> usize {
+    let started_by_skip =
+        |frame: &Fmp4Frame| ticks_to_duration(frame.decode_time, timescale) <= skip;
+    frames
+        .partition_point(started_by_skip)
+        .saturating_sub(1)
+        .min(frames.len().saturating_sub(1))
 }
 
 fn ticks_to_duration(ticks: u64, timescale: u32) -> Duration {

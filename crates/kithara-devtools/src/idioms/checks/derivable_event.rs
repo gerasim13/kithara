@@ -11,11 +11,8 @@ use syn::{
 
 use super::{Check, Context};
 use crate::common::{
-    exclude::attrs_have_cfg_test,
-    parse::self_ty_name,
-    suppress::Suppressions,
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+    exclude::attrs_have_cfg_test, parse::self_ty_name, suppress::Suppressions,
+    violation::Violation, walker::relative_to,
 };
 
 pub(crate) const ID: &str = "derivable_event";
@@ -40,12 +37,12 @@ impl Check for DerivableEvent {
         let mut declared = BTreeSet::new();
         let mut forwarded = BTreeSet::new();
         let mut out = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let source = fs::read_to_string(&path)?;
+        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+            let source = fs::read_to_string(path)?;
             let Ok(file) = syn::parse_file(&source) else {
                 continue;
             };
-            let relative = relative_to(ctx.workspace_root, &path);
+            let relative = relative_to(ctx.workspace_root, path);
             let suppress = Suppressions::parse(&source);
             let mut census = Census::default();
             census.visit_file(&file);

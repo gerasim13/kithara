@@ -24,6 +24,28 @@ pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
     }
 }
 
+/// Access units a decoder must consume before its output is trustworthy,
+/// for a decode run that starts mid-stream.
+///
+/// A flushed decoder strips its own algorithmic delay from the head of what
+/// it emits — measured at 1685 PCM frames for the fdk-aac adapter, which
+/// `aac_head_strip_exceeds_the_bias_the_timeline_models` pins — and its
+/// transform needs one further access unit of overlap before the window it
+/// reconstructs is the one the encoder wrote. Four access units cover both
+/// with margin on every AAC profile here (4096 frames against a 1685-frame
+/// strip plus 1024 of overlap); MP3's larger access unit needs two.
+///
+/// A seek that lands inside a segment must therefore begin decoding this far
+/// ahead of its target. `0` for codecs without a fixed access-unit size,
+/// which have no such run to shorten.
+pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
+    match codec {
+        AudioCodec::Mp3 => 2,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 4,
+        _ => 0,
+    }
+}
+
 /// Frame-level codec contract paired with a [`crate::demuxer::Demuxer`] in
 /// `ComposedDecoder<D, C, S>`.
 ///
