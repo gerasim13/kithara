@@ -85,7 +85,7 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
     );
     output.push_str("#[cfg_attr(target_arch = \"wasm32\", wasm_bindgen::prelude::wasm_bindgen)]\n");
     writeln!(output, "pub struct Ffi{} {{", registration.owner)?;
-    for field in fields {
+    for field in &fields {
         for line in &field.docs {
             writeln!(output, "    /// {}", ffi_doc_line(line))?;
         }
@@ -99,6 +99,21 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
         writeln!(output, "    pub {}: {wire_type},", field.name)?;
     }
     output.push_str("}\n");
+    if registration.package == "kithara-play" && registration.owner == "LimiterConfig" {
+        output.push_str("\nimpl Default for FfiLimiterConfig {\n    fn default() -> Self {\n        let config = kithara::play::effects::LimiterConfig::default();\n        Self {\n");
+        for field in &fields {
+            writeln!(
+                output,
+                "            {}: config.{}(),",
+                field.name, field.name
+            )?;
+        }
+        output.push_str("        }\n    }\n}\n\nimpl TryFrom<FfiLimiterConfig> for kithara::play::effects::LimiterConfig {\n    type Error = crate::types::FfiError;\n\n    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {\n        Self::builder()\n");
+        for field in &fields {
+            writeln!(output, "            .{}(config.{})", field.name, field.name)?;
+        }
+        output.push_str("            .build()\n            .map_err(|error| crate::types::FfiError::InvalidArgument {\n                reason: error.to_string(),\n            })\n    }\n}\n");
+    }
     Ok(())
 }
 
@@ -225,6 +240,8 @@ mod tests {
         assert!(generated.contains("pub struct FfiLimiterConfig"));
         assert!(generated.contains("pub release_ms: f32"));
         assert!(generated.contains("/// Release in milliseconds."));
+        assert!(generated.contains("release_ms: config.release_ms()"));
+        assert!(generated.contains(".release_ms(config.release_ms)"));
 
         let unsupported = source.replace("ceiling: f32", "ceiling: FilterKind");
         let registered = registrations("crates/kithara-play/src/eq.rs", &unsupported).unwrap();

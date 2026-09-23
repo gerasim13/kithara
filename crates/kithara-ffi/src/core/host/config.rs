@@ -1,32 +1,8 @@
 use std::num::NonZeroU32;
 
-use kithara::{host::HostConfig, play::effects::LimiterConfig};
+use kithara::host::HostConfig;
 
 use crate::{FfiLimiterConfig, types::FfiError};
-
-impl Default for FfiLimiterConfig {
-    fn default() -> Self {
-        let config = LimiterConfig::default();
-        Self {
-            ceiling: config.ceiling(),
-            release_ms: config.release_ms(),
-        }
-    }
-}
-
-impl TryFrom<FfiLimiterConfig> for LimiterConfig {
-    type Error = FfiError;
-
-    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {
-        Self::builder()
-            .ceiling(config.ceiling)
-            .release_ms(config.release_ms)
-            .build()
-            .map_err(|error| FfiError::InvalidArgument {
-                reason: error.to_string(),
-            })
-    }
-}
 
 /// Settings fixed for the lifetime of the process-wide audio host.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,6 +81,7 @@ pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
 
 #[cfg(test)]
 mod tests {
+    use kithara::play::effects::LimiterConfig;
     use kithara_test_utils::kithara;
 
     use super::*;

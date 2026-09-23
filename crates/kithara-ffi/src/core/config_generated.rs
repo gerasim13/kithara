@@ -55,3 +55,27 @@ pub struct FfiLimiterConfig {
     /// Milliseconds the gain takes to recover toward unity.
     pub release_ms: f32,
 }
+
+impl Default for FfiLimiterConfig {
+    fn default() -> Self {
+        let config = kithara::play::effects::LimiterConfig::default();
+        Self {
+            ceiling: config.ceiling(),
+            release_ms: config.release_ms(),
+        }
+    }
+}
+
+impl TryFrom<FfiLimiterConfig> for kithara::play::effects::LimiterConfig {
+    type Error = crate::types::FfiError;
+
+    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {
+        Self::builder()
+            .ceiling(config.ceiling)
+            .release_ms(config.release_ms)
+            .build()
+            .map_err(|error| crate::types::FfiError::InvalidArgument {
+                reason: error.to_string(),
+            })
+    }
+}
