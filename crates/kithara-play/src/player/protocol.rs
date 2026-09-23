@@ -4,8 +4,8 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_sync::{
-    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
-    SyncRejected, SyncStatusSnapshot,
+    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
@@ -116,6 +116,10 @@ where
 
     delegate::delegate! {
         to self.sync {
+            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
+            fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(
                 &mut self,

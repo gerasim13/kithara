@@ -1,4 +1,5 @@
 mod applied;
+mod facts;
 mod group;
 mod member;
 mod operation;
@@ -7,11 +8,12 @@ mod revision;
 mod topology;
 
 pub use applied::SyncApplied;
+pub use facts::{ParentGridUpdate, SessionAxisUpdate};
 pub use group::{SyncError, SyncGroup, SyncStatusSnapshot};
 pub use member::SyncMember;
 pub use operation::{
     AlignmentSource, ReconcileCause, SyncAdmission, SyncCapability, SyncIntent, SyncMemberKind,
-    SyncOperation, TopologyOperation, TransportOperation,
+    SyncMode, SyncOperation, TopologyOperation, TransportOperation,
 };
 pub use rejected::SyncRejected;
 pub use revision::{LoadGeneration, SyncOperationId, TopologyRevision, TopologyStamp};

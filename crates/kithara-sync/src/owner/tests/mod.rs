@@ -8,9 +8,12 @@ use kithara_warp::{
 };
 
 use crate::{
-    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected,
+    SyncStatusSnapshot,
 };
+
+mod modes;
 
 /// Test-only recursive group that delegates to the real owner state.
 ///
@@ -25,12 +28,31 @@ impl TestGroup {
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
     ) -> Self {
-        Self(GroupState::unavailable(id, sample_rate, epoch, member_kind))
+        Self(GroupState::unavailable(
+            id,
+            sample_rate,
+            epoch,
+            member_kind,
+            SyncMode::Off,
+        ))
     }
 
     delegate::delegate! {
         to self.0 {
             fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError>;
+        }
+    }
+}
+
+/// A plain live grid owned by a group as its direct member.
+struct TestGrid(BeatGridSnapshot);
+
+impl BeatGrid for TestGrid {
+    delegate::delegate! {
+        to self.0 {
+            fn id(&self) -> BeatGridId;
+            #[call(clone)]
+            fn snapshot(&self) -> BeatGridSnapshot;
         }
     }
 }
@@ -49,6 +71,10 @@ impl SyncGroup for TestGroup {
 
     delegate::delegate! {
         to self.0 {
+            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
+            fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;

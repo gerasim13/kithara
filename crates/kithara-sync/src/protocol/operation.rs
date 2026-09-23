@@ -1,5 +1,7 @@
 use kithara_signal::{SessionFrame, TransportRevision};
-use kithara_warp::{BeatGridId, MapRegion, PresentationFrontier, WarpMapRevision};
+use kithara_warp::{
+    BeatGridId, BeatGridStamp, BeatsPerMinute, MapRegion, PresentationFrontier, WarpMapRevision,
+};
 
 use crate::{LoadGeneration, SyncGroup, SyncMember, SyncOperationId, TopologyStamp};
 
@@ -62,6 +64,18 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Last source/output boundary consumed by the callback.
         frontier: PresentationFrontier,
     },
+    /// Commits a new tempo on a group that owns its own beat timeline.
+    Tempo {
+        /// Stable group grid receiving the tempo.
+        target: BeatGridId,
+        /// Tempo the group approaches from the tempo already playing.
+        tempo: BeatsPerMinute,
+        /// Session frame at which the approach starts; the beat playing there
+        /// does not move.
+        commit: SessionFrame,
+        /// Time constant of the approach, in seconds; zero steps at `commit`.
+        smoothing: f64,
+    },
 }
 
 impl<G: SyncGroup> SyncOperation<G> {
@@ -72,7 +86,8 @@ impl<G: SyncGroup> SyncOperation<G> {
             Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
-            | Self::Reconcile { target, .. } => *target,
+            | Self::Reconcile { target, .. }
+            | Self::Tempo { target, .. } => *target,
         }
     }
 }
@@ -141,6 +156,20 @@ pub enum SyncIntent {
     Disable,
     /// Snap immediately to the parent group's tempo and phase.
     AlignNow,
+    /// Leave the beat timeline: continue the audible source unsynchronized.
+    Free,
+}
+
+/// Relation between a group's beat timeline and its parent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SyncMode {
+    /// The group claims no musical timeline of its own or of its parent.
+    Off,
+    /// The group owns its tempo and phase; parent tempo does not reach it.
+    LocalSync,
+    /// The group follows the parent's accepted tempo and phase.
+    HostSync,
 }
 
 /// Material change that requires an active warp map to be reconsidered.
@@ -204,6 +233,17 @@ pub enum SyncAdmission {
         warp_map: WarpMapRevision,
         /// Exact output boundary at which the warp map takes effect.
         activation: SessionFrame,
+    },
+    /// The group's mode or beat timeline changed.
+    StateChanged {
+        /// Identity of the admitted operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was admitted.
+        topology: TopologyStamp,
+        /// Mode the group holds after the operation.
+        mode: SyncMode,
+        /// Group grid published by the operation.
+        grid: BeatGridStamp,
     },
     /// The requested operation already matches committed state.
     Unchanged {

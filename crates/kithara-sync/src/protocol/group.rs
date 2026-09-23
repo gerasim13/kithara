@@ -1,12 +1,13 @@
 use kithara_signal::SessionFrame;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
-    WarpMapRevision,
+    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, CoordinateError,
+    MapAxis, MapRegion, WarpMapRevision,
 };
 
 use crate::{
-    SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp,
+    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncCapability,
+    SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncRejected, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -90,6 +91,21 @@ pub enum SyncError {
         from: BeatGridState,
         to: BeatGridState,
     },
+    /// A group owner cannot mint another grid revision.
+    #[error("grid revision space is exhausted for group {group_id}")]
+    GridRevisionExhausted { group_id: BeatGridId },
+    /// An external grid publication reached a group that derives its own grid.
+    #[error("group grid is derived by {mode:?} and cannot be published externally")]
+    GridOwnedByMode { mode: SyncMode },
+    /// A parent fact reached a session root, which owns its axis and tempo.
+    #[error("group {group_id} is a session root and follows no parent")]
+    SessionRoot { group_id: BeatGridId },
+    /// A tempo was addressed to a group that follows its parent's tempo.
+    #[error("group {owner} inherits its tempo from its parent")]
+    TempoInherited { owner: BeatGridId },
+    /// A tempo or phase relation cannot be represented on the session axis.
+    #[error(transparent)]
+    Coordinate(#[from] CoordinateError),
     /// A grid owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
     BeatGridSnapshot(#[from] BeatGridSnapshotError),
@@ -138,11 +154,31 @@ pub enum SyncError {
 
 /// Live owner protocol for a recursive group of beat grids.
 ///
-/// The topology's group-grid stamp must equal `snapshot().stamp()`, and its
-/// group identity must equal `id()`.
+/// Every group is both a parent and a member of its own parent: operations
+/// are routed down through `transact`, the parent's timeline facts arrive
+/// through the `check_*`/`accept_*` pairs, and `status` and `topology`
+/// report upwards. The topology's group-grid stamp must equal
+/// `snapshot().stamp()`, and its group identity must equal `id()`.
 pub trait SyncGroup: BeatGrid {
     /// Concrete synchronization-group type accepted as a direct child.
     type NestedGroup: SyncGroup;
+
+    /// Moves every mode in this subtree onto a new physical session axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when this group or any nested group refuses the
+    /// axis; nothing in the subtree changes then.
+    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+
+    /// Accepts a parent segment: a group in [`SyncMode::HostSync`] adopts it
+    /// as its grid and passes it on, any other mode only records it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when this group or any nested group refuses the
+    /// segment; nothing in the subtree changes then.
+    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
 
     /// Commits an operation as audibly applied and returns the resulting sync state.
     ///
@@ -151,6 +187,22 @@ pub trait SyncGroup: BeatGrid {
     /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
     /// does not match the currently prepared operation.
     fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+
+    /// Checks without mutation that this subtree accepts a new session axis,
+    /// so a parent can refuse it before any of its members changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when this group or any nested group refuses it.
+    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+
+    /// Checks without mutation that this subtree accepts a parent segment,
+    /// so a parent can refuse it before any of its members changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when this group or any nested group refuses it.
+    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
 
     /// Returns the canonical control-plane view of this group's sync state.
     fn status(&self) -> SyncStatusSnapshot;

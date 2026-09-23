@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
-    SyncOperation, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncMember, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
@@ -54,11 +54,43 @@ impl BeatGrid for PlayerSync {
 impl SyncGroup for PlayerSync {
     type NestedGroup = PlayerMember;
 
+    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+        self.owned
+            .as_mut()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.accept_axis(update)
+            })
+    }
+
+    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
+        self.owned
+            .as_mut()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.accept_parent(update)
+            })
+    }
+
     fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
         self.owned
             .as_mut()
             .map_or(Err(SyncError::OwnerUnavailable), |owned| {
                 owned.acknowledge(applied)
+            })
+    }
+
+    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+        self.owned
+            .as_ref()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.check_axis(update)
+            })
+    }
+
+    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError> {
+        self.owned
+            .as_ref()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.check_parent(update)
             })
     }
 
@@ -123,6 +155,10 @@ impl SyncGroup for PlayerMember {
 
     delegate::delegate! {
         to self.sync {
+            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
+            fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+            fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(
                 &mut self,

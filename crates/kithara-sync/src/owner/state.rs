@@ -3,14 +3,18 @@ use std::num::NonZeroU32;
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    MapAxis, SessionAxis,
+    BeatsPerMinute, MapAxis, SessionAxis,
 };
 
-use super::{mutation::materialize_topology, transaction};
+use super::{
+    descent::Descent,
+    mutation::materialize_topology,
+    timeline::{Blocked, Timeline},
+};
 use crate::{
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
-    TopologyRevision, TopologyStamp,
+    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
 };
 
 /// Canonical mutable state for one recursive synchronization group.
@@ -19,105 +23,77 @@ use crate::{
 /// member exclusively; callers interact through transactions or closure-based
 /// access so member references cannot escape the owning lock.
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
-    grid: BeatGridSnapshot,
-    next_operation: Option<SyncOperationId>,
-    unavailable: Option<(SyncOperationId, SyncCapability)>,
-    member_kind: SyncMemberKind,
-    topology_revision: TopologyRevision,
-    members: Vec<SyncMember<G>>,
+    pub(super) grid: BeatGridSnapshot,
+    pub(super) timeline: Timeline,
+    pub(super) parent: Option<ParentGridUpdate>,
+    pub(super) next_operation: Option<SyncOperationId>,
+    pub(super) blocked: Option<Blocked>,
+    pub(super) member_kind: SyncMemberKind,
+    pub(super) topology_revision: TopologyRevision,
+    pub(super) members: Vec<SyncMember<G>>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
-    /// Creates an empty group around an already-published grid.
+    /// Creates an empty group in [`SyncMode::Off`] around an externally
+    /// published grid.
     #[must_use]
     pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind) -> Self {
         Self {
             grid,
             member_kind,
+            timeline: Timeline::Off,
+            parent: None,
             members: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
-            unavailable: None,
+            blocked: None,
         }
     }
 
-    /// Publishes a later immutable grid snapshot for this stable owner.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when the candidate changes identity or axis, moves
-    /// the revision backwards, or violates the group-grid lifecycle.
-    pub fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError> {
-        let given = candidate.stamp();
-        if given.grid_id() != self.grid.id() {
-            return Err(SyncError::GridIdentityMismatch {
-                expected: self.grid.id(),
-                given: given.grid_id(),
-            });
-        }
-        let candidate_state = candidate.state();
-        let candidate_axis = candidate.axis();
-        let current_state = self.grid.state();
-        let expected_axis = self.grid.axis();
-        if given == self.grid.stamp() {
-            return Ok(());
-        }
-        if given.revision() <= self.grid.revision() {
-            return Err(SyncError::StaleGridRevision {
-                given,
-                current: self.grid.stamp(),
-            });
-        }
-        if !matches!(
-            candidate_state,
-            BeatGridState::Live | BeatGridState::Unavailable(_)
-        ) {
-            return Err(SyncError::InvalidGroupGridState {
-                state: candidate_state,
-            });
-        }
-        let axis_is_valid = match (expected_axis, candidate_axis) {
-            (MapAxis::Session(current), MapAxis::Session(next))
-                if is_successor_epoch(current.epoch(), next.epoch())
-                    && matches!(candidate_state, BeatGridState::Unavailable(_)) =>
-            {
-                true
-            }
-            (MapAxis::Session(current), MapAxis::Session(next))
-                if next.epoch() == current.epoch() =>
-            {
-                match (current_state, candidate_state) {
-                    (BeatGridState::Live, BeatGridState::Live)
-                    | (BeatGridState::Unavailable(_), BeatGridState::Unavailable(_)) => {
-                        current.sample_rate() == next.sample_rate()
-                    }
-                    (BeatGridState::Unavailable(_), BeatGridState::Live) => true,
-                    (BeatGridState::Live, BeatGridState::Unavailable(_)) => {
-                        return Err(SyncError::InvalidGroupGridTransition {
-                            from: current_state,
-                            to: candidate_state,
-                        });
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        if !axis_is_valid {
-            return Err(SyncError::GridAxisChanged {
-                expected: expected_axis,
-                given: candidate_axis,
-            });
-        }
-        self.grid = candidate;
-        Ok(())
+    /// Returns the relation between this group's timeline and its parent.
+    #[must_use]
+    pub const fn mode(&self) -> SyncMode {
+        self.timeline.mode()
     }
 
-    /// Publishes a later unavailable session-axis snapshot.
+    /// Returns the tempo this group's own or inherited timeline approaches.
+    ///
+    /// A group in [`SyncMode::Off`] claims no tempo, and neither does a group
+    /// whose timeline has no geometry yet.
+    #[must_use]
+    pub fn tempo(&self) -> Option<BeatsPerMinute> {
+        self.timeline.tempo(self.parent.as_ref())
+    }
+
+    /// Publishes the session trajectory of a group in [`SyncMode::Off`] from
+    /// its external timeline owner, and passes it on to every direct child
+    /// group as its parent segment.
     ///
     /// # Errors
     ///
-    /// Forwards validation failures from [`Self::publish_grid`].
+    /// Returns [`SyncError`] when the group derives its own grid, when the
+    /// segment does not succeed the current grid, or when any child group
+    /// refuses it; nothing changes then.
+    pub fn publish_session(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
+        let stamp = update.parent();
+        let candidate = BeatGridSnapshot::session(
+            stamp.grid_id(),
+            stamp.revision(),
+            update.epoch(),
+            update.anchor(),
+            update.meter(),
+        );
+        self.publish(candidate, Some(Descent::Parent(update)))
+    }
+
+    /// Publishes a later unavailable session-axis snapshot, moving every
+    /// direct child group onto the axis when it changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when the group derives its own grid, when the
+    /// snapshot does not succeed the current grid, or when any child group
+    /// refuses the axis; nothing changes then.
     pub fn publish_unavailable_grid(
         &mut self,
         stamp: BeatGridStamp,
@@ -131,6 +107,35 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ))
     }
 
+    /// Publishes a later immutable grid snapshot from the external timeline
+    /// owner of a group in [`SyncMode::Off`].
+    pub(super) fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError> {
+        let descent = match candidate.axis() {
+            MapAxis::Session(axis) if candidate.axis() != self.grid.axis() => {
+                Some(Descent::Axis(SessionAxisUpdate::new(axis)))
+            }
+            _ => None,
+        };
+        self.publish(candidate, descent)
+    }
+
+    fn publish(
+        &mut self,
+        candidate: BeatGridSnapshot,
+        descent: Option<Descent>,
+    ) -> Result<(), SyncError> {
+        if !matches!(self.timeline, Timeline::Off) {
+            return Err(SyncError::GridOwnedByMode { mode: self.mode() });
+        }
+        if candidate.stamp() == self.grid.stamp() {
+            return Ok(());
+        }
+        validate_successor(&self.grid, &candidate, Withdrawal::Refused)?;
+        self.check_descent(descent)?;
+        self.grid = candidate;
+        self.descend(descent)
+    }
+
     /// Creates an empty group whose session-axis grid is not available yet.
     #[must_use]
     pub fn unavailable(
@@ -138,15 +143,18 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
+        mode: SyncMode,
     ) -> Self {
-        Self::new(
+        let mut group = Self::new(
             BeatGridSnapshot::unavailable(
                 id,
                 BeatGridRevision::first(),
                 MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
             ),
             member_kind,
-        )
+        );
+        group.timeline = Timeline::without_geometry(mode);
+        group
     }
 
     /// Creates a group that owns `member` from birth, with a session-axis
@@ -165,7 +173,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         member: SyncMember<G>,
     ) -> Self {
         let member_kind = member.kind();
-        let mut group = Self::unavailable(id, sample_rate, epoch, member_kind);
+        let mut group = Self::unavailable(id, sample_rate, epoch, member_kind, SyncMode::Off);
         group.members.push(member);
         group
     }
@@ -183,6 +191,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         })?;
         Some(dispatch(group))
     }
+
+    pub(super) fn next_revision(&self) -> Result<BeatGridRevision, SyncError> {
+        self.grid
+            .revision()
+            .checked_next()
+            .ok_or_else(|| SyncError::GridRevisionExhausted {
+                group_id: self.grid.id(),
+            })
+    }
+
+    pub(super) fn topology_stamp(&self) -> TopologyStamp {
+        TopologyStamp::new(self.grid.id(), self.topology_revision)
+    }
 }
 
 impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
@@ -198,15 +219,49 @@ impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
 impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     type NestedGroup = G;
 
+    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+        let staged = self.stage_axis(update)?;
+        self.commit_staged(staged)
+    }
+
+    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
+        let staged = self.stage_parent(update)?;
+        self.commit_staged(staged)
+    }
+
     fn acknowledge(&mut self, _applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
         Err(SyncError::NoPreparedOperation)
     }
 
+    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+        self.check_staged(self.stage_axis(update)?.as_ref())
+    }
+
+    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError> {
+        self.check_staged(self.stage_parent(update)?.as_ref())
+    }
+
     fn status(&self) -> SyncStatusSnapshot {
-        transaction::status(
-            TopologyStamp::new(self.grid.id(), self.topology_revision),
-            self.unavailable,
-        )
+        let topology = self.topology_stamp();
+        match self.blocked {
+            None => SyncStatusSnapshot::Off { topology },
+            Some(Blocked::Waiting {
+                operation,
+                required,
+            }) => SyncStatusSnapshot::WaitingForGrid {
+                operation,
+                topology,
+                required,
+            },
+            Some(Blocked::Unavailable {
+                operation,
+                capability,
+            }) => SyncStatusSnapshot::Unavailable {
+                operation,
+                topology,
+                capability,
+            },
+        }
     }
 
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
@@ -214,16 +269,87 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     }
 
     fn transact(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>> {
-        transaction::transact(
-            &self.grid,
-            &mut self.topology_revision,
-            &mut self.members,
-            &mut self.next_operation,
-            &mut self.unavailable,
-            self.member_kind,
-            operation,
-        )
+        self.route(operation)
     }
+}
+
+/// Whether a same-epoch successor may drop a live grid's geometry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Withdrawal {
+    /// A mode transition leaves the beat timeline it followed.
+    Allowed,
+    /// A publication on the same axis; only a new epoch drops geometry.
+    Refused,
+}
+
+/// Validates `candidate` as the next revision of the group grid `current`.
+pub(super) fn validate_successor(
+    current: &BeatGridSnapshot,
+    candidate: &BeatGridSnapshot,
+    withdrawal: Withdrawal,
+) -> Result<(), SyncError> {
+    let given = candidate.stamp();
+    if given.grid_id() != current.id() {
+        return Err(SyncError::GridIdentityMismatch {
+            expected: current.id(),
+            given: given.grid_id(),
+        });
+    }
+    let candidate_state = candidate.state();
+    let candidate_axis = candidate.axis();
+    let current_state = current.state();
+    let expected_axis = current.axis();
+    if given.revision() <= current.revision() {
+        return Err(SyncError::StaleGridRevision {
+            given,
+            current: current.stamp(),
+        });
+    }
+    if !matches!(
+        candidate_state,
+        BeatGridState::Live | BeatGridState::Unavailable(_)
+    ) {
+        return Err(SyncError::InvalidGroupGridState {
+            state: candidate_state,
+        });
+    }
+    let axis_is_valid = match (expected_axis, candidate_axis) {
+        (MapAxis::Session(current), MapAxis::Session(next))
+            if is_successor_epoch(current.epoch(), next.epoch())
+                && matches!(candidate_state, BeatGridState::Unavailable(_)) =>
+        {
+            true
+        }
+        (MapAxis::Session(current), MapAxis::Session(next)) if next.epoch() == current.epoch() => {
+            match (current_state, candidate_state) {
+                (BeatGridState::Live, BeatGridState::Live)
+                | (BeatGridState::Unavailable(_), BeatGridState::Unavailable(_)) => {
+                    current.sample_rate() == next.sample_rate()
+                }
+                (BeatGridState::Unavailable(_), BeatGridState::Live) => true,
+                (BeatGridState::Live, BeatGridState::Unavailable(_))
+                    if withdrawal == Withdrawal::Allowed =>
+                {
+                    current.sample_rate() == next.sample_rate()
+                }
+                (BeatGridState::Live, BeatGridState::Unavailable(_)) => {
+                    return Err(SyncError::InvalidGroupGridTransition {
+                        from: current_state,
+                        to: candidate_state,
+                    });
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
+    if !axis_is_valid {
+        return Err(SyncError::GridAxisChanged {
+            expected: expected_axis,
+            given: candidate_axis,
+        });
+    }
+    Ok(())
 }
 
 fn is_successor_epoch(current: SessionEpoch, next: SessionEpoch) -> bool {
