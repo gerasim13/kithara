@@ -24,8 +24,11 @@ use crate::{
 /// The first session frame no caller can use.
 const OPEN_END: i64 = i64::MAX;
 
+/// Beats every `beat_frames` from `first_beat_frame` through `covered`, on a
+/// recording `extent` frames long.
 fn asset_segments_from(
-    frames: u64,
+    extent: u64,
+    covered: u64,
     beat_frames: u64,
     first_beat_frame: u64,
     meter: Option<MeterFacts>,
@@ -39,7 +42,7 @@ fn asset_segments_from(
             exact,
         )
     };
-    let segments = (0..(frames - first_beat_frame) / beat_frames)
+    let segments = (0..(covered - first_beat_frame) / beat_frames)
         .map(|beat| {
             MapSegment::new(
                 marker(beat, first_beat_frame + beat * beat_frames),
@@ -50,14 +53,14 @@ fn asset_segments_from(
         })
         .collect();
     SegmentSet::new(
-        MapAxis::Asset(AssetAxis::new(rate(48_000), AssetExtent::Bounded(frames))),
+        MapAxis::Asset(AssetAxis::new(rate(48_000), AssetExtent::Bounded(extent))),
         segments,
     )
     .expect("fixture segment set is contiguous")
 }
 
 fn asset_segments(frames: u64, beat_frames: u64, meter: Option<MeterFacts>) -> SegmentSet {
-    asset_segments_from(frames, beat_frames, 0, meter)
+    asset_segments_from(frames, frames, beat_frames, 0, meter)
 }
 
 fn complete(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
@@ -190,7 +193,10 @@ fn preparation_before_the_first_grid_beat_cues_that_first_beat() {
     let track = BeatGridId::allocate().expect("grid id");
     attach_grid(
         &mut group,
-        complete(track, asset_segments_from(480_000, 30_000, 30_000, None)),
+        complete(
+            track,
+            asset_segments_from(480_000, 480_000, 30_000, 30_000, None),
+        ),
     );
 
     let admission = prepare(&mut group, track, cue(6_000), 6_000);
@@ -546,4 +552,130 @@ fn a_member_absent_from_the_group_is_not_prepared() {
 
     assert!(prepare_in(&mut group, stranger, cue(0), window(0, OPEN_END)).is_err());
     assert!(group.pending.is_empty());
+}
+
+fn building(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
+    BeatGridSnapshot::segments(
+        id,
+        BeatGridRevision::first(),
+        BeatGridState::Building,
+        segments,
+    )
+    .expect("a building grid is valid")
+}
+
+fn replace_grid(group: &mut Group, grid: BeatGridSnapshot) {
+    let base = group.topology().expect("topology").stamp();
+    let _ = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Replace {
+                member: grid.id(),
+                replacement: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(TestGrid(grid)),
+                },
+            }]),
+        })
+        .expect("a deck replaces its track grid");
+}
+
+#[kithara::test]
+fn a_window_too_short_for_a_downbeat_is_refused() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+    let next = group.next_operation;
+
+    let refused = prepare_in(&mut group, track, cue(0), window(194_000, 200_000));
+
+    assert_eq!(
+        refused,
+        Err(SyncError::NoAdmissibleBoundary {
+            member_id: track,
+            first: SessionFrame::new(288_000),
+            end: SessionFrame::new(200_000),
+        })
+    );
+    assert!(group.pending.is_empty());
+    assert_eq!(group.next_operation, next);
+}
+
+#[kithara::test]
+fn a_building_grid_that_proves_its_bar_is_prepared() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(
+        &mut group,
+        building(
+            track,
+            asset_segments(480_000, 24_000, observed(four_four())),
+        ),
+    );
+
+    let admission = prepare(&mut group, track, cue(0), 0);
+
+    assert_eq!(source_and_activation(&admission), (0, SessionFrame::new(0)));
+}
+
+#[kithara::test]
+fn a_building_grid_that_cannot_prove_its_bar_waits_for_it() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(
+        &mut group,
+        building(track, asset_segments(480_000, 24_000, None)),
+    );
+
+    let admission = prepare(&mut group, track, cue(0), 0);
+
+    assert!(
+        matches!(admission, SyncAdmission::Deferred { .. }),
+        "{admission:?}"
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::WaitingForGrid { .. }
+    ));
+}
+
+#[kithara::test]
+fn a_building_track_grid_defers_until_it_covers_the_entry() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let meter = observed(four_four());
+    attach_grid(
+        &mut group,
+        building(
+            track,
+            asset_segments_from(480_000, 192_000, 24_000, 0, meter),
+        ),
+    );
+
+    let covered = prepare(&mut group, track, cue(48_000), 0);
+    assert_eq!(
+        source_and_activation(&covered),
+        (96_000, SessionFrame::new(0))
+    );
+    let uncovered = prepare(&mut group, track, cue(200_000), 0);
+    assert!(
+        matches!(uncovered, SyncAdmission::Deferred { .. }),
+        "{uncovered:?}"
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::WaitingForGrid { .. }
+    ));
+
+    replace_grid(&mut group, four_four_grid(track, 480_000, 24_000));
+    let complete = prepare(&mut group, track, cue(200_000), 0);
+
+    assert_eq!(
+        source_and_activation(&complete),
+        (288_000, SessionFrame::new(0))
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Prepared { .. }
+    ));
 }
