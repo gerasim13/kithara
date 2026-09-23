@@ -144,12 +144,17 @@ ENV KITHARA_RTSAN_LIB_DIR=/opt/rtsan
 # not the component is installed, so without this the health stage does not
 # report a missing tool — it reports `rust-analyzer scip … exited with code 1`.
 #
+# The nightly toolchain carries `llvm-tools-preview` as well: the lanes that
+# run under it resolve `llvm-nm` from the active sysroot, and the Android
+# export tests read the staged libraries' symbols with it.
+#
 # The lockbud toolchain is a fourth one and costs 1.3 GB, most of it `rustc-dev`.
 # A driver cannot borrow another toolchain's compiler internals, so a deadlock
 # verdict is what that gigabyte buys.
 RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
+      --component llvm-tools-preview \
       --component miri \
       --component rust-src \
       --component rustfmt \
