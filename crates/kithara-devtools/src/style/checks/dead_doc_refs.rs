@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeSet, HashSet},
-    fs,
     path::{Component, Path, PathBuf},
 };
 
@@ -10,10 +9,7 @@ use glob::Pattern;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{
-        compile_globs, matches_any, relative_to, workspace_text_files_scoped,
-        workspace_tracked_files,
-    },
+    walker::{compile_globs, matches_any, relative_to, workspace_tracked_files},
 };
 
 pub(crate) const ID: &str = "dead_doc_refs";
@@ -31,14 +27,14 @@ impl Check for DeadDocRefs {
         let allow_targets = compile_globs(&cfg.allow_targets);
         let tracked_docs = tracked_doc_targets(ctx.workspace_root)?;
         let mut violations = Vec::new();
-        for path in workspace_text_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.text_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             if path_excluded(&excludes, &rel) {
                 continue;
             }
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let refs = scan_content(&rel, &src, |target| tracked_docs.contains(target));

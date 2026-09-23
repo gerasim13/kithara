@@ -68,7 +68,12 @@ pub trait ElasticEngine: Send + 'static {
     ) -> Result<(), ElasticError>;
 
     /// Renders exactly `request.output_frames()` interleaved output frames
-    /// from exactly `request.source_frames()` interleaved source frames.
+    /// while admitting exactly `request.source_frames()` interleaved source frames.
+    /// `request.output_source_frames()` describes the source advance of the audible
+    /// interval. A projected caller may admit future source for a delayed pipeline
+    /// while naming the current audible advance separately. Cue-anchored engines
+    /// schedule that audible span; input-driven pipelines retain their native delay.
+    /// This does not change buffer lengths or add an independent rate control.
     /// Across this and any immediately adjacent calls, a changed ratio must
     /// affect emitted audio within `capabilities().latency().output_frames()`
     /// frames. Engines must not add software-buffering delay beyond their

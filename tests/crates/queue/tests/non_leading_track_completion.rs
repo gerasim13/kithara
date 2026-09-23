@@ -221,7 +221,7 @@ async fn outgoing_eof_does_not_advance_the_promoted_successor() {
     let successor = assets::constant_wav_loud_30s();
     let first = append_loaded(&harness, &queue, &outgoing).await;
     let second = append_loaded(&harness, &queue, &successor).await;
-    let mut events: EventReceiver<TestEvent> = queue.subscribe();
+    let mut events: EventReceiver<QueueEvent> = queue.subscribe();
 
     harness
         .run(&queue, move |q| q.select(first, Transition::None))
@@ -246,7 +246,7 @@ async fn outgoing_eof_does_not_advance_the_promoted_successor() {
 
     let mut advances = Vec::new();
     while let Ok(envelope) = events.try_recv() {
-        if let TestEvent::Queue(QueueEvent::CurrentTrackAdvance { id, reason }) = envelope.event {
+        if let QueueEvent::CurrentTrackAdvance { id, reason } = envelope.event {
             advances.push((id, reason));
         }
     }

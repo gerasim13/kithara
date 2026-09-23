@@ -255,6 +255,7 @@ mod tests {
             types::SelectPhase,
         },
         test_pools::TestPools,
+        track::{TrackRecord, TrackSource},
     };
 
     fn selected_second(queue: &QueueControl<TestPools>) -> (TrackId, TrackId) {
@@ -358,12 +359,12 @@ mod tests {
     async fn pause_and_none_suppress_natural_eof_progression() {
         for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
             let queue = make_queue();
-            let first = queue
-                .append("https://example.com/first.mp3")
-                .expect("append first");
-            let second = queue
-                .append("https://example.com/second.mp3")
-                .expect("append second");
+            let first = TrackId::allocate();
+            let second = TrackId::allocate();
+            queue.tracks.lock().extend([
+                TrackRecord::new(first, "first".into(), TrackSource::from("first")),
+                TrackRecord::new(second, "second".into(), TrackSource::from("second")),
+            ]);
             *queue.lock_pending_select_mut() = SelectPhase::Idle;
             queue.lock_navigation_mut().select(first, &[first, second]);
             queue.player.play();
@@ -373,7 +374,7 @@ mod tests {
             queue.handle_item_did_play_to_end(&ItemRole::Leading(TrackRef::new(
                 first,
                 SlotId::new(0),
-                Arc::from("https://example.com/first.mp3"),
+                Arc::from("first"),
             )));
 
             assert_eq!(queue.current().map(|entry| entry.id), Some(first));

@@ -206,6 +206,59 @@ record; branch, merge-request and quarantine runs check against a window
 unioning the last five recorded runs, so an intermittent failure is not read as
 a regression.
 
+## Object cache service
+
+One MinIO stack serves both fleets. It runs on the Linux host as the compose
+project `kithara-ci-cache`, published on `127.0.0.1:19000`; the mac host reads
+the same endpoint. `docker/ci-cache.compose.yml` declares it and
+`docker/ci-cache/linux.env.example` gives the shape of the environment it is
+started with. The environment itself lives on the host, outside the
+repository, because it names volumes and quotas of that machine.
+
+The image carries `xtask`, and `ci cache initialize` builds every bucket
+policy from `ci::cache::provision`. So the copy of this repository the image
+was built from, not the repository itself, decides what the live policy says.
+The deployment copy is `/etc/kithara-ci/cache-compose/source`; refreshing it is
+copying a tree over that path, keeping the one it replaces as
+`source.before-<stamp>` beside it, and rebuilding the image from it.
+
+Which copy a running stack was actually started from is a question to ask the
+stack, not this page:
+
+```
+docker inspect kithara-ci-cache \
+  --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
+```
+
+On 2026-09-23 it answered `/mnt/sdb1/kithara-ci/worktrees/pr362-proof-44320e421`
+- a checkout a pull request had left behind, two weeks stale - so refreshing the
+deployment copy had been changing nothing the server ran. The stack was
+recreated from the deployment copy with its image rebuilt, and the environment
+it is started with now lives beside it as `linux.env`.
+
+A policy added in the repository therefore does not reach the server by being
+merged. `source-snapshots/` was added to the non-trusted statement on
+2026-09-22 while the host still carried its copy from 2026-09-09: every branch
+scope was refused the listing of the dependency source layer, and every branch
+job fetched its dependencies from the public internet instead. The layer was
+there the whole time. The refusal named the bucket with an empty key, which is
+what a `ListBucket` denial always looks like - so it read as a broken client
+rather than a policy that had never been updated.
+
+Quotas are per scope and applied at initialize. Changing one afterwards is
+`mc quota set` against the live bucket; editing the environment file changes
+only what the next initialize would apply.
+
+The two drift, and the drift is the danger: the live buckets had been raised by
+hand to 200 GiB trusted and 800 GiB review while the environment the stack was
+started with still said 50, and the per-fork scopes existed outside the
+`CACHE_SCOPES` it named - so an initialize run would have flattened every quota
+and known nothing of half the buckets. A scope that needs
+its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
+`CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
+environment on the host states what the buckets actually are, so applying it is
+no longer a way to lose them.
+
 ## Storage policy
 
 Profile thresholds are bytes used against the quota; cleanup takes each as the

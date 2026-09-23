@@ -303,7 +303,7 @@ where
         let audio = Self::from(AudioParts {
             emit,
             ring: RingConsumer::new(prepared.ring),
-            cursor: ChunkCursor::new(&pools, initial_spec).map_err(DecodeError::backend)?,
+            cursor: ChunkCursor::new(initial_spec),
             runtime: AudioRuntime { wake, cancel },
             session: Session {
                 playhead,

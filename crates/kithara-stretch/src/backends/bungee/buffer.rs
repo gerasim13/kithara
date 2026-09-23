@@ -20,12 +20,14 @@ where
         .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
     let sample_rate =
         NonZeroU32::new(config.sample_rate()).ok_or(ElasticError::InvalidSampleRate)?;
-    PlanarBuffer::new(
+    let mut buffer = PlanarBuffer::new(
         config.pools(),
         AudioSpec::new(channels, sample_rate),
         FrameCount::new(frames),
     )
-    .map_err(signal_error)
+    .map_err(signal_error)?;
+    buffer.shrink_to_fit();
+    Ok(buffer)
 }
 
 pub(super) fn signal_error(error: SignalError) -> ElasticError {
@@ -233,7 +235,9 @@ impl InputBuffer {
     pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
         self.audio
             .resize_frames(FrameCount::new(capacity))
-            .map_err(signal_error)
+            .map_err(signal_error)?;
+        self.audio.shrink_to_fit();
+        Ok(())
     }
 
     fn requested_frames(&self) -> Result<usize, ElasticError> {

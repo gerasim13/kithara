@@ -1,9 +1,12 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
+use firewheel_core::{
+    dsp::filter::smoothing_filter::MIN_SETTLE_RATIO,
+    param::smoother::{SmoothedParam, SmootherConfig},
+};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
     ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
 };
@@ -11,13 +14,17 @@ use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
-use super::renderer_target::PreparedTarget;
+use super::{
+    renderer_projection::{ProjectedQuantum, ProjectionState},
+    renderer_target::PreparedTarget,
+};
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    temporal::RateTarget,
+    WarpCursor, WarpPlanSlot, temporal::RateTarget,
 };
 
 #[cfg(test)]
+#[path = "renderer/tests.rs"]
 mod tests;
 
 /// Span the speed smoother measures its settle threshold against: the range
@@ -29,7 +36,9 @@ const SPEED_SMOOTHING_SPAN: f32 = 2.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
+    pub(super) source_start: u64,
     pub(super) activation: Option<PreparedActivation>,
+    pub(super) projection: Option<ProjectedQuantum>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
     pub(super) active_frames: usize,
@@ -55,6 +64,9 @@ impl PreparedActivation {
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
     pub(super) controls: Arc<StretchControls>,
+    pub(super) plan_slot: Arc<WarpPlanSlot>,
+    pub(super) projection: ProjectionState,
+    pub(super) residency: Option<super::renderer_residency::SourceResidency>,
     pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
@@ -72,8 +84,6 @@ pub struct WarpRenderer<S> {
     pub(super) last_input_meta: Option<AudioChunkInfo>,
     /// Exact source coordinate at which the current output scratch begins.
     pub(super) output_start_meta: Option<AudioChunkInfo>,
-    /// Oldest sample in the rolling unity history stored in `pending_source`.
-    pub(super) passthrough_history_head: Option<usize>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<AudioChunkInfo>,
     /// Source whose cumulative output is still below one representable frame.
@@ -103,6 +113,8 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    pub(super) current_keylock: bool,
+    pub(super) backend_transition_pending: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
@@ -140,26 +152,36 @@ where
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
+        let current_keylock = controls.keylock();
         let plan = controls.region_plan();
         let speed = controls.speed();
         let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
-            current_kind,
+            (current_kind, current_keylock),
             config.backends(),
             config.source_block_frames(),
             spec,
             &pools,
             PreparedTarget::default(),
-        );
-        let passthrough_history_head = target.engine.is_some().then_some(0);
+            true,
+        )
+        .unwrap_or_else(|error| {
+            warn!(%current_kind, %error, "time-stretch engine preparation failed");
+            PreparedTarget::default()
+        });
         Self {
             context,
+            plan_slot: Arc::clone(config.plan()),
+            projection: ProjectionState::new(config),
+            residency: target.residency,
             committed: None,
             backends: config.backends(),
             engine: target.engine,
             retired_engine: None,
             current_kind,
+            current_keylock,
+            backend_transition_pending: false,
             controls,
             pools,
             spec,
@@ -171,8 +193,8 @@ where
                     speed,
                     SPEED_SMOOTHING_SPAN,
                     SmootherConfig {
-                        smooth_seconds: smooth_frames / sample_rate,
-                        ..SmootherConfig::default()
+                        smooth_seconds: smooth_frames / sample_rate * -MIN_SETTLE_RATIO.ln(),
+                        settle_ratio: MIN_SETTLE_RATIO,
                     },
                     spec.sample_rate,
                 )
@@ -182,7 +204,6 @@ where
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
-            passthrough_history_head,
             pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
@@ -198,7 +219,9 @@ where
             region: None,
         }
     }
+}
 
+impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Whether the renderer can accept another source chunk without dropping it.
     #[must_use]
     pub fn accepts_input(&self) -> bool {
@@ -228,11 +251,13 @@ where
             source.clear();
         }
         self.pending_meta = None;
-        self.passthrough_history_head = None;
         self.pending_unity_meta = None;
     }
 
     pub(super) fn clear_render_state(&mut self) {
+        if let Some(residency) = self.residency.as_mut() {
+            residency.clear();
+        }
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
@@ -255,19 +280,29 @@ where
     pub(super) fn commit_rate_render(
         &mut self,
         snapshot: Option<RenderSnapshot>,
-        output_frames: usize,
-        request_revision: u64,
+        output: &AudioChunk,
         applied_rate: f32,
         target_rate: f32,
+        projection: Option<ProjectedQuantum>,
     ) {
-        if let Err(error) = self.advance_speed(target_rate, output_frames) {
+        let output_frames = output.frames();
+        let request_revision = output.meta.render_revision;
+        if projection.is_none()
+            && let Err(error) = self.advance_speed(target_rate, output_frames)
+        {
             warn!(%error, "time-stretch speed smoothing failed");
         }
         let Some(snapshot) = snapshot else {
             return;
         };
+        let snapshot = snapshot.bind_output_identity(
+            output
+                .meta
+                .mapping_revision
+                .map(crate::WarpMapRevision::from),
+        );
         let Some((committed, session_frame, source_start, source_end)) =
-            self.next_render_snapshot(snapshot, output_frames)
+            self.next_render_snapshot(snapshot, output_frames, projection)
         else {
             return;
         };
@@ -282,12 +317,25 @@ where
         self.commit(committed, session_frame, source_start);
     }
 
-    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
+    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output: &AudioChunk) {
+        let output_frames = output.frames();
+        let projection = self.projected_tail_cursor(output_frames);
+        if let Some(projection) = projection {
+            self.projection.cursor = Some(projection.end);
+            self.projection.output_frames =
+                self.projection.output_frames.saturating_add(output_frames);
+        }
         let Some(snapshot) = snapshot else {
             return;
         };
+        let snapshot = snapshot.bind_output_identity(
+            output
+                .meta
+                .mapping_revision
+                .map(crate::WarpMapRevision::from),
+        );
         let Some((committed, output_start, source_start, _)) =
-            self.next_render_snapshot(snapshot, output_frames)
+            self.next_render_snapshot(snapshot, output_frames, projection)
         else {
             return;
         };
@@ -364,6 +412,7 @@ where
         &self,
         snapshot: RenderSnapshot,
         output_frames: usize,
+        projection: Option<ProjectedQuantum>,
     ) -> Option<(RenderSnapshot, i64, u64, u64)> {
         if !self.context.is_current(&snapshot) {
             return None;
@@ -381,14 +430,25 @@ where
                 |previous| previous.frontier().source(),
             )
             .max(snapshot.frontier().source());
-        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
+        let committed = if let Some(quantum) = projection {
+            snapshot.mapped(WarpCursor::new(
+                quantum.end.revision(),
+                source_end,
+                quantum.end.output(),
+            ))
+        } else {
+            snapshot.advance(self.committed.as_ref(), source_end, output_frames)?
+        };
         let output_frames = i64::try_from(output_frames).ok()?;
-        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
+        let output_start = match projection {
+            Some(quantum) => i64::from(quantum.output_start),
+            None => i64::from(committed.frontier().output()).checked_sub(output_frames)?,
+        };
         Some((committed, output_start, source_start, source_end))
     }
 
     pub(super) fn pending_frames(&self, channels: usize) -> usize {
-        if self.transition_pending() || self.passthrough_history_head.is_some() {
+        if self.pending_unity_meta.is_some() {
             return 0;
         }
         self.pending_source
@@ -468,10 +528,12 @@ where
     /// Whether a live active-to-unity transition still owns queued samples.
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some()
+        self.pending_unity_meta.is_some() || self.backend_transition_pending
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
+        self.projection.active.is_none()
+            && self.plan.is_none()
+            && (speed - 1.0).abs() <= f32::EPSILON
     }
 }

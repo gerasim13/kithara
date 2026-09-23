@@ -439,7 +439,8 @@
                 : `${Number($('crossfade-slider').value).toFixed(1)}s`;
         };
         $('crossfade-slider').onchange = () => {
-            player.setCrossfadeSeconds(Number($('crossfade-slider').value));
+            const settings = player.crossfadeSettings();
+            player.setCrossfadeSettings(Number($('crossfade-slider').value), settings.curve, settings.depth, settings.position);
         };
 
         // --- Equalizer ---
@@ -498,7 +499,7 @@
         for (const t of seedTracks) addTrack(t.url, t.label);
         renderEq();
         $('volume-value').textContent = `${Math.round(player.volume() * 100)}%`;
-        $('crossfade-value').textContent = `${player.crossfadeSeconds().toFixed(1)}s`;
+        $('crossfade-value').textContent = `${player.crossfadeSettings().duration.toFixed(1)}s`;
         setControlsEnabled(true);
         $('status').textContent = 'Ready';
         log('WASM player initialized', 'info');

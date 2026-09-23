@@ -1,3 +1,5 @@
+#[path = "tests/projection.rs"]
+mod projection;
 use std::num::NonZero;
 
 use kithara_platform::{sync::Arc, time::Duration};
@@ -16,8 +18,13 @@ use crate::{
 
 type WarpRenderer = GenericWarpRenderer<TestPools>;
 
+#[path = "tests/backend.rs"]
+mod backend;
+#[path = "tests/playback.rs"]
 mod playback;
+#[path = "tests/target.rs"]
 mod target;
+#[path = "tests/timeline.rs"]
 mod timeline;
 
 struct Consts;
@@ -87,7 +94,10 @@ fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
     fx.prepare(spec());
-    let output = fx.render(input);
+    let output = fx
+        .render(input)
+        .continue_value()
+        .expect("whole source span");
     fx.prepare(spec());
     output
 }

@@ -38,15 +38,8 @@ mod player_queue_api_regressions;
 mod player_resource_internal;
 mod player_track_internal;
 mod quality_switch_continuity;
-mod rate_response;
 mod resource_internal;
 mod resource_regressions;
 mod rt_click;
 mod rt_metrics;
 mod seamless_queue_advance;
-mod sync_fixture_census;
-mod sync_listening;
-#[cfg(not(target_arch = "wasm32"))]
-mod sync_oracle;
-mod sync_product_matrix;
-mod sync_runtime_oracles;

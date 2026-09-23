@@ -8,12 +8,18 @@ use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevisio
 use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
-use crate::{PresentationFrontier, RenderContext, SessionBeat};
+use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat, WarpMapRevision};
 
 const SEQLOCK_PHASES: u64 = 2;
 
 #[derive(Debug, Default)]
 struct RenderCell {
+    anchor_frame: AtomicI64,
+    anchor_beat: AtomicU64,
+    anchor_tempo: AtomicU64,
+    anchor_target: AtomicU64,
+    anchor_smoothing: AtomicU64,
+    trajectory_present: AtomicU32,
     frontier_output: AtomicI64,
     output_end: AtomicI64,
     output_start: AtomicI64,
@@ -22,6 +28,7 @@ struct RenderCell {
     beat_end: AtomicU64,
     beat_start: AtomicU64,
     frontier_source: AtomicU64,
+    warp_map: AtomicU64,
     session_epoch: AtomicU64,
     transport_revision: AtomicU64,
     version: AtomicU64,
@@ -43,6 +50,12 @@ impl RenderCell {
                 continue;
             }
             let raw = RawSnapshot {
+                anchor_frame: self.anchor_frame.load(Ordering::Relaxed),
+                anchor_beat: self.anchor_beat.load(Ordering::Relaxed),
+                anchor_tempo: self.anchor_tempo.load(Ordering::Relaxed),
+                anchor_target: self.anchor_target.load(Ordering::Relaxed),
+                anchor_smoothing: self.anchor_smoothing.load(Ordering::Relaxed),
+                trajectory_present: self.trajectory_present.load(Ordering::Relaxed) != 0,
                 output_start: self.output_start.load(Ordering::Relaxed),
                 output_end: self.output_end.load(Ordering::Relaxed),
                 sample_rate: self.sample_rate.load(Ordering::Relaxed),
@@ -52,6 +65,7 @@ impl RenderCell {
                 session_epoch: self.session_epoch.load(Ordering::Relaxed),
                 transport_revision: self.transport_revision.load(Ordering::Relaxed),
                 frontier_source: self.frontier_source.load(Ordering::Relaxed),
+                warp_map: self.warp_map.load(Ordering::Relaxed),
                 frontier_output: self.frontier_output.load(Ordering::Relaxed),
             };
             fence(Ordering::Acquire);
@@ -64,6 +78,23 @@ impl RenderCell {
 
     fn publish(&self, context: &RenderContext, frontier: PresentationFrontier) {
         self.write(|cell| {
+            if let Some(anchor) = context.trajectory() {
+                cell.anchor_frame
+                    .store(i64::from(anchor.frame()), Ordering::Relaxed);
+                cell.anchor_beat
+                    .store(f64::from(anchor.beat()).to_bits(), Ordering::Relaxed);
+                cell.anchor_tempo
+                    .store(anchor.beats_per_second().to_bits(), Ordering::Relaxed);
+                cell.anchor_target.store(
+                    anchor.target_beats_per_second().to_bits(),
+                    Ordering::Relaxed,
+                );
+                cell.anchor_smoothing
+                    .store(anchor.smooth_seconds().to_bits(), Ordering::Relaxed);
+                cell.trajectory_present.store(1, Ordering::Relaxed);
+            } else {
+                cell.trajectory_present.store(0, Ordering::Relaxed);
+            }
             let output = context.output().output_frames();
             cell.output_start
                 .store(i64::from(output.start), Ordering::Relaxed);
@@ -87,6 +118,8 @@ impl RenderCell {
                 context.output().transport_revision().map_or(0, u64::from),
                 Ordering::Relaxed,
             );
+            cell.warp_map
+                .store(frontier.warp_map().map_or(0, u64::from), Ordering::Relaxed);
             cell.frontier_source
                 .store(frontier.source(), Ordering::Relaxed);
             cell.frontier_output
@@ -104,6 +137,12 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
+    anchor_frame: i64,
+    anchor_beat: u64,
+    anchor_tempo: u64,
+    anchor_target: u64,
+    anchor_smoothing: u64,
+    trajectory_present: bool,
     beats_present: bool,
     frontier_output: i64,
     output_end: i64,
@@ -112,6 +151,7 @@ struct RawSnapshot {
     beat_end: u64,
     beat_start: u64,
     frontier_source: u64,
+    warp_map: u64,
     session_epoch: u64,
     transport_revision: u64,
 }
@@ -135,9 +175,28 @@ impl RawSnapshot {
             SessionEpoch::new(self.session_epoch),
             transport_revision,
         )?;
-        let context = RenderContext::new(output, session_beats)?;
+        let context = if self.trajectory_present {
+            let frame = SessionFrame::new(self.anchor_frame);
+            let anchor = SessionAnchor::new(
+                frame,
+                SessionBeat::new(f64::from_bits(self.anchor_beat)).ok()?,
+                f64::from_bits(self.anchor_tempo),
+                sample_rate,
+            )
+            .ok()?
+            .retarget(
+                frame,
+                f64::from_bits(self.anchor_target),
+                f64::from_bits(self.anchor_smoothing),
+            )
+            .ok()?;
+            RenderContext::new(output, Some(anchor))?
+        } else {
+            RenderContext::new_linear(output, session_beats)?
+        };
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
+            .maybe_warp_map(NonZeroU64::new(self.warp_map).map(WarpMapRevision::from))
             .output(SessionFrame::new(self.frontier_output))
             .build();
         Some(RenderSnapshot { frontier, context })
@@ -213,6 +272,30 @@ pub struct RenderSnapshot {
 }
 
 impl RenderSnapshot {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
+        self.frontier = self.frontier.with_warp_map(revision);
+        self
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
+        Self {
+            context: self.context,
+            frontier: PresentationFrontier::builder()
+                .source(cursor.source())
+                .output(cursor.output())
+                .warp_map(cursor.revision())
+                .build(),
+        }
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn advance(
         self,
@@ -242,6 +325,7 @@ impl RenderSnapshot {
         let frontier = PresentationFrontier::builder()
             .source(source)
             .output(SessionFrame::new(output))
+            .maybe_warp_map(self.frontier.warp_map())
             .build();
         Some(Self {
             frontier,
@@ -258,7 +342,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::RenderPublisher;
-    use crate::{PresentationFrontier, RenderContext, SessionBeat};
+    use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat};
 
     fn context(epoch: u64, start: i64) -> RenderContext {
         let output = OutputContext::new(
@@ -268,7 +352,7 @@ mod tests {
             Some(TransportRevision::first()),
         )
         .expect("fixture output range is ordered");
-        RenderContext::new(
+        RenderContext::new_linear(
             output,
             Some(
                 SessionBeat::new(1.0).expect("fixture beat is finite")
@@ -290,7 +374,11 @@ mod tests {
         let publisher = RenderPublisher::default();
         let reader = publisher.reader();
         let expected_context = context(3, 1_000);
-        let expected_frontier = frontier(8_000, 1_128);
+        let expected_frontier = PresentationFrontier::builder()
+            .source(8_000)
+            .output(SessionFrame::new(1_128))
+            .warp_map(crate::WarpMapRevision::first())
+            .build();
 
         publisher.publish(&expected_context, expected_frontier);
 
@@ -308,5 +396,49 @@ mod tests {
         publisher.clear();
 
         assert!(reader.load().is_none());
+    }
+    #[kithara::test]
+    fn publication_preserves_the_exact_ramp_and_its_subranges() {
+        let publisher = RenderPublisher::default();
+        let output = context(3, 1_000).output().clone();
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(900),
+            SessionBeat::new(1.0).expect("finite beat"),
+            2.0,
+            output.sample_rate(),
+        )
+        .expect("valid anchor")
+        .retarget(SessionFrame::new(950), 3.0, 0.005)
+        .expect("valid ramp");
+        let expected = RenderContext::new(output, Some(anchor)).expect("valid context");
+        publisher.publish(&expected, frontier(8_000, 1_128));
+        let actual = publisher.reader().load().expect("published snapshot");
+        assert_eq!(actual.context(), &expected);
+        for split in [1, 17, 64, 127] {
+            assert_eq!(
+                actual.context().for_output_range(split..128),
+                expected.for_output_range(split..128)
+            );
+        }
+    }
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn advancing_a_prepared_snapshot_keeps_its_warp_map() {
+        let previous_map = crate::WarpMapRevision::first();
+        let warp_map = crate::WarpMapRevision::from(
+            std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
+        );
+        let previous = super::RenderSnapshot {
+            context: context(3, 1_000),
+            frontier: frontier(7_900, 1_000).with_warp_map(Some(previous_map)),
+        };
+        let advanced = super::RenderSnapshot {
+            context: context(3, 1_000),
+            frontier: frontier(8_000, 1_128).with_warp_map(Some(warp_map)),
+        }
+        .advance(Some(&previous), 8_128, 128)
+        .expect("monotonic prepared frontier advances");
+
+        assert_eq!(advanced.frontier().warp_map(), Some(warp_map));
     }
 }

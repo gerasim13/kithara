@@ -53,7 +53,7 @@ fn classify_token(
     bail!("audit: unknown scope '{tok}' (not a crate name nor a known top-level path)")
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct Scope {
     /// Crate names from `--crate <name>`. Resolved against
     /// `<workspace>/crates/<name>/`.

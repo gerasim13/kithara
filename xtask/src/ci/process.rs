@@ -5,6 +5,7 @@ use std::{
     path::{Path as FsPath, PathBuf},
     process::{Child, Command, Output},
     sync::Mutex,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -45,6 +46,34 @@ enum Mode {
     Record(Mutex<Recording>),
 }
 
+/// How long one step of a lane took, and whether it got there.
+#[derive(Debug)]
+pub(crate) struct Timing {
+    pub(crate) elapsed: Duration,
+    pub(crate) label: String,
+    pub(crate) ok: bool,
+}
+
+/// Something a cache layer did during this job.
+///
+/// A lane's wall time is mostly decided by what the caches carried, and until
+/// now a log said only that a step ran. These entries say which layer acted,
+/// what it did, and about what - so a pipeline run is itself the evidence,
+/// rather than a local test standing in for one.
+#[derive(Debug)]
+pub(crate) struct CacheNote {
+    pub(crate) detail: String,
+    pub(crate) event: &'static str,
+    pub(crate) layer: &'static str,
+}
+
+/// What the job did, in the order it did it.
+#[derive(Debug, Default)]
+pub(crate) struct Journal {
+    caches: Vec<CacheNote>,
+    steps: Vec<Timing>,
+}
+
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct Process {
@@ -55,6 +84,7 @@ pub(crate) struct Process {
     root: PathBuf,
     vars: BTreeMap<OsString, OsString>,
     mode: Mode,
+    journal: Mutex<Journal>,
 }
 
 impl Process {
@@ -63,6 +93,7 @@ impl Process {
             root: root.to_path_buf(),
             vars,
             mode: Mode::Run,
+            journal: Mutex::new(Journal::default()),
         }
     }
 
@@ -74,6 +105,7 @@ impl Process {
             root: root.to_path_buf(),
             vars: BTreeMap::new(),
             mode: Mode::Record(Mutex::new(recording)),
+            journal: Mutex::new(Journal::default()),
         }
     }
 
@@ -150,13 +182,83 @@ impl Process {
             return Ok(());
         }
         info!(step = label, root = %self.root.display(), "starting");
+        let started = Instant::now();
         let status = command
             .status()
             .with_context(|| format!("failed to start {label}"))?;
+        let elapsed = started.elapsed();
+        self.time(label, elapsed, status.success());
+        info!(step = label, seconds = elapsed.as_secs_f64(), "done");
         if !status.success() {
             return Err(ChildFailure::inherited(label.to_owned(), status.code()));
         }
         Ok(())
+    }
+
+    /// Record how long a step took. A step that never ran is not recorded, so
+    /// the sum of these is the time the lane actually spent.
+    fn time(&self, label: &str, elapsed: Duration, ok: bool) {
+        if let Ok(mut journal) = self.journal.lock() {
+            journal.steps.push(Timing {
+                elapsed,
+                label: label.to_owned(),
+                ok,
+            });
+        }
+    }
+
+    /// Record what a cache layer did, for the summary at the end of the job.
+    pub(crate) fn note_cache(&self, layer: &'static str, event: &'static str, detail: String) {
+        info!(cache = layer, event, detail = %detail, "cache");
+        if let Ok(mut journal) = self.journal.lock() {
+            journal.caches.push(CacheNote {
+                detail,
+                event,
+                layer,
+            });
+        }
+    }
+
+    /// Print what the job spent and what its caches carried.
+    ///
+    /// Steps come out slowest first, because the question a CI log is read
+    /// with is where the time went. The cache lines come out in the order the
+    /// layers acted, because that order is the story: what was restored
+    /// before the work, what the work reused, what was written after it.
+    pub(crate) fn report_journal(&self, lane: &str) {
+        let Ok(journal) = self.journal.lock() else {
+            return;
+        };
+        let total: Duration = journal.steps.iter().map(|step| step.elapsed).sum();
+        let mut steps: Vec<&Timing> = journal.steps.iter().collect();
+        steps.sort_by_key(|step| std::cmp::Reverse(step.elapsed));
+        println!(
+            "lane {lane}: {:.1} s across {} step(s)",
+            total.as_secs_f64(),
+            steps.len()
+        );
+        for step in steps {
+            let share = if total.is_zero() {
+                0.0
+            } else {
+                100.0 * step.elapsed.as_secs_f64() / total.as_secs_f64()
+            };
+            println!(
+                "  {:>9.1} s  {:>5.1}%  {}{}",
+                step.elapsed.as_secs_f64(),
+                share,
+                step.label,
+                if step.ok { "" } else { "  (failed)" }
+            );
+        }
+        if journal.caches.is_empty() {
+            println!("lane {lane}: no cache layer reported anything");
+            return;
+        }
+        println!("lane {lane}: cache layers");
+        for note in &journal.caches {
+            println!("  {:<18} {:<12} {}", note.layer, note.event, note.detail);
+        }
     }
 
     pub(crate) fn capture(&self, program: &str, args: &[&str], label: &str) -> Result<String> {

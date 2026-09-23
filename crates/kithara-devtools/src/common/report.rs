@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Write};
+use std::{cmp::Reverse, collections::BTreeMap, fmt::Write};
 
 use super::{
     baseline::RatchetDiff,
@@ -312,4 +312,21 @@ pub fn render_json(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>
 
 fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Wall time per check, slowest first.
+///
+/// The ratchets are the larger half of the lint lane's clock, and without this
+/// the only way to learn which of the namespace's checks owns that time is to
+/// guess. Checks run in parallel, so the sum below exceeds the namespace's
+/// wall clock; it is a ranking of cost, not a stopwatch.
+pub fn print_timings(namespace: &str, rows: &[(&'static str, std::time::Duration)]) {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|row| Reverse(row.1));
+    let total: std::time::Duration = rows.iter().map(|(_, elapsed)| *elapsed).sum();
+    eprintln!("{namespace} timings (sum of check time, not wall clock):");
+    for (id, elapsed) in rows {
+        eprintln!("  {:>8.2}s  {id}", elapsed.as_secs_f64());
+    }
+    eprintln!("  {:>8.2}s  total", total.as_secs_f64());
 }

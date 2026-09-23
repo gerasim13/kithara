@@ -509,6 +509,16 @@ mod tests {
     }
 
     #[kithara::test]
+    fn selection_reflects_only_the_requested_live_attempt() {
+        let tracks = two_tracks();
+        assert!(!tracks.attempt_selected(TrackId(1)));
+        assert!(tracks.begin_attempt(TrackId(1), token(), false).is_some());
+        assert!(tracks.begin_attempt(TrackId(2), token(), true).is_some());
+        assert!(!tracks.attempt_selected(TrackId(1)));
+        assert!(tracks.attempt_selected(TrackId(2)));
+    }
+
+    #[kithara::test]
     fn begin_replaces_cancelled_unwinding_attempt() {
         let tracks = tracks_with(TrackId(1));
         let first_cancel = token();

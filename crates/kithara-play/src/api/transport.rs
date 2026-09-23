@@ -68,7 +68,8 @@ pub struct SessionTransportSnapshot {
     /// Returns the session-grid generation defining the live frame axis.
     #[field(get, copy)]
     session_epoch: SessionEpoch,
-    /// Returns the tempo that produced this processed position.
+    /// Returns the committed tempo target. The session grid reports the
+    /// instantaneous tempo while the committed trajectory approaches it.
     #[field(get, copy)]
     tempo: Tempo,
     /// Returns the monotonic revision of the committed transport configuration.

@@ -7,7 +7,7 @@ use super::{Check, Context};
 use crate::{
     common::{
         violation::Violation,
-        walker::{compile_globs, matches_any_segmented, relative_to, workspace_text_files_scoped},
+        walker::{compile_globs, matches_any_segmented, relative_to},
     },
     style::config::ReadmeShapeConfig,
 };
@@ -32,14 +32,14 @@ impl Check for ReadmeShape {
         let cfg = &ctx.config.thresholds.readme_shape;
         let workspace_license = workspace_license(ctx.workspace_root)?;
         let mut violations = Vec::new();
-        for path in workspace_text_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.text_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             if !selected(cfg, &rel) {
                 continue;
             }
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             let manifest = path.with_file_name("Cargo.toml");

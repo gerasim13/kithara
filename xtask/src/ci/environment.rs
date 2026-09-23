@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
 use serde::{Deserialize, Serialize};
@@ -308,6 +308,7 @@ impl CiEnvironment {
         let sccache =
             PreparedSccache::for_environment(&shared_root, &cache_root, config, cache_group)?;
         let cargo_home = cache_root.join("cargo");
+        refuse_a_divergent_cargo_home_from_env(&cargo_home)?;
         let gradle_home = cache_root.join("gradle");
         let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
         let leases = [cache_lease(&cache_root)?, cache_lease(&fixture_cache)?];
@@ -359,6 +360,20 @@ impl CiEnvironment {
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
+        // Same reasoning as the justfile's: the system git fetches a large
+        // git history far faster, but it fetches with the machine's
+        // credentials, and a Linux container has none for the challenge
+        // GitHub answers its anonymous request with. Cargo's own client asks
+        // anonymously, so it is what the fleet without credentials uses.
+        insert(
+            &mut vars,
+            "CARGO_NET_GIT_FETCH_WITH_CLI",
+            if cfg!(target_os = "macos") {
+                "true"
+            } else {
+                "false"
+            },
+        );
         // Same statement as the GitHub fleet's container: a Linux job links
         // with `lld`. The lane executor is the other way a job reaches this
         // machine, and a linker chosen for only one of them is a measurement
@@ -413,23 +428,7 @@ impl CiEnvironment {
         }
 
         if cfg!(target_os = "macos") {
-            let android_user_home = config.host.host_root.join("toolchains/android-user");
-            insert(&mut vars, "ANDROID_HOME", &config.host.android_home);
-            insert(
-                &mut vars,
-                "ANDROID_NDK_HOME",
-                config
-                    .host
-                    .android_home
-                    .join("ndk")
-                    .join(&config.pins.android_ndk_version),
-            );
-            insert(&mut vars, "ANDROID_USER_HOME", &android_user_home);
-            insert(&mut vars, "ANDROID_AVD_HOME", android_user_home.join("avd"));
-            let java_home = config.host.java_home();
-            if java_home.is_dir() {
-                insert(&mut vars, "JAVA_HOME", &java_home);
-            }
+            insert_android_environment(&mut vars, config);
         }
 
         for lease in &leases {
@@ -1385,5 +1384,123 @@ mod tests {
         .unwrap();
 
         assert_eq!(target, FsPath::new("/work/kithara/target"));
+    }
+}
+
+/// Reads the job's environment and applies the rule below.
+///
+/// # Errors
+///
+/// Returns an error if the environment names a different home.
+/// The Android toolchain a mac host carries. Only that fleet builds for the
+/// device, and the paths are the host profile's rather than this crate's.
+fn insert_android_environment(vars: &mut BTreeMap<OsString, OsString>, config: &CiConfig) {
+    let android_user_home = config.host.host_root.join("toolchains/android-user");
+    insert(vars, "ANDROID_HOME", &config.host.android_home);
+    insert(
+        vars,
+        "ANDROID_NDK_HOME",
+        config
+            .host
+            .android_home
+            .join("ndk")
+            .join(&config.pins.android_ndk_version),
+    );
+    insert(vars, "ANDROID_USER_HOME", &android_user_home);
+    insert(vars, "ANDROID_AVD_HOME", android_user_home.join("avd"));
+    let java_home = config.host.java_home();
+    if java_home.is_dir() {
+        insert(vars, "JAVA_HOME", &java_home);
+    }
+}
+
+fn refuse_a_divergent_cargo_home_from_env(expected: &FsPath) -> Result<()> {
+    let root = env::var_os("KITHARA_CI_CACHE_ROOT").map(PathBuf::from);
+    refuse_a_divergent_cargo_home(
+        expected,
+        env::var_os("CARGO_HOME").as_deref(),
+        root.as_deref(),
+    )
+}
+
+/// Refuses to run when the job already has a different `CARGO_HOME`.
+///
+/// The `justfile` names this home before it builds `xtask`, because that build
+/// is what fetches the git dependencies. When the two disagree the job fetches
+/// the same submodules twice - once to compile the tool, once to run the lane -
+/// and nothing says so. Measured on `apple-lint`: 51 minutes, then the same
+/// `boringssl` submodule again. A disagreement is a defect in the layout, not
+/// something to paper over, so it stops the job with both paths named.
+///
+/// Only a home inside the CI cache root is judged. A developer's own home, or
+/// one a test inherited, is not this layout's business and is left alone.
+///
+/// # Errors
+///
+/// Returns an error if the environment names a different home.
+fn refuse_a_divergent_cargo_home(
+    expected: &FsPath,
+    given: Option<&OsStr>,
+    cache_root: Option<&FsPath>,
+) -> Result<()> {
+    let Some(cache_root) = cache_root else {
+        return Ok(());
+    };
+    let Some(given) = given else {
+        return Ok(());
+    };
+    if !FsPath::new(given).starts_with(cache_root) {
+        return Ok(());
+    }
+    ensure!(
+        FsPath::new(given) == expected,
+        "the job was given CARGO_HOME {} but this lane's is {}; the justfile and \
+         CiEnvironment must name the same home",
+        FsPath::new(given).display(),
+        expected.display()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod cargo_home_tests {
+    use super::*;
+
+    #[test]
+    fn a_home_that_matches_is_accepted() {
+        let expected = FsPath::new("/cache/review/macos-aarch64/cargo");
+        assert!(
+            refuse_a_divergent_cargo_home(
+                expected,
+                Some(OsStr::new("/cache/review/macos-aarch64/cargo")),
+                Some(FsPath::new("/cache"))
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_home_the_bootstrap_invented_is_refused() {
+        let expected = FsPath::new("/cache/review/macos-aarch64/cargo");
+        let error = refuse_a_divergent_cargo_home(
+            expected,
+            Some(OsStr::new("/cache/bootstrap/review/cargo-Darwin-arm64")),
+            Some(FsPath::new("/cache")),
+        )
+        .expect_err("a divergent home must stop the job");
+        assert!(error.to_string().contains("cargo-Darwin-arm64"));
+    }
+
+    #[test]
+    fn a_home_outside_the_cache_root_is_left_alone() {
+        let expected = FsPath::new("/cache/review/macos-aarch64/cargo");
+        assert!(
+            refuse_a_divergent_cargo_home(
+                expected,
+                Some(OsStr::new("/home/dev/.cargo")),
+                Some(FsPath::new("/cache"))
+            )
+            .is_ok()
+        );
     }
 }

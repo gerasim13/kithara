@@ -25,6 +25,7 @@ members = [
     "crates/kithara-file",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-mp4",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -70,6 +71,8 @@ members = [
     "tests/crates/queue",
     "tests/crates/storage",
     "tests/crates/stream",
+    "tests/crates/sync",
+    "tests/crates/warp",
     "tests/fuzz",
     "xtask",
 ]
@@ -93,6 +96,7 @@ default-members = [
     "crates/kithara-hls",
     "crates/kithara-host",
     "crates/kithara-derive",
+    "crates/kithara-mp4",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -137,6 +141,8 @@ default-members = [
     "tests/crates/queue",
     "tests/crates/storage",
     "tests/crates/stream",
+    "tests/crates/sync",
+    "tests/crates/warp",
 ]
 
 [workspace.lints.rust]
@@ -286,6 +292,7 @@ kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha4" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }
@@ -692,6 +699,12 @@ opt-level = 1
 [profile.test-release.package.kithara-stream-tests]
 opt-level = 1
 
+[profile.test-release.package.kithara-sync-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-warp-tests]
+opt-level = 1
+
 [profile.test-release.package.kithara-test-dylib]
 opt-level = 1
 
@@ -700,15 +713,3 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
-
-[patch.crates-io]
-firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "18bbf168523175735d7ece9fb293cdf3de66b273" }
-# The renderer's bump-allocated buffers are hand-picked constants sized for
-# vello's own 8K test scenes, so a window pays 165 MiB on its first frame
-# whatever it draws. The fork derives them from the frame instead and makes
-# `DebugLayers` nameable so the sizes can be checked. Upstream at
-# linebender/vello; drop this once it lands.
-vello = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
-vello_encoding = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
-vello_shaders = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
-btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }

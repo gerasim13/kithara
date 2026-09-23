@@ -14,7 +14,9 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    TestTempDir, disk_asset_store, kithara,
+    TestTempDir,
+    audio_artifact::write_audio_artifact,
+    disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
     usdt_trace::{self, ProbeEvent, Scope},
@@ -58,11 +60,13 @@ const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 
 const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
 const EXTREME: ResponseCase = ResponseCase::new(64, 16_384, 32, 64, 441, 0.5, 0, 4.0, 3, 64);
 
+const RAMP: ResponseCase = ResponseCase::new(128, 8_192, 32, 882, 441, 2.0, 2, 4.0, 3, 0);
+
 #[derive(Clone, Copy, Debug)]
 struct ResponseCase {
     callback_frames: usize,
     source_block_frames: usize,
-    render_quantum_frames: usize,
+    render_quantum_frames: Option<NonZeroUsize>,
     smooth_frames: usize,
     response_budget_frames: usize,
     initial_rate: f32,
@@ -88,7 +92,7 @@ impl ResponseCase {
         Self {
             callback_frames,
             source_block_frames,
-            render_quantum_frames,
+            render_quantum_frames: NonZeroUsize::new(render_quantum_frames),
             smooth_frames,
             response_budget_frames,
             initial_rate,
@@ -176,12 +180,12 @@ async fn capture_command_boundary(
     target: usize,
     callback_frames: usize,
 ) -> Vec<f32> {
-    let mut publish_count = probe_count(&trace.events(), "publish");
+    let mut publish_count = probe_count(&response_events(trace), "publish");
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         let block = capture_frames(harness, callback_frames, callback_frames).await;
         samples.extend_from_slice(&block);
-        let after = trace.events();
+        let after = response_events(trace);
         let current_publish_count = probe_count(&after, "publish");
         let published = current_publish_count > publish_count;
         publish_count = current_publish_count;
@@ -196,7 +200,7 @@ async fn capture_command_boundary(
             return samples;
         }
     }
-    let events = trace.events();
+    let events = response_events(trace);
     let publish = events
         .iter()
         .filter(|event| event.probe == "publish")
@@ -227,7 +231,7 @@ async fn capture_until_applied(
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
-        let events = trace.events();
+        let events = response_events(trace);
         let Some(revision) = events
             .iter()
             .rfind(|event| event.probe == "rate_requested")
@@ -239,7 +243,7 @@ async fn capture_until_applied(
             return (samples, revision, events);
         }
     }
-    let events = trace.events();
+    let events = response_events(trace);
     let requested: Vec<_> = events
         .iter()
         .filter(|event| event.probe == "rate_requested")
@@ -265,6 +269,21 @@ async fn capture_until_applied(
     );
 }
 
+fn response_events(trace: &Scope) -> Vec<ProbeEvent> {
+    [
+        "publish",
+        "rate_requested",
+        "rate_applied",
+        "pcm_consumed",
+        "render_committed",
+        "prime_activation",
+        "chunk_admitted",
+    ]
+    .into_iter()
+    .flat_map(|probe| trace.events_of(probe))
+    .collect()
+}
+
 fn probe_count(events: &[ProbeEvent], name: &str) -> usize {
     events.iter().filter(|event| event.probe == name).count()
 }
@@ -287,9 +306,7 @@ async fn playing_queue(
         .rate_smooth_frames(
             NonZeroUsize::new(case.smooth_frames).expect("case smoothing is non-zero"),
         )
-        .render_quantum_frames(
-            NonZeroUsize::new(case.render_quantum_frames).expect("case quantum is non-zero"),
-        )
+        .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -473,7 +490,7 @@ async fn run_case(
         queue.is_playing(),
         "{backend} command boundary is not playing"
     );
-    let ready = trace.events();
+    let ready = response_events(&trace);
     let published_end = ready
         .iter()
         .rfind(|event| event.probe == "publish")
@@ -498,7 +515,7 @@ async fn run_case(
     let apply_frame = command_frame + acknowledged.len() / usize::from(CHANNELS);
     samples.extend(acknowledged);
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
-    let events = trace.events();
+    let events = response_events(&trace);
     drop(trace);
 
     let precommand_start = command_frame.saturating_sub(TARGET_WINDOW_FRAMES);
@@ -590,4 +607,375 @@ async fn a_live_rate_change_becomes_audible_within_the_pcm_already_rendered(
     #[case] case: ResponseCase,
 ) {
     run_case(&temp_dir, backend, backends, case, response_source).await;
+}
+
+fn assert_strict_response(
+    backend: StretchKind,
+    case: ResponseCase,
+    command_frame: usize,
+    samples: &[f32],
+    events: &[ProbeEvent],
+) {
+    let requested = events
+        .iter()
+        .rfind(|event| event.probe == "rate_requested")
+        .unwrap_or_else(|| {
+            let publish = events
+                .iter()
+                .filter(|event| event.probe == "publish")
+                .count();
+            let consumed = events
+                .iter()
+                .filter(|event| event.probe == "pcm_consumed")
+                .count();
+            let applied = events
+                .iter()
+                .filter(|event| event.probe == "rate_applied")
+                .count();
+            panic!(
+                "{backend} emitted no rate_requested probe; publish={publish}, rate_applied={applied}, pcm_consumed={consumed}"
+            )
+        });
+    let revision = requested
+        .field("request_revision")
+        .unwrap_or_else(|| panic!("{backend} request probe has no revision"));
+    assert_eq!(
+        requested.field("target_rate_bits"),
+        Some(u64::from(case.target_rate.to_bits())),
+        "{backend} correlated the wrong final rate request"
+    );
+    let request_frame = requested
+        .field("session_frame")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} request probe has no session frame"));
+    let budget = i64::try_from(case.response_budget_frames).expect("case budget fits i64");
+    let observed_frames = samples
+        .len()
+        .checked_div(usize::from(CHANNELS))
+        .and_then(|frames| frames.checked_sub(command_frame))
+        .expect("captured output includes the command boundary");
+    let applied = revision_probe(events, "rate_applied", "request_revision", revision)
+        .unwrap_or_else(|| {
+            let applied: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "rate_applied")
+                .map(|event| {
+                    (
+                        event.field("request_revision"),
+                        event.field("session_frame"),
+                        event
+                            .field("applied_rate_bits")
+                            .and_then(|bits| u32::try_from(bits).ok())
+                            .map(f32::from_bits),
+                        event.field("source_start"),
+                        event.field("source_end"),
+                    )
+                })
+                .collect();
+            let presented: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "pcm_consumed")
+                .filter_map(|event| {
+                    event
+                        .field("render_revision")
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let rendered: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "render_committed")
+                .filter_map(|event| {
+                    event
+                        .field("source_start")
+                        .zip(event.field("source_end"))
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let published: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe == "publish")
+                .filter_map(|event| {
+                    event
+                        .field("source")
+                        .zip(event.field("output_start"))
+                        .zip(event.field("output_end"))
+                })
+                .collect();
+            let target_onset = first_target_onset(samples, command_frame, case.target_tone);
+            panic!(
+                "{backend} did not apply revision {revision} within {observed_frames} rendered output frames; response budget is {budget}; target_onset={target_onset:?}; applied={applied:?}; presented={presented:?}; rendered={rendered:?}; published={published:?}"
+            )
+        });
+    let consumed = revision_probe(events, "pcm_consumed", "render_revision", revision)
+        .unwrap_or_else(|| panic!("{backend} presented no PCM for {revision}"));
+    let applied_frame = applied
+        .field("session_frame")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} apply probe has no session frame"));
+    let applied_rate = applied
+        .field("applied_rate_bits")
+        .and_then(|bits| u32::try_from(bits).ok())
+        .map(f32::from_bits)
+        .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
+    let consumed_frame = consumed
+        .field("output_start")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} PCM probe has no output start"));
+    let applied_response = applied_frame
+        .checked_sub(request_frame)
+        .unwrap_or_else(|| panic!("{backend} applied revision before its request"));
+    let presented_response = consumed_frame
+        .checked_sub(request_frame)
+        .unwrap_or_else(|| panic!("{backend} presented revision before its request"));
+    assert!(
+        applied_response <= budget,
+        "{backend} applied revision {revision} after {applied_response} frames; budget is {budget}"
+    );
+    assert!(
+        presented_response <= budget,
+        "{backend} presented revision {revision} after {presented_response} frames; applied after {applied_response} frames; apply-to-presentation delay is {} frames; budget is {budget}",
+        presented_response - applied_response
+    );
+    if case.smooth_frames > 1 {
+        let low = case.initial_rate.min(case.target_rate);
+        let high = case.initial_rate.max(case.target_rate);
+        assert!(
+            applied_rate > low && applied_rate < high,
+            "{backend} jumped from {} directly to {} instead of smoothing over {} output frames",
+            case.initial_rate,
+            applied_rate,
+            case.smooth_frames
+        );
+    }
+    let onset = first_target_onset(samples, command_frame, case.target_tone)
+        .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
+    let primed = revision_probe(events, "prime_activation", "request_revision", revision)
+        .map(|event| (event.field("source_frames"), event.field("output_frames")));
+    assert!(
+        onset <= case.response_budget_frames,
+        "{backend} target tone began after {onset} frames; applied after {applied_response}; presented after {presented_response}; budget is {}; primed={primed:?}",
+        case.response_budget_frames
+    );
+}
+
+async fn run_strict_case(
+    temp_dir: &TestTempDir,
+    backend: StretchKind,
+    backends: ElasticBackendConfig,
+    case: ResponseCase,
+    response_source: PathBuf,
+) {
+    let (harness, queue) = playing_queue(temp_dir, backend, backends, case, response_source).await;
+    let trace = usdt_trace::scope();
+    let mut samples =
+        capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
+    let command_frame = samples.len() / usize::from(CHANNELS);
+    assert!(
+        queue.is_playing(),
+        "{backend} command boundary is not playing"
+    );
+    let ready = response_events(&trace);
+    let published_end = ready
+        .iter()
+        .rfind(|event| event.probe == "publish")
+        .and_then(|event| event.field("output_end"));
+    let consumed_end = ready
+        .iter()
+        .rfind(|event| event.probe == "pcm_consumed")
+        .and_then(|event| event.field("output_end"));
+    let published_end = published_end
+        .unwrap_or_else(|| panic!("{backend} command boundary has no published transport"));
+    let consumed_end = consumed_end
+        .unwrap_or_else(|| panic!("{backend} command boundary has no presented transport"));
+    assert!(
+        consumed_end <= published_end,
+        "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
+    );
+    for command in 0..case.burst {
+        queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
+    }
+    queue.set_rate(case.target_rate);
+    samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
+    let events = response_events(&trace);
+    drop(trace);
+
+    let precommand_start = command_frame.saturating_sub(TARGET_WINDOW_FRAMES);
+    let precommand =
+        &samples[precommand_start * usize::from(CHANNELS)..command_frame * usize::from(CHANNELS)];
+    assert!(
+        tone_is_dominant(precommand, case.initial_tone),
+        "{backend} was not playing the initial tone before set_rate"
+    );
+    assert!(
+        !tone_is_dominant(precommand, case.target_tone),
+        "{backend} already contained the target tone before set_rate"
+    );
+    save_response_audio(backend, case, command_frame, &samples);
+    assert_strict_response(backend, case, command_frame, &samples, &events);
+    drop(queue);
+    harness.close().await;
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(60)),
+    hang_timeout_secs(5)
+)]
+#[case::signalsmith_default_quantum(
+    StretchKind::Signalsmith,
+    response_backends(),
+    ResponseCase {
+        render_quantum_frames: None,
+        ..MINIMUM
+    }
+)]
+#[case::signalsmith_minimum(StretchKind::Signalsmith, response_backends(), MINIMUM)]
+#[case::signalsmith_product(StretchKind::Signalsmith, response_backends(), PRODUCT)]
+#[case::signalsmith_extreme(StretchKind::Signalsmith, response_backends(), EXTREME)]
+#[cfg_attr(
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
+    case::bungee_minimum(StretchKind::Bungee, response_backends(), MINIMUM)
+)]
+#[cfg_attr(
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
+    case::bungee_product(StretchKind::Bungee, response_backends(), PRODUCT)
+)]
+#[cfg_attr(
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
+    case::bungee_extreme(StretchKind::Bungee, response_backends(), EXTREME)
+)]
+async fn live_rate_change_reaches_presented_pcm_within_response_budget(
+    temp_dir: TestTempDir,
+    response_source: PathBuf,
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] case: ResponseCase,
+) {
+    run_strict_case(&temp_dir, backend, backends, case, response_source).await;
+}
+
+/// A plain rate step is ramped by the existing Warp manual-rate smoother: no block moves the multiplier
+/// further than the smoother's worst-case step for that block, the renderer
+/// applies intermediate ratios, and the ramp settles at the target.
+#[kithara::test(
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(60)),
+    hang_timeout_secs(5)
+)]
+#[case::signalsmith_ramp(StretchKind::Signalsmith, response_backends(), RAMP)]
+async fn rate_multiplier_step_is_ramped_across_blocks(
+    temp_dir: TestTempDir,
+    response_source: PathBuf,
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] case: ResponseCase,
+) {
+    let (harness, queue) = playing_queue(&temp_dir, backend, backends, case, response_source).await;
+    let trace = usdt_trace::scope();
+    let mut samples =
+        capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
+    let command_frame = samples.len() / usize::from(CHANNELS);
+    let before_smoothed = trace.events_of("rate_smoothed").len();
+    let before_applied = trace.events_of("rate_applied").len();
+    queue.set_rate(case.target_rate);
+    samples.extend(capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await);
+    save_response_audio(backend, case, command_frame, &samples);
+    let smoothing_events = trace.events_of("rate_smoothed");
+    let smoothed: Vec<(u64, f32)> = smoothing_events[before_smoothed..]
+        .iter()
+        .filter_map(|event| {
+            let bits =
+                u32::try_from(event.field("multiplier_bits")?).expect("multiplier bits fit u32");
+            Some((event.field("frames")?, f32::from_bits(bits)))
+        })
+        .collect();
+    assert!(
+        smoothed.len() >= 4,
+        "{backend} emitted {} rate_smoothed blocks after the step",
+        smoothed.len()
+    );
+    let delta = f64::from(case.target_rate - case.initial_rate);
+    let smooth_frames =
+        f64::from(u32::try_from(case.smooth_frames).expect("case smoothing fits u32"));
+    for pair in smoothed.windows(2) {
+        let (frames, next) = pair[1];
+        let step = f64::from((next - pair[0].1).abs());
+        let bound = delta * f64::from(u32::try_from(frames).expect("block fits u32"))
+            / smooth_frames
+            + 1e-3;
+        assert!(
+            step <= bound,
+            "{backend} multiplier moved {step} over {frames} frames; {} smoothing frames allow {bound}: {smoothed:?}",
+            case.smooth_frames
+        );
+    }
+    assert!(
+        smoothed
+            .iter()
+            .any(|(_, multiplier)| (multiplier - case.target_rate).abs() < 2e-3),
+        "{backend} never settled at {}: {smoothed:?}",
+        case.target_rate
+    );
+    let applied_events = trace.events_of("rate_applied");
+    let applied: Vec<f32> = applied_events[before_applied..]
+        .iter()
+        .filter_map(|event| event.field("applied_rate_bits"))
+        .map(|bits| f32::from_bits(u32::try_from(bits).expect("ratio bits fit u32")))
+        .collect();
+    let between = applied
+        .iter()
+        .filter(|ratio| {
+            (*ratio - case.initial_rate).abs() > 1e-3 && (*ratio - case.target_rate).abs() > 1e-3
+        })
+        .count();
+    assert!(
+        between >= 3,
+        "{backend} renderer never applied an intermediate ratio: {applied:?}"
+    );
+}
+
+fn save_response_audio(
+    backend: StretchKind,
+    case: ResponseCase,
+    command_frame: usize,
+    samples: &[f32],
+) {
+    let name = format!(
+        "rate-{backend}-{}-{}-{}-{}",
+        case.callback_frames,
+        case.source_block_frames,
+        case.render_quantum_frames.map_or(0, NonZeroUsize::get),
+        case.smooth_frames,
+    );
+    write_audio_artifact(
+        &name,
+        SAMPLE_RATE,
+        CHANNELS,
+        &[("output", samples)],
+        &serde_json::json!({
+            "backend": backend.to_string(),
+            "command_frame": command_frame,
+            "initial_rate": case.initial_rate,
+            "target_rate": case.target_rate,
+            "response_budget_frames": case.response_budget_frames,
+            "smooth_frames": case.smooth_frames,
+            "scope": "offline command to presented PCM; includes queued output",
+        }),
+    )
+    .expect("listening artifact is saved before final response assertions");
 }

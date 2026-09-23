@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     /// The polling thread drives `Queue::tick`, including repeat-one replay.
-    #[kithara::test(tokio)]
+    #[kithara::test(tokio, flash(false))]
     async fn polling_thread_replays_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),

@@ -19,8 +19,10 @@
 It owns the value types shared by decoders, playback, Warp, and streaming
 analysis: format, owning chunk, timeline/provenance facts, frame/sample units,
 the physical session output axis, pure sample/time conversion, frame-range
-coverage, and the versioned blob framing that stores it. Pool-region
-mechanics remain in `kithara-bufpool`. Encoded/container media facts remain in
+coverage, and the versioned blob framing that stores it.
+`SourceSpan` preserves the exact rational source/output relation through nested
+consumer slices; rounded source endpoints never become a new mapping basis.
+Pool-region mechanics remain in `kithara-bufpool`. Encoded/container media facts remain in
 `kithara-stream`. Musical geometry — beats, grids, warping — remains in
 `kithara-warp`.
 

@@ -11,7 +11,7 @@ use anyhow::Result;
 use cargo_metadata::Metadata;
 
 use super::config::IdiomsConfig;
-use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
+use crate::common::{fix::FixOutcome, scan::Scan, scope::Scope, violation::Violation};
 
 pub(crate) mod accumulator_loops;
 pub(crate) mod arc_mutex_collection;
@@ -61,6 +61,7 @@ pub(crate) mod thin_wrapper_economy;
 
 pub(crate) struct Context<'a> {
     pub(crate) config: &'a IdiomsConfig,
+    pub(crate) scan: &'a Scan,
     pub(crate) metadata: &'a Metadata,
     pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
@@ -85,7 +86,7 @@ impl CheckPolicy {
     }
 }
 
-pub(crate) trait Check {
+pub(crate) trait Check: Sync {
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
     }

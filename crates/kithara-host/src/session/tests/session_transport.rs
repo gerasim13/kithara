@@ -319,7 +319,8 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
         .credit(1)
         .expect("invariant: new tempo applies at the boundary");
     let changed = snapshot(&session);
-    let new_step = f64::from(BLOCK_FRAMES) / f64::from(SAMPLE_RATE);
+    let elapsed = f64::from(BLOCK_FRAMES) / f64::from(SAMPLE_RATE);
+    let new_step = elapsed + 0.005 * (1.0 - (-elapsed / 0.005).exp());
     assert_eq!(
         u64::from(changed.revision()),
         u64::from(initial.revision()) + 1

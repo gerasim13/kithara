@@ -57,7 +57,7 @@ pub(crate) struct PlayerCore<S> {
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
-    pub(crate) response_budget_frames: NonZeroUsize,
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker<S>,
     pub(crate) params: PlayerParams,

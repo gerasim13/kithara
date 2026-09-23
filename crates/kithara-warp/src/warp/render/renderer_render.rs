@@ -1,10 +1,11 @@
 use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
-use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
+use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::renderer::WarpRenderer;
+use super::renderer::{PreparedQuantum, WarpRenderer};
 
 impl<S> WarpRenderer<S>
 where
@@ -18,8 +19,14 @@ where
         let Some(applied) = self.applied_speed else {
             return Ok(());
         };
-        let (_, next) = Self::smoothed_speed(applied, target, output_frames)?;
+        let (_, next, endpoint) = Self::smoothed_speed(applied, target, output_frames)?;
         self.applied_speed = Some(next);
+        kithara::probe_event!(
+            rate_smoothed,
+            frames = output_frames,
+            multiplier_bits = endpoint.to_bits(),
+            target_bits = target.to_bits()
+        );
         Ok(())
     }
 
@@ -31,7 +38,7 @@ where
         let Some(applied) = self.applied_speed else {
             return Ok(target);
         };
-        let (speed, _) = Self::smoothed_speed(applied, target, output_frames)?;
+        let (speed, _, _) = Self::smoothed_speed(applied, target, output_frames)?;
         Ok(speed)
     }
 
@@ -39,16 +46,20 @@ where
         mut applied: SmoothedParam,
         target: f32,
         output_frames: usize,
-    ) -> Result<(f32, SmoothedParam), ElasticError> {
+    ) -> Result<(f32, SmoothedParam, f32), ElasticError> {
         if output_frames == 0 {
             return Err(ElasticError::EmptyOutput);
         }
         applied.set_value(target);
         let mut total = 0.0_f64;
+        let mut endpoint = target;
         for _ in 0..output_frames {
-            total += f64::from(applied.next_smoothed());
+            endpoint = applied.next_smoothed();
+            if applied.settle() {
+                endpoint = target;
+            }
+            total += f64::from(endpoint);
         }
-        applied.settle();
         let frames = output_frames
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -56,7 +67,7 @@ where
             .to_f32()
             .filter(|speed| speed.is_finite() && *speed > 0.0)
             .ok_or(ElasticError::InvalidRate(total / frames))?;
-        Ok((speed, applied))
+        Ok((speed, applied, endpoint))
     }
 }
 
@@ -116,34 +127,52 @@ where
         remaining.div_ceil(partitions)
     }
 
-    fn fit_output_to_envelope(
-        source_frames: usize,
-        output_frames: usize,
+    fn quantized_source_span(
+        frames: usize,
+        pending_frames: usize,
+        stretch: f64,
         remainder: f64,
         capabilities: ElasticCapabilities,
-    ) -> Result<(usize, f64), ElasticError> {
-        let source_frames_f = source_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
+        output_limit: usize,
+    ) -> Result<Option<usize>, ElasticError> {
         let envelope = capabilities.rate_envelope();
-        let minimum_output = (source_frames_f / envelope.max_source_frames_per_output())
-            .ceil()
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let maximum_output = (source_frames_f / envelope.min_source_frames_per_output())
-            .floor()
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            .min(capabilities.max_output_frames());
-        if minimum_output == 0 || minimum_output > maximum_output {
-            return Err(ElasticError::InvalidRate(source_frames_f));
+        let mut source = frames;
+        while source > 0 {
+            let (output, _) = Self::output_frames(source, stretch, remainder)?;
+            if output == 0 {
+                return Ok(Some(source));
+            }
+            let total_source = pending_frames
+                .checked_add(source)
+                .and_then(|frames| frames.to_f64())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let output_f = output.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
+            let rate = total_source / output_f;
+            if output <= output_limit && envelope.contains_rate(rate) {
+                return Ok(Some(source));
+            }
+            let next = if output <= output_limit && rate > envelope.max_source_frames_per_output() {
+                (output_f * envelope.max_source_frames_per_output())
+                    .floor()
+                    .to_usize()
+                    .ok_or(ElasticError::SampleCountOverflow)?
+                    .saturating_sub(pending_frames)
+            } else {
+                let next_output = output.saturating_sub(1).min(output_limit);
+                let rounding_boundary = next_output
+                    .to_f64()
+                    .ok_or(ElasticError::SampleCountOverflow)?
+                    + 0.5;
+                ((rounding_boundary - remainder) / stretch)
+                    .ceil()
+                    .max(0.0)
+                    .to_usize()
+                    .ok_or(ElasticError::SampleCountOverflow)?
+                    .saturating_sub(1)
+            };
+            source = next.min(source - 1);
         }
-        let bounded = output_frames.clamp(minimum_output, maximum_output);
-        let displaced = output_frames
-            .to_f64()
-            .and_then(|output| bounded.to_f64().map(|bounded| output - bounded))
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        Ok((bounded, remainder + displaced))
+        Ok(None)
     }
 
     pub(super) fn output_frames(
@@ -264,7 +293,17 @@ where
         if available == 0 {
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
-        Ok(region_frames.min(available))
+        let frames = region_frames.min(available);
+        // Short regions can accumulate until their joint request is representable.
+        Ok(Self::quantized_source_span(
+            frames,
+            pending_frames,
+            stretch,
+            self.output_remainder,
+            capabilities,
+            output_limit,
+        )?
+        .unwrap_or(frames))
     }
 }
 
@@ -281,7 +320,7 @@ where
         frames: usize,
     ) -> Result<(), ElasticError> {
         let base = 1.0 / f64::from(speed);
-        let pitch = if self.controls.keylock() {
+        let pitch = if self.current_keylock {
             1.0
         } else {
             f64::from(speed)
@@ -317,12 +356,24 @@ where
                 return Err(ElasticError::InvalidRate(stretch.recip()));
             }
             let sub = Self::balanced_source_block(remaining, available);
+            let request_span = Self::quantized_source_span(
+                sub,
+                pending_frames,
+                stretch,
+                self.output_remainder,
+                capabilities,
+                capabilities.max_output_frames(),
+            )?;
+            let sub = request_span.unwrap_or(sub);
             let (output_frames, next_remainder) =
                 Self::output_frames(sub, stretch, self.output_remainder)?;
             let part = &samples[consumed * channels..(consumed + sub) * channels];
-            if output_frames == 0 {
+            if output_frames == 0 || request_span.is_none() {
                 self.append_pending_source(part, meta, frame)?;
-                self.output_remainder = next_remainder;
+                self.output_remainder = next_remainder
+                    + output_frames
+                        .to_f64()
+                        .ok_or(ElasticError::SampleCountOverflow)?;
                 consumed += sub;
                 frame = frame.saturating_add(
                     u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?,
@@ -338,12 +389,6 @@ where
             let source_frames = pending_frames
                 .checked_add(sub)
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            let (output_frames, next_remainder) = Self::fit_output_to_envelope(
-                source_frames,
-                output_frames,
-                next_remainder,
-                capabilities,
-            )?;
             let output_frames = FrameCount::new(output_frames);
             let request = ElasticRequest::new(source_frames, output_frames.get())?;
             let output_samples = output_frames
@@ -475,6 +520,207 @@ where
         self.pending_meta = None;
         self.output_remainder = 0.0;
         self.active = true;
+        Ok(())
+    }
+}
+
+impl<S: HasPool<f32>> WarpRenderer<S> {
+    pub(super) fn render_resident_projection(
+        &mut self,
+        chunk: AudioChunk,
+        prepared: PreparedQuantum,
+    ) -> Result<Option<AudioChunk>, ElasticError> {
+        let channels = usize::from(self.spec.channels.max(1));
+        let AudioChunk { meta, samples } = chunk;
+        let result = (|| {
+            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            resident.append(meta, &samples)?;
+            self.last_input_meta = Some(meta);
+            if prepared
+                .projection
+                .is_some_and(|projection| projection.output_frames == 0)
+            {
+                return Ok(None);
+            }
+            self.process_resident_projection(meta, channels)
+        })();
+        self.defer_scratch(Some(samples));
+        result
+    }
+
+    pub(super) fn process_resident_projection(
+        &mut self,
+        meta: AudioChunkInfo,
+        channels: usize,
+    ) -> Result<Option<AudioChunk>, ElasticError> {
+        let request = self
+            .residency
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?
+            .prepared
+            .ok_or(ElasticError::EnginePreparation(
+                "resident projection is not prepared",
+            ))?;
+        let plan = self
+            .projection
+            .prepared
+            .as_ref()
+            .or(self.projection.active.as_ref())
+            .ok_or(ElasticError::EnginePreparation(
+                "projected map is unavailable",
+            ))?;
+        let audible_start = Self::projected_source(plan, request.projection.output_start)?;
+        let audible_frames = usize::try_from(
+            request
+                .projection
+                .end
+                .source()
+                .checked_sub(audible_start)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let frames = usize::try_from(request.source_end - request.source_start)
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let speed = frames.to_f64().ok_or(ElasticError::SampleCountOverflow)?
+            / request
+                .projection
+                .output_frames
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        self.apply_pitch(if self.current_keylock { 1.0 } else { speed })?;
+        self.prime_resident_request(request, channels)?;
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        let source = resident.range(
+            i64::try_from(request.source_start).map_err(|_| ElasticError::SampleCountOverflow)?,
+            request.source_end,
+            channels,
+        )?;
+        let output_frames = request.projection.output_frames;
+        let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        output
+            .ensure_len(
+                output_frames
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        self.engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "projected engine is unavailable",
+            ))?
+            .process(
+                ElasticRequest::new(frames, output_frames)?
+                    .with_output_source_frames(audible_frames)?,
+                &resident.samples[source],
+                output,
+            )?;
+        let available = resident
+            .replacement
+            .len()
+            .saturating_sub(resident.replacement_offset);
+        let blend_samples = output.len().min(available);
+        let total_frames = resident.replacement.len() / channels;
+        for (offset, sample) in output[..blend_samples].iter_mut().enumerate() {
+            let index = resident.replacement_offset + offset;
+            let mix = (index / channels + 1)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / total_frames
+                    .max(1)
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+            *sample = resident.replacement[index].mul_add(1.0 - mix, *sample * mix);
+        }
+        resident.replacement_offset += blend_samples;
+        if resident.replacement_offset == resident.replacement.len() {
+            resident.replacement.clear();
+            resident.replacement_offset = 0;
+        }
+        resident.retain_from(request.projection.end.source(), channels);
+        resident.prepared = None;
+        self.clear_pending_source();
+        self.active = true;
+        self.rendered_source_end = Some((request.projection.end.source(), self.spec.sample_rate));
+        let mut meta = meta;
+        meta.render_revision = request.rate.revision();
+        meta.mapping_revision =
+            std::num::NonZeroU64::new(u64::from(request.projection.end.revision()));
+        meta.frame_offset = Self::projected_source(
+            self.projection
+                .prepared
+                .as_ref()
+                .or(self.projection.active.as_ref())
+                .ok_or(ElasticError::EnginePreparation(
+                    "projected map is unavailable",
+                ))?,
+            request.projection.output_start,
+        )?;
+        meta.timestamp = meta
+            .spec
+            .duration_for(meta.frame_offset)
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        meta.end_timestamp = meta
+            .spec
+            .duration_for(request.projection.end.source())
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        meta.frames =
+            u32::try_from(output_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
+        let output = self.scratch.take().ok_or(ElasticError::PoolCapacity)?;
+        Ok(Some(AudioChunk::new(meta, output)))
+    }
+    fn prime_resident_request(
+        &mut self,
+        request: super::renderer_residency::ResidentRequest,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        if let Some((cue, history, warm)) = request.prime {
+            let cue_i = i64::try_from(cue).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let history_i =
+                i64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let history_range = resident.range(
+                cue_i
+                    .checked_sub(history_i)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+                cue,
+                channels,
+            )?;
+            let lookahead_end = cue
+                .checked_add(u64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let lookahead_range = resident.range(cue_i, lookahead_end, channels)?;
+            let warm_range = resident.range(
+                i64::try_from(lookahead_end).map_err(|_| ElasticError::SampleCountOverflow)?,
+                request.source_start,
+                channels,
+            )?;
+            let discard = self
+                .activation_scratch
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?;
+            discard
+                .ensure_len(
+                    warm.output_frames()
+                        .checked_mul(channels)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                )
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            self.engine
+                .as_mut()
+                .ok_or(ElasticError::EnginePreparation(
+                    "projected engine is unavailable",
+                ))?
+                .prime(
+                    warm,
+                    &resident.samples[history_range],
+                    &resident.samples[lookahead_range],
+                    &resident.samples[warm_range],
+                    discard,
+                )?;
+            discard.clear();
+        }
+        resident.primed = true;
         Ok(())
     }
 }

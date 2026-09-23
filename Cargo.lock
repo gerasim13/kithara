@@ -4806,6 +4806,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-mp4",
  "kithara-mpa",
  "kithara-platform",
  "kithara-resampler",
@@ -4879,6 +4880,7 @@ dependencies = [
  "glob",
  "proc-macro2",
  "quote",
+ "rayon",
  "regex",
  "roxmltree",
  "serde",
@@ -5125,13 +5127,13 @@ dependencies = [
  "kithara-download",
  "kithara-events",
  "kithara-file",
+ "kithara-mp4",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "re_mp4",
  "serde",
  "serde_yaml_ng",
  "tempfile",
@@ -5347,6 +5349,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-mp4"
+version = "0.0.1-alpha4"
+dependencies = [
+ "derive_more",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "re_mp4",
+ "tracing",
+]
+
+[[package]]
 name = "kithara-mpa"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5529,11 +5542,8 @@ name = "kithara-play-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "cochlea-features",
- "delegate",
  "derive_more",
  "firewheel",
- "futures",
- "hex",
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
@@ -5544,7 +5554,6 @@ dependencies = [
  "reqwest",
  "ringbuf",
  "serde",
- "serde_json",
  "serial_test",
  "tracing",
  "tracing-subscriber",
@@ -5757,6 +5766,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-signal",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5783,6 +5793,22 @@ dependencies = [
  "kithara-warp",
  "kithara-workspace-hack",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-sync-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "delegate",
+ "futures",
+ "hex",
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serde_json",
 ]
 
 [[package]]
@@ -5949,6 +5975,23 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-warp-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-beat",
+ "kithara-integration-tests",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-stretch",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-warp",
+ "num-traits",
+ "serde_json",
 ]
 
 [[package]]

@@ -4,6 +4,11 @@ Domain suites live in `tests/crates/<domain>/tests/`, with each package's
 `Cargo.toml` beside that directory. Suite entrypoints select focused modules;
 subdirectories group scenarios rather than repeat the package name.
 
+The contract under test determines the package: `warp` owns tempo, pitch and
+rate response; `sync` owns musical synchronization across Host, Player and Queue;
+`play` owns playback, mixing, seeking and lifecycle. Using Player or Host as a
+test driver does not change that ownership.
+
 The root `kithara-integration-tests` package owns shared fixture helpers in
 `tests/src`, support binaries, performance scenarios and benches. Domain
 packages consume that library. `tests/crates/integration` contains only the

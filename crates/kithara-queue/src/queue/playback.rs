@@ -306,6 +306,7 @@ mod tests {
             state::tests::make_queue,
             types::{CrossfadeArm, PlaybackTime, SelectPhase, should_arm_crossfade},
         },
+        track::{TrackRecord, TrackSource},
     };
 
     #[kithara::test(tokio)]
@@ -336,12 +337,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
         let queue = make_queue();
-        let a = queue
-            .append("https://example.com/a.mp3")
-            .expect("open queue accepts a track");
-        let b = queue
-            .append("https://example.com/b.mp3")
-            .expect("open queue accepts a track");
+        let a = TrackId::allocate();
+        let b = TrackId::allocate();
+        queue.tracks.lock().extend([
+            TrackRecord::new(a, "a".into(), TrackSource::from("a")),
+            TrackRecord::new(b, "b".into(), TrackSource::from("b")),
+        ]);
         queue.lock_navigation_mut().select(b, &[a, b]);
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();

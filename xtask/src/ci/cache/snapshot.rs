@@ -7,7 +7,7 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 use kithara_devtools::lease;
 use sha2::{Digest, Sha256};
@@ -137,18 +137,30 @@ pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, mc: &Path) -> R
     publish(target, fingerprint, mc)
 }
 
+/// What a restore found. Three outcomes used to arrive as one warning, so a
+/// lane whose `Cargo.lock` simply had no object yet read exactly like a lane
+/// that could not reach the cache at all.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Restored {
+    /// The home already carries this fingerprint; nothing to do.
+    AlreadyPresent,
+    /// No object exists under this key. The ordinary case on a changed
+    /// `Cargo.lock`, and not a failure.
+    Absent,
+    /// The layer was downloaded and unpacked.
+    Layer(String),
+}
+
 /// Fill `cargo_home` with the dependency sources this `Cargo.lock` names, so
-/// the job compiles instead of fetching. Returns whether anything was restored.
-pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<bool> {
+/// the job compiles instead of fetching.
+pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<Restored> {
     let fingerprint = sources_fingerprint(root)?;
     if read_marker(cargo_home)?.as_deref() == Some(fingerprint.as_str()) {
-        info!(%fingerprint, "source layer already present");
-        return Ok(false);
+        return Ok(Restored::AlreadyPresent);
     }
     let client = Client::load(mc)?;
     let Some(object) = client.latest(Sources::BUCKET, Sources::PREFIX, &fingerprint)? else {
-        info!(%fingerprint, "no source snapshot exists");
-        return Ok(false);
+        return Ok(Restored::Absent);
     };
     let expected = checksum_of(&object)?;
     let archive = NamedTempFile::new().context("create source snapshot download")?;
@@ -170,13 +182,22 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Resu
     )?;
     write_marker(cargo_home, &fingerprint)?;
     info!(%fingerprint, object, "restored dependency sources");
-    Ok(true)
+    Ok(Restored::Layer(object))
 }
 
 /// Publish the sources this job ended up with. Only the trusted scope may
 /// write the bucket, so a branch that fetched something new leaves it for the
 /// default branch to record rather than publishing its own.
 pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<()> {
+    let client = Client::load(mc)?;
+    // The bucket is named here, but the credentials come from whatever the
+    // host handed this job, and on a Mac host that is one identity for every
+    // lane whatever `KITHARA_CACHE_TRUST` says. Publishing anyway is how this
+    // ended up writing `kithara-trusted` with `kithara-review` keys and being
+    // refused. This is a guard, not a fallback: a job holding another scope's
+    // keys has nothing to publish to, and writing to its own bucket instead
+    // would let one branch poison what every branch reads.
+    ensure_trusted_publisher(&client.bucket)?;
     let fingerprint = sources_fingerprint(root)?;
     let present: Vec<&str> = Sources::PATHS
         .into_iter()
@@ -199,7 +220,6 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Resu
     run_command(&mut command, "archive source snapshot")?;
     let checksum = sha256(archive.path())?;
     let object = Sources::object(&fingerprint, &checksum);
-    let client = Client::load(mc)?;
     if client.exists(Sources::BUCKET, &object)? {
         info!(%fingerprint, %checksum, "source snapshot already exists");
         return Ok(());
@@ -207,6 +227,23 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Resu
     client.copy(archive.path(), Sources::BUCKET, &object)?;
     write_marker(cargo_home, &fingerprint)?;
     info!(%fingerprint, %checksum, "published dependency sources");
+    Ok(())
+}
+
+/// Refuse a publish from a job whose credentials belong to another scope.
+///
+/// The bucket is named in code, but the keys come from whatever the host
+/// handed this job, and on a Mac host that is one identity for every lane
+/// whatever `KITHARA_CACHE_TRUST` says. This is a guard, not a fallback: a job
+/// holding another scope's keys has nothing to publish to, and writing to its
+/// own bucket instead would let one branch poison what every branch reads.
+fn ensure_trusted_publisher(bucket: &str) -> Result<()> {
+    ensure!(
+        bucket == Sources::BUCKET,
+        "refusing to publish the source layer: this job holds '{bucket}' credentials, and only '{}' may write {}",
+        Sources::BUCKET,
+        Sources::PREFIX,
+    );
     Ok(())
 }
 
@@ -463,13 +500,22 @@ fn run_command(command: &mut Command, what: &str) -> Result<()> {
     require_success(&output, what)
 }
 
+/// `mc --json` writes its refusals to stdout, not stderr, so reading only
+/// stderr produced `list snapshots failed:` with nothing after the colon - a
+/// permission denial that arrived as an empty sentence. Take whichever stream
+/// actually said something.
 fn require_success(output: &Output, what: &str) -> Result<()> {
-    ensure!(
-        output.status.success(),
-        "{what} failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    Ok(())
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let said = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    bail!("{what} failed: {said}");
 }
 
 struct Client {
@@ -833,5 +879,51 @@ mod tests {
                 .components()
                 .all(|component| matches!(component, Component::CurDir | Component::Normal(_)))
         );
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    use super::*;
+
+    #[test]
+    fn only_a_trusted_job_may_publish_the_source_layer() {
+        assert!(ensure_trusted_publisher(Sources::BUCKET).is_ok());
+        let refusal = ensure_trusted_publisher("kithara-review")
+            .expect_err("a review job must not write the trusted bucket");
+        let said = refusal.to_string();
+        assert!(said.contains("kithara-review"), "{said}");
+        assert!(said.contains(Sources::BUCKET), "{said}");
+        assert!(said.contains(Sources::PREFIX), "{said}");
+    }
+
+    /// The defect this pins: `mc --json` refused the upload on stdout, the
+    /// reader looked only at stderr, and the lane logged `list snapshots
+    /// failed:` with nothing after the colon.
+    #[test]
+    fn a_refusal_reported_on_stdout_still_reaches_the_message() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"mc: Insufficient permissions\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let error = require_success(&output, "upload snapshot").expect_err("non-zero status");
+        assert!(
+            error.to_string().contains("Insufficient permissions"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn stderr_still_wins_when_it_carries_the_reason() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"noise\n".to_vec(),
+            stderr: b"the real reason\n".to_vec(),
+        };
+        let error = require_success(&output, "upload snapshot").expect_err("non-zero status");
+        assert!(error.to_string().contains("the real reason"), "{error}");
     }
 }

@@ -44,6 +44,66 @@ fn mean_square(samples: &[f32]) -> f64 {
 }
 
 #[kithara::test]
+#[cfg(feature = "stretch-signalsmith")]
+fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
+    let controls = StretchControls::new(2.0);
+    controls.set_keylock(true);
+    controls.set_backend(StretchKind::Signalsmith);
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .rate_smooth_frames(std::num::NonZeroUsize::new(882).expect("non-zero ramp"))
+        .backends(
+            kithara_stretch::ElasticBackendConfig::builder()
+                .signalsmith(
+                    kithara_stretch::SignalsmithConfig::builder()
+                        .block_frames(std::num::NonZeroUsize::new(224).expect("non-zero block"))
+                        .interval_frames(
+                            std::num::NonZeroUsize::new(32).expect("non-zero interval"),
+                        )
+                        .build(),
+                )
+                .build(),
+        )
+        .render_quantum_frames(std::num::NonZeroUsize::new(32).expect("non-zero quantum"))
+        .build();
+    let mut fx = Warp::new((), &config).renderer(spec(), crate::test_pools::pools());
+    let pools = fx.pools.clone();
+    fx.prepare(spec());
+    controls.set_speed(4.0);
+    let mut source_frame = 0_u64;
+    let mut output_frames = 0;
+    for _ in 0..400 {
+        fx.prepare(spec());
+        let mut input = chunk(&pools, &[0.25; 256]);
+        input.meta.frame_offset = source_frame;
+        let frames = fx
+            .prepare_quantum(input.meta, 128)
+            .expect("a continuous ramp keeps accepting source quanta")
+            .get();
+        input.samples.truncate(frames * usize::from(Consts::CH));
+        input.meta.frames = u32::try_from(frames).expect("quantum fits u32");
+        source_frame += u64::try_from(frames).expect("quantum fits u64");
+        let output = fx
+            .render_quantum(input)
+            .continue_value()
+            .expect("prepared source shape")
+            .expect("a complete ramp quantum emits PCM");
+        output_frames += output.frames();
+        assert!(output.frames() <= 32, "the output quantum stays bounded");
+        assert!(
+            fx.output_remainder.abs() <= 1.0,
+            "quantization debt must stay within one frame: {}",
+            fx.output_remainder
+        );
+    }
+    assert!(
+        output_frames > 10_000,
+        "rendering continues past the former stall"
+    );
+    assert_eq!(fx.preview_speed(4.0, 32).expect("settled speed"), 4.0);
+}
+
+#[kithara::test]
 fn exact_output_frames_do_not_drift_across_partitions() {
     let stretch = 1.0 / 1.3;
     let partitions = [127, 509, 2048, 17, 4096];
@@ -562,4 +622,76 @@ fn reset_discards_pending_span_before_new_timeline(
     assert_eq!(output.meta.frame_offset, 100);
     assert_eq!(output.meta.timestamp, Duration::from_secs(1));
     assert_eq!(&output.samples[..], &expected);
+}
+
+fn moving_target_renderer() -> WarpRenderer {
+    use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
+
+    let mut fx = renderer(StretchControls::new(1.0));
+    fx.applied_speed = Some(SmoothedParam::new(
+        1.0,
+        super::super::SPEED_SMOOTHING_SPAN,
+        SmootherConfig::default(),
+        spec().sample_rate,
+    ));
+    fx
+}
+
+fn moving_target_advance(blocks: usize, frames: usize) -> f64 {
+    let mut fx = moving_target_renderer();
+    (0..blocks)
+        .map(|_| {
+            let multiplier = fx.preview_speed(1.2, frames).expect("non-empty block");
+            fx.advance_speed(1.2, frames).expect("non-empty block");
+            f64::from(multiplier) * frames.to_f64().expect("invariant: a block length fits f64")
+        })
+        .sum()
+}
+
+#[kithara::test(native, flash(false))]
+fn a_moving_target_advances_the_same_whatever_the_partitioning() {
+    let one_block = moving_target_advance(1, 2_048);
+    let many_blocks = moving_target_advance(16, 128);
+
+    assert!(
+        (one_block - many_blocks).abs() < 1e-3,
+        "the same 2048 frames of a moving target must consume the same source \
+         whether rendered as one block or sixteen: {one_block} vs {many_blocks}",
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_settled_target_keeps_its_exact_multiplier() {
+    let fx = moving_target_renderer();
+
+    assert_eq!(
+        fx.preview_speed(1.0, 512).expect("non-empty block"),
+        1.0,
+        "a target that never moves must not be perturbed by averaging",
+    );
+}
+
+#[kithara::test]
+fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
+    let controls = StretchControls::new(1.0);
+    let mut fx = renderer(Arc::clone(&controls));
+    fx.applied_speed = moving_target_renderer().applied_speed;
+    controls.set_speed(1.25);
+    let target = controls.rate_target();
+    let expected_speed = fx
+        .preview_speed(target.speed(), 128)
+        .expect("non-empty block");
+    let meta = kithara_signal::AudioChunkInfo {
+        spec: spec(),
+        frames: 128,
+        ..Default::default()
+    };
+    fx.prepare_quantum(meta, 128)
+        .expect("manual span is plannable");
+    let prepared = fx.prepared_quantum.expect("quantum was prepared");
+
+    assert_eq!(prepared.rate.revision(), target.revision());
+    assert_eq!(prepared.rate.speed(), 1.25);
+    assert_eq!(prepared.speed, expected_speed);
+    assert!(prepared.speed < target.speed());
 }

@@ -389,8 +389,14 @@ impl PlayerTrack {
             .resource
             .presentation_source_end(context.output().sample_rate())
         {
-            self.resource
-                .publish_render(&context, presentation_frontier(&context, source.frame()));
+            self.resource.publish_render(
+                &context,
+                presentation_frontier(&context, source.frame()).with_warp_map(
+                    source
+                        .mapping_revision()
+                        .map(kithara_warp::WarpMapRevision::from),
+                ),
+            );
         } else {
             self.resource.clear_render();
         }

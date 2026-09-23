@@ -1058,7 +1058,7 @@ mod tests {
         let request = TestRequest::parse(&[]).expect("parse request");
 
         for (name, feature) in [
-            ("usdt-play", "kithara-play-tests/usdt"),
+            ("usdt-warp", "kithara-warp-tests/usdt"),
             ("usdt-play-scheduler", "kithara-play/usdt"),
             ("usdt-hls", "kithara-hls-tests/usdt"),
             ("usdt-hls-stress", "kithara-hls-tests/usdt"),

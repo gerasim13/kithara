@@ -335,21 +335,19 @@ class KitharaPlayer(config: Config = Config()) {
      */
     @Throws(KitharaError::class)
     fun selectItem(at: Int, transition: Transition = Transition.None) {
-        try {
-            inner.selectItem(at.toUInt(), transition.toFfi())
-        } catch (error: FfiException) {
-            throw KitharaError.fromFfi(error)
-        }
+        val item = items.getOrNull(at)
+            ?: throw KitharaError.InvalidArgument("item index $at out of range")
+        selectItem(item, transition)
     }
 
     /** Select an item by identity (AVQueuePlayer-style). */
     @Throws(KitharaError::class)
     fun selectItem(item: KitharaPlayerItem, transition: Transition = Transition.None) {
-        val idx = items.indexOfFirst { queued -> queued.id == item.id }
-        if (idx < 0) {
-            throw KitharaError.InvalidArgument("item ${item.id} not in queue")
+        try {
+            inner.select(item.inner, transition.toFfi())
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
         }
-        selectItem(at = idx, transition = transition)
     }
 
     private fun updateState(update: (PlayerState) -> PlayerState) {

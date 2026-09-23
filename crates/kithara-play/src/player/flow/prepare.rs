@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig, session::SessionError};
+use crate::{PlayError, resource::ResourceConfig};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -32,12 +32,13 @@ where
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let stream_shape = self.player.core.engine.stream_shape()?;
+        // Before attachment the application settings stand; no session deadline
+        // can be checked without the actual output shape.
         // A resident render quantum turns the two buffer depths into geometry
         // the response budget admits rather than a preference, so the computed
         // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
-        if let Some(quantum) = warp.render_quantum_frames() {
-            let shape = stream_shape.ok_or(SessionError::NoContext)?;
+        if let (Some(quantum), Some(shape)) = (warp.render_quantum_frames(), stream_shape) {
             let (preload, ring) =
                 shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
             audio.preload_chunks = Some(preload);
@@ -120,6 +121,7 @@ mod tests {
         player::PlayerConfig,
         resource::ResourceSrc,
         rt::StreamShape,
+        session::SessionError,
         test_pools::{TestPools, pools},
     };
 
@@ -202,6 +204,40 @@ mod tests {
             .prepare_config(resource_config("https://example.com/song.mp3"))
             .expect("resources may be prepared before host insertion");
 
+        assert!(prepared.decoder.resampler().is_none());
+    }
+
+    #[kithara::test]
+    #[case::default(None, None)]
+    #[case::explicit(Some(64), Some(64))]
+    fn unbound_preparation_preserves_audio_settings_and_resolves_player_quantum(
+        #[case] configured: Option<usize>,
+        #[case] expected: Option<usize>,
+    ) {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .warp(
+                    WarpConfig::builder()
+                        .maybe_render_quantum_frames(configured.and_then(NonZeroUsize::new))
+                        .build(),
+                )
+                .build(),
+        );
+        let mut config = resource_config("https://example.com/song.mp3");
+        config.audio.preload_chunks = NonZeroUsize::new(7);
+        config.audio.audio_buffer_chunks = Some(11);
+        let prepared = player.prepare_config(config).expect("unbound preparation");
+        assert_eq!(
+            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            expected
+        );
+        assert_eq!(
+            prepared.audio.preload_chunks.map(NonZeroUsize::get),
+            Some(7)
+        );
+        assert_eq!(prepared.audio.audio_buffer_chunks, Some(11));
         assert!(prepared.decoder.resampler().is_none());
     }
 

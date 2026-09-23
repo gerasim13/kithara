@@ -15,6 +15,9 @@ pub(super) struct StreamCore {
     pub(super) input: InputBuffer,
     pub(super) native: NativeStretcher,
     pub(super) anchor: Option<f64>,
+    pub(super) audible_source_end: u64,
+    pub(super) audible_output_end: u64,
+    pub(super) grain_output_position: f64,
     pub(super) output_chunk: Option<NativeOutput>,
     pub(super) output: PlanarBuffer,
     pub(super) request: Request,
@@ -48,6 +51,9 @@ impl StreamCore {
         let source_latency_frames = max_input_frames / 2;
         Ok(Self {
             anchor: None,
+            audible_source_end: 0,
+            audible_output_end: 0,
+            grain_output_position: 0.0,
             cue_grain_pending: false,
             input: InputBuffer::new(config, max_input_frames, max_source_frames)?,
             max_input_frames,
@@ -317,5 +323,53 @@ mod tests {
             Some(&mut recovery_output),
         )
         .expect("the explicitly cleared stream accepts a new request");
+    }
+    #[kithara::test]
+    #[case::even_quantum(64)]
+    #[case::odd_quantum(257)]
+    fn anchored_half_rate_keeps_every_quantized_request_in_its_phase(
+        #[case] quantum: usize,
+        stretch_pcm: &'static StretchPcm,
+    ) {
+        use num_traits::ToPrimitive;
+
+        const OUTPUT_FRAMES: usize = 64 * 257 * 8;
+        let mut core = anchored_core(stretch_pcm);
+        let mut produced = 0usize;
+        let mut admitted = 0usize;
+        let mut output = vec![f32::NAN; quantum * Fixture::CHANNELS];
+        while produced < OUTPUT_FRAMES {
+            let next = produced + quantum;
+            let source_frames = next / 2 - produced / 2;
+            let source = &stretch_pcm.bungee[..source_frames * Fixture::CHANNELS];
+            core.render(
+                Some(source),
+                ElasticRequest::new(source_frames, quantum).expect("quantized half-rate request"),
+                1.0,
+                Some(&mut output),
+            )
+            .expect("the anchored source renders each exact request");
+            produced = next;
+            admitted += source_frames;
+            assert!(output.iter().all(|sample| sample.is_finite()));
+        }
+        assert_eq!(admitted, OUTPUT_FRAMES / 2);
+        assert_eq!(
+            core.audible_source_end,
+            u64::try_from(admitted).expect("source count")
+        );
+        assert_eq!(
+            core.audible_output_end,
+            u64::try_from(produced).expect("output count")
+        );
+        let expected = core.grain_output_position * 0.5;
+        let phase_error = (core.request.position - expected).abs();
+        let quantization_bound = core.max_input_frames().to_f64().expect("native window")
+            / quantum.to_f64().expect("quantum")
+            + 1.0;
+        assert!(
+            phase_error <= quantization_bound,
+            "native phase accumulated callback rounding: error={phase_error}, bound={quantization_bound}, quantum={quantum}"
+        );
     }
 }

@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
@@ -103,7 +103,7 @@ where
                 "output scratch is unavailable",
             ))?;
         let start = scratch.len();
-        if start >= sample_limit {
+        if start >= sample_limit && sample_limit > 0 {
             return Ok(false);
         }
         scratch
@@ -253,10 +253,6 @@ where
     fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = usize::from(self.spec.channels.max(1));
         if !self.active && self.pending_frames(channels) == 0 {
-            if let Err(error) = self.retain_passthrough_history(chunk.meta, &chunk.samples) {
-                warn!(%error, "time-stretch passthrough history retention failed");
-                self.clear_pending_source();
-            }
             self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
         }
@@ -317,6 +313,22 @@ where
     /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         let snapshot = self.context.load();
+        if self.backend_transition_pending
+            && self.projection.selected.is_some()
+            && (self.projection.active.is_some() || self.projection.prepared.is_some())
+        {
+            if let Err(error) = self.retain_projected_replacement() {
+                warn!(%error, "projected backend retirement failed");
+            }
+            return None;
+        }
+        if self
+            .residency
+            .as_ref()
+            .is_some_and(|resident| resident.prepared.is_some())
+        {
+            return self.flush_resident_request(snapshot);
+        }
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         } else {
@@ -325,8 +337,12 @@ where
         }
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
-        if self.transition_pending() {
-            return self.advance_transition(channels, None);
+        if self.pending_unity_meta.is_some() {
+            let output = self.advance_transition(channels, None);
+            if let Some(output) = output.as_ref() {
+                self.commit_render(snapshot, output);
+            }
+            return output;
         }
         let result = self
             .render_terminal_pending(channels)
@@ -346,8 +362,41 @@ where
             self.held_source_frames()
         };
         let output = self.emit(None, held_source_frames);
+        self.finish_flush(output, complete, snapshot)
+    }
+
+    fn finish_flush(
+        &mut self,
+        mut output: Option<AudioChunk>,
+        complete: bool,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
+        let rejected = output.as_mut().and_then(|chunk| {
+            let projection = self.projected_tail_cursor(chunk.frames())?;
+            self.trim_projected_eof(chunk, projection).err()
+        });
+        if let Some(error) = rejected {
+            warn!(%error, "projected EOF identity is uncovered");
+            self.defer_scratch(output.map(|chunk| chunk.samples));
+            return None;
+        }
+        let output = match output {
+            Some(output) if output.frames() == 0 => {
+                self.defer_scratch(Some(output.samples));
+                None
+            }
+            output => output,
+        };
         if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output.frames());
+            self.commit_render(snapshot, output);
+        }
+        if complete {
+            self.backend_transition_pending = false;
+            self.active = false;
+            self.pending_meta = None;
+            self.source_frames_admitted = 0;
+            self.primed_source_debt = 0;
+            self.reset_pending = true;
         }
         output
     }
@@ -358,7 +407,20 @@ where
     }
 
     /// Render one complete decoded source chunk.
-    pub fn render(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
+    ///
+    /// Returns the original input when it requires splitting into prepared
+    /// quanta. The caller retains the unconsumed suffix between operations.
+    pub fn render(&mut self, mut chunk: AudioChunk) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
+        if self.transition_pending() {
+            return ControlFlow::Break(chunk);
+        }
+        if self.projection.active.is_some() || self.projection.selected.is_some() {
+            let frames = self.prepare_quantum(chunk.meta, chunk.frames());
+            if !frames.is_ok_and(|frames| frames.get() == chunk.frames()) {
+                return ControlFlow::Break(chunk);
+            }
+            return self.render_quantum(chunk);
+        }
         let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.controls.rate_target();
@@ -366,11 +428,11 @@ where
             Ok(speed) => speed,
             Err(error) => {
                 warn!(%error, "time-stretch speed smoothing failed");
-                return None;
+                return ControlFlow::Break(chunk);
             }
         };
         chunk.meta.render_revision = rate.revision();
-        self.render_at(chunk, speed, snapshot, None, rate.speed())
+        ControlFlow::Continue(self.render_at(chunk, speed, snapshot, None, rate.speed()))
     }
 
     fn render_at(
@@ -396,57 +458,298 @@ where
             return None;
         }
 
-        let output = if self.unity_passthrough(speed) {
-            self.process_unity(chunk)
-        } else {
-            let mut chunk = chunk;
-            if let Some(prepared) = prepared {
-                if let Err(error) = self.activate_prepared_quantum(&mut chunk, prepared) {
-                    warn!(%error, "time-stretch activation failed; dropping chunk");
-                    self.retire_engine();
-                    self.clear_render_state();
-                    self.defer_scratch(Some(chunk.samples));
+        let output = if let Some(prepared) = prepared.filter(|quantum| quantum.projection.is_some())
+        {
+            match self.render_resident_projection(chunk, prepared) {
+                Ok(output) => output,
+                Err(error) => {
+                    warn!(%error, "resident projection rendering failed");
                     return None;
                 }
-            } else if self.passthrough_history_head.is_some() {
-                self.clear_pending_source();
             }
-            self.process_active(chunk, speed)
+        } else {
+            self.render_manual(chunk, speed, prepared)
         };
         if let Some(output) = output.as_ref() {
             self.commit_rate_render(
                 snapshot,
-                output.frames(),
-                output.meta.render_revision,
+                output,
                 speed,
                 target_speed,
+                prepared.and_then(|quantum| quantum.projection),
             );
         }
         output
     }
 
-    /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
-        let prepared = self.prepared_quantum.take()?;
-        if chunk.frames() != prepared.frames {
+    fn render_manual(
+        &mut self,
+        chunk: AudioChunk,
+        speed: f32,
+        prepared: Option<PreparedQuantum>,
+    ) -> Option<AudioChunk> {
+        if let Some(residency) = self.residency.as_mut()
+            && let Err(error) = residency.retain_manual(
+                chunk.meta,
+                &chunk.samples,
+                self.rendered_source_end.map(|(source, _)| source),
+            )
+        {
+            warn!(%error, "source history retention failed");
+            self.defer_scratch(Some(chunk.samples));
             return None;
         }
+        if self.unity_passthrough(speed) {
+            return self.process_unity(chunk);
+        }
+        let mut chunk = chunk;
+        if let Some(prepared) = prepared
+            && let Err(error) = self.activate_prepared_quantum(&mut chunk, prepared)
+        {
+            warn!(%error, "time-stretch activation failed; dropping chunk");
+            self.retire_engine();
+            self.clear_render_state();
+            self.defer_scratch(Some(chunk.samples));
+            return None;
+        }
+        self.process_active(chunk, speed)
+    }
+
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    ///
+    /// Returns the unchanged input if no matching quantum was prepared.
+    pub fn render_quantum(
+        &mut self,
+        mut chunk: AudioChunk,
+    ) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
+        let Some(prepared) = self.prepared_quantum else {
+            return ControlFlow::Break(chunk);
+        };
+        if chunk.frames() != prepared.frames
+            || chunk.meta.frame_offset != prepared.source_start
+            || chunk.spec() != self.spec
+            || self.transition_pending()
+        {
+            return ControlFlow::Break(chunk);
+        }
+        self.prepared_quantum = None;
         let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(
+        chunk.meta.mapping_revision = prepared
+            .projection
+            .and_then(|projection| std::num::NonZeroU64::new(u64::from(projection.end.revision())));
+        let output = self.render_at(
             chunk,
             prepared.speed,
             snapshot,
             Some(prepared),
             prepared.rate.speed(),
-        )
+        );
+        if output.is_some()
+            && let Some(projection) = prepared.projection
+        {
+            self.accept_projected_output(projection);
+        }
+        ControlFlow::Continue(output)
+    }
+
+    pub(super) fn accept_projected_output(
+        &mut self,
+        projection: super::renderer_projection::ProjectedQuantum,
+    ) {
+        if let Some(plan) = self.projection.prepared.take() {
+            let same = self
+                .projection
+                .active
+                .as_ref()
+                .is_some_and(|active| kithara_platform::sync::Arc::ptr_eq(active, &plan));
+            if !same {
+                debug_assert!(self.projection.retired.is_none());
+                self.projection.retired = self.projection.active.replace(plan);
+            }
+        }
+        self.projection.cursor = Some(projection.end);
+        self.projection.output_frames = projection
+            .output_offset
+            .saturating_add(projection.output_frames);
     }
 
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
+        self.projection.cursor = None;
+        self.projection.output_frames = 0;
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
         self.snap_speed();
+    }
+}
+
+impl<S: HasPool<f32>> WarpRenderer<S> {
+    fn retain_projected_replacement(&mut self) -> Result<(), ElasticError> {
+        let channels = usize::from(self.spec.channels.max(1));
+        let capacity = self
+            .residency
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?
+            .replacement
+            .capacity()
+            / channels;
+        let quantum = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation(
+                "projected engine is unavailable",
+            ))?
+            .capabilities()
+            .latency()
+            .output_frames()
+            .max(1);
+        for _ in 0..=capacity.div_ceil(quantum) {
+            self.scratch
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?
+                .clear();
+            let complete = self.drain_tail(channels)?;
+            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            let output = self.scratch.as_ref().ok_or(ElasticError::PoolCapacity)?;
+            if resident.replacement.len() + output.len() > resident.replacement.capacity() {
+                return Err(ElasticError::PoolCapacity);
+            }
+            resident
+                .replacement
+                .try_extend_from_slice(output)
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            self.scratch
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?
+                .clear();
+            if complete {
+                resident.primed = false;
+                self.backend_transition_pending = false;
+                self.active = false;
+                self.applied_pitch = f64::NAN;
+                self.reset_pending = false;
+                return Ok(());
+            }
+        }
+        Err(ElasticError::EnginePreparation(
+            "projected backend drain exceeds its capability bound",
+        ))
+    }
+}
+
+impl<S: HasPool<f32>> WarpRenderer<S> {
+    fn flush_resident_request(
+        &mut self,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
+        let request = self.residency.as_ref()?.prepared?;
+        let channels = usize::from(self.spec.channels.max(1));
+        let result = (|| {
+            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            resident.pad_to(request.source_end, channels)?;
+            // EOF silence supplies DSP lookahead, never new recording geometry.
+            let meta = self.last_input_meta.ok_or(ElasticError::EmptySource)?;
+            self.process_resident_projection(meta, channels)
+        })();
+        match result {
+            Ok(Some(mut output)) => {
+                let projection = match self.trim_projected_eof(&mut output, request.projection) {
+                    Ok(projection) => projection,
+                    Err(error) => {
+                        warn!(%error, "projected EOF identity is uncovered");
+                        self.defer_scratch(Some(output.samples));
+                        return None;
+                    }
+                };
+                self.commit_rate_render(
+                    snapshot,
+                    &output,
+                    1.0,
+                    request.rate.speed(),
+                    Some(projection),
+                );
+                self.accept_projected_output(projection);
+                Some(output)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                warn!(%error, "projected EOF completion failed");
+                None
+            }
+        }
+    }
+
+    fn trim_projected_eof(
+        &mut self,
+        output: &mut AudioChunk,
+        mut projection: super::renderer_projection::ProjectedQuantum,
+    ) -> Result<super::renderer_projection::ProjectedQuantum, ElasticError> {
+        let plan = self
+            .projection
+            .prepared
+            .as_ref()
+            .or(self.projection.active.as_ref())
+            .ok_or(ElasticError::EnginePreparation("projected EOF has no plan"))?;
+        let end = self
+            .residency
+            .as_ref()
+            .and_then(|resident| resident.end)
+            .ok_or(ElasticError::EmptySource)?;
+        let source = end
+            .to_f64()
+            .and_then(|end| crate::AssetFrame::new(end).ok())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let crate::BeatGridQuery::Resolved(end_output) = plan.map().output_at(source) else {
+            return Err(ElasticError::EnginePreparation(
+                "projected source EOF is uncovered",
+            ));
+        };
+        let axis = plan.output_axis().ok_or(ElasticError::EnginePreparation(
+            "projected EOF has no session axis",
+        ))?;
+        let total = self.projected_output_offset(plan, end_output)?;
+        let frames = output
+            .frames()
+            .min(total.saturating_sub(projection.output_offset));
+        let total_frames = projection
+            .output_offset
+            .checked_add(frames)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_offset = (total_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?
+            * f64::from(axis.sample_rate().get())
+            / f64::from(self.spec.sample_rate.get()))
+        .round()
+        .to_i64()
+        .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_end = crate::SessionFrame::new(
+            i64::from(plan.activation().output())
+                .checked_add(output_offset)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        );
+        let source = Self::projected_endpoint(plan, output_end, end)?;
+        projection.output_frames = frames;
+        projection.end = plan.map().reanchor(source, output_end);
+        output
+            .samples
+            .truncate(frames * usize::from(self.spec.channels.max(1)));
+        output.meta.frames =
+            u32::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?;
+        output.meta.frame_offset = Self::projected_endpoint(plan, projection.output_start, end)?;
+        output.meta.timestamp = self
+            .spec
+            .duration_for(output.meta.frame_offset)
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        output.meta.end_timestamp = self
+            .spec
+            .duration_for(source)
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        output.meta.mapping_revision =
+            std::num::NonZeroU64::new(u64::from(projection.end.revision()));
+        self.rendered_source_end = Some((source, self.spec.sample_rate));
+        Ok(projection)
     }
 }

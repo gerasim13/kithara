@@ -7,7 +7,10 @@ use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::renderer::{PreparedActivation, PreparedQuantum, WarpRenderer};
+use super::{
+    renderer::{PreparedActivation, PreparedQuantum, WarpRenderer},
+    renderer_projection::ProjectionPreparation,
+};
 
 impl<S> WarpRenderer<S>
 where
@@ -19,9 +22,6 @@ where
         prepared: PreparedQuantum,
     ) -> Result<(), ElasticError> {
         let Some(activation) = prepared.activation else {
-            if self.passthrough_history_head.is_some() {
-                self.clear_pending_source();
-            }
             return Ok(());
         };
         let prefix_frames = activation.prefix_frames()?;
@@ -72,29 +72,37 @@ where
             .output_frames()
             .checked_mul(channels)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let pitch = if self.controls.keylock() {
+        let pitch = if self.current_keylock {
             1.0
         } else {
             f64::from(prepared.rate.speed())
         };
         self.apply_pitch(pitch)?;
 
-        let head = self
-            .passthrough_history_head
-            .ok_or(ElasticError::EnginePreparation(
-                "Warp renderer history is unavailable",
-            ))?;
-        let history = self
-            .pending_source
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?;
-        if history.len() != history_samples {
-            return Err(ElasticError::HistorySampleCount {
-                actual: history.len(),
-                expected: history_samples,
-            });
-        }
-        history.rotate_left(head);
+        let residency = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let history_start = i64::try_from(cue)
+            .ok()
+            .and_then(|cue| cue.checked_sub(i64::try_from(activation.history_frames).ok()?))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let range = residency.range(history_start.max(residency.start), cue, channels)?;
+        let resident_history = &residency.samples[range];
+        let history = if resident_history.len() == history_samples {
+            resident_history
+        } else {
+            let history = self
+                .pending_source
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?;
+            history
+                .ensure_len(history_samples)
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            let missing = history_samples
+                .checked_sub(resident_history.len())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            history[..missing].fill(0.0);
+            history[missing..].copy_from_slice(resident_history);
+            history.as_ref()
+        };
 
         let lookahead = chunk.samples.get(..history_samples).ok_or_else(|| {
             ElasticError::LookaheadSampleCount {
@@ -163,25 +171,51 @@ where
         let latency = self.engine.as_ref()?.capabilities().latency();
         let history_frames = latency.source_frames();
         let output_frames = latency.output_frames();
-        let channels = usize::from(self.spec.channels.max(1));
-        let history_samples = history_frames.checked_mul(channels)?;
-        if history_frames == 0
-            || output_frames == 0
-            || self.passthrough_history_head.is_none()
-            || self.pending_source.as_deref()?.len() != history_samples
-        {
+        if history_frames == 0 || output_frames == 0 || self.residency.as_ref()?.end.is_none() {
             return None;
         }
         Some((history_frames, output_frames))
     }
 
     /// Select the next source span that fits the configured output quantum.
+    ///
+    /// # Errors
+    /// Returns pending activation or the geometry/engine admission error.
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
-    ) -> Option<FrameCount> {
-        self.sync_plan();
+    ) -> Result<FrameCount, crate::WarpRenderError> {
+        if let Some(prepared) = self.prepared_quantum {
+            return if prepared.source_start == meta.frame_offset {
+                Ok(FrameCount::new(prepared.frames))
+            } else {
+                Err(crate::WarpRenderError::OutstandingQuantum)
+            };
+        }
+        if self.projection.retired.is_some() || self.transition_pending() {
+            return Err(crate::WarpRenderError::NeedsService);
+        }
+        if let Some(prepared) = self.continue_resident_projection(meta, remaining)? {
+            self.prepared_quantum = Some(prepared);
+            return Ok(FrameCount::new(prepared.frames));
+        }
+        let remaining = match self.prepare_projection(meta, remaining) {
+            Ok(ProjectionPreparation::Projected(prepared)) => {
+                self.prepared_quantum = Some(prepared);
+                return Ok(FrameCount::new(prepared.frames));
+            }
+            Ok(ProjectionPreparation::Service) => {
+                return Err(crate::WarpRenderError::NeedsService);
+            }
+            Ok(ProjectionPreparation::Pending) => {
+                return Err(crate::WarpRenderError::PendingActivation);
+            }
+            Ok(ProjectionPreparation::Manual(remaining)) => remaining,
+            Err(error) => {
+                return Err(error.into());
+            }
+        };
         let rate = self.controls.rate_target();
         let preview_frames = self
             .render_quantum_frames
@@ -210,6 +244,8 @@ where
                     .checked_add(active_frames)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
+                    source_start: meta.frame_offset,
+                    projection: None,
                     activation,
                     rate,
                     speed,
@@ -220,12 +256,11 @@ where
         match result {
             Ok(prepared) => {
                 self.prepared_quantum = Some(prepared);
-                Some(FrameCount::new(prepared.frames))
+                Ok(FrameCount::new(prepared.frames))
             }
             Err(error) => {
                 self.prepared_quantum = None;
-                warn!(%error, "time-stretch source quantum sizing failed");
-                None
+                Err(error.into())
             }
         }
     }
@@ -233,12 +268,36 @@ where
     /// Shrink a prepared source span at true EOF without sampling controls again.
     pub fn prepare_terminal_quantum(
         &mut self,
-        _meta: AudioChunkInfo,
+        meta: AudioChunkInfo,
         frames: usize,
     ) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
             return None;
+        }
+        if prepared.projection.is_some() {
+            if self
+                .residency
+                .as_ref()
+                .is_some_and(|resident| resident.prepared.is_some())
+            {
+                prepared.frames = frames;
+                if let Some(projection) = prepared.projection.as_mut() {
+                    projection.output_frames = 0;
+                }
+                self.prepared_quantum = Some(prepared);
+                return Some(FrameCount::new(frames));
+            }
+            match self.resize_projected_quantum(prepared, meta, frames) {
+                Ok(projected) => {
+                    self.prepared_quantum = Some(projected);
+                    return Some(FrameCount::new(projected.frames));
+                }
+                Err(error) => {
+                    warn!(%error, "terminal projected source quantum sizing failed");
+                    return None;
+                }
+            }
         }
         prepared.frames = frames;
         if let Some(activation) = prepared.activation {
@@ -275,102 +334,5 @@ where
             history_frames,
             warm: ElasticRequest::new(source_frames, output_frames)?,
         }))
-    }
-
-    pub(super) fn reset_passthrough_history(&mut self) -> Result<(), ElasticError> {
-        let channels = usize::from(self.spec.channels.max(1));
-        let history_samples = self
-            .engine
-            .as_ref()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .capabilities()
-            .latency()
-            .source_frames()
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let history = self
-            .pending_source
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?;
-        history
-            .ensure_len(history_samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        history.fill(0.0);
-        self.passthrough_history_head = Some(0);
-        Ok(())
-    }
-
-    pub(super) fn retain_passthrough_history(
-        &mut self,
-        meta: AudioChunkInfo,
-        source: &[f32],
-    ) -> Result<(), ElasticError> {
-        let Some(engine) = self.engine.as_ref() else {
-            self.clear_pending_source();
-            return Ok(());
-        };
-        let channels = usize::from(self.spec.channels.max(1));
-        let history_frames = engine.capabilities().latency().source_frames();
-        let history_samples = history_frames
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let continuous = self.rendered_source_end.is_none_or(|(frame, sample_rate)| {
-            frame == meta.frame_offset && sample_rate == meta.spec.sample_rate
-        });
-        if !continuous {
-            self.clear_pending_source();
-        }
-        if history_samples == 0 {
-            self.passthrough_history_head = Some(0);
-            return Ok(());
-        }
-        let history = self
-            .pending_source
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?;
-        if history_samples > history.capacity() {
-            return Err(ElasticError::SourceFrameLimit {
-                frames: history_frames,
-                limit: history.capacity() / channels,
-            });
-        }
-        if source.len() >= history_samples {
-            history
-                .ensure_len(history_samples)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            history.copy_from_slice(&source[source.len() - history_samples..]);
-            self.passthrough_history_head = Some(0);
-            return Ok(());
-        }
-
-        let current = history.len();
-        if current < history_samples {
-            let appended = source.len().min(history_samples - current);
-            history
-                .try_extend_from_slice(&source[..appended])
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            if appended == source.len() {
-                self.passthrough_history_head = Some(0);
-                return Ok(());
-            }
-            let rest = &source[appended..];
-            self.passthrough_history_head = Some(Self::write_passthrough_history(history, 0, rest));
-            return Ok(());
-        }
-
-        let head = self.passthrough_history_head.unwrap_or(0);
-        self.passthrough_history_head =
-            Some(Self::write_passthrough_history(history, head, source));
-        Ok(())
-    }
-
-    fn write_passthrough_history(history: &mut [f32], head: usize, source: &[f32]) -> usize {
-        debug_assert!(!history.is_empty());
-        debug_assert!(source.len() < history.len());
-        let first = source.len().min(history.len() - head);
-        history[head..head + first].copy_from_slice(&source[..first]);
-        let rest = source.len() - first;
-        history[..rest].copy_from_slice(&source[first..]);
-        (head + source.len()) % history.len()
     }
 }

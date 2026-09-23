@@ -96,7 +96,13 @@ impl ElasticCapabilities {
                 expected: expected_history_samples,
             });
         }
-        self.validate_spans(request, source_samples, output_samples)
+        self.validate_spans(request, source_samples, output_samples)?;
+        if request.source_frames() != request.output_source_frames() {
+            return Err(ElasticError::EnginePreparation(
+                "priming requires equal admitted and warmup source spans",
+            ));
+        }
+        Ok(())
     }
 
     fn validate_samples(
@@ -132,14 +138,24 @@ impl ElasticCapabilities {
         output_samples: usize,
     ) -> Result<(), ElasticError> {
         self.validate_samples(request, source_samples, output_samples)?;
-        if self.rate_envelope().contains(request) {
-            Ok(())
-        } else {
-            Err(ElasticError::RateOutsideEnvelope {
-                source_frames: request.source_frames(),
-                output_frames: request.output_frames(),
-            })
+        if self.latency.source_frames() == 0
+            && self.latency.output_frames() == 0
+            && request.source_frames() != request.output_source_frames()
+        {
+            return Err(ElasticError::EnginePreparation(
+                "zero-latency rendering requires equal admitted and audible source spans",
+            ));
         }
+        for source_frames in [request.source_frames(), request.output_source_frames()] {
+            let span = ElasticRequest::new(source_frames, request.output_frames())?;
+            if !self.rate_envelope().contains(span) {
+                return Err(ElasticError::RateOutsideEnvelope {
+                    source_frames,
+                    output_frames: request.output_frames(),
+                });
+            }
+        }
+        Ok(())
     }
 
     delegate::delegate! {
@@ -191,6 +207,94 @@ mod tests {
                 source_frames: 32,
                 output_frames: 1,
             })
+        );
+    }
+    #[kithara::test]
+    fn audible_span_validation_does_not_change_admitted_storage() {
+        let config = ElasticConfig::builder()
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(64)
+            .max_output_frames(64)
+            .build()
+            .expect("valid elastic config");
+        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1));
+        let physical = ElasticRequest::new(32, 16).expect("physical span");
+        assert_eq!(physical.output_source_frames(), physical.source_frames());
+        let request = physical
+            .with_output_source_frames(16)
+            .expect("audible unity span");
+        assert_eq!(capabilities.validate(request, 64, 32), Ok(()));
+        assert_eq!(
+            capabilities.validate(request, 32, 32),
+            Err(ElasticError::SourceSampleCount {
+                actual: 32,
+                expected: 64,
+            })
+        );
+        let invalid = physical
+            .with_output_source_frames(128)
+            .expect("non-empty audible span");
+        assert_eq!(
+            capabilities.validate(invalid, 64, 32),
+            Err(ElasticError::RateOutsideEnvelope {
+                source_frames: 128,
+                output_frames: 16,
+            })
+        );
+        assert_eq!(
+            physical.with_output_source_frames(0),
+            Err(ElasticError::EmptySource)
+        );
+        let immediate = ElasticCapabilities::new(config.shape(), ElasticLatency::new(0, 0));
+        assert_eq!(immediate.validate(physical, 64, 32), Ok(()));
+        assert_eq!(
+            immediate.validate(request, 64, 32),
+            Err(ElasticError::EnginePreparation(
+                "zero-latency rendering requires equal admitted and audible source spans",
+            ))
+        );
+        assert_eq!(
+            immediate.validate(request, 32, 32),
+            Err(ElasticError::SourceSampleCount {
+                actual: 32,
+                expected: 64,
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn priming_rejects_an_ignored_audible_span() {
+        let config = ElasticConfig::builder()
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(64)
+            .max_output_frames(64)
+            .build()
+            .expect("valid preparation");
+        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(8, 16));
+        let ordinary = ElasticRequest::new(32, 16).expect("warmup span");
+        assert_eq!(
+            capabilities.validate_prime(ordinary, 16, 16, 64, 32),
+            Ok(())
+        );
+        let distinct = ordinary
+            .with_output_source_frames(16)
+            .expect("distinct audible span");
+        assert_eq!(
+            capabilities.validate_prime(distinct, 16, 16, 64, 32),
+            Err(ElasticError::EnginePreparation(
+                "priming requires equal admitted and warmup source spans",
+            )),
+        );
+        assert_eq!(
+            capabilities.validate_prime(distinct, 16, 16, 32, 32),
+            Err(ElasticError::SourceSampleCount {
+                actual: 32,
+                expected: 64
+            }),
         );
     }
 }

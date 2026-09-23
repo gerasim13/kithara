@@ -4,6 +4,7 @@
 //! - `Violation` / `Severity` / `Report` — uniform check results
 //! - `Baseline` / `RatchetDiff` — ratchet baseline plumbing
 //! - `walker` — `.rs` discovery and glob matching
+//! - `scan` — one shared walk and read of the workspace per ratchet run
 //! - `parse` — `syn` AST helpers (file parsing, scope/impl traversal, passthrough analysis)
 //! - `report` — markdown / JSON renderers
 
@@ -14,6 +15,7 @@ pub mod parse;
 pub(crate) mod process;
 pub mod project;
 pub mod report;
+pub mod scan;
 pub mod scope;
 pub mod style;
 pub mod suppress;

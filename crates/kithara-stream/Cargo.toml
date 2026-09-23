@@ -16,7 +16,7 @@ ignored = ["unimock"]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["kithara-test-utils/usdt"]
-mock = ["dep:unimock"]
+mock = ["dep:unimock", "kithara-test-utils/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-net/client-wreq", "kithara-abr/client-wreq"]

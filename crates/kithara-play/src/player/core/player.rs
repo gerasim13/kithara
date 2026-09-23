@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{num::NonZeroUsize, ops::Deref};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -10,6 +10,7 @@ use kithara_platform::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::SyncMember;
+use kithara_warp::WarpConfigPatch;
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{
@@ -41,6 +42,12 @@ impl<S> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
+        if config.response_budget_frames.is_some() && config.warp.render_quantum_frames().is_none()
+        {
+            let mut patch = WarpConfigPatch::default();
+            patch.render_quantum_frames = NonZeroUsize::new(32);
+            config.warp.apply(patch);
+        }
         let pools = config.worker.pools().clone();
         // The player's one member is its own track geometry: a grid it keeps
         // for its whole life, so loading, replacing and releasing a track all
@@ -72,7 +79,7 @@ impl<S> PlayerImpl<S> {
             .sample_rate(config.sample_rate)
             .max_slots(config.max_slots)
             .eq_layout(config.eq_layout.clone())
-            .response_budget_frames(config.response_budget_frames)
+            .maybe_response_budget_frames(config.response_budget_frames)
             .maybe_render_quantum_frames(config.warp.render_quantum_frames())
             .pools(pools)
             .maybe_session(config.session.clone())
