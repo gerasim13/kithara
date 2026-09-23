@@ -23,7 +23,7 @@ use config::ArchConfig;
 use self::checks::{Check, redundant_accessors::RedundantAccessors};
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
+    exclude::apply_lint_excludes,
     project::ProjectConfig,
     report,
     scope::Scope,
@@ -142,9 +142,12 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     }
 
     let project = ProjectConfig::load(&workspace_root)?;
-    apply_path_excludes(&mut report, &project.lint_exclude.runtime_paths());
-    apply_cfg_test_exclusion(&mut report, &workspace_root);
-    apply_module_excludes(&mut report, &project.lint_exclude.modules, &workspace_root);
+    apply_lint_excludes(
+        &mut report,
+        &project.lint_exclude.runtime_paths(),
+        &project.lint_exclude.modules,
+        &workspace_root,
+    );
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);

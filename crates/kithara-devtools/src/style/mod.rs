@@ -25,7 +25,7 @@ use config::StyleConfig;
 
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
+    exclude::apply_lint_excludes,
     project::ProjectConfig,
     report,
     scan::Scan,
@@ -222,10 +222,9 @@ fn run_checks(
             if check.uses_global_lint_excludes() {
                 let mut check_report = Report::default();
                 check_report.extend(violations);
-                apply_path_excludes(&mut check_report, &project.lint_exclude.paths);
-                apply_cfg_test_exclusion(&mut check_report, workspace_root);
-                apply_module_excludes(
+                apply_lint_excludes(
                     &mut check_report,
+                    &project.lint_exclude.paths,
                     &project.lint_exclude.modules,
                     workspace_root,
                 );

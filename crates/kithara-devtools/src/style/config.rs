@@ -231,8 +231,8 @@ pub(crate) struct CommentHygieneConfig {
     pub(crate) exclude_paths: Vec<String>,
     /// Annotations an author reached for instead of writing documentation. A
     /// block carrying one is never promoted to `///`: publishing `WHY:` as
-    /// rendered docs would launder the note rather than answer it, so it stays
-    /// for a human.
+    /// rendered docs would launder the note rather than answer it, so the fix
+    /// removes it like any other prose.
     #[serde(default = "default_prose_markers")]
     pub(crate) prose_markers: Vec<String>,
     /// Density threshold in percent (0..=100): a fn body where the share
