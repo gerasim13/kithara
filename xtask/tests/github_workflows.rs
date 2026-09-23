@@ -2014,7 +2014,7 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
 }
 
 #[test]
-fn cargo_seedling_fetch_uses_scoped_checkout_token() {
+fn external_git_fetches_use_scoped_checkout_token() {
     let workflow = github_workflow("lane.yml");
     let steps = workflow["jobs"]["run"]["steps"]
         .as_sequence()
@@ -2024,7 +2024,7 @@ fn cargo_seedling_fetch_uses_scoped_checkout_token() {
         .find(|step| step["name"].as_str() == Some("Run the lane"))
         .expect("lane command");
     assert_eq!(
-        lane["env"]["SEEDLING_FETCH_TOKEN"].as_str(),
+        lane["env"]["GITHUB_FETCH_TOKEN"].as_str(),
         Some("${{ github.token }}")
     );
     let script = lane["run"].as_str().expect("lane script");
@@ -2034,6 +2034,11 @@ fn cargo_seedling_fetch_uses_scoped_checkout_token() {
         )
     );
     assert!(script.contains("GIT_CONFIG_VALUE_0=\"AUTHORIZATION: basic $auth\""));
+    assert!(script.contains("GIT_CONFIG_COUNT=2"));
+    assert!(
+        script.contains("GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader")
+    );
+    assert!(script.contains("GIT_CONFIG_VALUE_1=\"AUTHORIZATION: basic $auth\""));
     assert!(
         !script.contains("url.https://"),
         "the token must not enter a git remote URL"
