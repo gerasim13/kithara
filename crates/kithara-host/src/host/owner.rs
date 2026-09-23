@@ -108,11 +108,11 @@ impl<S> SessionRuntime<S> {
     }
 }
 
-struct SessionRoot {
-    id: BeatGridId,
-    group: GroupState<PlayerMember>,
-    sample_rate: NonZeroU32,
-    view: RootView,
+pub(super) struct SessionRoot {
+    pub(super) id: BeatGridId,
+    pub(super) group: GroupState<PlayerMember>,
+    pub(super) sample_rate: NonZeroU32,
+    pub(super) view: RootView,
 }
 
 impl<S> Host<S> {
@@ -273,7 +273,7 @@ impl<S> Host<S> {
         }
     }
 
-    fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
+    pub(super) fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let group = GroupState::unavailable(
             grid_id,
