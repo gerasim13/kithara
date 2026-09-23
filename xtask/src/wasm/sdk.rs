@@ -105,7 +105,7 @@ pub(super) fn run_product(args: Args, ctx: &Ctx) -> Result<()> {
                     "target/wasm32-unknown-unknown/debug/kithara_product_web_uniffi_probe.wasm",
                 ),
             )
-            .args(["--target", "web", "--out-name", "index", "--out-dir"])
+            .args(["--target", "web", "--out-name", "kithara-ffi", "--out-dir"])
             .arg(generated.join("wasm-bindgen")),
         &cancel,
     )?;
@@ -495,7 +495,7 @@ fn bundle_product(root: &Path, output: &Path, backend: &Path, cancel: &Cancel) -
         &generated,
         source.replace(
             original,
-            "const wasmBundle = await import(new URL(\"./generated/wasm-bindgen/index.js\", import.meta.url).href);",
+            "const wasmBundle = await import(new URL(\"./generated/wasm-bindgen/kithara-ffi.js\", import.meta.url).href);",
         ),
     )?;
     let config = json!({ "compilerOptions": {

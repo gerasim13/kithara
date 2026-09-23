@@ -58,6 +58,7 @@ Do not depend on this crate directly from application code — use the platform-
 - `Trunk.toml` / `index.html` / `_headers` / `coi-serviceworker.js` — wasm demo app shell (used by `just platform wasm build` and selenium tests).
 
 The browser surface is the cross-platform [`AudioPlayer`](src/player/facade.rs) facade with a `#[wasm_bindgen] impl` in [`src/web/surface.rs`](src/web/surface.rs).
+Generated UniFFI Web callers drive `tick_host` from their animation loop after host initialization to apply worker commands and service key callbacks.
 
 Native callers create a registry, register file and HLS layout callbacks, then
 create one `FfiAssetStore` from the outer cache root and a registry snapshot.

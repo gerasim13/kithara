@@ -1,10 +1,18 @@
-import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost, tickHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
-  const { default: init, AudioPlayer } = await import(new URL("./generated/wasm-bindgen/index.js", import.meta.url).href);
-  await init({ module_or_path: "/generated/wasm-bindgen/index_bg.wasm", memory });
+  const { default: init, AudioPlayer } = await import(new URL("./generated/wasm-bindgen/kithara-ffi.js", import.meta.url).href);
+  await init({ module_or_path: "/generated/wasm-bindgen/kithara-ffi_bg.wasm", memory });
   api.initialize();
+
+  let prematureTick = false;
+  try {
+    tickHost();
+  } catch (error) {
+    prematureTick = FfiError.NotInitialized.instanceOf(error);
+  }
+  if (!prematureTick) throw new Error("generated host tick accepted an uninitialized host");
 
   let premature = false;
   try {
@@ -56,6 +64,20 @@ async function main() {
     throw new Error("oversized EQ layout changed the player owner");
   }
   const crossfade = { duration: 2.5, curve: FfiCrossfadeCurve.Linear, depth: 0.75, position: 0.4 };
+  const pump = setInterval(() => tickHost(), 16);
+  const events = new BroadcastChannel("kithara-events");
+  const workerApplied = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("worker did not apply crossfade settings")), 10_000);
+    events.onmessage = ({ data }) => {
+      if (data.kind !== "CrossfadeSettingsChanged") return;
+      clearTimeout(timeout);
+      if (data.duration !== crossfade.duration || data.curve !== "Linear" || data.depth !== crossfade.depth || data.position !== Math.fround(crossfade.position)) {
+        reject(new Error(`worker applied wrong crossfade settings: ${JSON.stringify(data)}`));
+      } else {
+        resolve();
+      }
+    };
+  });
   generatedPlayer.setCrossfadeSettings(crossfade);
   const appliedCrossfade = generatedPlayer.crossfadeSettings();
   if (appliedCrossfade.duration !== crossfade.duration || appliedCrossfade.curve !== crossfade.curve || appliedCrossfade.depth !== crossfade.depth || appliedCrossfade.position !== Math.fround(crossfade.position)) {
@@ -70,6 +92,9 @@ async function main() {
   if (!invalidCrossfade || JSON.stringify(generatedPlayer.crossfadeSettings()) !== JSON.stringify(appliedCrossfade)) {
     throw new Error("invalid crossfade changed the player owner");
   }
+  await workerApplied;
+  clearInterval(pump);
+  events.close();
   if (!(generatedPlayer instanceof UniAudioPlayer)) throw new Error("generated player has no owned handle");
   generatedPlayer.uniffiDestroy();
   const player = new AudioPlayer();
@@ -86,7 +111,7 @@ async function main() {
   if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
   player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and crossfade mutation; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and worker-applied crossfade mutation; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });

@@ -27,6 +27,8 @@ pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use core::host::ensure_default_host;
+#[cfg(all(target_arch = "wasm32", feature = "uniffi-web"))]
+pub use core::host::tick_host;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
 pub use core::{
