@@ -22,6 +22,7 @@ crates = [
   "kithara-drm",
   "kithara-events",
   "kithara-net",
+  "kithara-ring",
   "kithara-signal",
 ]
 

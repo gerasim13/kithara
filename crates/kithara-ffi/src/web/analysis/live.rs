@@ -263,12 +263,18 @@ mod runs {
             };
             self.cancel(id);
 
-            let (rx, producer, pass) = self.worker.open(
+            let (rx, producer, pass) = match self.worker.open(
                 token,
                 rate,
                 Consts::CALLER_HOLDS_NO_REVISION,
                 AnalysisDemand::ALL,
-            );
+            ) {
+                Ok(opened) => opened,
+                Err(error) => {
+                    send_reply(request_id, Err(error.to_string()));
+                    return;
+                }
+            };
             let cancel = pass.cancel_token().clone();
             self.live.borrow_mut().insert(id, cancel.clone());
 
