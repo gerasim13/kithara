@@ -15,15 +15,15 @@ use syn::{
 use super::{
     Check, Context,
     derivable_support::{
-        attrs_match_config, cfg_tokens, crate_manifest, deletion_range, field_declaration_start,
-        impl_range, indent_attribute, line_start, merge_derive, method_blocks,
+        attrs_match_config, cfg_tokens, crate_manifest, field_declaration_start, impl_range,
+        indent_attribute, merge_derive, method_blocks,
     },
 };
 #[cfg(test)]
 use crate::idioms::config::DerivableGetterConfig;
 use crate::{
     common::{
-        fix::{FixOutcome, SourceRewriter},
+        fix::{FixOutcome, SourceRewriter, deletion_range, line_start},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::relative_to,

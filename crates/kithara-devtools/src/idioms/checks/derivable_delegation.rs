@@ -12,13 +12,11 @@ use syn::{
 
 use super::{
     Check, Context,
-    derivable_support::{
-        attrs_match_config, crate_manifest, deletion_range, item_blocks, line_start,
-    },
+    derivable_support::{attrs_match_config, crate_manifest, item_blocks},
 };
 use crate::{
     common::{
-        fix::{FixOutcome, SourceRewriter, block::BlockRange},
+        fix::{FixOutcome, SourceRewriter, block::BlockRange, deletion_range, line_start},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::relative_to,
