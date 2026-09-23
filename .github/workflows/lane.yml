@@ -126,7 +126,16 @@ jobs:
           path: artifacts
 
       - name: Run the lane
-        run: just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
+        env:
+          SEEDLING_FETCH_TOKEN: ${{ github.token }}
+        run: |
+          # Cargo fetches into a cache outside checkout's credential scope.
+          # Limit this header to the one pinned GitHub dependency.
+          auth=$(printf 'x-access-token:%s' "$SEEDLING_FETCH_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/gerasim13/bevy_seedling.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
 
       - name: Upload Cargo timing report
         if: ${{ always() && (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') }}
