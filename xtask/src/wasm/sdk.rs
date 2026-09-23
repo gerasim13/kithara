@@ -27,13 +27,14 @@ pub(crate) struct Args {
 pub(super) fn run(args: Args, ctx: &Ctx) -> Result<()> {
     let cancel = Cancel::install()?;
     let pins = CiPins::load(&ctx.root.join(".config/ci-pins.toml"))?;
+    let backend_pin = backend_pin(&ctx.root)?;
     let backend = ctx.root.join(args.backend).canonicalize()?;
-    validate_tools(&backend, &pins, &cancel)?;
+    validate_tools(&backend, &backend_pin, &pins, &cancel)?;
     let output = ctx.root.join("target/config-protocol/sdk");
     let generated = output.join("generated");
     let shim = output.join("shim");
     fs::create_dir_all(shim.join("src"))?;
-    build_backend(&backend, &cancel)?;
+    build_backend(&backend, &backend.join("target"), &cancel)?;
     let native = output.join("native");
     run_command(
         Command::new("cargo")
@@ -64,25 +65,21 @@ pub(super) fn run(args: Args, ctx: &Ctx) -> Result<()> {
         &cancel,
     )?;
     bundle(&ctx.root, &output, &backend, &cancel)?;
-    tracing::info!(directory = %output.display(), revision = %pins.uniffi_javascript_rev, "generated SDK fixture ready");
+    tracing::info!(directory = %output.display(), revision = %backend_pin.rev, "generated SDK fixture ready");
     Ok(())
 }
 
 pub(super) fn run_product(args: Args, ctx: &Ctx) -> Result<()> {
     let cancel = Cancel::install()?;
     let pins = CiPins::load(&ctx.root.join(".config/ci-pins.toml"))?;
+    let backend_pin = backend_pin(&ctx.root)?;
     let backend = ctx.root.join(args.backend).canonicalize()?;
-    validate_tools(&backend, &pins, &cancel)?;
+    validate_tools(&backend, &backend_pin, &pins, &cancel)?;
     let output = ctx.root.join("target/config-protocol/product-sdk");
     let generated = output.join("generated");
     let shim = output.join("shim");
     fs::create_dir_all(shim.join("src"))?;
-    build_product_backend(
-        &backend,
-        &ctx.root.join(".config/patches/ubrn-passive-metadata.patch"),
-        &output,
-        &cancel,
-    )?;
+    build_backend(&backend, &output.join("backend-target"), &cancel)?;
     build_product_metadata_wasm(&ctx.root, &shim, &pins.nightly_toolchain, &cancel)?;
     let library = shim.join("target/wasm32-unknown-unknown/debug/kithara_ffi.wasm");
     generate_bindings(
@@ -149,7 +146,59 @@ fn generate_bindings(
     )
 }
 
-fn validate_tools(backend: &Path, pins: &CiPins, cancel: &Cancel) -> Result<()> {
+struct BackendPin {
+    git: String,
+    rev: String,
+}
+
+fn backend_pin(root: &Path) -> Result<BackendPin> {
+    let manifest: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let metadata = manifest
+        .get("workspace")
+        .and_then(|value| value.get("metadata"))
+        .and_then(|value| value.get("uniffi-javascript"))
+        .context("missing [workspace.metadata.uniffi-javascript] in Cargo.toml")?;
+    let git = metadata
+        .get("git")
+        .and_then(toml::Value::as_str)
+        .context("UniFFI Web backend git URL")?
+        .to_owned();
+    ensure!(
+        github_repository(&git).is_some(),
+        "UniFFI Web backend git URL must name a GitHub repository"
+    );
+    let rev = metadata
+        .get("rev")
+        .and_then(toml::Value::as_str)
+        .context("UniFFI Web backend revision")?
+        .to_owned();
+    ensure!(
+        rev.len() == 40 && rev.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "UniFFI Web backend revision must be a full Git commit hash"
+    );
+    Ok(BackendPin { git, rev })
+}
+
+fn github_repository(url: &str) -> Option<&str> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    url.strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@ssh.github.com:443/"))
+        .filter(|repo| {
+            repo.split_once('/').is_some_and(|(owner, name)| {
+                !owner.is_empty() && !name.is_empty() && !name.contains('/')
+            })
+        })
+}
+
+fn validate_tools(
+    backend: &Path,
+    backend_pin: &BackendPin,
+    pins: &CiPins,
+    cancel: &Cancel,
+) -> Result<()> {
     let revision = capture(
         Command::new("git")
             .arg("-C")
@@ -158,8 +207,24 @@ fn validate_tools(backend: &Path, pins: &CiPins, cancel: &Cancel) -> Result<()> 
         cancel,
     )?;
     ensure!(
-        revision.trim() == pins.uniffi_javascript_rev,
-        "SDK backend revision differs from CI pin"
+        revision.trim() == backend_pin.rev,
+        "SDK backend revision differs from Cargo.toml pin {} at {}",
+        backend_pin.rev,
+        backend_pin.git
+    );
+    let remote = capture(
+        Command::new("git")
+            .arg("-C")
+            .arg(backend)
+            .args(["remote", "get-url", "origin"]),
+        cancel,
+    )?;
+    let expected_repo = github_repository(&backend_pin.git).context("backend pin git URL")?;
+    ensure!(
+        github_repository(&remote).is_some_and(|repo| repo.eq_ignore_ascii_case(expected_repo)),
+        "SDK backend origin {} differs from Cargo.toml pin {}",
+        remote.trim(),
+        backend_pin.git
     );
     let dirty = capture(
         Command::new("git")
@@ -212,52 +277,12 @@ fn run_command(command: &mut Command, cancel: &Cancel) -> Result<()> {
     Ok(())
 }
 
-fn build_backend(backend: &Path, cancel: &Cancel) -> Result<()> {
+fn build_backend(backend: &Path, target: &Path, cancel: &Cancel) -> Result<()> {
     run_command(
         Command::new("cargo")
             .current_dir(backend)
             .args(["build", "--locked", "-p", "uniffi-bindgen-react-native"])
-            .env("CARGO_TARGET_DIR", backend.join("target")),
-        cancel,
-    )
-}
-
-fn build_product_backend(
-    backend: &Path,
-    patch: &Path,
-    output: &Path,
-    cancel: &Cancel,
-) -> Result<()> {
-    let staged = tempfile::tempdir_in(output)?;
-    let archive = staged.path().join("backend.tar");
-    run_command(
-        Command::new("git")
-            .current_dir(backend)
-            .args(["archive", "--format=tar", "--output"])
-            .arg(&archive)
-            .arg("HEAD"),
-        cancel,
-    )?;
-    run_command(
-        Command::new("tar")
-            .args(["-xf"])
-            .arg(&archive)
-            .arg("-C")
-            .arg(staged.path()),
-        cancel,
-    )?;
-    run_command(
-        Command::new("patch")
-            .current_dir(staged.path())
-            .args(["-p1", "-i"])
-            .arg(patch),
-        cancel,
-    )?;
-    run_command(
-        Command::new("cargo")
-            .current_dir(staged.path())
-            .args(["build", "--locked", "-p", "uniffi-bindgen-react-native"])
-            .env("CARGO_TARGET_DIR", output.join("backend-target")),
+            .env("CARGO_TARGET_DIR", target),
         cancel,
     )
 }
@@ -523,6 +548,28 @@ fn bundle_product(root: &Path, output: &Path, backend: &Path, cancel: &Cancel) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_origin_accepts_https_and_ssh_for_the_same_repository() {
+        let https = "https://github.com/gerasim13/uniffi-bindgen-react-native";
+        let ssh = "git@github.com:gerasim13/uniffi-bindgen-react-native.git";
+        let ssh_url = "ssh://git@github.com/gerasim13/uniffi-bindgen-react-native.git";
+        let ssh_443 = "ssh://git@ssh.github.com:443/gerasim13/uniffi-bindgen-react-native.git";
+        assert_eq!(github_repository(https), github_repository(ssh));
+        assert_eq!(github_repository(https), github_repository(ssh_url));
+        assert_eq!(github_repository(https), github_repository(ssh_443));
+        assert_ne!(
+            github_repository(https),
+            github_repository("https://github.com/other/uniffi-bindgen-react-native")
+        );
+        assert_eq!(github_repository("https://github.com//repo"), None);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let pin = backend_pin(root).unwrap();
+        assert_eq!(
+            github_repository(&pin.git),
+            Some("gerasim13/uniffi-bindgen-react-native")
+        );
+    }
 
     #[test]
     fn canonical_modules_keep_abi_fields_in_declared_order() {

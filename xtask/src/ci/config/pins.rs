@@ -76,7 +76,6 @@ pub(crate) struct CiPins {
     pub(crate) rustup_windows_sha256: String,
     pub(crate) sccache_s3_image: String,
     pub(crate) stable_toolchain: String,
-    pub(crate) uniffi_javascript_rev: String,
     pub(crate) windows_eval_iso_sha256: String,
     pub(crate) windows_eval_iso_url: String,
     /// Serialised last: TOML requires tables after plain values.
@@ -115,7 +114,6 @@ impl CiPins {
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
             ("bun_version", self.bun_version.as_str()),
-            ("uniffi_javascript_rev", self.uniffi_javascript_rev.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
