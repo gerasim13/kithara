@@ -8,6 +8,7 @@ use kithara_events::{Envelope, EventBus, RecvError, ScopeLabel, TrackId};
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, CancelToken,
+    maybe_send::MaybeSend,
     sync::Arc,
     time::Duration,
     tokio,
@@ -239,8 +240,8 @@ where
     #[track_caller]
     pub(crate) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
-        F: Future + Send + 'static,
-        F::Output: Send + 'static,
+        F: Future + MaybeSend + 'static,
+        F::Output: MaybeSend + 'static,
     {
         match &self.runtime {
             Some(runtime) => spawn_on(runtime, future),
