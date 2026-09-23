@@ -239,24 +239,43 @@ fn execute_lane(
     lane: &str,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    journalled(process, lane, || {
+        if uses_sccache {
+            retire_sccache_server(process, tools)?;
+            process.run(
+                tools.program("sccache"),
+                &["--start-server"],
+                "start the compiler cache",
+            )?;
+        }
+        let result = dispatch();
+        if uses_sccache {
+            process.best_effort(
+                tools.program("sccache"),
+                &["--show-stats"],
+                "sccache statistics",
+            );
+        }
+        result
+    })
+}
+
+/// Run a lane's work with the evidence of its caches around it: where this
+/// xtask itself came from, before anything else is asked, and what every step
+/// and every cache layer cost, after the last one has answered.
+///
+/// Both entry points a job can take need this. `ci run` prepares the
+/// environment itself; `ci lane` is handed one by the executor and dispatches
+/// the lane directly, and a journal reported from only one of them describes
+/// whichever half of the fleet happens to use it.
+pub(crate) fn journalled(
+    process: &Process,
+    lane: &str,
+    dispatch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let (event, detail) = crate::self_cache::provenance();
     process.note_cache("xtask self-cache", event, detail);
-    if uses_sccache {
-        retire_sccache_server(process, tools)?;
-        process.run(
-            tools.program("sccache"),
-            &["--start-server"],
-            "start the compiler cache",
-        )?;
-    }
     let result = dispatch();
-    if uses_sccache {
-        process.best_effort(
-            tools.program("sccache"),
-            &["--show-stats"],
-            "sccache statistics",
-        );
-    }
     process.report_journal(lane);
     result
 }

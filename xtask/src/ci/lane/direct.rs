@@ -69,7 +69,9 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()
         _ => None,
     };
     let process = Process::new(&ctx.root, executor_vars(target_dir));
-    let outcome = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
+    let outcome = crate::ci::run::journalled(&process, &args.lane, || {
+        declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
+    });
     let settled = build.map_or(Ok(()), |build| build.settle(outcome.is_ok()));
     outcome.and(settled)
 }
