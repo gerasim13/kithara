@@ -1,5 +1,3 @@
-mod registration;
-
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
@@ -34,17 +32,17 @@ type SlotHandle = SlotControl;
 pub struct EngineImpl<S> {
     running: AtomicBool,
     master_volume: AtomicF32,
-    config: EngineConfig<S>,
+    pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
-    bus: EventBus,
-    eq_layout: Mutex<Vec<EqBandConfig>>,
-    registration: Mutex<Option<RegisteredPlayer>>,
+    pub(super) bus: EventBus,
+    pub(super) eq_layout: Mutex<Vec<EqBandConfig>>,
+    pub(super) registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(super)")]
-    session: SessionHandle<S>,
+    pub(super) session: SessionHandle<S>,
 }
 
 impl<S> EngineImpl<S> {
@@ -395,7 +393,7 @@ impl<S> EngineImpl<S> {
         self.session.tick()
     }
 
-    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
+    pub(super) fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
         let player = self.configured_sample_rate();
         if player == session {
             Ok(())

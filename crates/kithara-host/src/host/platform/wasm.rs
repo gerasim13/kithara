@@ -12,7 +12,7 @@ use kithara_sync::{
 };
 use kithara_warp::BeatGridId;
 
-use super::super::{Host, HostOwned, SessionRuntime};
+use super::super::{Host, HostOwned, core::SessionRuntime};
 use crate::{
     session::{HostDispatcher, RootView, web::WebSessionState},
     wasm::HostRoute,

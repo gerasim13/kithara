@@ -24,7 +24,7 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "renderer/tests.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
 
 /// Span the speed smoother measures its settle threshold against: the range

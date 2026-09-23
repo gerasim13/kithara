@@ -1,7 +1,7 @@
 use kithara_platform::sync::Arc;
 
 #[cfg(test)]
-use super::super::core::PlayerImpl;
+use super::super::PlayerImpl;
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{PlayerEvent, SlotId, TimeControlStatus, TrackId, WaitingReason},

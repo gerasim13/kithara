@@ -10,7 +10,10 @@ use kithara_play::{
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
 use kithara_warp::BeatGridId;
 
-use super::super::{Host, HostOwned, PlatformResult};
+use super::{
+    super::{Host, HostOwned},
+    PlatformResult,
+};
 use crate::session::{HostDispatcher, RootView};
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
