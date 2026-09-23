@@ -8,6 +8,8 @@
 //! is a binary of its own holding a single test: nothing else runs while it
 //! measures, and the two hosts are asked one after the other rather than at
 //! once.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+use kithara_test_utils::kithara;
 #[path = "../examples/gallery/app.rs"]
 mod app;
 #[path = "../examples/gallery/capture.rs"]
@@ -29,5 +31,12 @@ mod sections;
 // A sibling in `tests/` would be a test binary of its own, and this one
 // carries the gallery modules the checks are written against. Under this
 // directory cargo leaves it alone and only this binary claims it.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[path = "ui_memory/checks.rs"]
 mod checks;
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[kithara::test]
+fn device_memory_budget_requires_metal_accounting() {
+    assert!(kithara_ui::render::gpu::allocated_bytes().is_none());
+}
