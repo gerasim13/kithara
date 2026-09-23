@@ -16,8 +16,8 @@ use crate::{backend::pooled::ByteBuffers, error::NetError};
 pub(super) const READ_SIZE: usize = 64 * 1024;
 
 pub(super) struct Response {
-    pub(super) status: u16,
     pub(super) headers: Vec<(String, String)>,
+    pub(super) status: u16,
 }
 
 // What the transport reported and Kithara has not taken yet.
@@ -28,12 +28,12 @@ pub(super) struct CallState {
 
 #[derive(Default)]
 struct Reports {
-    phase: Phase,
-    response: Option<Response>,
     chunk: Option<Bytes>,
     outcome: Option<Result<(), NetError>>,
-    transport_ended: bool,
+    response: Option<Response>,
     waker: Option<Waker>,
+    phase: Phase,
+    transport_ended: bool,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -45,32 +45,6 @@ enum Phase {
 }
 
 impl CallState {
-    pub(super) fn response(&self, status: u16, headers: Vec<(String, String)>) {
-        self.update(|reports| match reports.phase {
-            Phase::Opening => {
-                reports.phase = Phase::Body;
-                reports.response = Some(Response { status, headers });
-            }
-            Phase::Body => reports.violate(format!("a second response, HTTP {status}")),
-            Phase::Settled => {}
-        });
-    }
-
-    pub(super) fn read(&self, buffer: HostBuffer, len: usize) {
-        self.update(|reports| match reports.phase {
-            Phase::Opening => reports.violate("a read before the response".to_owned()),
-            Phase::Body if len > buffer.as_ref().len() => reports.violate(format!(
-                "a read of {len} bytes into a buffer of {}",
-                buffer.as_ref().len()
-            )),
-            Phase::Body if reports.chunk.is_some() => {
-                reports.violate("a read nobody asked for".to_owned());
-            }
-            Phase::Body => reports.chunk = Some(buffer.into_bytes(len)),
-            Phase::Settled => {}
-        });
-    }
-
     pub(super) fn end(&self) {
         self.update(|reports| {
             reports.transport_ended = true;
@@ -85,8 +59,19 @@ impl CallState {
         });
     }
 
-    pub(super) fn transport_ended(&self) -> bool {
-        self.reports.lock().transport_ended
+    fn poll_chunk(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, NetError>>> {
+        let mut reports = self.reports.lock();
+        if let Some(chunk) = reports.chunk.take() {
+            return Poll::Ready(Some(Ok(chunk)));
+        }
+        match reports.outcome.take() {
+            Some(Ok(())) => Poll::Ready(None),
+            Some(Err(error)) => Poll::Ready(Some(Err(error))),
+            None => {
+                reports.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
     }
 
     pub(super) fn poll_response(&self, cx: &mut Context<'_>) -> Poll<Result<Response, NetError>> {
@@ -106,19 +91,34 @@ impl CallState {
         }
     }
 
-    fn poll_chunk(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, NetError>>> {
-        let mut reports = self.reports.lock();
-        if let Some(chunk) = reports.chunk.take() {
-            return Poll::Ready(Some(Ok(chunk)));
-        }
-        match reports.outcome.take() {
-            Some(Ok(())) => Poll::Ready(None),
-            Some(Err(error)) => Poll::Ready(Some(Err(error))),
-            None => {
-                reports.waker = Some(cx.waker().clone());
-                Poll::Pending
+    pub(super) fn read(&self, buffer: HostBuffer, len: usize) {
+        self.update(|reports| match reports.phase {
+            Phase::Opening => reports.violate("a read before the response".to_owned()),
+            Phase::Body if len > buffer.as_ref().len() => reports.violate(format!(
+                "a read of {len} bytes into a buffer of {}",
+                buffer.as_ref().len()
+            )),
+            Phase::Body if reports.chunk.is_some() => {
+                reports.violate("a read nobody asked for".to_owned());
             }
-        }
+            Phase::Body => reports.chunk = Some(buffer.into_bytes(len)),
+            Phase::Settled => {}
+        });
+    }
+
+    pub(super) fn response(&self, status: u16, headers: Vec<(String, String)>) {
+        self.update(|reports| match reports.phase {
+            Phase::Opening => {
+                reports.phase = Phase::Body;
+                reports.response = Some(Response { headers, status });
+            }
+            Phase::Body => reports.violate(format!("a second response, HTTP {status}")),
+            Phase::Settled => {}
+        });
+    }
+
+    pub(super) fn transport_ended(&self) -> bool {
+        self.reports.lock().transport_ended
     }
 
     fn update(&self, report: impl FnOnce(&mut Reports)) {
@@ -151,9 +151,9 @@ impl Reports {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct Call {
-    call: Box<dyn HostCall>,
     #[field(get, vis = "pub(super)")]
     state: Arc<CallState>,
+    call: Box<dyn HostCall>,
     stopped: bool,
 }
 
@@ -185,8 +185,8 @@ impl Drop for Call {
 }
 
 pub(super) struct HostBodyStream {
-    call: Call,
     buffers: ByteBuffers,
+    call: Call,
     cancel: CancelToken,
     cancel_wake: Option<CancelWakerGuard>,
     done: bool,

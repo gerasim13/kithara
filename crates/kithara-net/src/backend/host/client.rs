@@ -99,6 +99,14 @@ impl RawHostNet {
         Ok(response)
     }
 
+    fn observe_first_byte(&self, started: Instant, status: u16) {
+        if let Some(observer) = self.options.observer.as_ref() {
+            observer
+                .0
+                .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
+        }
+    }
+
     #[kithara::flash(io)]
     async fn raw_body(
         &self,
@@ -111,11 +119,11 @@ impl RawHostNet {
         let opened = timeout(
             self.options.inactivity_timeout,
             self.exchange.open(Target {
+                url,
+                headers,
                 method: HostMethod::Get,
                 accept_encoding: AcceptEncodingPolicy::Identity,
-                url,
                 range: range.as_ref(),
-                headers,
                 body: None,
             }),
         )
@@ -130,14 +138,6 @@ impl RawHostNet {
         let Opened { call, headers, .. } = opened;
         let body = self.exchange.body(call);
         Ok(ByteStream::with_partial(headers, Box::pin(body), partial))
-    }
-
-    fn observe_first_byte(&self, started: Instant, status: u16) {
-        if let Some(observer) = self.options.observer.as_ref() {
-            observer
-                .0
-                .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
-        }
     }
 
     fn wrap_resumable(
@@ -198,12 +198,17 @@ impl HostNet {
         S: HasPool<u8> + Send + Sync + 'static,
     {
         Self::from(RawHostNet {
-            exchange: Exchange {
-                buffers: ByteBuffers::new(pools),
-                cancel,
-            },
             options,
+            exchange: Exchange {
+                cancel,
+                buffers: ByteBuffers::new(pools),
+            },
         })
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &NetOptions {
+        &self.raw.options
     }
 
     #[must_use]
@@ -212,11 +217,6 @@ impl HostNet {
             options: self.raw.options.with_observer(observer),
             exchange: self.raw.exchange.clone(),
         })
-    }
-
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.raw.options
     }
 
     delegate::delegate! {

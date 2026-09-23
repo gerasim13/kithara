@@ -9,8 +9,8 @@ use crate::error::AndroidBackendError;
 
 /// One method of one object, checked to exist once and called many times.
 pub(crate) struct BoundMethod {
-    object: Global<JObject<'static>>,
     name: &'static JNIStr,
+    object: Global<JObject<'static>>,
     signature: MethodSignature<'static, 'static>,
 }
 
@@ -28,8 +28,8 @@ impl BoundMethod {
         env.get_method_id(&class, name, &signature)
             .map_err(AndroidBackendError::jni("jni-method-id"))?;
         Ok(Self {
-            object,
             name,
+            object,
             signature,
         })
     }

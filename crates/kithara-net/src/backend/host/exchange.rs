@@ -22,12 +22,12 @@ pub(super) struct Opened {
 }
 
 pub(super) struct Target<'a> {
-    pub(super) method: HostMethod,
-    pub(super) accept_encoding: AcceptEncodingPolicy,
     pub(super) url: &'a Url,
-    pub(super) range: Option<&'a RangeSpec>,
-    pub(super) headers: Option<&'a Headers>,
+    pub(super) accept_encoding: AcceptEncodingPolicy,
+    pub(super) method: HostMethod,
     pub(super) body: Option<Bytes>,
+    pub(super) headers: Option<&'a Headers>,
+    pub(super) range: Option<&'a RangeSpec>,
 }
 
 #[derive(Clone)]
@@ -54,10 +54,10 @@ impl Exchange {
             .transpose()?;
         let state = Arc::new(CallState::default());
         let request = HostRequest {
+            body,
             method: target.method,
             url: target.url.clone(),
             headers: request_headers(target.headers, target.range, target.accept_encoding),
-            body,
         };
         let call = transport.start(request, HostEvents(Arc::clone(&state)))?;
         let call = Call::new(call, state);

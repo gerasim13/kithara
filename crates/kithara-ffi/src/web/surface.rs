@@ -407,9 +407,9 @@ impl AudioPlayer {
         };
         self.inner
             .set_crossfade_settings(FfiCrossfadeSettings {
+                duration,
                 curve,
                 depth,
-                duration,
                 position,
             })
             .map_err(|error| JsValue::from_str(&error.to_string()))

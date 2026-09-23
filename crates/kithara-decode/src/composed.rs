@@ -639,8 +639,8 @@ mod default_priming_tests {
     #[derive(Debug, PartialEq)]
     struct Pcm {
         timestamp: Duration,
-        frame_offset: u64,
         samples: Vec<f32>,
+        frame_offset: u64,
     }
 
     fn pcm_prefix(mut next: impl FnMut() -> DecoderChunkOutcome) -> Pcm {
