@@ -5888,6 +5888,7 @@ dependencies = [
  "iced_wgpu",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
