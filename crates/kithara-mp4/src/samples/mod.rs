@@ -1,3 +1,3 @@
-mod core;
+mod table;
 
-pub use core::{Sample, read_samples};
+pub use table::{Sample, read_samples};

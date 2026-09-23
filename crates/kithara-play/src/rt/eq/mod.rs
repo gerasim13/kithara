@@ -1,3 +1,3 @@
-mod core;
+mod master;
 
-pub use core::MasterEqNode;
+pub use master::MasterEqNode;

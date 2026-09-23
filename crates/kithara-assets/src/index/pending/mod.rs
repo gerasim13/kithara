@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-mod core;
+mod demand;
 
-pub(super) use core::PendingResourceInner;
-pub(crate) use core::{DemandEntry, PendingResourceIndex};
+pub(super) use demand::PendingResourceInner;
+pub(crate) use demand::{DemandEntry, PendingResourceIndex};

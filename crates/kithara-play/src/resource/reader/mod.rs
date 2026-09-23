@@ -1,3 +1,3 @@
-mod core;
+mod playback;
 
-pub use core::Resource;
+pub use playback::Resource;

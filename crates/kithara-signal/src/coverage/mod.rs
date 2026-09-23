@@ -1,6 +1,5 @@
 mod blob;
-mod core;
-
-pub use core::{FrameCoverage, FrameSpan};
+mod frame;
 
 pub use blob::{CoverageRead, CoverageWrite};
+pub use frame::{FrameCoverage, FrameSpan};

@@ -10,7 +10,7 @@ use ringbuf::{
 
 use super::{
     FormatChange, LiveRecordingReport,
-    core::{Consts, Control},
+    recorder::{Consts, Control},
 };
 use crate::{
     LiveRecordingConfig, LiveRecordingError, PartSinkFactory, RecordingConfig, RecordingCore,

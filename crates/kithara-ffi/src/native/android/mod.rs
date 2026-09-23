@@ -1,6 +1,6 @@
 #[cfg(feature = "test")]
 mod capture;
-mod core;
+mod exports;
 mod init;
 #[cfg(feature = "test")]
 mod probe;

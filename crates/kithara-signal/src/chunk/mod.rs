@@ -1,6 +1,5 @@
-mod core;
+mod audio;
 mod source_span;
 
-pub use core::{AudioChunk, AudioChunkInfo};
-
+pub use audio::{AudioChunk, AudioChunkInfo};
 pub use source_span::SourceSpan;

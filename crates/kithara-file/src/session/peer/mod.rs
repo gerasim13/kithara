@@ -1,4 +1,4 @@
-mod core;
+mod downloader;
 mod response;
 
-pub(crate) use core::FilePeer;
+pub(crate) use downloader::FilePeer;

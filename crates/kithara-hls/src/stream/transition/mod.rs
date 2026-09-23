@@ -1,4 +1,4 @@
-mod core;
 mod prepare;
+mod slots;
 
-pub(super) use core::SessionSlots;
+pub(super) use slots::SessionSlots;

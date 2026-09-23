@@ -1,9 +1,8 @@
 mod config;
-mod core;
 #[cfg(feature = "offline")]
 mod offline;
+mod owner;
 mod platform;
 
-pub use core::{Host, HostOwned};
-
 pub use config::HostConfig;
+pub use owner::{Host, HostOwned};

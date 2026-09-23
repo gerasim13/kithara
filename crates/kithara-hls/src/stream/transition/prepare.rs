@@ -10,7 +10,7 @@ use kithara_stream::{
 
 use super::{
     super::coord::HlsCoord,
-    core::{IncomingSlot, transition_for_claim, unsupported_pending_claim},
+    slots::{IncomingSlot, transition_for_claim, unsupported_pending_claim},
 };
 use crate::{
     reader::HlsReaderEventSink,

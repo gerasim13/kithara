@@ -1,3 +1,3 @@
-mod core;
+mod decoder;
 
-pub(crate) use core::DecoderNode;
+pub(crate) use decoder::DecoderNode;

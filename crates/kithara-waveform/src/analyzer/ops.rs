@@ -9,7 +9,7 @@ use tracing::debug;
 
 use super::{
     WaveformAnalyzer,
-    core::{Consts, Partial},
+    waveform::{Consts, Partial},
 };
 use crate::Band;
 

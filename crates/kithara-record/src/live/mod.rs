@@ -1,5 +1,5 @@
-mod core;
+mod recorder;
 mod task;
 
-pub(super) use core::FormatChange;
-pub use core::{LiveRecorder, LiveRecordingHandle, LiveRecordingReport, RecordingOutput};
+pub(super) use recorder::FormatChange;
+pub use recorder::{LiveRecorder, LiveRecordingHandle, LiveRecordingReport, RecordingOutput};

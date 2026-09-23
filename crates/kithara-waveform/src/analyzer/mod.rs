@@ -1,4 +1,4 @@
-mod core;
 mod ops;
+mod waveform;
 
-pub use core::WaveformAnalyzer;
+pub use waveform::WaveformAnalyzer;

@@ -1,4 +1,4 @@
 mod apply;
-mod core;
+mod control;
 mod navigation;
 mod pending;

@@ -1,3 +1,3 @@
-mod core;
+mod fragment;
 
-pub use core::{Fmp4Layout, Fragment};
+pub use fragment::{Fmp4Layout, Fragment};
