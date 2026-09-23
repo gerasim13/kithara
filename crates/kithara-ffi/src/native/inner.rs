@@ -301,13 +301,31 @@ impl NativeInner {
         let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
-        self.queue
-            .append_with_id(id, source)
-            .map_err(|error| FfiError::Internal {
-                description: error.to_string(),
-            })?;
-        *item.inserted.lock() = true;
+        self.enqueue(item, || {
+            self.queue
+                .append_with_id(id, source)
+                .map(|_| ())
+                .map_err(|error| FfiError::Internal {
+                    description: error.to_string(),
+                })
+        })
+    }
+
+    /// Registers `item` before `add` puts it into the queue: a load that
+    /// fails at once reports its status while `add` is still returning, and
+    /// the event bridge drops a status for an item it cannot find.
+    fn enqueue(
+        &self,
+        item: &Arc<AudioPlayerItem>,
+        add: impl FnOnce() -> Result<(), FfiError>,
+    ) -> Result<(), FfiError> {
+        let id = item.track_id();
         self.items.lock().insert(id, Arc::clone(item));
+        if let Err(error) = add() {
+            self.items.lock().remove(&id);
+            return Err(error);
+        }
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -339,16 +357,14 @@ impl NativeInner {
         let id = item.track_id();
         let after_id = after.map(|i| i.track_id());
 
-        self.queue
-            .insert_with_id(id, source, after_id)
-            .map_err(|e| FfiError::InvalidArgument {
-                reason: e.to_string(),
-            })?;
-
-        *item.inserted.lock() = true;
-        self.items.lock().insert(id, Arc::clone(item));
-        item.restart_bridge();
-        Ok(())
+        self.enqueue(item, || {
+            self.queue
+                .insert_with_id(id, source, after_id)
+                .map(|_| ())
+                .map_err(|e| FfiError::InvalidArgument {
+                    reason: e.to_string(),
+                })
+        })
     }
 
     pub(crate) fn item_count(&self) -> u32 {
