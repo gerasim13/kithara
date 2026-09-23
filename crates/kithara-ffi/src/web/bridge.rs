@@ -48,6 +48,10 @@ pub(crate) fn require_initialized() -> Result<(), JsValue> {
     ready_host_channel().map(drop)
 }
 
+pub(crate) fn require_initialized_domain() -> Result<(), crate::types::FfiError> {
+    host_channel().with_ready(|_| ())
+}
+
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = initializeHost)]
 pub fn initialize_host(config: FfiHostConfig) -> Result<(), JsValue> {
     initialize_host_domain(config).map_err(|error| JsValue::from_str(&error.to_string()))

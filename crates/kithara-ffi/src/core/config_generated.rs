@@ -3,7 +3,7 @@ use kithara::play::{EqBandConfig, FilterKind, GainDb};
 
 /// Filter response applied by one equalizer band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiEqFilterKind {
     LowShelf,
     Peaking,
@@ -12,7 +12,10 @@ pub enum FfiEqFilterKind {
 
 /// Configuration for a single EQ band.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
 pub struct FfiEqBandConfig {
     /// Filter response applied by this band.
     pub kind: FfiEqFilterKind,

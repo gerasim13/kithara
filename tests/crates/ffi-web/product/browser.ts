@@ -1,10 +1,18 @@
-import api, { defaultHostConfig, FfiError, initializeHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiEqFilterKind, FfiError, initializeHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
   const { default: init, AudioPlayer } = await import(new URL("./generated/wasm-bindgen/index.js", import.meta.url).href);
   await init({ module_or_path: "/generated/wasm-bindgen/index_bg.wasm", memory });
   api.initialize();
+
+  let premature = false;
+  try {
+    UniAudioPlayer.newWeb();
+  } catch (error) {
+    premature = FfiError.NotInitialized.instanceOf(error);
+  }
+  if (!premature) throw new Error("generated player constructor accepted an uninitialized host");
 
   const defaults = defaultHostConfig();
   if (defaults.sampleRateHint !== 44_100 || Math.abs(defaults.limiter.ceiling - 0.98) > 1e-6 || defaults.limiter.releaseMs !== 50) {
@@ -33,6 +41,13 @@ async function main() {
     repeated = FfiError.AlreadyInitialized.instanceOf(error);
   }
   if (!repeated) throw new Error("repeated host initialization was accepted");
+  const generatedPlayer = UniAudioPlayer.newWeb();
+  generatedPlayer.setEqLayout([{ kind: FfiEqFilterKind.Peaking, gainDb: 3, frequency: 1000, qFactor: 0.7 }]);
+  if (generatedPlayer.eqBandCount() !== 1 || generatedPlayer.eqGain(0) !== 3) {
+    throw new Error("generated player EQ layout did not reach owner readback");
+  }
+  if (!(generatedPlayer instanceof UniAudioPlayer)) throw new Error("generated player has no owned handle");
+  generatedPlayer.uniffiDestroy();
   const player = new AudioPlayer();
   let rejectedBand = false;
   try {

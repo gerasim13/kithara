@@ -18,7 +18,10 @@ use crate::{
 /// facade only owns the object identity and (on native) the `Drop`
 /// shutdown pulse. The JS control surface lives in
 /// `crate::web::surface`.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Object)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
     pub(crate) inner: Inner,
@@ -82,14 +85,6 @@ impl AudioPlayer {
     #[must_use]
     pub fn current_time(&self) -> f64 {
         self.inner.current_time()
-    }
-
-    pub fn eq_band_count(&self) -> u32 {
-        self.inner.eq_band_count()
-    }
-
-    pub fn eq_gain(&self, band: u32) -> f32 {
-        self.inner.eq_gain(band)
     }
 
     /// Insert an item into the queue.
@@ -233,14 +228,6 @@ impl AudioPlayer {
         self.inner.set_eq_gain(band, gain_db)
     }
 
-    /// Replace the complete live equalizer layout through the owning player.
-    ///
-    /// # Errors
-    /// Returns an error when the player cannot prepare or publish the layout.
-    pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
-        self.inner.set_eq_layout(layout)
-    }
-
     pub fn set_muted(&self, muted: bool) {
         self.inner.set_muted(muted);
     }
@@ -325,6 +312,45 @@ impl AudioPlayer {
 
     pub fn volume(&self) -> f32 {
         self.inner.volume()
+    }
+}
+
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
+impl AudioPlayer {
+    /// Number of bands in the current equalizer layout.
+    #[must_use]
+    pub fn eq_band_count(&self) -> u32 {
+        self.inner.eq_band_count()
+    }
+
+    /// Gain in decibels for one band, or zero for an unknown index.
+    #[must_use]
+    pub fn eq_gain(&self, band: u32) -> f32 {
+        self.inner.eq_gain(band)
+    }
+
+    /// Replace the complete live equalizer layout through the owning player.
+    ///
+    /// # Errors
+    /// Returns an error when the player cannot prepare or publish the layout.
+    pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        self.inner.set_eq_layout(layout)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[cfg_attr(feature = "uniffi-web", uniffi::export)]
+impl AudioPlayer {
+    /// Create a Web player attached to the initialized host.
+    ///
+    /// # Errors
+    /// Returns a lifecycle error if the host is not ready.
+    #[cfg_attr(feature = "uniffi-web", uniffi::constructor)]
+    pub fn new_web() -> Result<Arc<Self>, FfiError> {
+        crate::web::bridge::require_initialized_domain()?;
+        Ok(Arc::new(Self {
+            inner: Inner::default(),
+        }))
     }
 }
 

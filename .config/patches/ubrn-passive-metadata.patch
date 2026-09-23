@@ -1,0 +1,104 @@
+diff --git a/crates/ubrn_bindgen/src/wasm_metadata.rs b/crates/ubrn_bindgen/src/wasm_metadata.rs
+index 4fe4922..b6e9190 100644
+--- a/crates/ubrn_bindgen/src/wasm_metadata.rs
++++ b/crates/ubrn_bindgen/src/wasm_metadata.rs
+@@ -56,6 +56,8 @@ fn read_meta_blobs(wasm_bytes: &[u8]) -> Result<Vec<(String, &[u8])>> {
+     let mut globals: Vec<i32> = Vec::new();
+     let mut meta_exports: BTreeMap<String, u32> = BTreeMap::new();
+     let mut data_segments: Vec<(u32, &[u8])> = Vec::new();
++    let mut passive_segments: Vec<Option<&[u8]>> = Vec::new();
++    let mut static_inits: Vec<(u32, u32, u32, u32)> = Vec::new();
+ 
+     for payload in Parser::new(0).parse_all(wasm_bytes) {
+         let payload = payload.context("failed to parse WASM payload")?;
+@@ -82,16 +84,31 @@ fn read_meta_blobs(wasm_bytes: &[u8]) -> Result<Vec<(String, &[u8])>> {
+                     }
+                 }
+             }
++            Payload::CodeSectionEntry(body) => {
++                let mut constants = Vec::new();
++                for operator in body.get_operators_reader()? {
++                    match operator? {
++                        Operator::I32Const { value } => constants.push(value as u32),
++                        Operator::MemoryInit { data_index, mem } if mem == 0 && constants.len() >= 3 => {
++                            let args = &constants[constants.len() - 3..];
++                            static_inits.push((data_index, args[0], args[1], args[2]));
++                            constants.clear();
++                        }
++                        _ => constants.clear(),
++                    }
++                }
++            }
+             Payload::DataSection(reader) => {
+                 for data in reader {
+                     let data = data.context("failed to parse WASM data segment")?;
+-                    if let wasmparser::DataKind::Active {
+-                        memory_index: 0,
+-                        offset_expr,
+-                    } = &data.kind
+-                    {
+-                        let base = eval_i32_init_expr(offset_expr)?;
+-                        data_segments.push((base as u32, data.data));
++                    match &data.kind {
++                        wasmparser::DataKind::Active { memory_index: 0, offset_expr } => {
++                            let base = eval_i32_init_expr(offset_expr)?;
++                            data_segments.push((base as u32, data.data));
++                            passive_segments.push(None);
++                        }
++                        wasmparser::DataKind::Passive => passive_segments.push(Some(data.data)),
++                        _ => passive_segments.push(None),
+                     }
+                 }
+             }
+@@ -99,6 +116,19 @@ fn read_meta_blobs(wasm_bytes: &[u8]) -> Result<Vec<(String, &[u8])>> {
+         }
+     }
+ 
++    for (index, destination, source, length) in static_inits {
++        let Some(Some(data)) = passive_segments.get(index as usize) else {
++            continue;
++        };
++        let start = source as usize;
++        let Some(end) = start.checked_add(length as usize) else {
++            continue;
++        };
++        if let Some(initialized) = data.get(start..end) {
++            data_segments.push((destination, initialized));
++        }
++    }
++
+     if meta_exports.is_empty() {
+         bail!("no UNIFFI_META_* exports found in WASM file - is this a UniFFI crate?");
+     }
+@@ -264,6 +294,31 @@ mod tests {
+         assert_eq!(&bytes[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+     }
+ 
++    #[test]
++    fn extracts_meta_blob_initialized_from_passive_data() {
++        let mut wasm = Vec::from(&b"\0asm\x01\0\0\0"[..]);
++        push_section(&mut wasm, 1, &[1, 0x60, 0, 0]);
++        push_section(&mut wasm, 3, &[1, 0]);
++        push_section(&mut wasm, 5, &[1, 0, 1]);
++        push_section(&mut wasm, 6, &[1, 0x7f, 0, 0x41, 0x80, 0x08, 0x0b]);
++        let name = b"UNIFFI_META_NS_demo";
++        let mut exports = vec![1, name.len() as u8];
++        exports.extend_from_slice(name);
++        exports.extend_from_slice(&[3, 0]);
++        push_section(&mut wasm, 7, &exports);
++        push_section(&mut wasm, 8, &[0]);
++        push_section(&mut wasm, 12, &[1]);
++        push_section(
++            &mut wasm,
++            10,
++            &[1, 13, 0, 0x41, 0x80, 0x08, 0x41, 0, 0x41, 8, 0xfc, 8, 0, 0, 0x0b],
++        );
++        push_section(&mut wasm, 11, &[1, 1, 8, 1, 2, 3, 4, 5, 6, 7, 8]);
++
++        let blobs = read_meta_blobs(&wasm).expect("static passive initialization");
++        assert_eq!(&blobs[0].1[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
++    }
++
+     #[test]
+     fn rejects_wasm_with_no_meta_exports() {
+         // A genuinely empty wasm module - just the header.

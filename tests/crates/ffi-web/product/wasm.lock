@@ -2141,6 +2141,7 @@ dependencies = [
  "js-sys",
  "kithara-abr",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-events",

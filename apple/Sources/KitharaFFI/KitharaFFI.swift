@@ -662,8 +662,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func currentTime()  -> Double
 
+    /**
+     * Number of bands in the current equalizer layout.
+     */
     func eqBandCount()  -> UInt32
 
+    /**
+     * Gain in decibels for one band, or zero for an unknown index.
+     */
     func eqGain(band: UInt32)  -> Float
 
     /**
@@ -1076,6 +1082,9 @@ open func currentTime() -> Double  {
 })
 }
 
+    /**
+     * Number of bands in the current equalizer layout.
+     */
 open func eqBandCount() -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_eq_band_count(
@@ -1084,6 +1093,9 @@ open func eqBandCount() -> UInt32  {
 })
 }
 
+    /**
+     * Gain in decibels for one band, or zero for an unknown index.
+     */
 open func eqGain(band: UInt32) -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_eq_gain(
@@ -9761,10 +9773,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_time() != 5603) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_band_count() != 6883) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_band_count() != 16392) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 64291) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 49120) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 21561) {

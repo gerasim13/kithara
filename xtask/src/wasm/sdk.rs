@@ -15,6 +15,8 @@ use crate::{
     ci::CiPins,
 };
 
+const WASM_RUSTFLAGS: &str = "--cfg=web_sys_unstable_apis -C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=67108864 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base -C link-arg=--export=__heap_base -C panic=abort";
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
     /// Clean checkout of the pinned uniffi-bindgen-react-native revision.
@@ -45,7 +47,7 @@ pub(super) fn run(args: Args, ctx: &Ctx) -> Result<()> {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     ));
-    generate_bindings(&backend, &generated, &shim, &library, &cancel)?;
+    generate_bindings(&backend, &generated, &shim, &library, None, &cancel)?;
     let module = shim.join("src/kithara_config_uniffi_probe_module.rs");
     fs::write(&module, canonical_rust(&fs::read_to_string(&module)?)?)?;
     write_shim(&ctx.root, &shim, &backend)?;
@@ -75,26 +77,22 @@ pub(super) fn run_product(args: Args, ctx: &Ctx) -> Result<()> {
     let generated = output.join("generated");
     let shim = output.join("shim");
     fs::create_dir_all(shim.join("src"))?;
-    build_backend(&backend, &cancel)?;
-    run_command(
-        Command::new("cargo").current_dir(&ctx.root).args([
-            "build",
-            "--locked",
-            "-p",
-            "kithara-ffi",
-            "--lib",
-            "--no-default-features",
-            "--features",
-            "uniffi-web,symphonia,client-reqwest,tls-rustls",
-        ]),
+    build_product_backend(
+        &backend,
+        &ctx.root.join(".config/patches/ubrn-passive-metadata.patch"),
+        &output,
         &cancel,
     )?;
-    let library = ctx.root.join("target/debug").join(format!(
-        "{}kithara_ffi{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
-    generate_bindings(&backend, &generated, &shim, &library, &cancel)?;
+    build_product_metadata_wasm(&ctx.root, &shim, &pins.nightly_toolchain, &cancel)?;
+    let library = shim.join("target/wasm32-unknown-unknown/debug/kithara_ffi.wasm");
+    generate_bindings(
+        &backend,
+        &generated,
+        &shim,
+        &library,
+        Some(&output.join("backend-target")),
+        &cancel,
+    )?;
     let module = shim.join("src/kithara_ffi_module.rs");
     fs::write(&module, canonical_rust(&fs::read_to_string(&module)?)?)?;
     write_product_shim(&ctx.root, &shim, &backend)?;
@@ -124,10 +122,12 @@ fn generate_bindings(
     generated: &Path,
     shim: &Path,
     library: &Path,
+    product_target: Option<&Path>,
     cancel: &Cancel,
 ) -> Result<()> {
-    let generator = backend.join(format!(
-        "target/debug/uniffi-bindgen-react-native{}",
+    let target = product_target.map_or_else(|| backend.join("target"), Path::to_path_buf);
+    let generator = target.join(format!(
+        "debug/uniffi-bindgen-react-native{}",
         std::env::consts::EXE_SUFFIX
     ));
     run_command(
@@ -218,6 +218,46 @@ fn build_backend(backend: &Path, cancel: &Cancel) -> Result<()> {
             .current_dir(backend)
             .args(["build", "--locked", "-p", "uniffi-bindgen-react-native"])
             .env("CARGO_TARGET_DIR", backend.join("target")),
+        cancel,
+    )
+}
+
+fn build_product_backend(
+    backend: &Path,
+    patch: &Path,
+    output: &Path,
+    cancel: &Cancel,
+) -> Result<()> {
+    let staged = tempfile::tempdir_in(output)?;
+    let archive = staged.path().join("backend.tar");
+    run_command(
+        Command::new("git")
+            .current_dir(backend)
+            .args(["archive", "--format=tar", "--output"])
+            .arg(&archive)
+            .arg("HEAD"),
+        cancel,
+    )?;
+    run_command(
+        Command::new("tar")
+            .args(["-xf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(staged.path()),
+        cancel,
+    )?;
+    run_command(
+        Command::new("patch")
+            .current_dir(staged.path())
+            .args(["-p1", "-i"])
+            .arg(patch),
+        cancel,
+    )?;
+    run_command(
+        Command::new("cargo")
+            .current_dir(staged.path())
+            .args(["build", "--locked", "-p", "uniffi-bindgen-react-native"])
+            .env("CARGO_TARGET_DIR", output.join("backend-target")),
         cancel,
     )
 }
@@ -324,11 +364,52 @@ uniffi-runtime-javascript = { path = "", features = ["wasm32"] }
 }
 
 fn build_wasm(shim: &Path, nightly: &str, cancel: &Cancel) -> Result<()> {
-    run_command(Command::new("cargo").current_dir(shim)
-        .arg(format!("+{nightly}"))
-        .args(["build", "--locked", "--target", "wasm32-unknown-unknown", "-Z", "build-std=std,panic_abort"])
-        .env("CARGO_TARGET_DIR", shim.join("target"))
-        .env("RUSTFLAGS", "--cfg=web_sys_unstable_apis -C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=67108864 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base -C link-arg=--export=__heap_base -C panic=abort"), cancel)
+    run_command(
+        Command::new("cargo")
+            .current_dir(shim)
+            .arg(format!("+{nightly}"))
+            .args([
+                "build",
+                "--locked",
+                "--target",
+                "wasm32-unknown-unknown",
+                "-Z",
+                "build-std=std,panic_abort",
+            ])
+            .env("CARGO_TARGET_DIR", shim.join("target"))
+            .env("RUSTFLAGS", WASM_RUSTFLAGS),
+        cancel,
+    )
+}
+
+fn build_product_metadata_wasm(
+    root: &Path,
+    shim: &Path,
+    nightly: &str,
+    cancel: &Cancel,
+) -> Result<()> {
+    run_command(
+        Command::new("cargo")
+            .current_dir(root)
+            .arg(format!("+{nightly}"))
+            .args([
+                "build",
+                "--locked",
+                "--target",
+                "wasm32-unknown-unknown",
+                "-Z",
+                "build-std=std,panic_abort",
+                "-p",
+                "kithara-ffi",
+                "--lib",
+                "--no-default-features",
+                "--features",
+                "wasm,uniffi-web,symphonia,client-reqwest,tls-rustls",
+            ])
+            .env("CARGO_TARGET_DIR", shim.join("target"))
+            .env("RUSTFLAGS", WASM_RUSTFLAGS),
+        cancel,
+    )
 }
 
 fn bundle(root: &Path, output: &Path, backend: &Path, cancel: &Cancel) -> Result<()> {

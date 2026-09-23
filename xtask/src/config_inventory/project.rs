@@ -18,7 +18,7 @@ pub(super) fn render(registrations: &[Registration]) -> Result<String> {
          use kithara::play::{EqBandConfig, FilterKind, GainDb};\n\n\
          /// Filter response applied by one equalizer band.\n\
          #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n\
-         #[cfg_attr(feature = \"uniffi\", derive(uniffi::Enum))]\n\
+         #[cfg_attr(any(feature = \"uniffi\", feature = \"uniffi-web\"), derive(uniffi::Enum))]\n\
          pub enum FfiEqFilterKind {\n\
          \x20\x20\x20\x20LowShelf,\n\
          \x20\x20\x20\x20Peaking,\n\
@@ -112,7 +112,7 @@ fn render_record(output: &mut String, registration: &Registration) -> Result<()>
     }
     output.push_str(
         "#[derive(Clone, Debug, PartialEq)]\n\
-         #[cfg_attr(feature = \"uniffi\", derive(uniffi::Record))]\n\
+         #[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n\
          pub struct FfiEqBandConfig {\n",
     );
     for field in readable_fields(registration) {
