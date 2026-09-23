@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
 use delegate::delegate;
-use kithara_abr::{AbrController, AbrSettings};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -79,23 +78,14 @@ impl<S> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
-        if config.abr.is_none() {
-            let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
-            config.abr = Some(AbrController::new(abr_settings));
-        }
-
         // Seed the single speed source with the configured default rate.
         config.warp.stretch().set_speed(config.default_rate);
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
             params,
-            worker: config.worker,
+            config,
             engine_load: Arc::new(EngineLoad::default()),
-            warp: config.warp,
-            response_budget_frames: config.response_budget_frames,
-            gapless_mode: config.gapless_mode,
-            block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),

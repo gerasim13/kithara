@@ -85,7 +85,7 @@ where
 
     /// Start playback from the configured default-rate target.
     pub fn play(&self) {
-        let rate = self.core.warp.stretch().speed();
+        let rate = self.core.config.warp.stretch().speed();
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");

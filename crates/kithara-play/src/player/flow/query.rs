@@ -109,15 +109,17 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.bus().subscribe()
     }
 
+    /// Shared playback worker configured for this Player.
+    #[must_use]
+    pub const fn worker(&self) -> &PlayWorker<S> {
+        &self.core.config.worker
+    }
+
     delegate! {
         to self.core {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
             pub const fn engine(&self) -> &EngineImpl<S>;
-            /// Shared playback worker configured for this Player.
-            #[field(&worker)]
-            #[must_use]
-            pub const fn worker(&self) -> &PlayWorker<S>;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
