@@ -98,6 +98,23 @@ pub fn asset_id(func: &str, case: &str) -> String {
     hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
 }
 
+/// Identity of a case stored in an output format:
+/// `sha2-256(func || 0x00 || case || 0x00 || format)`.
+///
+/// `format` is a sample the current code writes in that format. A format
+/// change alters the sample and so re-addresses every case, while a build
+/// still on the old format keeps reading its own entries.
+#[must_use]
+pub fn formatted_asset_id(func: &str, case: &str, format: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(func.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(case.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(format);
+    hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
+}
+
 /// Reads the explicitly configured persistent store root.
 ///
 /// # Errors
@@ -388,6 +405,26 @@ mod tests {
         assert_ne!(a, swapped, "the separator must keep the halves apart");
         assert_eq!(a.len(), ASSET_ID_BYTES * 2);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_format_change_re_addresses_the_case() {
+        let plain = asset_id("rhythm_expected_analysis", "house_124_aligned");
+        let v6 = formatted_asset_id("rhythm_expected_analysis", "house_124_aligned", b"KA\x06");
+        let v7 = formatted_asset_id("rhythm_expected_analysis", "house_124_aligned", b"KA\x07");
+
+        assert_ne!(v6, v7, "a new format must not reuse the old entry");
+        assert_eq!(
+            v7,
+            formatted_asset_id("rhythm_expected_analysis", "house_124_aligned", b"KA\x07"),
+        );
+        assert_ne!(plain, v7);
+        assert_ne!(
+            formatted_asset_id("rhythm_expected_analysis", "house_124_aligned", b""),
+            plain,
+            "an empty sample still separates from an unformatted id",
+        );
+        assert_eq!(v7.len(), ASSET_ID_BYTES * 2);
     }
 
     #[kithara::test(native, flash(false))]

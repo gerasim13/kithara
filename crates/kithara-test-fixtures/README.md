@@ -21,6 +21,13 @@ The explicit `cache-version` file selects the shared cache revision. Change it
 only when intentionally replacing the cached fixture set; use a new case name
 for an individual replacement. Rebuilds reuse existing entries.
 
+An asset stored in a format another crate owns names a sample of that format
+with `#[kithara::asset(format = sample_fn)]`. The sample's digest joins the
+case id, so an edit to the format re-addresses every such case and the next
+build produces it again: no format version bump and no `cache-version` change.
+Every `.analysis` asset is keyed this way by `analysis_format`, one analysis
+file written with the current `kithara-analysis`.
+
 `KITHARA_FIXTURE_REFRESH` overrides that reuse for one build: `all` rebuilds the
 whole revision, and a comma-separated list rebuilds only what it names: an
 accessor (`{func}_{case}`), or a producing function (`{func}`), which stands for
@@ -91,6 +98,7 @@ use `#[future(awt)]` to receive those resources after preparation.
 - `store::ORIGIN_ENV` — `KITHARA_FIXTURE_ORIGIN`, optional `http://127.0.0.1`
   source. When set, records come from this URL and land in `STORE_ENV`.
 - `store::asset_id` — stable identity of one case.
+- `store::formatted_asset_id` — identity of one case keyed by its format sample.
 - `store::file` — local path of one store-relative record, fetched when an
   origin is configured.
 - `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic
