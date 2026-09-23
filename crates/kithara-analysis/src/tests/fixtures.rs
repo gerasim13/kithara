@@ -212,7 +212,9 @@ impl FakeReader {
 }
 
 pub(super) fn idle_ingest() -> crate::producer::ring::Reader {
-    crate::producer::ring::open_for(spec().sample_rate).1
+    crate::producer::ring::open_for(&crate::test_pools::pools(), spec().sample_rate)
+        .expect("test ring fits the pools")
+        .1
 }
 
 pub(super) fn eof() -> ChunkOutcome {

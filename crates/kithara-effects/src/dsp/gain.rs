@@ -6,7 +6,7 @@ use firewheel_core::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::GainDb;
+use crate::GainDb;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]

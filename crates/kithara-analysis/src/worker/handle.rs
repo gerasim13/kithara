@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_audio::AudioReader;
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolError};
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Mutex, mpsc},
@@ -29,9 +29,14 @@ pub struct AnalysisWorker {
     tasks: Mutex<Vec<ActiveTask>>,
     chunk_seconds: NonZeroU32,
     start_job: StartJob,
+    open_ring: OpenRing,
     _base: Worker,
     active: bool,
 }
+
+type OpenRing = Box<
+    dyn Fn(NonZeroU32) -> Result<(ring::Writer, ring::Reader), PoolError> + Send + Sync + 'static,
+>;
 
 type StartJob =
     Box<dyn Fn(Job, mpsc::Sender<()>) -> Result<TaskHandle, TaskError> + Send + Sync + 'static>;
@@ -130,6 +135,8 @@ impl AnalysisWorker {
         let task_config = TaskConfig::new()
             .with_max_compute_tasks(max_compute_tasks)
             .with_priority(priority);
+        let pools = builder.pools().clone();
+        let open_ring: OpenRing = Box::new(move |rate| ring::open_for(&pools, rate));
         let job_dispatcher = dispatcher.clone();
         let start_job: StartJob = Box::new(move |job, completion| {
             let pending = job_dispatcher.reserve(task_config.clone())?;
@@ -156,6 +163,7 @@ impl AnalysisWorker {
             chunk_seconds,
             dispatcher,
             fingerprint,
+            open_ring,
             resume_shape,
             scope,
             start_job,
@@ -167,7 +175,11 @@ impl AnalysisWorker {
     /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
     /// another axis is refused. Returns where its snapshots arrive and the
     /// producer another component may contribute decoded ranges through.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the playback ingress cannot be acquired under
+    /// the pool budget.
     pub fn analyze(
         &self,
         reader: Box<dyn AudioReader>,
@@ -175,10 +187,10 @@ impl AnalysisWorker {
         rate: NonZeroU32,
         revision: u64,
         demand: AnalysisDemand,
-    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate, revision, demand);
+    ) -> Result<(watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer), PoolError> {
+        let (rx, producer, pass) = self.open(token, rate, revision, demand)?;
         self.start(pass, reader);
-        (rx, producer)
+        Ok((rx, producer))
     }
 
     /// Identity of the analyzers that survived worker initialization.
@@ -196,20 +208,20 @@ impl AnalysisWorker {
     /// Open a pass and its bounded playback producer without waiting for the
     /// fallback reader to open or preload. `revision` is the one the caller
     /// already holds for `token`; every publication outranks it.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the playback ingress cannot be acquired under
+    /// the pool budget.
     pub fn open(
         &self,
         token: AnalysisToken,
         rate: NonZeroU32,
         revision: u64,
         demand: AnalysisDemand,
-    ) -> (
-        watch::Receiver<Option<AnalysisProgress>>,
-        AnalysisProducer,
-        AnalysisPass,
-    ) {
+    ) -> Result<AnalysisOpen, PoolError> {
+        let (writer, ingest) = (self.open_ring)(rate)?;
         let (tx, rx) = watch::channel(None);
-        let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
             ingest,
@@ -221,7 +233,7 @@ impl AnalysisWorker {
             cancel: self.scope.token().child(),
             resume: None,
         };
-        (rx, producer, pass)
+        Ok((rx, producer, pass))
     }
 
     /// Open a validated partial publication before its fallback reader is
@@ -230,7 +242,9 @@ impl AnalysisWorker {
     /// # Errors
     ///
     /// Rejects a settled or malformed checkpoint, analyzer/config drift, an
-    /// unknown source extent, and a different configured chunk size.
+    /// unknown source extent, and a different configured chunk size, and
+    /// fails when the playback ingress cannot be acquired under the pool
+    /// budget.
     pub fn open_resume(
         &self,
         progress: AnalysisProgress,
@@ -255,8 +269,8 @@ impl AnalysisWorker {
 
         let token = analysis.token().clone();
         let revision = analysis.revision();
+        let (writer, ingest) = (self.open_ring)(rate)?;
         let (tx, rx) = watch::channel(Some(progress.clone()));
-        let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
             ingest,

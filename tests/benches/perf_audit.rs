@@ -236,13 +236,15 @@ async fn analyze_track(
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;
-    let (mut results, _producer) = analysis_worker.analyze(
-        Box::new(reader),
-        token.clone(),
-        rate,
-        0,
-        AnalysisDemand::ALL,
-    );
+    let (mut results, _producer) = analysis_worker
+        .analyze(
+            Box::new(reader),
+            token.clone(),
+            rate,
+            0,
+            AnalysisDemand::ALL,
+        )
+        .expect("the analysis pass opens");
     while results.changed().await.is_ok() {}
 
     let progress = results.borrow().clone();

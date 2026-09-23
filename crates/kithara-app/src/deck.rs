@@ -1,12 +1,10 @@
 #[cfg(feature = "gui")]
-use kithara::play::effects::eq::{EqBandConfig, GainDb};
+use kithara::effects::{GainDb, eq::EqBandConfig};
 use kithara::{
+    effects::eq::generate_log_spaced_bands,
     host::HostOwned,
     platform::{CancelToken, sync::Arc},
-    play::{
-        PlayError, PlayerConfig, PlayerImpl, StretchControls,
-        effects::eq::generate_log_spaced_bands,
-    },
+    play::{PlayError, PlayerConfig, PlayerImpl, StretchControls},
     queue::QueueConfig,
     warp::WarpConfig,
 };

@@ -1,11 +1,11 @@
 use bon::Builder;
 use kithara_audio::{AudioConfig, ResamplerBackend};
+use kithara_effects::AudioEffect;
 use kithara_platform::sync::Arc;
 use kithara_stream::StreamType;
 use kithara_warp::WarpConfig;
 
 use super::EngineLoad;
-use crate::effects::AudioEffect;
 
 /// Play-owned configuration for one resident Warp/audio producer lane.
 #[derive(Builder, fieldwork::Fieldwork)]

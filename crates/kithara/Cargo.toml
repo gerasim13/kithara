@@ -89,15 +89,16 @@ bufpool = ["dep:kithara-bufpool"]
 decode = ["dep:kithara-decode"]
 download = ["dep:kithara-download"]
 drm = ["dep:kithara-drm"]
+effects = ["dep:kithara-effects"]
 encode = ["dep:kithara-encode"]
 events = ["dep:kithara-events"]
 file = ["assets", "net", "dep:kithara-file"]
 hls = ["abr", "assets", "drm", "net", "dep:kithara-hls"]
-host = ["dep:kithara-host"]
+host = ["effects", "dep:kithara-host"]
 net = ["dep:kithara-net"]
 output = ["dep:kithara-output"]
 platform = ["dep:kithara-platform"]
-play = ["dep:kithara-play"]
+play = ["effects", "dep:kithara-play"]
 queue = ["dep:kithara-queue"]
 resampler = ["dep:kithara-resampler"]
 signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
@@ -284,6 +285,7 @@ usdt = [
     "kithara-audio?/usdt",
     "kithara-decode?/usdt",
     "kithara-download?/usdt",
+    "kithara-effects?/usdt",
     "kithara-file?/usdt",
     "kithara-hls?/usdt",
     "kithara-host?/usdt",
@@ -298,6 +300,7 @@ mock = [
     "kithara-abr?/mock",
     "kithara-audio?/mock",
     "kithara-decode?/mock",
+    "kithara-effects?/mock",
     "kithara-net?/mock",
     "kithara-play?/mock",
     "kithara-storage?/mock",
@@ -384,6 +387,7 @@ kithara-bufpool = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true, default-features = false }
 kithara-download = { workspace = true, optional = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }
+kithara-effects = { workspace = true, optional = true }
 kithara-encode = { workspace = true, optional = true, default-features = false }
 kithara-events = { workspace = true, optional = true }
 kithara-file = { workspace = true, optional = true, default-features = false }

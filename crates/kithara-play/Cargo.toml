@@ -65,8 +65,14 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
-usdt = ["kithara-test-utils/usdt", "kithara-sync/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
-mock = ["dep:unimock", "kithara-stream/mock"]
+usdt = [
+    "kithara-effects/usdt",
+    "kithara-test-utils/usdt",
+    "kithara-sync/usdt",
+    "kithara-warp/usdt",
+    "kithara-worker/usdt",
+]
+mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
@@ -88,6 +94,7 @@ kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
+kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
@@ -105,7 +112,6 @@ kithara-worker = { workspace = true }
 
 # Utilities
 arc-swap = { workspace = true }
-biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
@@ -114,7 +120,6 @@ fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
-firewheel-core = { workspace = true }
 hex = { workspace = true }
 humantime-serde = { workspace = true }
 num-traits = { workspace = true }

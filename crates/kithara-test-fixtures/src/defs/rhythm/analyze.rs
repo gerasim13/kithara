@@ -60,13 +60,15 @@ fn analyze(reader: PcmReader) -> (BeatArtifact, u64) {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let rate = reader.spec.sample_rate;
-    let (mut results, _producer) = worker().analyze(
-        Box::new(reader),
-        AnalysisToken::from("rhythm-fixture"),
-        rate,
-        0,
-        AnalysisDemand::ALL,
-    );
+    let (mut results, _producer) = worker()
+        .analyze(
+            Box::new(reader),
+            AnalysisToken::from("rhythm-fixture"),
+            rate,
+            0,
+            AnalysisDemand::ALL,
+        )
+        .expect("the rhythm pass opens under the pool budget");
     let progress = block_on(async {
         while results.changed().await.is_ok() {}
         results.borrow().clone()

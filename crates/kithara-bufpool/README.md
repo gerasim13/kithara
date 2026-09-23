@@ -75,6 +75,8 @@ fn build() -> Result<(), PoolError> {
 
 <tr><td><code>ByteBuffer</code> / <code>SampleBuffer</code></td><td>Checked RAII guards returned to their typed pool on drop</td></tr>
 
+<tr><td><code>RingProd</code> / <code>RingCons</code></td><td>Halves of an SPSC ring whose slots are one pooled buffer, from <code>PoolRegion::ring</code></td></tr>
+
 <tr><td><code>VecKey</code> / <code>StringKey</code></td><td>Safe registered storage shapes for crate-owned aliases</td></tr>
 
 <tr><td><code>PooledVec</code> / <code>PooledString</code></td><td>Checked guards for registered vector and UTF-8 storage</td></tr>

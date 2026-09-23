@@ -6,11 +6,12 @@ use firewheel::{
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
+use kithara_effects::LimiterConfig;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember};
+use kithara_play::{SessionSampleRate, StreamShape, player::PlayerMember};
 use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
