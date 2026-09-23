@@ -4766,6 +4766,7 @@ dependencies = [
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
+ "kithara-ring",
  "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5627,6 +5628,15 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-ring"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "ringbuf",
 ]
 
 [[package]]

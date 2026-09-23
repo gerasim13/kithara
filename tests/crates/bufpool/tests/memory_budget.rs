@@ -82,3 +82,41 @@ fn retained_bytes_stabilize_across_cycles() {
 
     assert_eq!(pools.stats().allocated_bytes, bytes_after);
 }
+
+#[kithara::test]
+fn a_ring_holds_pooled_slots_until_both_halves_drop() {
+    let budget = 64 * 1024;
+    let pools = pools_with(
+        budget,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let (prod, cons) = pools
+        .ring::<f32>(8 * 1024)
+        .expect("ring slots fit half the budget");
+    assert_eq!(pools.stats().allocated_bytes, budget / 2);
+    let error = pools
+        .get_with_len::<u8>(budget / 2 + 1)
+        .expect_err("ring slots count against the shared cap");
+    assert!(matches!(error, PoolError::OverallBudgetExceeded { .. }));
+
+    drop(prod);
+    assert_eq!(
+        pools.get::<f32>().capacity(),
+        0,
+        "the consumer still holds the slots"
+    );
+    drop(cons);
+    assert!(pools.get::<f32>().capacity() >= 8 * 1024);
+    assert_eq!(pools.stats().allocated_bytes, budget / 2);
+}
+
+#[kithara::test]
+fn a_ring_without_slots_is_refused() {
+    let pools = pools_with(
+        1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    assert!(matches!(pools.ring::<f32>(0), Err(PoolError::EmptyRing)));
+}

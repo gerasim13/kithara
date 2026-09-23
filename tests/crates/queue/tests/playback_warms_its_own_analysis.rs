@@ -100,13 +100,15 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
         .cancel(cancel)
         .build(),
     );
-    let (analysis, producer) = worker.analyze(
-        stalled_reader(AudioSpec::new(2, rate)),
-        "played-track".into(),
-        rate,
-        0,
-        AnalysisDemand::ALL,
-    );
+    let (analysis, producer) = worker
+        .analyze(
+            stalled_reader(AudioSpec::new(2, rate)),
+            "played-track".into(),
+            rate,
+            0,
+            AnalysisDemand::ALL,
+        )
+        .expect("the analysis pass opens");
     queue.attach_observer(id, producer);
     queue.run(move |q| q.play()).await;
 
