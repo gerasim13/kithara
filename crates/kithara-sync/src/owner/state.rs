@@ -7,16 +7,17 @@ use kithara_warp::{
 };
 
 use super::{
-    descent::{Descent, Takeover},
+    descent::{Parent, Takeover},
     lifecycle::Applied,
     mutation::{materialize_topology, routed_group},
     preparation::Pending,
     timeline::{Blocked, Timeline},
 };
 use crate::{
-    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
-    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyRevision,
+    TopologyStamp,
 };
 
 /// Canonical mutable state for one recursive synchronization group.
@@ -27,7 +28,7 @@ use crate::{
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) grid: BeatGridSnapshot,
     pub(super) timeline: Timeline,
-    pub(super) parent: Option<ParentGridUpdate>,
+    pub(super) parent: Option<Parent>,
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
     pub(super) pending: Vec<Pending>,
@@ -70,19 +71,26 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// whose timeline has no geometry yet.
     #[must_use]
     pub fn tempo(&self) -> Option<BeatsPerMinute> {
-        self.timeline.tempo(self.parent.as_ref())
+        self.timeline
+            .tempo(self.parent.and_then(Parent::segment).as_ref())
     }
 
     /// Publishes the session trajectory of a group in [`SyncMode::Off`] from
     /// its external timeline owner, and passes it on to every direct child
     /// group as its parent segment.
     ///
+    /// Returns every preparation the publication issued and withdrew across
+    /// the subtree.
+    ///
     /// # Errors
     ///
     /// Returns [`SyncError`] when the group derives its own grid, when the
     /// segment does not succeed the current grid, or when any child group
     /// refuses it; nothing changes then.
-    pub fn publish_session(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
+    pub fn publish_session(
+        &mut self,
+        update: ParentGridUpdate,
+    ) -> Result<SyncTransition, SyncError> {
         let stamp = update.parent();
         let candidate = BeatGridSnapshot::session(
             stamp.grid_id(),
@@ -91,11 +99,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             update.anchor(),
             update.meter(),
         );
-        self.publish(candidate, Some(Descent::Parent(update)))
+        self.publish(candidate, Some(ParentFact::Segment(update)))
     }
 
     /// Publishes a later unavailable session-axis snapshot, moving every
     /// direct child group onto the axis when it changes.
+    ///
+    /// Returns every preparation the publication issued and withdrew across
+    /// the subtree.
     ///
     /// # Errors
     ///
@@ -107,7 +118,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         stamp: BeatGridStamp,
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
-    ) -> Result<(), SyncError> {
+    ) -> Result<SyncTransition, SyncError> {
         self.publish_grid(BeatGridSnapshot::unavailable(
             stamp.grid_id(),
             stamp.revision(),
@@ -117,10 +128,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 
     /// Publishes a later immutable grid snapshot from the external timeline
     /// owner of a group in [`SyncMode::Off`].
-    pub(super) fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError> {
+    pub(super) fn publish_grid(
+        &mut self,
+        candidate: BeatGridSnapshot,
+    ) -> Result<SyncTransition, SyncError> {
         let descent = match candidate.axis() {
             MapAxis::Session(axis) if candidate.axis() != self.grid.axis() => {
-                Some(Descent::Axis(SessionAxisUpdate::new(axis)))
+                Some(ParentFact::Axis(SessionAxisUpdate::new(axis)))
             }
             _ => None,
         };
@@ -130,13 +144,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     fn publish(
         &mut self,
         candidate: BeatGridSnapshot,
-        descent: Option<Descent>,
-    ) -> Result<(), SyncError> {
+        descent: Option<ParentFact>,
+    ) -> Result<SyncTransition, SyncError> {
         if !matches!(self.timeline, Timeline::Off) {
             return Err(SyncError::GridOwnedByMode { mode: self.mode() });
         }
         if candidate.stamp() == self.grid.stamp() {
-            return Ok(());
+            return Ok(SyncTransition::default());
         }
         validate_successor(&self.grid, &candidate, Withdrawal::Refused)?;
         let takeover = Takeover {
@@ -144,7 +158,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_operation: self.next_operation,
         };
         let staged = self.stage(candidate, self.timeline, self.parent, descent, takeover)?;
-        self.commit_staged(Some(staged))
+        Ok(self.apply(Some(staged)))
     }
 
     /// Creates an empty group whose session-axis grid is not available yet.
@@ -254,14 +268,15 @@ impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
 impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     type NestedGroup = G;
 
-    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError> {
-        let staged = self.stage_axis(update)?;
-        self.commit_staged(staged)
-    }
-
-    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
-        let staged = self.stage_parent(update)?;
-        self.commit_staged(staged)
+    delegate::delegate! {
+        to self {
+            #[call(stage_descent)]
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+            #[call(apply_descent)]
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
+            #[call(route)]
+            fn transact(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>>;
+        }
     }
 
     fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
@@ -272,14 +287,6 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
         routed_group(&mut self.members, group_id)?
             .ok_or(SyncError::GroupNotFound { group_id })?
             .acknowledge(receipt)
-    }
-
-    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError> {
-        self.check_staged(self.stage_axis(update)?.as_ref())
-    }
-
-    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError> {
-        self.check_staged(self.stage_parent(update)?.as_ref())
     }
 
     fn status(&self) -> SyncStatusSnapshot {
@@ -330,10 +337,6 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
 
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
         materialize_topology(&self.grid, self.topology_revision, &self.members)
-    }
-
-    fn transact(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>> {
-        self.route(operation)
     }
 }
 

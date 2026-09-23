@@ -16,7 +16,8 @@ use super::{
 };
 use crate::{
     AlignmentSource, LoadGeneration, SyncAdmission, SyncCapability, SyncEffect, SyncError,
-    SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, TopologyStamp,
+    SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
+    TopologyStamp,
 };
 
 /// The one unapplied decision a group holds for a direct member.
@@ -70,6 +71,13 @@ impl Pending {
         match self {
             Self::Prepared { preparation, .. } => preparation.stamp().operation(),
             Self::Waiting { operation, .. } => *operation,
+        }
+    }
+
+    const fn preparation(&self) -> Option<&SyncPreparation> {
+        match self {
+            Self::Prepared { preparation, .. } => Some(preparation),
+            Self::Waiting { .. } => None,
         }
     }
 
@@ -153,17 +161,17 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         let lane = self.applied_of(target);
         let replaces = lane.map(Applied::map);
         let (entry, placement) = match (source, lane) {
-            (AlignmentSource::Prepared(_), Some(_)) => {
+            (AlignmentSource::Prepared(_) | AlignmentSource::Cued(_), Some(_)) => {
                 return Err(SyncError::MemberAudible { member_id: target });
             }
-            (AlignmentSource::Audible(frontier), _) if frontier.warp_map() != replaces => {
+            (AlignmentSource::Audible { frontier, .. }, _) if frontier.warp_map() != replaces => {
                 return Err(SyncError::AudibleMapMismatch {
                     member_id: target,
                     expected: replaces,
                     given: frontier.warp_map(),
                 });
             }
-            (AlignmentSource::Audible(frontier), Some(lane)) => {
+            (AlignmentSource::Audible { frontier, .. }, Some(lane)) => {
                 let activation = window.start.max(frontier.output());
                 if activation >= window.end {
                     return Err(SyncError::NoAdmissibleBoundary {
@@ -396,10 +404,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// the topology being replaced, and an execution receipt is never
     /// restamped past a new fence. What is armed or applied already sounds,
     /// so a member that stays keeps it.
-    pub(super) fn retain_current_pending(&mut self) {
-        let pending = std::mem::take(&mut self.pending);
-        self.pending = pending
-            .into_iter()
+    pub(super) fn retain_current_pending(&mut self) -> SyncTransition {
+        let held = std::mem::take(&mut self.pending);
+        self.pending = held
+            .iter()
             .filter(|held| {
                 self.direct_grid(held.member()).is_some()
                     && !matches!(
@@ -410,12 +418,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         }
                     )
             })
+            .cloned()
             .collect();
         let applied = std::mem::take(&mut self.applied);
         self.applied = applied
             .into_iter()
             .filter(|lane| self.direct_grid(lane.member()).is_some())
             .collect();
+        transition(&held, &self.pending)
     }
 
     /// Returns the frozen grid of the direct grid member `id`.
@@ -429,6 +439,34 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     fn pending_of(&self, member: BeatGridId) -> Option<&Pending> {
         self.pending.iter().find(|held| held.member() == member)
     }
+}
+
+/// The preparations `next` issues and withdraws compared with `held`: each
+/// one a member did not hold before is issued, and each one whose member
+/// holds no preparation afterwards is withdrawn.
+pub(super) fn transition(held: &[Pending], next: &[Pending]) -> SyncTransition {
+    let issued = next
+        .iter()
+        .filter_map(Pending::preparation)
+        .filter(|preparation| {
+            !held
+                .iter()
+                .any(|old| old.preparation() == Some(preparation))
+        })
+        .cloned()
+        .collect();
+    let withdrawn = held
+        .iter()
+        .filter_map(Pending::preparation)
+        .filter(|preparation| {
+            let member = preparation.stamp().member().grid_id();
+            !next
+                .iter()
+                .any(|new| new.preparation().is_some() && new.member() == member)
+        })
+        .map(SyncPreparation::stamp)
+        .collect();
+    SyncTransition::new(issued, withdrawn)
 }
 
 /// `held` when it still releases its member from a timeline that lost its

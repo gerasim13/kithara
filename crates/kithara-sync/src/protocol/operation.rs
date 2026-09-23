@@ -6,7 +6,8 @@ use kithara_warp::{
 };
 
 use crate::{
-    LoadGeneration, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, TopologyStamp,
+    LoadGeneration, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
+    TopologyStamp,
 };
 
 /// Playback state from which synchronization is requested.
@@ -16,8 +17,18 @@ pub enum AlignmentSource {
     /// Decoded audio has not become audible and waits at this recording
     /// frame, from which it may be positioned before playback.
     Prepared(AssetFrame),
+    /// Decoded audio has not become audible and must start exactly at this
+    /// recording frame, such as a pickup before the first downbeat, so its
+    /// beat and bar phase are kept.
+    Cued(AssetFrame),
     /// Decoded audio is already audible at the stated exact presentation frontier.
-    Audible(PresentationFrontier),
+    Audible {
+        /// Source/output boundary the audio callback consumed.
+        frontier: PresentationFrontier,
+        /// Recording seconds the unsynchronized stream advances per session
+        /// second, such as a manual playback speed.
+        speed: f64,
+    },
 }
 
 /// One operation routed through the live synchronization-group owner.
@@ -203,6 +214,8 @@ pub enum SyncAdmission {
         operation: SyncOperationId,
         /// Exact topology published by the transaction.
         topology: TopologyStamp,
+        /// Preparations the new topology fence withdrew.
+        transition: SyncTransition,
     },
     /// A validated SYNC-off transport command may enter the existing sample path.
     Accepted {
@@ -227,6 +240,8 @@ pub enum SyncAdmission {
         mode: SyncMode,
         /// Group grid published by the operation.
         grid: BeatGridStamp,
+        /// Preparations the change issued and withdrew across the subtree.
+        transition: SyncTransition,
     },
     /// The requested operation already matches committed state.
     Unchanged {

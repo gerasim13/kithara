@@ -1,3 +1,4 @@
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
@@ -7,6 +8,7 @@ use kithara_warp::{
 use num_traits::ToPrimitive;
 
 use super::{
+    Accept,
     modes::{
         Group, attach_group, group_in, nested, rate, sync_at, synced_deck, tempo_at,
         transport_unavailable,
@@ -19,9 +21,9 @@ use super::{
 };
 use crate::{
     AlignmentSource, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncEffect, SyncError,
-    SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
-    SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot,
-    TopologyOperation, TopologyRevision, TopologyStamp,
+    SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot,
+    SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp,
 };
 
 /// A deck at 120 BPM holding one track grid.
@@ -130,6 +132,226 @@ fn free_at(group: &mut Group, frame: i64) -> SyncAdmission {
         group,
         sync_at(id, SyncIntent::Free, SessionFrame::new(frame)),
     )
+}
+
+/// A track grid that publishes new revisions while its group owns it; a
+/// queued revision is published right after the next observation.
+#[derive(Clone)]
+struct PublishingGrid {
+    current: Arc<Mutex<BeatGridSnapshot>>,
+    queued: Arc<Mutex<Option<BeatGridSnapshot>>>,
+}
+
+impl PublishingGrid {
+    fn new(grid: BeatGridSnapshot) -> Self {
+        Self {
+            current: Arc::new(Mutex::new(grid)),
+            queued: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl BeatGrid for PublishingGrid {
+    fn id(&self) -> BeatGridId {
+        self.current.lock().id()
+    }
+
+    fn snapshot(&self) -> BeatGridSnapshot {
+        let mut current = self.current.lock();
+        let observed = current.clone();
+        if let Some(next) = self.queued.lock().take() {
+            *current = next;
+        }
+        observed
+    }
+}
+
+/// The next complete revision of `live`, covering `frames` recording frames.
+fn successor(live: &PublishingGrid, frames: u64) -> BeatGridSnapshot {
+    let grid = live.current.lock();
+    BeatGridSnapshot::segments(
+        grid.id(),
+        grid.revision().checked_next().expect("revision"),
+        BeatGridState::Complete,
+        asset_segments_from(frames, frames, 24_000, 0, None),
+    )
+    .expect("the successor track grid is valid")
+}
+
+/// The next complete revision of the track grid `live` publishes.
+fn publish_next(live: &PublishingGrid) -> BeatGridSnapshot {
+    let next = successor(live, 960_000);
+    *live.current.lock() = next.clone();
+    next
+}
+
+fn attach_live(group: &mut Group, live: &PublishingGrid) {
+    let base = group.topology().expect("topology").stamp();
+    let _ = transact(
+        group,
+        SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Attach {
+                member: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(live.clone()),
+                },
+            }]),
+        },
+    );
+}
+
+/// A local 120 BPM root whose host-synced deck sounds `track` on the root's
+/// beats from frame 0, the deck's identity, and the sounding preparation.
+fn sounding_under_root(track: &PublishingGrid) -> (Group, BeatGridId, SyncPreparation) {
+    let mut root = group_in(SyncMode::LocalSync, SyncMemberKind::Group);
+    let mut deck = group_in(SyncMode::HostSync, SyncMemberKind::Grid);
+    attach_live(&mut deck, track);
+    let deck_id = deck.id();
+    attach_group(&mut root, deck);
+    let root_id = root.id();
+    let _ = transact(&mut root, tempo_at(root_id, 120.0, SessionFrame::new(0)));
+    let preparation = launched(&mut root, track.id(), 0);
+    let _ = sound(&mut root, &preparation);
+    (root, deck_id, preparation)
+}
+
+fn transition(admission: SyncAdmission) -> SyncTransition {
+    match admission {
+        SyncAdmission::StateChanged { transition, .. } => transition,
+        admission => panic!("expected a state change, got {admission:?}"),
+    }
+}
+
+#[kithara::test]
+fn leaving_the_timeline_releases_every_host_synced_descendant() {
+    let live = PublishingGrid::new(asset_grid(
+        BeatGridId::allocate().expect("grid id"),
+        960_000,
+        24_000,
+    ));
+    let track = live.id();
+    let (mut root, deck_id, preparation) = sounding_under_root(&live);
+    let local = synced_deck();
+    let local_id = local.id();
+    attach_group(&mut root, local);
+    let local_grid = nested(&root, &[local_id], |local| local.snapshot().stamp());
+
+    let released = transition(free_at(&mut root, 96_000));
+
+    let deck_grid = nested(&root, &[deck_id], |deck| deck.snapshot());
+    assert!(matches!(deck_grid.state(), BeatGridState::Unavailable(_)));
+    assert_eq!(
+        nested(&root, &[deck_id], |deck| deck.mode()),
+        SyncMode::HostSync
+    );
+    assert_eq!(
+        nested(&root, &[local_id], |local| local.snapshot().stamp()),
+        local_grid,
+        "a local sibling keeps its own timeline"
+    );
+    assert!(released.withdrawn().is_empty());
+    let [handoff] = released.issued() else {
+        panic!("the sounding track is released, got {released:?}");
+    };
+    assert_eq!(handoff.stamp().member().grid_id(), track);
+    assert_eq!(handoff.stamp().group(), deck_grid.stamp());
+    let SyncEffect::Handoff {
+        replaces,
+        source,
+        activation,
+    } = *handoff.effect()
+    else {
+        panic!("leaving the timeline hands the member off");
+    };
+    assert_eq!(replaces, map(&preparation));
+    assert_eq!(activation, SessionFrame::new(96_000));
+    assert_eq!(
+        f64::from(source).round().to_u64(),
+        Some(source_at(plan(&preparation), 96_000))
+    );
+    assert!(matches!(
+        sound(&mut root, handoff),
+        SyncStatusSnapshot::Off { .. }
+    ));
+}
+
+#[kithara::test]
+fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
+    let live = PublishingGrid::new(asset_grid(
+        BeatGridId::allocate().expect("grid id"),
+        960_000,
+        24_000,
+    ));
+    let (mut root, _, preparation) = sounding_under_root(&live);
+    let observed = preparation.stamp().member();
+    let shrunk = successor(&live, 24_000);
+    *live.queued.lock() = Some(shrunk.clone());
+    let root_id = root.id();
+
+    let retargeted = transition(transact(
+        &mut root,
+        tempo_at(root_id, 150.0, SessionFrame::new(36_000)),
+    ));
+
+    assert_eq!(root.tempo().map(f64::from), Some(150.0));
+    assert!(retargeted.withdrawn().is_empty());
+    let [moved] = retargeted.issued() else {
+        panic!("the sounding track is retargeted, got {retargeted:?}");
+    };
+    assert_eq!(moved.stamp().member(), observed);
+    assert_eq!(
+        root.acknowledge(SyncReceipt::Installed(moved.stamp())),
+        Err(SyncError::StaleGridRevision {
+            current: shrunk.stamp(),
+            given: observed,
+        }),
+        "a publication after staging is caught by the receipt fence"
+    );
+}
+
+#[kithara::test]
+fn a_member_grid_publication_fences_installing_and_arming() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let live = PublishingGrid::new(asset_grid(track, 960_000, 24_000));
+    attach_live(&mut group, &live);
+
+    let issued = launched(&mut group, track, 0);
+    let placed_on = issued.stamp().member();
+    let current = publish_next(&live).stamp();
+    let before = group.pending.clone();
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Installed(issued.stamp())),
+        Err(SyncError::StaleGridRevision {
+            current,
+            given: placed_on,
+        })
+    );
+    assert_eq!(group.pending, before);
+
+    let installed = launched(&mut group, track, 0);
+    assert_eq!(installed.stamp().member(), current);
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(installed.stamp()));
+    let republished = publish_next(&live).stamp();
+    let before = group.pending.clone();
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Armed(installed.stamp())),
+        Err(SyncError::StaleGridRevision {
+            current: republished,
+            given: current,
+        })
+    );
+    assert_eq!(group.pending, before);
+
+    let _ = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: installed.stamp(),
+            reason: SyncExecutionReject::Geometry,
+        },
+    );
+    assert!(group.pending.is_empty());
 }
 
 #[kithara::test]
@@ -339,12 +561,13 @@ fn an_armed_member_refuses_a_second_entry() {
         prepare_in(&mut group, track, cue(0), window(0, i64::MAX)),
         Err(SyncError::MemberAudible { member_id: track })
     );
-    let unmapped = AlignmentSource::Audible(
-        PresentationFrontier::builder()
+    let unmapped = AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
             .source(0)
             .output(SessionFrame::new(0))
             .build(),
-    );
+        speed: 1.0,
+    };
     assert_eq!(
         prepare_in(&mut group, track, unmapped, window(0, i64::MAX)),
         Err(SyncError::AudibleMapMismatch {
@@ -360,13 +583,14 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
     let _ = sound(&mut group, &preparation);
-    let heard = AlignmentSource::Audible(
-        PresentationFrontier::builder()
+    let heard = AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
             .warp_map(map(&preparation))
             .source(source_at(plan(&preparation), 48_000))
             .output(SessionFrame::new(48_000))
             .build(),
-    );
+        speed: 1.0,
+    };
 
     let SyncAdmission::Prepared(retarget) =
         prepare_in(&mut group, track, heard, window(96_000, i64::MAX))
@@ -516,10 +740,12 @@ fn an_armed_preparation_survives_a_tempo_commit_and_then_converges() {
 fn stale_host_seek_topology_commits_nothing() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
-    attach_grid(
+    let fenced = attach_grid(
         &mut group,
         asset_grid(BeatGridId::allocate().expect("grid id"), 960_000, 24_000),
     );
+    assert!(fenced.issued().is_empty());
+    assert_eq!(fenced.withdrawn(), [preparation.stamp()]);
     let held = group.pending.clone();
     let status = group.status();
     let topology = group.topology().expect("topology").stamp();

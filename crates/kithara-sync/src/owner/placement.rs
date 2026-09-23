@@ -3,8 +3,8 @@ use std::ops::Range;
 use kithara_signal::SessionFrame;
 use kithara_warp::{
     AssetFrame, Beat, BeatAlignment, BeatEvidence, BeatGridQuery, BeatGridSnapshot,
-    BeatGridUnavailable, BeatOrdinal, GridProjectionError, MapPoint, MapPosition, MapRegion, Meter,
-    PresentationFrontier, WarpMap, WarpMapRevision, WarpPlan, WarpPlanError,
+    BeatGridUnavailable, BeatOrdinal, CoordinateError, GridProjectionError, MapPoint, MapPosition,
+    MapRegion, Meter, PresentationFrontier, WarpMap, WarpMapRevision, WarpPlan, WarpPlanError,
 };
 use num_traits::ToPrimitive;
 
@@ -43,9 +43,9 @@ pub(super) struct Placement {
 ///
 /// A member whose grid proves its bars enters on a downbeat in its own bar
 /// phase; one whose grid proves only beats enters on a whole beat. A silent
-/// member starts on its first such beat at or after its cue; an audible one
-/// keeps playing and is carried to the member beat its live stream reaches no
-/// earlier than the activation.
+/// member starts on its first such beat at or after its cue, or exactly on a
+/// cue it must start from; an audible one keeps playing and is carried to the
+/// member beat its live stream reaches no earlier than the activation.
 pub(super) fn place(
     owner: &BeatGridSnapshot,
     member: &BeatGridSnapshot,
@@ -58,30 +58,44 @@ pub(super) fn place(
             let first = whole_beat(member, member_beat_at_or_next(member, cue)?)?;
             let member_meter = bar_of(member, first, cue)?;
             let member_beat = next_downbeat(member, first, member_meter)?;
-            let lower = MapPosition::Session(window.start);
-            let reachable = whole_beat(owner, owner_beat_at(owner, lower)?)?;
-            let owner_meter = owner_bar(owner, reachable, member_meter, lower)?;
-            let owner_beat = matching_phase(reachable, owner_meter, member_beat, member_meter)
-                .ok_or_else(|| outside(owner))?;
+            let owner_beat = enter(owner, member_beat, member_meter, window.start)?;
             (owner_beat, member_beat)
         }
-        AlignmentSource::Audible(frontier) => {
+        AlignmentSource::Cued(cue) => {
+            let cue = MapPosition::Asset(cue);
+            let member_beat = resolve(
+                member,
+                member.beat_at(MapPoint::new(member.stamp(), cue)),
+                cue,
+            )?;
+            let member_beat = *member_beat.value().value();
+            let member_meter = bar_of(member, member_beat, cue)?;
+            let owner_beat = enter(owner, member_beat, member_meter, window.start)?;
+            (owner_beat, member_beat)
+        }
+        AlignmentSource::Audible { frontier, speed } => {
+            if !speed.is_finite() || speed <= 0.0 {
+                return Err(SyncError::from(CoordinateError::NonInvertibleRate).into());
+            }
             let past_frontier = i64::from(frontier.output())
                 .checked_add(1)
                 .map(SessionFrame::new)
                 .ok_or_else(|| outside(owner))?;
-            let lower = MapPosition::Session(window.start.max(past_frontier));
-            let reachable = whole_beat(owner, owner_beat_at(owner, lower)?)?;
+            let lower = window.start.max(past_frontier);
+            let at = MapPosition::Session(lower);
             let heard = MapPosition::Asset(asset_frame(member, frontier.source())?);
             let heard_beat = whole_beat(member, member_beat_at_or_next(member, heard)?)?;
             let member_meter = bar_of(member, heard_beat, heard)?;
-            let owner_meter = owner_bar(owner, reachable, member_meter, lower)?;
-            let owner_beat = next_downbeat(owner, reachable, owner_meter)?;
-            let activation = session_frame(owner, owner_beat, lower)?;
-            let live = MapPosition::Asset(live_source(owner, member, frontier, activation)?);
+            let under = owner_beat_at(owner, at)?;
+            let owner_meter = owner_bar(owner, under, member_meter, at)?;
+            let owner_beat = first_boundary(owner, under, lower, owner_meter, 0.0)?;
+            let activation = session_frame(owner, owner_beat, at)?;
+            let live = live_source(owner, member, frontier, speed, activation)?;
+            let live = MapPosition::Asset(live);
             let live_beat = whole_beat(member, member_beat_at_or_next(member, live)?)?;
-            let member_beat = matching_phase(live_beat, member_meter, owner_beat, owner_meter)
-                .ok_or_else(|| outside(member))?;
+            let owner_phase = bar_phase(owner_beat, owner_meter).ok_or_else(|| outside(owner))?;
+            let member_beat =
+                with_phase(live_beat, member_meter, owner_phase).ok_or_else(|| outside(member))?;
             (owner_beat, member_beat)
         }
     };
@@ -101,6 +115,44 @@ pub(super) fn place(
         ),
         activation,
     })
+}
+
+/// The first owner beat at or after `lower` in the bar phase of
+/// `member_beat`.
+fn enter(
+    owner: &BeatGridSnapshot,
+    member_beat: Beat,
+    member_meter: Option<Meter>,
+    lower: SessionFrame,
+) -> Result<Beat, Missing> {
+    let at = MapPosition::Session(lower);
+    let under = owner_beat_at(owner, at)?;
+    let owner_meter = owner_bar(owner, under, member_meter, at)?;
+    let phase = bar_phase(member_beat, member_meter).ok_or_else(|| outside(owner))?;
+    first_boundary(owner, under, lower, owner_meter, phase)
+}
+
+/// The first owner beat in bar `phase` whose session frame is at or after
+/// `lower`, where `under` is the beat playing at `lower`.
+///
+/// A boundary a fraction of a frame before `lower` rounds onto `lower`, so the
+/// beat playing there may already lie past it; that boundary still counts.
+fn first_boundary(
+    owner: &BeatGridSnapshot,
+    under: Beat,
+    lower: SessionFrame,
+    meter: Option<Meter>,
+    phase: f64,
+) -> Result<Beat, Missing> {
+    let forward = with_phase(under, meter, phase).ok_or_else(|| outside(owner))?;
+    let earlier = Beat::new(f64::from(forward) - bar_length(meter)).map_err(|_| outside(owner))?;
+    let rounds_onto_lower = match owner.position_at(MapPoint::new(owner.stamp(), earlier)) {
+        BeatGridQuery::Resolved(position) => {
+            matches!(*position.value().value(), MapPosition::Session(frame) if frame >= lower)
+        }
+        _ => false,
+    };
+    Ok(if rounds_onto_lower { earlier } else { forward })
 }
 
 /// Carries a prepared `alignment` onto the successor `owner` grid.
@@ -288,12 +340,13 @@ fn asset_frame(member: &BeatGridSnapshot, frame: u64) -> Result<AssetFrame, Miss
 
 /// The recording frame an unmapped audible member reaches at `activation`.
 ///
-/// The live stream advances one recording second per session second, so the
-/// span crosses the resampler once.
+/// The live stream advances `speed` recording seconds per session second, so
+/// the span crosses the resampler once.
 fn live_source(
     owner: &BeatGridSnapshot,
     member: &BeatGridSnapshot,
     frontier: PresentationFrontier,
+    speed: f64,
     activation: SessionFrame,
 ) -> Result<AssetFrame, Missing> {
     let span = i64::from(activation)
@@ -305,7 +358,7 @@ fn live_source(
     let advanced = frontier
         .source()
         .to_f64()
-        .map(|source| source + (span * ratio).ceil())
+        .map(|source| source + (span * speed * ratio).ceil())
         .ok_or_else(|| Missing::Refused(outside(member)))?;
     AssetFrame::new(advanced).map_err(|_| Missing::Refused(outside(member)))
 }
@@ -335,20 +388,17 @@ fn next_downbeat(
         .ok_or_else(|| Missing::Refused(outside(grid)))
 }
 
-/// The first beat at or after `beat` whose bar phase equals that of `other`.
+/// The first beat at or after `beat` whose bar phase is `phase`.
 ///
-/// A side without a proven bar counts every beat as its downbeat, so only the
+/// A grid without a proven bar counts every beat as its downbeat, so only the
 /// fractional beat phase carries over.
-fn matching_phase(
-    beat: Beat,
-    meter: Option<Meter>,
-    other: Beat,
-    other_meter: Option<Meter>,
-) -> Option<Beat> {
-    let phase = bar_phase(beat, meter)?;
-    let other_phase = bar_phase(other, other_meter)?;
-    let length = meter.map_or(1.0, |meter| f64::from(meter.beats_per_bar()));
-    Beat::new(f64::from(beat) + (other_phase - phase).rem_euclid(length)).ok()
+fn with_phase(beat: Beat, meter: Option<Meter>, phase: f64) -> Option<Beat> {
+    let current = bar_phase(beat, meter)?;
+    Beat::new(f64::from(beat) + (phase - current).rem_euclid(bar_length(meter))).ok()
+}
+
+fn bar_length(meter: Option<Meter>) -> f64 {
+    meter.map_or(1.0, |meter| f64::from(meter.beats_per_bar()))
 }
 
 fn bar_phase(beat: Beat, meter: Option<Meter>) -> Option<f64> {
@@ -357,35 +407,4 @@ fn bar_phase(beat: Beat, meter: Option<Meter>) -> Option<f64> {
     };
     let downbeat = Beat::try_from(meter.downbeat()).ok()?;
     Some((f64::from(beat) - f64::from(downbeat)).rem_euclid(f64::from(meter.beats_per_bar())))
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-    use kithara_warp::{Beat, BeatOrdinal, Meter};
-
-    use super::matching_phase;
-
-    fn pickup(source: f64) -> f64 {
-        let source_meter = Meter::new(4)
-            .expect("four beats per bar")
-            .with_downbeat(BeatOrdinal::new(1));
-        let host_meter = Meter::new(4).expect("four beats per bar");
-        let source = Beat::new(source).expect("source beat");
-        let host_frontier = Beat::new(1.0).expect("first eligible host beat");
-
-        let target = matching_phase(host_frontier, Some(host_meter), source, Some(source_meter))
-            .expect("pickup phase resolves");
-        f64::from(target)
-    }
-
-    #[kithara::test]
-    fn pickup_track_start_keeps_its_weak_beat_phase() {
-        assert_eq!(pickup(0.0), 3.0);
-    }
-
-    #[kithara::test]
-    fn pickup_track_start_preserves_fractional_beat_phase() {
-        assert_eq!(pickup(0.5), 3.5);
-    }
 }

@@ -4,21 +4,22 @@ use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatAlignment, BeatEvidence, BeatGridId, BeatGridQuery,
-    BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatMarker, BeatOrdinal, FrameUncertainty,
-    MapAxis, MapPosition, MapSegment, Meter, MeterFacts, PresentationFrontier, SegmentFacts,
-    SegmentSet, SessionAxis, WarpMapRevision, WarpPlan,
+    BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatMarker, BeatOrdinal, CoordinateError,
+    FrameUncertainty, MapAxis, MapPosition, MapSegment, Meter, MeterFacts, PresentationFrontier,
+    SegmentFacts, SegmentSet, SessionAxis, WarpMapRevision, WarpPlan,
 };
 
 use super::{
-    TestGrid,
+    Accept, TestGrid,
     modes::{
         Group, anchor_at_rate, group_in, parent_id, parent_stamp, parent_update, rate, synced_deck,
+        synced_deck_at,
     },
 };
 use crate::{
     AlignmentSource, LoadGeneration, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncEffect,
     SyncError, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
-    TopologyOperation,
+    SyncTransition, TopologyOperation,
 };
 
 /// The first session frame no caller can use.
@@ -100,9 +101,11 @@ pub(super) fn four_four_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> B
     asset_grid_with_meter(id, frames, beat_frames, observed(four_four()))
 }
 
-pub(super) fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) {
+/// Attaches `grid` to `group` and returns what the new topology fence
+/// withdrew.
+pub(super) fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) -> SyncTransition {
     let base = group.topology().expect("topology").stamp();
-    let _ = group
+    let admission = group
         .transact(SyncOperation::Topology {
             base,
             operations: Box::new([TopologyOperation::Attach {
@@ -113,6 +116,10 @@ pub(super) fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) {
             }]),
         })
         .expect("a deck admits a track grid");
+    let SyncAdmission::TopologyChanged { transition, .. } = admission else {
+        panic!("expected a topology change, got {admission:?}");
+    };
+    transition
 }
 
 pub(super) fn window(earliest: i64, end: i64) -> Range<SessionFrame> {
@@ -124,12 +131,17 @@ pub(super) fn cue(frame: u64) -> AlignmentSource {
 }
 
 pub(super) fn frontier(source: u64, output: i64) -> AlignmentSource {
-    AlignmentSource::Audible(
-        PresentationFrontier::builder()
+    frontier_at_speed(source, output, 1.0)
+}
+
+fn frontier_at_speed(source: u64, output: i64, speed: f64) -> AlignmentSource {
+    AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
             .source(source)
             .output(SessionFrame::new(output))
             .build(),
-    )
+        speed,
+    }
 }
 
 pub(super) fn prepare_in(
@@ -225,6 +237,43 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
         source_and_activation(&admission),
         (24_000, SessionFrame::new(24_000))
     );
+}
+
+#[kithara::test]
+fn audible_manual_speed_selects_the_cue_the_faster_stream_reaches() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+
+    let admission = prepare(&mut group, track, frontier_at_speed(0, 0, 2.0), 0);
+
+    // At twice the recording speed the stream reaches source 48_000 by the
+    // first deck beat, so the cue lies there rather than behind it.
+    assert_eq!(
+        source_and_activation(&admission),
+        (48_000, SessionFrame::new(24_000))
+    );
+}
+
+#[kithara::test]
+fn an_audible_member_without_a_forward_speed_is_refused() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+
+    for speed in [0.0, -1.0, f64::NAN] {
+        assert_eq!(
+            prepare_in(
+                &mut group,
+                track,
+                frontier_at_speed(0, 0, speed),
+                window(0, OPEN_END)
+            ),
+            Err(SyncError::Coordinate(CoordinateError::NonInvertibleRate)),
+            "{speed}"
+        );
+    }
+    assert!(group.pending.is_empty());
 }
 
 #[kithara::test]
@@ -514,13 +563,14 @@ fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     let track = BeatGridId::allocate().expect("grid id");
     attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
     let given = WarpMapRevision::first();
-    let source = AlignmentSource::Audible(
-        PresentationFrontier::builder()
+    let source = AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
             .warp_map(given)
             .source(0)
             .output(SessionFrame::new(0))
             .build(),
-    );
+        speed: 1.0,
+    };
 
     assert_eq!(
         prepare_in(&mut group, track, source, window(0, OPEN_END)),
@@ -584,6 +634,50 @@ pub(super) fn replace_grid(group: &mut Group, grid: BeatGridSnapshot) {
             }]),
         })
         .expect("a deck replaces its track grid");
+}
+
+#[kithara::test]
+fn a_boundary_rounded_onto_the_first_window_frame_is_admitted() {
+    // At 123 BPM a beat lasts 23_414.63 frames, so beat 1 sounds on frame
+    // 23_415 while the beat playing there is already a fraction past 1.
+    let mut group = synced_deck_at(123.0);
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+
+    let admission = prepare_in(&mut group, track, cue(0), window(23_415, 23_416))
+        .expect("the beat rounded onto the window start is admissible");
+
+    let (alignment, plan) = projection(&admission);
+    assert_eq!(f64::from(*alignment.target().value()), 1.0);
+    assert_eq!(plan.activation().output(), SessionFrame::new(23_415));
+}
+
+fn pickup(cue_beat: f64) -> f64 {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let source_meter = four_four().with_downbeat(BeatOrdinal::new(1));
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(track, 480_000, 24_000, observed(source_meter)),
+    );
+    let cue = AssetFrame::new(cue_beat * 24_000.0).expect("fixture cue is finite");
+
+    // The deck frontier stands on its beat 1, the first eligible host beat.
+    let admission = prepare(&mut group, track, AlignmentSource::Cued(cue), 24_000);
+
+    let (alignment, _) = projection(&admission);
+    assert_eq!(f64::from(*alignment.source().value()), cue_beat);
+    f64::from(*alignment.target().value())
+}
+
+#[kithara::test]
+fn pickup_track_start_keeps_its_weak_beat_phase() {
+    assert_eq!(pickup(0.0), 3.0);
+}
+
+#[kithara::test]
+fn pickup_track_start_preserves_fractional_beat_phase() {
+    assert_eq!(pickup(0.5), 3.5);
 }
 
 #[kithara::test]

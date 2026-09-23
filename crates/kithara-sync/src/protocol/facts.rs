@@ -1,5 +1,17 @@
-use kithara_signal::SessionEpoch;
+use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_warp::{BeatGridStamp, MeterFacts, SessionAnchor, SessionAxis};
+
+/// One timeline fact a group passes on to each of its direct child groups.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ParentFact {
+    /// The parent's beat timeline moved onto a new segment.
+    Segment(ParentGridUpdate),
+    /// The parent's beat timeline lost its geometry.
+    Withdrawn(ParentWithdrawal),
+    /// The physical session axis changed.
+    Axis(SessionAxisUpdate),
+}
 
 /// A parent's accepted tempo and phase segment, offered to one direct child.
 ///
@@ -66,5 +78,42 @@ impl SessionAxisUpdate {
     #[must_use]
     pub const fn new(axis: SessionAxis) -> Self {
         Self { axis }
+    }
+}
+
+/// A parent's beat timeline has no geometry from `at` on.
+///
+/// A child in [`crate::SyncMode::HostSync`] withdraws its own grid with it
+/// and, when the parent released its sounding members, releases its own
+/// under the same transport; a child in any other mode only records it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct ParentWithdrawal {
+    /// Returns the parent grid identity and revision that has no geometry.
+    #[field(get, copy)]
+    parent: BeatGridStamp,
+    /// Returns the session frame from which the timeline is withdrawn.
+    #[field(get, copy)]
+    at: SessionFrame,
+    /// Returns the transport under which sounding members are released, or
+    /// `None` when they keep their applied maps.
+    #[field(get, copy)]
+    release: Option<TransportRevision>,
+}
+
+impl ParentWithdrawal {
+    /// Describes one parent timeline withdrawn at an exact session frame.
+    #[must_use]
+    pub const fn new(
+        parent: BeatGridStamp,
+        at: SessionFrame,
+        release: Option<TransportRevision>,
+    ) -> Self {
+        Self {
+            parent,
+            at,
+            release,
+        }
     }
 }

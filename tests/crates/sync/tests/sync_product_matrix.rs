@@ -694,14 +694,15 @@ impl ProductHarness {
                 let playback = deck.playback_view();
                 let position = playback.position.unwrap_or(0.0);
                 let source = if playback.playing {
-                    AlignmentSource::Audible(
-                        PresentationFrontier::builder()
+                    AlignmentSource::Audible {
+                        frontier: PresentationFrontier::builder()
                             .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
                             .output(SessionFrame::new(
                                 i64::try_from(self.output_frames).unwrap_or(i64::MAX),
                             ))
                             .build(),
-                    )
+                        speed: f64::from(deck.rate()),
+                    }
                 } else {
                     AlignmentSource::Prepared(
                         AssetFrame::new((position * f64::from(case.sample_rate)).max(0.0))

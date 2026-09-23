@@ -9,9 +9,9 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
-    SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
 mod config;
@@ -397,14 +397,15 @@ impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
 impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
-    /// The Host's session transport owns its axis; no parent can move it.
-    fn check_axis(&self, _update: SessionAxisUpdate) -> Result<(), SyncError> {
+    /// The Host's session transport owns its axis and tempo; no parent fact
+    /// can reach it.
+    fn stage_fact(&self, _fact: ParentFact) -> Result<SyncStaged, SyncError> {
         Err(SyncError::SessionRoot { group_id: self.id })
     }
 
-    /// The Host's session transport owns its tempo; no parent can set it.
-    fn check_parent(&self, _update: ParentGridUpdate) -> Result<(), SyncError> {
-        Err(SyncError::SessionRoot { group_id: self.id })
+    /// Nothing is ever staged on a session root, so nothing is applied.
+    fn apply_staged(&mut self, _staged: SyncStaged) -> SyncTransition {
+        SyncTransition::default()
     }
 
     fn transact(
@@ -415,12 +416,6 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     }
 
     delegate::delegate! {
-        to self {
-            #[call(check_axis)]
-            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-            #[call(check_parent)]
-            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
-        }
         to self.root_view {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
@@ -444,6 +439,7 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 #[cfg(test)]
 mod tests {
     use kithara_signal::SessionFrame;
+    use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::{BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
 
@@ -451,7 +447,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
-        let mut host =
+        let host =
             Host::<TestPools>::new(HostConfig::builder().build()).expect("fixture realtime Host");
         let grid = host.snapshot();
         let MapAxis::Session(axis) = grid.axis() else {
@@ -473,14 +469,18 @@ mod tests {
             .expect("parent anchor"),
             None,
         );
-        let refusal = Err(SyncError::SessionRoot {
+        let refusal = SyncError::SessionRoot {
             group_id: host.id(),
-        });
+        };
 
-        assert_eq!(host.check_axis(axis_update), refusal);
-        assert_eq!(host.accept_axis(axis_update), refusal);
-        assert_eq!(host.check_parent(segment), refusal);
-        assert_eq!(host.accept_parent(segment), refusal);
+        let withdrawal = ParentWithdrawal::new(segment.parent(), SessionFrame::new(0), None);
+        for fact in [
+            ParentFact::Axis(axis_update),
+            ParentFact::Segment(segment),
+            ParentFact::Withdrawn(withdrawal),
+        ] {
+            assert_eq!(host.stage_fact(fact).err(), Some(refusal.clone()));
+        }
         assert_eq!(host.snapshot().stamp(), grid.stamp());
     }
 

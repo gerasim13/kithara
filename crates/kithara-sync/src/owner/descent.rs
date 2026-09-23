@@ -1,36 +1,69 @@
 use kithara_signal::SessionFrame;
-use kithara_warp::{BeatGridSnapshot, MapAxis, WarpMapRevision};
+use kithara_warp::{BeatGridSnapshot, BeatGridStamp, MapAxis, WarpMapRevision};
 
 use super::{
     lifecycle::Applied,
-    preparation::{Pending, Refreshed},
+    preparation::{Pending, Refreshed, transition},
     state::{GroupState, Withdrawal, validate_successor},
     timeline::Timeline,
+    transaction::take_operation,
 };
 use crate::{
-    ParentGridUpdate, SessionAxisUpdate, SyncError, SyncGroup, SyncMember, SyncOperationId,
+    ParentFact, ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate, SyncError, SyncGroup,
+    SyncMember, SyncOperationId, SyncTransition,
 };
 
-/// A timeline fact one group passes on to its direct child groups.
+/// The parent timeline a group last accepted.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Descent {
-    Parent(ParentGridUpdate),
-    Axis(SessionAxisUpdate),
+pub(super) enum Parent {
+    /// The parent's tempo and phase segment.
+    Segment(ParentGridUpdate),
+    /// The parent grid revision that has no geometry.
+    Withdrawn(BeatGridStamp),
+}
+
+impl From<Parent> for BeatGridStamp {
+    fn from(parent: Parent) -> Self {
+        match parent {
+            Parent::Segment(update) => update.parent(),
+            Parent::Withdrawn(stamp) => stamp,
+        }
+    }
+}
+
+impl Parent {
+    pub(super) const fn segment(self) -> Option<ParentGridUpdate> {
+        match self {
+            Self::Segment(update) => Some(update),
+            Self::Withdrawn(_) => None,
+        }
+    }
 }
 
 /// One group's successor grid together with everything it moves: the
 /// decisions and applied maps of its direct members, the identities they
-/// spend, and the segment its child groups follow, computed before mutation.
+/// spend, and the staged change of every direct child group, computed before
+/// mutation.
+#[derive(Debug)]
 pub(super) struct Staged {
     pub(super) grid: BeatGridSnapshot,
     timeline: Timeline,
-    parent: Option<ParentGridUpdate>,
-    descent: Option<Descent>,
+    parent: Option<Parent>,
     pub(super) pending: Vec<Pending>,
     applied: Vec<Applied>,
     next_map: Option<WarpMapRevision>,
     next_operation: Option<SyncOperationId>,
+    children: Vec<SyncStaged>,
 }
+
+/// A parent fact's complete effect on one subtree, computed against that
+/// subtree's current state and not applied yet.
+///
+/// Only the group that staged it may apply it, and only while nothing else
+/// changed the subtree in between.
+#[derive(Debug)]
+#[must_use]
+pub struct SyncStaged(Option<Box<Staged>>);
 
 /// Where a staged grid takes over, and the identities a retarget may spend.
 #[derive(Clone, Copy)]
@@ -40,54 +73,24 @@ pub(super) struct Takeover {
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
-    /// Checks that every direct child group accepts `descent` before any of
-    /// them changes.
-    pub(super) fn check_descent(&self, descent: Option<Descent>) -> Result<(), SyncError> {
-        let Some(descent) = descent else {
-            return Ok(());
+    pub(super) fn stage_descent(&self, fact: ParentFact) -> Result<SyncStaged, SyncError> {
+        let staged = match fact {
+            ParentFact::Segment(update) => self.stage_segment(update)?,
+            ParentFact::Withdrawn(withdrawal) => self.stage_withdrawal(withdrawal)?,
+            ParentFact::Axis(update) => self.stage_axis(update)?,
         };
-        self.members.iter().try_for_each(|member| match member {
-            SyncMember::Group { group, .. } => match descent {
-                Descent::Parent(update) => group.check_parent(update),
-                Descent::Axis(update) => group.check_axis(update),
-            },
-            SyncMember::Grid { .. } => Ok(()),
-        })
+        Ok(SyncStaged(staged.map(Box::new)))
     }
 
-    /// Passes `descent` on to every direct child group; call only after
-    /// [`Self::check_descent`] accepted it on the same members.
-    pub(super) fn descend(&mut self, descent: Option<Descent>) -> Result<(), SyncError> {
-        let Some(descent) = descent else {
-            return Ok(());
-        };
-        self.members.iter_mut().try_for_each(|member| match member {
-            SyncMember::Group { group, .. } => match descent {
-                Descent::Parent(update) => group.accept_parent(update),
-                Descent::Axis(update) => group.accept_axis(update),
-            },
-            SyncMember::Grid { .. } => Ok(()),
-        })
+    pub(super) fn apply_descent(&mut self, staged: SyncStaged) -> SyncTransition {
+        self.apply(staged.0.map(|staged| *staged))
     }
 
-    pub(super) fn stage_parent(
-        &self,
-        update: ParentGridUpdate,
-    ) -> Result<Option<Staged>, SyncError> {
-        if let Some(current) = self.parent {
-            let (current_stamp, given) = (current.parent(), update.parent());
-            if current == update {
-                return Ok(None);
-            }
-            if current_stamp.grid_id() == given.grid_id()
-                && given.revision() <= current_stamp.revision()
-            {
-                return Err(SyncError::StaleGridRevision {
-                    current: current_stamp,
-                    given,
-                });
-            }
+    fn stage_segment(&self, update: ParentGridUpdate) -> Result<Option<Staged>, SyncError> {
+        if self.parent == Some(Parent::Segment(update)) {
+            return Ok(None);
         }
+        self.check_parent_revision(update.parent())?;
         let (grid, descent) = match self.timeline {
             Timeline::Host => {
                 let (grid, descent) =
@@ -101,14 +104,63 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             commit: Some(update.anchor().frame()),
             next_operation: self.next_operation,
         };
-        self.stage(grid, self.timeline, Some(update), descent, takeover)
-            .map(Some)
+        self.stage(
+            grid,
+            self.timeline,
+            Some(Parent::Segment(update)),
+            descent,
+            takeover,
+        )
+        .map(Some)
     }
 
-    pub(super) fn stage_axis(
-        &self,
-        update: SessionAxisUpdate,
-    ) -> Result<Option<Staged>, SyncError> {
+    /// A group in [`crate::SyncMode::HostSync`] withdraws its grid with its
+    /// parent's, and releases its sounding members when the parent did.
+    fn stage_withdrawal(&self, withdrawal: ParentWithdrawal) -> Result<Option<Staged>, SyncError> {
+        let parent = Some(Parent::Withdrawn(withdrawal.parent()));
+        if self.parent == parent {
+            return Ok(None);
+        }
+        self.check_parent_revision(withdrawal.parent())?;
+        let at = withdrawal.at();
+        if !matches!(self.timeline, Timeline::Host) {
+            let takeover = Takeover {
+                commit: Some(at),
+                next_operation: self.next_operation,
+            };
+            return self
+                .stage(self.grid.clone(), self.timeline, parent, None, takeover)
+                .map(Some);
+        }
+        let grid = self.withdrawn_grid()?;
+        validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
+        let mut next_operation = self.next_operation;
+        let release = withdrawal
+            .release()
+            .map(|transport| {
+                take_operation(self.grid.id(), &mut next_operation)
+                    .map(|operation| (operation, transport))
+            })
+            .transpose()?;
+        let descent = ParentWithdrawal::new(grid.stamp(), at, withdrawal.release());
+        let takeover = Takeover {
+            commit: Some(at),
+            next_operation,
+        };
+        let mut staged = self.stage(
+            grid,
+            Timeline::Host,
+            parent,
+            Some(ParentFact::Withdrawn(descent)),
+            takeover,
+        )?;
+        if let Some((operation, transport)) = release {
+            staged.pending = self.handoffs(&staged.grid, operation, transport, at)?;
+        }
+        Ok(Some(staged))
+    }
+
+    fn stage_axis(&self, update: SessionAxisUpdate) -> Result<Option<Staged>, SyncError> {
         let axis = MapAxis::Session(update.axis());
         if axis == self.grid.axis() {
             return Ok(None);
@@ -119,7 +171,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             grid,
             self.timeline.on_new_axis(),
             None,
-            Some(Descent::Axis(update)),
+            Some(ParentFact::Axis(update)),
             Takeover {
                 commit: None,
                 next_operation: self.next_operation,
@@ -128,14 +180,29 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         .map(Some)
     }
 
+    /// Refuses a parent fact older than the one this group already accepted
+    /// from the same parent grid.
+    fn check_parent_revision(&self, given: BeatGridStamp) -> Result<(), SyncError> {
+        match self.parent.map(BeatGridStamp::from) {
+            Some(current)
+                if current.grid_id() == given.grid_id()
+                    && given.revision() <= current.revision() =>
+            {
+                Err(SyncError::StaleGridRevision { current, given })
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Stages `grid` under `timeline` as this group's successor, carrying
-    /// every member decision and applied map onto it.
+    /// every member decision and applied map onto it, and stages `descent` on
+    /// every direct child group.
     pub(super) fn stage(
         &self,
         grid: BeatGridSnapshot,
         timeline: Timeline,
-        parent: Option<ParentGridUpdate>,
-        descent: Option<Descent>,
+        parent: Option<Parent>,
+        descent: Option<ParentFact>,
         takeover: Takeover,
     ) -> Result<Staged, SyncError> {
         let Refreshed {
@@ -144,27 +211,36 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_map,
             next_operation,
         } = self.refreshed(&grid, timeline, takeover)?;
+        let children = match descent {
+            Some(fact) => self
+                .members
+                .iter()
+                .filter_map(|member| match member {
+                    SyncMember::Group { group, .. } => Some(group.stage_fact(fact)),
+                    SyncMember::Grid { .. } => None,
+                })
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        };
         Ok(Staged {
             grid,
             timeline,
             parent,
-            descent,
             pending,
             applied,
             next_map,
             next_operation,
+            children,
         })
     }
 
-    pub(super) fn check_staged(&self, staged: Option<&Staged>) -> Result<(), SyncError> {
-        staged.map_or(Ok(()), |staged| self.check_descent(staged.descent))
-    }
-
-    pub(super) fn commit_staged(&mut self, staged: Option<Staged>) -> Result<(), SyncError> {
+    /// Commits a change staged on this unchanged subtree, and returns every
+    /// preparation it issued and withdrew.
+    pub(super) fn apply(&mut self, staged: Option<Staged>) -> SyncTransition {
         let Some(staged) = staged else {
-            return Ok(());
+            return SyncTransition::default();
         };
-        self.check_descent(staged.descent)?;
+        let mut committed = transition(&self.pending, &staged.pending);
         self.grid = staged.grid;
         self.timeline = staged.timeline;
         self.parent = staged.parent;
@@ -172,6 +248,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.applied = staged.applied;
         self.next_map = staged.next_map;
         self.next_operation = staged.next_operation;
-        self.descend(staged.descent)
+        let mut children = staged.children.into_iter();
+        for member in &mut self.members {
+            if let SyncMember::Group { group, .. } = member
+                && let Some(child) = children.next()
+            {
+                committed.append(group.apply_staged(child));
+            }
+        }
+        committed
     }
 }

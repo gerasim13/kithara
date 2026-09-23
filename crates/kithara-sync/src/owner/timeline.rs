@@ -5,13 +5,13 @@ use kithara_warp::{
 };
 
 use super::{
-    descent::{Descent, Takeover},
+    descent::{Parent, Takeover},
     state::{GroupState, Withdrawal, validate_successor},
     transaction::take_operation,
 };
 use crate::{
-    ParentGridUpdate, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode,
-    SyncOperationId,
+    ParentFact, ParentGridUpdate, ParentWithdrawal, SyncAdmission, SyncCapability, SyncError,
+    SyncGroup, SyncIntent, SyncMode, SyncOperationId,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -49,7 +49,7 @@ enum ModeEffect {
     Changed {
         timeline: Timeline,
         grid: BeatGridSnapshot,
-        descent: Option<Descent>,
+        descent: Option<ParentFact>,
         at: SessionFrame,
         release: Option<TransportRevision>,
     },
@@ -169,19 +169,18 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         if matches!(self.timeline, Timeline::Host) {
             return Ok(ModeEffect::Unchanged);
         }
-        let (grid, descent) = match self.parent {
-            Some(parent) => {
-                let (grid, descent) =
-                    self.derived_grid(parent.epoch(), parent.anchor(), parent.meter())?;
-                (grid, Some(descent))
-            }
-            None => (self.withdrawn_grid()?, None),
+        let (grid, descent) = if let Some(parent) = self.parent.and_then(Parent::segment) {
+            self.derived_grid(parent.epoch(), parent.anchor(), parent.meter())?
+        } else {
+            let grid = self.withdrawn_grid()?;
+            let descent = ParentWithdrawal::new(grid.stamp(), at, None);
+            (grid, ParentFact::Withdrawn(descent))
         };
         validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
         Ok(ModeEffect::Changed {
             timeline: Timeline::Host,
             grid,
-            descent,
+            descent: Some(descent),
             at,
             release: None,
         })
@@ -211,10 +210,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         let grid = self.withdrawn_grid()?;
         validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
+        let descent = ParentWithdrawal::new(grid.stamp(), at, Some(transport));
         Ok(ModeEffect::Changed {
             timeline: Timeline::Off,
             grid,
-            descent: None,
+            descent: Some(ParentFact::Withdrawn(descent)),
             at,
             release: Some(transport),
         })
@@ -248,14 +248,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         epoch: SessionEpoch,
         anchor: SessionAnchor,
         meter: Option<MeterFacts>,
-    ) -> Result<(BeatGridSnapshot, Descent), SyncError> {
+    ) -> Result<(BeatGridSnapshot, ParentFact), SyncError> {
         let grid =
             BeatGridSnapshot::session(self.grid.id(), self.next_revision()?, epoch, anchor, meter);
         let segment = ParentGridUpdate::new(grid.stamp(), epoch, anchor, meter);
-        Ok((grid, Descent::Parent(segment)))
+        Ok((grid, ParentFact::Segment(segment)))
     }
 
-    fn withdrawn_grid(&self) -> Result<BeatGridSnapshot, SyncError> {
+    pub(super) fn withdrawn_grid(&self) -> Result<BeatGridSnapshot, SyncError> {
         Ok(BeatGridSnapshot::unavailable(
             self.grid.id(),
             self.next_revision()?,
@@ -293,7 +293,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 if let Some(transport) = release {
                     staged.pending = self.handoffs(&staged.grid, operation, transport, at)?;
                 }
-                self.check_staged(Some(&staged))?;
                 (Committed::Changed(timeline), Some(staged))
             }
             ModeEffect::Unchanged => (Committed::Unchanged, None),
@@ -303,7 +302,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         if staged.is_none() {
             self.next_operation = next_operation;
         }
-        self.commit_staged(staged)?;
+        let transition = self.apply(staged);
         Ok(match effect {
             Committed::Changed(timeline) => {
                 self.blocked = None;
@@ -312,6 +311,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     topology,
                     mode: timeline.mode(),
                     grid: self.grid.stamp(),
+                    transition,
                 }
             }
             Committed::Unchanged => {

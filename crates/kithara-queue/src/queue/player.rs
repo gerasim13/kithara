@@ -4,8 +4,8 @@ use kithara_play::{
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
 use kithara_sync::{
-    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
+    ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncReceipt,
+    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 
 use super::Queue;
@@ -34,10 +34,8 @@ where
 
     delegate::delegate! {
         to self.player {
-            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
-            fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-            fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
 
             fn transact(

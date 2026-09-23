@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
@@ -54,20 +54,12 @@ impl BeatGrid for PlayerSync {
 impl SyncGroup for PlayerSync {
     type NestedGroup = PlayerMember;
 
-    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+    /// A staged fact reaches only the owner that staged it; once the owner
+    /// is taken there is nothing left to apply it to.
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition {
         self.owned
             .as_mut()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.accept_axis(update)
-            })
-    }
-
-    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError> {
-        self.owned
-            .as_mut()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.accept_parent(update)
-            })
+            .map_or_else(SyncTransition::default, |owned| owned.apply_staged(staged))
     }
 
     fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
@@ -78,19 +70,11 @@ impl SyncGroup for PlayerSync {
             })
     }
 
-    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError> {
+    fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError> {
         self.owned
             .as_ref()
             .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.check_axis(update)
-            })
-    }
-
-    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError> {
-        self.owned
-            .as_ref()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.check_parent(update)
+                owned.stage_fact(fact)
             })
     }
 
@@ -155,10 +139,8 @@ impl SyncGroup for PlayerMember {
 
     delegate::delegate! {
         to self.sync {
-            fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-            fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
-            fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-            fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(
                 &mut self,

@@ -47,19 +47,22 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// direct member.
     ///
     /// A receipt advances its preparation one phase at a time: installed,
-    /// armed, presented. A rejection drops a preparation that is not armed
-    /// and leaves the member on the map it already sounds through. A
-    /// presentation makes the preparation's map the member's applied one, or
-    /// releases the member for a handoff. Nothing changes on a refusal.
+    /// armed, presented; installing and arming need the member grid the
+    /// preparation was placed on to still be current. A rejection drops a
+    /// preparation that is not armed and leaves the member on the map it
+    /// already sounds through. A presentation makes the preparation's map the
+    /// member's applied one, or releases the member for a handoff. Nothing
+    /// changes on a refusal.
     pub(super) fn record(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
         let stamp = receipt.stamp();
         let member = stamp.member().grid_id();
-        if self.direct_grid(member).is_none() {
-            return Err(SyncError::MemberNotFound {
+        let current = self
+            .direct_grid(member)
+            .ok_or_else(|| SyncError::MemberNotFound {
                 group_id: self.grid.id(),
                 member_id: member,
-            });
-        }
+            })?
+            .stamp();
         let held = self
             .pending
             .iter()
@@ -110,6 +113,12 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             _ => return Err(SyncError::ReceiptOutOfOrder { operation }),
         };
+        if matches!(step, Step::Phase(_)) && current != expected.member() {
+            return Err(SyncError::StaleGridRevision {
+                current,
+                given: expected.member(),
+            });
+        }
         match step {
             Step::Phase(next) => {
                 if let Some(Pending::Prepared { phase, .. }) = self.pending.get_mut(index) {

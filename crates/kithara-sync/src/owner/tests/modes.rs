@@ -8,11 +8,11 @@ use kithara_warp::{
     SessionAnchor, SessionAxis, SessionBeat,
 };
 
-use super::{TestGrid, TestGroup, session_grid};
+use super::{Accept, TestGrid, TestGroup, session_grid};
 use crate::{
     AlignmentSource, GroupState, LoadGeneration, ParentGridUpdate, SessionAxisUpdate,
     SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
+    SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
 };
 
 /// Time constant the tempo fixtures approach a new target with.
@@ -39,12 +39,16 @@ fn fixture_group() -> Group {
 }
 
 fn live_deck() -> Group {
+    live_deck_at(120.0)
+}
+
+fn live_deck_at(bpm: f64) -> Group {
     GroupState::new(
         session_grid(
             BeatGridId::allocate().expect("grid id"),
             BeatGridRevision::first(),
             SessionEpoch::new(0),
-            2.0,
+            bpm / 60.0,
         ),
         SyncMemberKind::Grid,
     )
@@ -52,12 +56,17 @@ fn live_deck() -> Group {
 
 /// A deck owning a local 120 BPM timeline latched from its live grid.
 pub(super) fn synced_deck() -> Group {
-    let mut deck = live_deck();
+    synced_deck_at(120.0)
+}
+
+/// A deck owning a local `bpm` timeline latched from its live grid.
+pub(super) fn synced_deck_at(bpm: f64) -> Group {
+    let mut deck = live_deck_at(bpm);
     let _ = deck
         .transact(sync(deck.id(), SyncIntent::Disable))
         .expect("disable latches the live grid");
     let _ = deck
-        .transact(tempo(deck.id(), 120.0))
+        .transact(tempo(deck.id(), bpm))
         .expect("a local deck accepts its own tempo");
     deck
 }
@@ -195,7 +204,13 @@ fn rejected_parent_anchor_preserves_the_committed_grid_and_anchor() {
         Err(SyncError::GridAxisChanged { .. })
     ));
     assert_eq!(group.snapshot().stamp(), stamp);
-    assert_eq!(group.parent.map(|parent| parent.anchor()), Some(committed));
+    assert_eq!(
+        group
+            .parent
+            .and_then(Parent::segment)
+            .map(|parent| parent.anchor()),
+        Some(committed)
+    );
 }
 
 #[kithara::test]
@@ -733,7 +748,10 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
     );
     let middle_stamp = nested(&root, &[middle_id], |group| group.snapshot().stamp());
     let leaf_parent = nested(&root, &[middle_id, leaf_id], |group| {
-        group.parent.map(|parent| parent.parent())
+        group
+            .parent
+            .and_then(Parent::segment)
+            .map(|parent| parent.parent())
     });
     assert_eq!(
         leaf_parent,

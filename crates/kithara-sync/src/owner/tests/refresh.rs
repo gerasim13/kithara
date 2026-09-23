@@ -6,6 +6,7 @@ use kithara_warp::{
 };
 
 use super::{
+    Accept,
     modes::{
         Group, anchor_at_rate, attach_group, grid_beat_at, group_in, nested, parent_stamp,
         parent_update, rate, sync, synced_deck, tempo_at,
@@ -16,8 +17,8 @@ use super::{
     },
 };
 use crate::{
-    SyncEffect, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode, SyncPreparation,
-    owner::preparation::Pending,
+    SyncAdmission, SyncEffect, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
+    SyncPreparation, owner::preparation::Pending,
 };
 
 /// A deck following `anchor` as revision one of the parent `parent`.
@@ -80,11 +81,13 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
         rate(48_000),
     )
     .expect("tempo anchor");
-    group
+    let transition = group
         .accept_parent(parent_update(parent_stamp(parent, 2), faster))
         .expect("a tempo commit keeps the session axis");
 
     let moved = prepared(&group, track);
+    assert_eq!(transition.issued(), [moved.clone()]);
+    assert!(transition.withdrawn().is_empty());
     assert_eq!(moved.stamp().operation(), planned.stamp().operation());
     assert_eq!(activation(&moved).0, activation(&planned).0);
     assert_eq!(activation_beat(&moved), beat);
@@ -271,11 +274,19 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     };
     let (planned, _, _) = read(&root);
 
-    let _ = root
+    let admission = root
         .transact(tempo_at(root.id(), 150.0, SessionFrame::new(36_000)))
         .expect("the root owns its tempo");
 
     let (moved, beat, deck_grid) = read(&root);
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("expected a state change, got {admission:?}");
+    };
+    assert_eq!(
+        transition.issued(),
+        [moved.clone()],
+        "the root's tempo commit reports the retarget its grandchild deck issued"
+    );
     assert_eq!(moved.stamp().member().grid_id(), track);
     assert_eq!(moved.stamp().operation(), planned.stamp().operation());
     assert_eq!(moved.stamp().group(), deck_grid);
@@ -285,13 +296,19 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
 
 #[kithara::test]
 fn leaving_the_timeline_withdraws_every_preparation() {
-    let (mut group, _, _) = prepared_deck();
+    let (mut group, _, track) = prepared_deck();
+    let planned = prepared(&group, track);
 
-    let _ = group
+    let admission = group
         .transact(sync(group.id(), SyncIntent::Free))
         .expect("free");
 
     assert_eq!(pending_members(&group), []);
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("expected a state change, got {admission:?}");
+    };
+    assert!(transition.issued().is_empty());
+    assert_eq!(transition.withdrawn(), [planned.stamp()]);
 }
 
 #[kithara::test]

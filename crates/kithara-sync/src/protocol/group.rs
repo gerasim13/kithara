@@ -5,9 +5,9 @@ use kithara_warp::{
 };
 
 use crate::{
-    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncCapability,
-    SyncExecutionStamp, SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode,
-    SyncOperation, SyncOperationId, SyncReceipt, SyncRejected, TopologyStamp,
+    ParentFact, SyncAdmission, SyncApplied, SyncCapability, SyncExecutionStamp, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
+    SyncRejected, SyncStaged, SyncTransition, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -200,29 +200,26 @@ pub enum SyncError {
 ///
 /// Every group is both a parent and a member of its own parent: operations
 /// are routed down through `transact`, the parent's timeline facts arrive
-/// through the `check_*`/`accept_*` pairs, and `status` and `topology`
+/// through `stage_fact` and `apply_staged`, and `status` and `topology`
 /// report upwards. The topology's group-grid stamp must equal
 /// `snapshot().stamp()`, and its group identity must equal `id()`.
 pub trait SyncGroup: BeatGrid {
     /// Concrete synchronization-group type accepted as a direct child.
     type NestedGroup: SyncGroup;
 
-    /// Moves every mode in this subtree onto a new physical session axis.
+    /// Computes, without mutation, everything a parent fact changes across
+    /// this subtree, so a parent can refuse the fact before any member
+    /// changes.
     ///
     /// # Errors
     ///
     /// Returns [`SyncError`] when this group or any nested group refuses the
-    /// axis; nothing in the subtree changes then.
-    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<(), SyncError>;
+    /// fact.
+    fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
 
-    /// Accepts a parent segment: a group in [`SyncMode::HostSync`] adopts it
-    /// as its grid and passes it on, any other mode only records it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when this group or any nested group refuses the
-    /// segment; nothing in the subtree changes then.
-    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
+    /// Commits a change [`Self::stage_fact`] computed on this unchanged
+    /// subtree, and returns every preparation it issued and withdrew.
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
 
     /// Records an executor's receipt for one preparation in this subtree and
     /// returns the resulting state of the group that issued it.
@@ -233,22 +230,6 @@ pub trait SyncGroup: BeatGrid {
     /// order, or does not match the preparation its member holds; nothing
     /// changes then.
     fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
-
-    /// Checks without mutation that this subtree accepts a new session axis,
-    /// so a parent can refuse it before any of its members changes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when this group or any nested group refuses it.
-    fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
-
-    /// Checks without mutation that this subtree accepts a parent segment,
-    /// so a parent can refuse it before any of its members changes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when this group or any nested group refuses it.
-    fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
 
     /// Returns the canonical control-plane view of this group's sync state.
     fn status(&self) -> SyncStatusSnapshot;

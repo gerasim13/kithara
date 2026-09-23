@@ -9,4 +9,5 @@ mod tests;
 mod timeline;
 mod transaction;
 
+pub use descent::SyncStaged;
 pub use state::GroupState;

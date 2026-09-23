@@ -197,12 +197,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Err(reject(error, operations));
         }
         apply_topology_operations(&mut self.members, operations);
-        self.retain_current_pending();
+        let transition = self.retain_current_pending();
         self.topology_revision = revision;
         advance_operation(&mut self.next_operation);
         Ok(SyncAdmission::TopologyChanged {
             operation: operation_id,
             topology: TopologyStamp::new(self.grid.id(), revision),
+            transition,
         })
     }
 }
