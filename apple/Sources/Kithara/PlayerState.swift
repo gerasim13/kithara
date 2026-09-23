@@ -131,8 +131,11 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
+/// Order used when selecting the next item in the queue.
 public enum PlaybackOrder: Sendable, Equatable {
+    /// Play items in queue order.
     case sequential
+    /// Select items in shuffled order.
     case shuffle
 }
 
