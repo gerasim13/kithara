@@ -110,7 +110,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 #[cfg(test)]
 mod tests {
     use ::kithara::{
-        play::effects::eq::GainDb,
+        effects::GainDb,
         ui::render::{ReadValue, Reads, Walk},
     };
     use iced::Size;

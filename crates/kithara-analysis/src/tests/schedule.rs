@@ -333,7 +333,7 @@ where
         let log = source.log();
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);
-        let (writer, ingest) = ring::open_for(rate);
+        let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
         jobs.send(Job {
             demand: AnalysisDemand::ALL,
             tx,

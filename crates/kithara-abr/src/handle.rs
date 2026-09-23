@@ -78,17 +78,6 @@ impl AbrHandle {
             .map(|s| s.current_variant_index().get())
     }
 
-    /// Drop any unobserved boundary-commit decision — see
-    /// [`AbrState::invalidate_pending`]. Called by `kithara-hls` on a
-    /// new seek epoch so a pre-seek up-switch chosen against stale
-    /// throughput does not commit on the first post-seek boundary
-    /// (prod `app.log` `HangDetector` signature).
-    pub fn invalidate_pending(&self) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.invalidate_pending();
-        }
-    }
-
     /// Lock ABR (used during seek).
     pub fn lock(&self) {
         if let Some(state) = self.inner.state.as_ref() {
@@ -141,16 +130,6 @@ impl AbrHandle {
     #[kithara::probe]
     pub fn reevaluate(&self) {
         self.inner.controller.tick(self.inner.peer_id);
-    }
-
-    /// Variant selected for a seek replacement, including a locked pending
-    /// intent. Stateless handles return `None`.
-    #[must_use]
-    pub fn selected_variant_for_seek(&self) -> Option<usize> {
-        self.inner
-            .state
-            .as_ref()
-            .map(|state| state.selected_variant_for_seek().get())
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {

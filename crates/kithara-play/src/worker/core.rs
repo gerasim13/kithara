@@ -6,6 +6,7 @@ use std::{
 use kithara_audio::{Audio, AudioSource, PreparedAudio, ResamplerBackend};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{DecodeError, DecodeResult};
+use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
 use kithara_stream::{Stream, StreamType};
@@ -17,7 +18,6 @@ use super::{
     WarpSource,
     scheduler::{PlaybackObserver, ServiceClass, Wake},
 };
-use crate::effects::EffectDrain;
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 

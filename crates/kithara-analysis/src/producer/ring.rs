@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, RingCons, RingProd, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -14,18 +14,31 @@ struct Span {
     frames: usize,
 }
 
-pub(crate) fn open_for(rate: NonZeroU32) -> (Writer, Reader) {
+pub(crate) fn open_for<S>(
+    pools: &PoolRegion<S>,
+    rate: NonZeroU32,
+) -> Result<(Writer, Reader), PoolError>
+where
+    S: HasPool<f32>,
+{
     const AHEAD_SECONDS: u32 = 4;
     const AHEAD_RANGES: usize = 256;
 
     let frames = rate.get().saturating_mul(AHEAD_SECONDS).to_usize();
-    open(frames.unwrap_or(usize::MAX), AHEAD_RANGES)
+    open(pools, frames.unwrap_or(usize::MAX), AHEAD_RANGES)
 }
 
-pub(crate) fn open(frames: usize, ranges: usize) -> (Writer, Reader) {
-    let (samples_tx, samples_rx) = HeapRb::<f32>::new(frames.max(1)).split();
+pub(crate) fn open<S>(
+    pools: &PoolRegion<S>,
+    frames: usize,
+    ranges: usize,
+) -> Result<(Writer, Reader), PoolError>
+where
+    S: HasPool<f32>,
+{
+    let (samples_tx, samples_rx) = pools.ring::<f32>(frames)?;
     let (spans_tx, spans_rx) = HeapRb::<Span>::new(ranges.max(1)).split();
-    (
+    Ok((
         Writer {
             samples: samples_tx,
             spans: spans_tx,
@@ -34,11 +47,11 @@ pub(crate) fn open(frames: usize, ranges: usize) -> (Writer, Reader) {
             samples: samples_rx,
             spans: spans_rx,
         },
-    )
+    ))
 }
 
 pub(crate) struct Writer {
-    samples: HeapProd<f32>,
+    samples: RingProd<SampleBuffer>,
     spans: HeapProd<Span>,
 }
 
@@ -68,7 +81,7 @@ impl Writer {
 }
 
 pub(crate) struct Reader {
-    samples: HeapCons<f32>,
+    samples: RingCons<SampleBuffer>,
     spans: HeapCons<Span>,
 }
 
@@ -105,8 +118,8 @@ mod tests {
 
     #[kithara::test]
     fn a_range_comes_out_the_way_it_went_in(pcm_ramp: Vec<f32>) {
-        let (mut tx, mut rx) = open(64, 4);
         let pools = pools();
+        let (mut tx, mut rx) = open(&pools, 64, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
         assert!(tx.push(100, 4, pcm_ramp[..4].iter().copied()));
@@ -121,8 +134,8 @@ mod tests {
 
     #[kithara::test]
     fn a_full_ring_refuses_whole_ranges(ones: Vec<f32>, pcm_ramp: Vec<f32>) {
-        let (mut tx, mut rx) = open(8, 4);
         let pools = pools();
+        let (mut tx, mut rx) = open(&pools, 8, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 8, ones[..8].iter().copied()));
@@ -138,8 +151,8 @@ mod tests {
 
     #[kithara::test]
     fn a_full_descriptor_ring_refuses_even_with_room_for_samples(pcm_ramp: Vec<f32>) {
-        let (mut tx, mut rx) = open(64, 2);
         let pools = pools();
+        let (mut tx, mut rx) = open(&pools, 64, 2).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 1, pcm_ramp[0..1].iter().copied()));
@@ -156,8 +169,8 @@ mod tests {
 
     #[kithara::test]
     fn draining_frees_the_room_it_read(ones: Vec<f32>, twos: Vec<f32>) {
-        let (mut tx, mut rx) = open(8, 4);
         let pools = pools();
+        let (mut tx, mut rx) = open(&pools, 8, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 8, ones[..8].iter().copied()));

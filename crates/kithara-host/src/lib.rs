@@ -5,7 +5,6 @@
 
 pub mod api;
 pub mod bridge;
-mod effects;
 mod error;
 mod host;
 mod rt;

@@ -9,7 +9,6 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 
 pub mod api;
 pub mod bridge;
-pub mod effects;
 pub mod engine;
 pub mod player;
 pub mod policy;
@@ -38,12 +37,12 @@ pub use bridge::{
     SessionError, SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason,
     TrackState, TrackTransition,
 };
-pub use effects::eq::EqBandConfig;
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
+pub use kithara_effects::eq::EqBandConfig;
 pub use kithara_net::Headers;
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls};
 pub use player::{

@@ -60,7 +60,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
 
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
-    let (_writer, ingest) = ring::open_for(rate);
+    let (_writer, ingest) = ring::open_for(&pools, rate).expect("test ring fits the pools");
     jobs.send(Job {
         tx,
         rate,

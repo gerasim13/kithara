@@ -97,7 +97,7 @@ mod tests {
     }
 
     fn producer(frames: usize, ranges: usize) -> (AnalysisProducer, ring::Reader) {
-        let (tx, rx) = ring::open(frames, ranges);
+        let (tx, rx) = ring::open(&pools(), frames, ranges).expect("test ring fits the pools");
         let rate = NonZeroU32::new(44_100).expect("test rate is non-zero");
         (AnalysisProducer::new(tx, rate, "track-a".into()), rx)
     }

@@ -85,8 +85,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .playbackOrderChanged(order: PlaybackOrder(ffi: order))
         case .actionAtItemEndChanged(let action):
             return .actionAtItemEndChanged(action: ActionAtItemEnd(ffi: action))
-        case .repeatModeChanged(let mode):
-            return .repeatModeChanged(mode: RepeatMode(ffi: mode))
         case .trackAdded,
              .trackRemoved,
              .trackLoadFailed,
@@ -103,7 +101,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
              .djStretchBackendChanged,
              .assetCommitted,
              .assetFailed,
-             .assetEvicted:
+             .assetEvicted,
+             .repeatModeChanged:
             return nil
         }
     }
@@ -209,20 +208,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// the queue is empty.
     public var currentAudioItem: KitharaPlayerItem? {
         _currentItemSubject.value
-    }
-
-    // MARK: - Repeat
-
-    /// Queue behavior after the current item reaches its end.
-    public var repeatMode: RepeatMode {
-        get { RepeatMode(ffi: _inner.repeatMode()) }
-        set {
-            do {
-                try _inner.setRepeatMode(mode: newValue.ffi)
-            } catch {
-                _eventSubject.send(.error(error: String(describing: error)))
-            }
-        }
     }
 
     // MARK: - Ducking

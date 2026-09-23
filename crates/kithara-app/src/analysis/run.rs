@@ -182,16 +182,25 @@ impl Owner {
                     .ok()
             });
         let fresh = resumed.is_none();
-        let rx = resumed.unwrap_or_else(|| {
-            self.runner.analyze(
+        let rx = match resumed {
+            Some(rx) => rx,
+            None => match self.runner.analyze(
                 config,
                 token_for(entry.target().key()),
                 axis,
                 revision,
                 demand,
                 deliver(&queue, track_id),
-            )
-        });
+            ) {
+                Ok(rx) => rx,
+                Err(error) => {
+                    warn!(%error, ?track_id, "analysis: pass could not open its ingress");
+                    entry.set_stage(Stage::Ended(axis));
+                    entry.release();
+                    return None;
+                }
+            },
+        };
         debug!(
             ?track_id,
             held,

@@ -3,8 +3,8 @@ use iced::{
     window::{Direction, Mode},
 };
 use kithara::{
+    effects::{GainDb, eq::EqBandConfig},
     platform::time::Duration,
-    play::effects::eq::{EqBandConfig, GainDb},
     ui::render::{WindowCommand, WindowEdge},
 };
 use tracing::{error, warn};
@@ -288,7 +288,7 @@ mod tests {
     use std::{convert::Infallible, mem};
 
     use ::kithara::{
-        play::effects::eq::GainDb,
+        effects::GainDb,
         ui::render::{ControlAction, UiEvent, WindowCommand, WindowEdge},
     };
     use iced::{Size, window::Direction};

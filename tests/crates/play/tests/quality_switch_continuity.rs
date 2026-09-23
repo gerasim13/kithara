@@ -17,15 +17,14 @@ use kithara::{
     abr::{AbrHandle, AbrMode},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
+    effects::LimiterConfig,
     events::{EventBus, EventReceiver},
     host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc, effects::LimiterConfig,
-    },
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -415,7 +414,7 @@ async fn prepare_player(
 ///
 /// The guard is what puts that advance on the same clock as everything else
 /// this test observes. Fixture delays already burn virtual time
-/// (`release_after_delay`), and the decode worker is a registered pacer, so the
+/// (`TestServerState::delay_response`), and the decode worker is a registered pacer, so the
 /// clock only moves once the worker has parked. Without the guard this `sleep`
 /// is a real `tokio` timer — the test macro rewrites time calls in the test
 /// body, not in the helpers it calls — and the consumer then advances at host
