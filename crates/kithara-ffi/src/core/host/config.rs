@@ -91,7 +91,7 @@ pub fn ensure_default_host() -> Result<(), FfiError> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::play::effects::LimiterConfig;
+    use ::kithara::effects::LimiterConfig;
     use kithara_test_utils::kithara;
 
     use super::*;
