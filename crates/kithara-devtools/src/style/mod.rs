@@ -81,6 +81,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
     let fix_scan = Scan::new(&workspace_root);
     let ctx = Context {
         workspace_root: &workspace_root,
+        metadata: &metadata,
         config: &config,
         scope: &scope,
         scan: &fix_scan,
