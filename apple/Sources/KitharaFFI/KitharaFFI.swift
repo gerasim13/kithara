@@ -645,6 +645,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func append(item: AudioPlayerItem) throws
 
+    /**
+     * Crossfade profile currently submitted to the owning queue.
+     */
     func crossfadeSettings()  -> FfiCrossfadeSettings
 
     /**
@@ -1048,6 +1051,9 @@ open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConver
 }
 }
 
+    /**
+     * Crossfade profile currently submitted to the owning queue.
+     */
 open func crossfadeSettings() -> FfiCrossfadeSettings  {
     return try!  FfiConverterTypeFfiCrossfadeSettings_lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_crossfade_settings(
@@ -9790,7 +9796,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 44588) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 34253) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {

@@ -61,9 +61,6 @@ impl AudioPlayer {
         self.inner.append(&item)
     }
 
-    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
-        self.inner.crossfade_settings()
-    }
     pub fn playback_order(&self) -> FfiPlaybackOrder {
         self.inner.playback_order()
     }
@@ -318,6 +315,11 @@ impl AudioPlayer {
 
 #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayer {
+    /// Crossfade profile currently submitted to the owning queue.
+    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
+        self.inner.crossfade_settings()
+    }
+
     /// Number of bands in the current equalizer layout.
     #[must_use]
     pub fn eq_band_count(&self) -> u32 {

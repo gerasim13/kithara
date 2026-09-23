@@ -1,4 +1,4 @@
-import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiEqFilterKind, FfiError, initializeHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
@@ -55,6 +55,21 @@ async function main() {
   if (!oversizedLayout || generatedPlayer.eqBandCount() !== 1) {
     throw new Error("oversized EQ layout changed the player owner");
   }
+  const crossfade = { duration: 2.5, curve: FfiCrossfadeCurve.Linear, depth: 0.75, position: 0.4 };
+  generatedPlayer.setCrossfadeSettings(crossfade);
+  const appliedCrossfade = generatedPlayer.crossfadeSettings();
+  if (appliedCrossfade.duration !== crossfade.duration || appliedCrossfade.curve !== crossfade.curve || appliedCrossfade.depth !== crossfade.depth || appliedCrossfade.position !== Math.fround(crossfade.position)) {
+    throw new Error(`generated crossfade settings did not reach owner readback: ${JSON.stringify(appliedCrossfade)}`);
+  }
+  let invalidCrossfade = false;
+  try {
+    generatedPlayer.setCrossfadeSettings({ ...crossfade, depth: 1.5 });
+  } catch (error) {
+    invalidCrossfade = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidCrossfade || JSON.stringify(generatedPlayer.crossfadeSettings()) !== JSON.stringify(appliedCrossfade)) {
+    throw new Error("invalid crossfade changed the player owner");
+  }
   if (!(generatedPlayer instanceof UniAudioPlayer)) throw new Error("generated player has no owned handle");
   generatedPlayer.uniffiDestroy();
   const player = new AudioPlayer();
@@ -71,7 +86,7 @@ async function main() {
   if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
   player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle EQ mutation; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and crossfade mutation; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });
