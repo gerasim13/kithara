@@ -206,9 +206,6 @@ impl NativeInner {
             action_at_item_end,
             crossfade_settings,
         } = config;
-        // The engine and the queue loader capture the ambient runtime at
-        // creation; the host constructs the player from its own thread.
-        let _rt = crate::FFI_RUNTIME.enter();
         let cancel = CancelToken::root();
         let pools = store.pools().clone();
         let worker = FfiWorker::new(
@@ -228,6 +225,7 @@ impl NativeInner {
         let player = PlayerImpl::new(player_config);
         let queue_config = QueueConfig::builder()
             .player(player)
+            .runtime(crate::FFI_RUNTIME.clone())
             .store(queue_store)
             .playback_order(playback_order.try_into()?)
             .action_at_item_end(action_at_item_end.try_into()?)
@@ -262,23 +260,7 @@ impl NativeInner {
         Ok(inner)
     }
 
-    pub(crate) fn notify_interruption(&self, kind: InterruptionKind) {
-        let _rt = crate::FFI_RUNTIME.enter();
-        self.queue.notify_interruption(kind);
-    }
-
-    pub(crate) fn pause(&self) {
-        let _rt = crate::FFI_RUNTIME.enter();
-        self.queue.pause();
-    }
-
-    pub(crate) fn play(&self) {
-        let _rt = crate::FFI_RUNTIME.enter();
-        self.queue.play();
-    }
-
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .next(Transition::None)
             .map(|_| ())
@@ -288,7 +270,6 @@ impl NativeInner {
     }
 
     pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .previous(Transition::None)
             .map(|_| ())
@@ -298,7 +279,6 @@ impl NativeInner {
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
         self.enqueue(item, || {
@@ -352,7 +332,6 @@ impl NativeInner {
         item: &Arc<AudioPlayerItem>,
         after: Option<&Arc<AudioPlayerItem>>,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
         let after_id = after.map(|i| i.track_id());
@@ -425,7 +404,6 @@ impl NativeInner {
         index: u32,
         item: &Arc<AudioPlayerItem>,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let idx = index as usize;
         let tracks = self.queue.tracks();
         let old = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
@@ -475,7 +453,6 @@ impl NativeInner {
         item: &AudioPlayerItem,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .select(item.track_id(), transition.try_into()?)
             .map_err(|e| match e {
@@ -647,6 +624,9 @@ impl NativeInner {
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
             pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn notify_interruption(&self, kind: InterruptionKind);
+            pub(crate) fn pause(&self);
+            pub(crate) fn play(&self);
             #[call(default_rate)]
             pub(crate) fn playing_rate(&self) -> f32;
             pub(crate) fn rate(&self) -> f32;

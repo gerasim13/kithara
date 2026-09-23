@@ -10,7 +10,6 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
-    tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
@@ -42,7 +41,6 @@ pub struct EngineImpl<S> {
     slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
-    runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(super)")]
     session: SessionHandle<S>,
 }
@@ -67,7 +65,6 @@ impl<S> EngineImpl<S> {
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
-            runtime: RuntimeHandle::try_current().ok(),
         }
     }
 
@@ -267,17 +264,6 @@ impl<S> EngineImpl<S> {
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
         Ok(())
-    }
-
-    /// Runtime handle captured at engine creation.
-    ///
-    /// Use when building a shared
-    /// [`Downloader`](kithara_download::Downloader) so its async tasks
-    /// land on the same runtime the audio engine observes, then pass the
-    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
-    #[must_use]
-    pub const fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.runtime.as_ref()
     }
 
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {

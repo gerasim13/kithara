@@ -120,7 +120,7 @@ where
             return;
         };
         let queue = self.clone();
-        drop(task::spawn(async move {
+        drop(self.loader.spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,

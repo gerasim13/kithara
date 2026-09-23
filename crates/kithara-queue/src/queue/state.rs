@@ -6,7 +6,9 @@ use std::{
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{CancelScope, CancelToken, sync::Arc};
+use kithara_platform::{
+    CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
+};
 use kithara_play::{
     CrossfadeSettings, PlayError, PlayerImpl,
     player::{PlayerControl, PlayerControlSource},
@@ -141,6 +143,7 @@ where
     pub fn new(config: QueueConfig<S>) -> Self {
         let QueueConfig {
             player,
+            runtime,
             store,
             cancel: config_cancel,
             max_concurrent_loads,
@@ -162,12 +165,11 @@ where
         player.set_prefetch_duration(prefetch_duration);
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
-        let player_runtime = player.runtime().cloned();
         let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             player_control.clone(),
-            player_runtime,
+            runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),

@@ -143,8 +143,8 @@ impl crate::observer::PlayerObserver for FailureSignal {
 }
 
 /// The host calls `play()` from its own thread, which has no Tokio runtime.
-/// Retrying a failed track must still start its load on the runtime the
-/// player was created with instead of panicking across the FFI boundary.
+/// Retrying a failed track must still start its load on the queue's own
+/// runtime instead of panicking across the FFI boundary.
 #[kithara::test]
 fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
