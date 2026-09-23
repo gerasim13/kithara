@@ -202,3 +202,130 @@ fn anti_alias_smooths_fast_glide(glide_alias: Vec<f32>) {
 
     assert!(filtered_energy < plain_energy);
 }
+
+#[kithara::test(native, flash(false))]
+fn exact_span_keeps_a_constant_signal_at_the_right_boundary() {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.75; 15];
+    let mut output = [0.0; 16];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    assert!(
+        output.iter().all(|sample| (*sample - 0.75).abs() < 1.0e-6),
+        "constant input changed at an exact-span boundary: {output:?}"
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn near_unity_exact_span_preserves_the_first_mapped_attack() {
+    const SOURCE_FRAMES: usize = 10_001;
+    const OUTPUT_FRAMES: usize = 10_000;
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(mode)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(SOURCE_FRAMES)
+                .build(),
+        )
+        .pools(pools())
+        .build();
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let mut input = vec![0.0; SOURCE_FRAMES];
+    input[0] = 1.0;
+    let mut output = vec![0.0; OUTPUT_FRAMES];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("near-unity exact span should render: {err}"));
+
+    assert!(
+        (output[0] - 1.0).abs() < 1.0e-6,
+        "the source attack mapped to output frame zero moved: {:?}",
+        &output[..8]
+    );
+}
+
+#[kithara::test(native, flash(false))]
+async fn exact_span_retunes_anti_alias_filter_without_allocating() {
+    let mut resampler = {
+        let _permit = kithara_test_utils::no_block::permit();
+        let mode = ResamplerMode::VariableRatio {
+            sample_rate: rate(48_000),
+            initial_ratio: 1.0,
+            glide: None,
+        };
+        GlideResampler::new("glide", GlideConfig::default(), &settings(mode))
+            .expect("prepared Glide buffers")
+    };
+    let source = [0.25; 16];
+    let mut target = [0.0; 16];
+    for frames in [8, 4, 16, 8] {
+        kithara_test_utils::no_block::watch("Glide exact-span filter retuning", 1_000, async {
+            resampler.process_exact_span(&[source.as_slice()], &mut [&mut target[..frames]])
+        })
+        .await
+        .expect("retuning reuses filter storage");
+        assert!(target[..frames].iter().all(|sample| sample.is_finite()));
+    }
+    let _permit = kithara_test_utils::no_block::permit();
+    drop(resampler);
+}
+
+#[kithara::test(native, flash(false))]
+#[case::stream_unity(false, 44_100)]
+#[case::stream_downsample(false, 22_050)]
+#[case::exact_unity(true, 44_100)]
+#[case::exact_downsample(true, 22_050)]
+fn extra_channel_storage_preserves_the_prepared_channel_shape(
+    #[case] exact: bool,
+    #[case] target_rate: u32,
+    glide_unity: Vec<f32>,
+) {
+    let mut expected = build_glide(44_100, target_rate);
+    let mut actual = build_glide(44_100, target_rate);
+    let frames = if target_rate == 44_100 { 4 } else { 2 };
+    let mut reference = [0.0; 4];
+    let mut rendered = [0.0; 4];
+    let mut extra = [0.75; 4];
+    let input = glide_unity.as_slice();
+    if exact {
+        expected
+            .process_exact_span(&[input], &mut [&mut reference[..frames]])
+            .expect("prepared channel renders");
+        actual
+            .process_exact_span(
+                &[input, &[]],
+                &mut [&mut rendered[..frames], &mut extra[..]],
+            )
+            .expect("additional storage does not change the prepared channel shape");
+    } else {
+        let reference_span = expected
+            .process_into_buffer(&[input], &mut [&mut reference[..frames]])
+            .expect("prepared channel renders");
+        let actual_span = actual
+            .process_into_buffer(
+                &[input, &[]],
+                &mut [&mut rendered[..frames], &mut extra[..]],
+            )
+            .expect("additional storage does not change the prepared channel shape");
+        assert_eq!(actual_span, reference_span);
+    }
+    assert_eq!(rendered, reference);
+    assert_eq!(extra, [0.75; 4]);
+}

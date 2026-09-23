@@ -1,4 +1,4 @@
-use crate::SessionFrame;
+use crate::{SessionFrame, WarpMapRevision};
 
 /// An exact source/output boundary consumed by the audio callback.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
@@ -6,6 +6,9 @@ use crate::SessionFrame;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PresentationFrontier {
+    /// Immutable producer map represented by this source/output boundary.
+    #[field(get, copy, with)]
+    warp_map: Option<WarpMapRevision>,
     /// Exclusive session output-frame boundary actually consumed.
     #[field(get, copy)]
     output: SessionFrame,

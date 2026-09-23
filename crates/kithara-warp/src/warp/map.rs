@@ -1,21 +1,109 @@
 use super::WarpCursor;
-use crate::{SessionFrame, WarpMapRevision};
+use crate::{
+    AssetFrame, BeatAlignment, BeatGridQuery, BeatGridSnapshot, BeatGridUnavailable,
+    GridProjectionError, MapAxis, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
+};
 
 /// One immutable session-output-to-source map revision.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpMap {
+    projection: Option<ProjectedMap>,
     /// Immutable owner-assigned map revision.
     #[field(get, copy)]
     revision: WarpMapRevision,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectedMap {
+    grid: BeatGridSnapshot,
+    source: BeatGridSnapshot,
 }
 
 impl WarpMap {
     /// Creates an immutable identity-map revision.
     #[must_use]
     pub const fn identity(revision: WarpMapRevision) -> Self {
-        Self { revision }
+        Self {
+            revision,
+            projection: None,
+        }
+    }
+
+    /// Freezes a recording projected onto a session grid using stamped alignment.
+    ///
+    /// # Errors
+    /// Returns the M3 projection error without replacing missing geometry.
+    pub fn projected(
+        source: BeatGridSnapshot,
+        target: BeatGridSnapshot,
+        alignment: BeatAlignment,
+        revision: WarpMapRevision,
+    ) -> Result<Self, GridProjectionError> {
+        let grid = BeatGridSnapshot::projection(source.clone(), target, alignment)?;
+        Ok(Self {
+            revision,
+            projection: Some(ProjectedMap { grid, source }),
+        })
+    }
+
+    /// The source axis of a projected map; identity maps have no fixed axis.
+    #[must_use]
+    pub fn source_axis(&self) -> Option<MapAxis> {
+        self.projection
+            .as_ref()
+            .map(|projection| projection.source.axis())
+    }
+
+    /// The session axis of a projected map.
+    #[must_use]
+    pub fn output_axis(&self) -> Option<MapAxis> {
+        self.projection
+            .as_ref()
+            .map(|projection| projection.grid.axis())
+    }
+
+    /// Absolute recording frame sounding at an output frame.
+    pub fn source_at(&self, output: SessionFrame) -> BeatGridQuery<AssetFrame> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.grid.source_at(MapPoint::new(
+            projection.grid.stamp(),
+            MapPosition::Session(output),
+        ))
+    }
+
+    /// Source frames per session output frame, including the sample-rate relation.
+    pub fn rate_at(&self, output: SessionFrame) -> BeatGridQuery<f64> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.grid.rate_at(MapPoint::new(
+            projection.grid.stamp(),
+            MapPosition::Session(output),
+        ))
+    }
+
+    /// Session position of an absolute recording endpoint.
+    pub fn output_at(&self, source: AssetFrame) -> BeatGridQuery<SessionFrame> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection
+            .source
+            .beat_at(MapPoint::new(
+                projection.source.stamp(),
+                MapPosition::Asset(source),
+            ))
+            .and_then(|beat| projection.grid.position_at(*beat.value()))
+            .and_then(|position| match *position.value().value() {
+                MapPosition::Session(frame) => BeatGridQuery::Resolved(frame),
+                MapPosition::Asset(_) => {
+                    BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch)
+                }
+            })
     }
 
     /// Creates renderer-local progress at an exact discontinuity boundary.
@@ -41,5 +129,47 @@ mod tests {
         assert_eq!(cursor.revision(), revision);
         assert_eq!(cursor.source(), 80);
         assert_eq!(cursor.output(), SessionFrame::new(120));
+    }
+    #[cfg(feature = "render")]
+    #[kithara::test]
+    fn projected_map_uses_absolute_source_endpoints() {
+        use std::num::NonZeroU32;
+
+        use crate::{BeatGridQuery, test_grids};
+        let plan = test_grids::projected_plan(120.0, 180.0, NonZeroU32::new(48_000).expect("rate"));
+        let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(128)) else {
+            panic!("projected source resolves");
+        };
+        assert!((f64::from(source) - 192.0).abs() < 1e-10);
+        assert_eq!(
+            plan.rate_at(SessionFrame::new(128)),
+            BeatGridQuery::Resolved(1.5)
+        );
+    }
+
+    #[cfg(feature = "render")]
+    #[kithara::test]
+    fn projected_rate_includes_the_source_to_output_sample_rate_relation() {
+        use std::num::NonZeroU32;
+
+        use crate::{Beat, test_grids};
+
+        let source = test_grids::asset_grid(120.0, NonZeroU32::new(44_100).expect("source rate"));
+        let target = test_grids::session_grid(180.0, NonZeroU32::new(48_000).expect("output rate"));
+        let cue = Beat::new(0.0).expect("finite cue");
+        let alignment = BeatAlignment::new(
+            MapPoint::new(source.stamp(), cue),
+            MapPoint::new(target.stamp(), cue),
+        );
+        let map = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
+            .expect("compatible axes");
+        let BeatGridQuery::Resolved(source) = map.source_at(SessionFrame::new(48_000)) else {
+            panic!("source endpoint resolves");
+        };
+        let BeatGridQuery::Resolved(rate) = map.rate_at(SessionFrame::new(48_000)) else {
+            panic!("derivative resolves");
+        };
+        assert!((f64::from(source) - 66_150.0).abs() < 1e-8);
+        assert!((rate - 1.5 * 44_100.0 / 48_000.0).abs() < 1e-12);
     }
 }

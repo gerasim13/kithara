@@ -156,6 +156,23 @@ impl PlanarBuffer {
         self.spec
     }
 
+    /// Compact channel stride and release pooled capacity beyond the logical frames.
+    /// This may reallocate and must run outside real-time rendering.
+    pub fn shrink_to_fit(&mut self) {
+        let frames = self.frames.get();
+        let channels = usize::from(self.spec.channels);
+        if self.stride != self.frames {
+            for channel in 1..channels {
+                let start = channel * self.stride.get();
+                self.samples
+                    .copy_within(start..start + frames, channel * frames);
+            }
+            self.stride = self.frames;
+        }
+        self.samples.truncate(channels * frames);
+        self.samples.shrink_to_fit();
+    }
+
     /// Per-channel storage stride, including reserved frames beyond the logical end.
     #[must_use]
     pub const fn stride(&self) -> FrameCount {
@@ -520,5 +537,43 @@ mod tests {
         let reused = PlanarBuffer::new(&pools, stereo(), FrameCount::new(8))
             .expect("reused planar storage fits");
         assert_eq!(reused.as_samples().as_ptr(), ptr);
+    }
+    #[kithara::test]
+    fn fixed_shape_releases_oversized_recycled_capacity() {
+        let pools = pools_with_budget(64 * size_of::<f32>());
+        let large =
+            PlanarBuffer::new(&pools, stereo(), FrameCount::new(32)).expect("large buffer fits");
+        drop(large);
+        let mut small = PlanarBuffer::new(&pools, stereo(), FrameCount::new(8))
+            .expect("small buffer reuses allocation");
+        assert_eq!(small.samples.capacity(), 64);
+        small.channel_mut(1).expect("right channel").fill(0.5);
+        small.shrink_to_fit();
+        assert_eq!(small.stride(), FrameCount::new(8));
+        assert_eq!(small.channel(1).expect("right channel"), &[0.5; 8]);
+        let sibling = PlanarBuffer::new(&pools, stereo(), FrameCount::new(24))
+            .expect("released capacity admits sibling under the unchanged budget");
+        assert_eq!(sibling.frames(), FrameCount::new(24));
+    }
+
+    #[kithara::test]
+    fn shrinking_stride_preserves_each_logical_channel() {
+        let pools = pools_with_budget(64 * size_of::<f32>());
+        let mut buffer =
+            PlanarBuffer::new(&pools, stereo(), FrameCount::new(8)).expect("prepared storage");
+        buffer.channel_mut(0).expect("left channel").fill(0.25);
+        buffer.channel_mut(1).expect("right channel").fill(0.5);
+        buffer
+            .resize_frames(FrameCount::new(3))
+            .expect("shorter span");
+        buffer.shrink_to_fit();
+        assert_eq!(buffer.stride(), FrameCount::new(3));
+        assert_eq!(buffer.as_samples(), &[0.25, 0.25, 0.25, 0.5, 0.5, 0.5]);
+        buffer
+            .resize_frames(FrameCount::new(0))
+            .expect("empty span");
+        buffer.shrink_to_fit();
+        assert_eq!(buffer.stride(), FrameCount::new(0));
+        assert!(buffer.as_samples().is_empty());
     }
 }

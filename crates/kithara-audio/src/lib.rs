@@ -32,12 +32,13 @@ pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
+pub use kithara_signal::SourceSpan;
 pub use pipeline::{
     config::{
         AudioConfig, AudioConfigPatch, AudioDecoderConfig, AudioDecoderConfigPatch,
         ConsumerWakeMode, DecoderResamplerSettings,
     },
-    fetch::{EpochValidator, Fetch, SourceEnd, SourceSpan},
+    fetch::{EpochValidator, Fetch, SourceEnd},
     track::{TrackStep, WaitingReason},
 };
 pub use producer::PreloadGate;

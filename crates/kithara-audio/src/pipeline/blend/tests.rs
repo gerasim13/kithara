@@ -32,6 +32,7 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
             frames: u32::try_from(frames).expect("fixture frame count"),
             epoch: 11,
             render_revision: 13,
+            mapping_revision: std::num::NonZeroU64::new(17),
             frame_offset: 9_876,
             source_bytes: 512,
         },

@@ -68,14 +68,14 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
-    /// Compute decoder buffer depths within the output response budget.
+    /// Compute decoder buffer depths, enforcing an application deadline when supplied.
     ///
     /// # Errors
     /// Returns an error when the geometry overflows or exceeds the budget.
     pub fn playback_buffers(
         self,
         quantum: NonZeroUsize,
-        budget: NonZeroUsize,
+        budget: Option<NonZeroUsize>,
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
@@ -88,7 +88,9 @@ impl StreamShape {
             .and_then(|chunks| chunks.checked_mul(quantum.get()))
             .and_then(|frames| frames.checked_sub(1))
             .ok_or(SessionError::ResponseGeometryOverflow)?;
-        if required_frames > budget.get() {
+        if let Some(budget) = budget
+            && required_frames > budget.get()
+        {
             return Err(SessionError::ResponseBudgetExceeded {
                 required_frames,
                 max_block_frames: self.max_block_frames.get(),
@@ -455,6 +457,28 @@ mod tests {
         test_pools::pools,
     };
 
+    #[kithara::test]
+    fn application_deadline_is_optional_but_explicit_geometry_is_enforced() {
+        let shape = StreamShape::new(
+            NonZeroU32::new(512).expect("fixture block"),
+            NonZeroU32::new(48_000).expect("fixture rate"),
+        );
+        let quantum = NonZeroUsize::new(32).expect("fixture quantum");
+        let (preload, ring) = shape
+            .playback_buffers(quantum, None)
+            .expect("unbounded deadline");
+        assert_eq!((preload.get(), ring.get()), (16, 17));
+        assert!(matches!(
+            shape.playback_buffers(quantum, NonZeroUsize::new(448)),
+            Err(SessionError::ResponseBudgetExceeded {
+                required_frames: 575,
+                max_block_frames: 512,
+                render_quantum_frames: 32,
+                budget_frames: 448,
+            })
+        ));
+    }
+
     fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {
@@ -511,7 +535,7 @@ mod tests {
             .expect("invariant: fixture installs one context slot");
         super::super::publish_render_context(
             &mut store,
-            RenderContext::new(
+            RenderContext::new_linear(
                 OutputContext::new(
                     SessionFrame::new(0)..SessionFrame::new(512),
                     NonZeroU32::new(44_100).expect("static sample rate"),

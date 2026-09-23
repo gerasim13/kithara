@@ -484,8 +484,7 @@ mod tests {
             let seek: Arc<dyn SeekControl> = seek_state.clone();
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
-            let cursor = ChunkCursor::new(&pools(), AudioChunkInfo::default().spec)
-                .expect("cursor scratch fits test pools");
+            let cursor = ChunkCursor::new(AudioChunkInfo::default().spec);
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
             Self {

@@ -14,6 +14,8 @@ use super::commit::{
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
+const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
+
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
     frame: SessionFrame,
@@ -21,7 +23,7 @@ struct RenderBoundary {
 
 #[derive(Debug)]
 pub(super) struct TransportFrame {
-    pub(super) session_beats: Option<Range<SessionBeat>>,
+    pub(super) trajectory: Option<SessionAnchor>,
     pub(super) transport_revision: Option<TransportRevision>,
     pub(super) session_epoch: SessionEpoch,
 }
@@ -218,12 +220,25 @@ impl TransportCommitState {
                 SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
             }
         };
-        let anchor = Self::build_anchor(
-            stamp.target_frame(),
-            beat,
-            stamp.next().tempo(),
-            stamp.sample_rate(),
-        )?;
+        let anchor = match (stamp.next().boundary(), stamp.previous(), self.anchor) {
+            (TransportBoundary::Continuous, Some(previous), Some(anchor))
+                if previous.is_playing() && stamp.next().is_playing() =>
+            {
+                anchor
+                    .retarget(
+                        stamp.target_frame(),
+                        stamp.next().tempo().beats_per_second(),
+                        TEMPO_SMOOTH_SECONDS,
+                    )
+                    .map_err(|_| TransportProcessError::InvalidBeatRange)?
+            }
+            _ => Self::build_anchor(
+                stamp.target_frame(),
+                beat,
+                stamp.next().tempo(),
+                stamp.sample_rate(),
+            )?,
+        };
         let session_grid_revision = self.session_grid.next_revision()?;
         self.active = Some(stamp.next());
         self.anchor = Some(anchor);
@@ -393,7 +408,7 @@ impl TransportCommitState {
         self.boundary = Self::next_boundary(info, self.active, self.boundary)?;
         self.snapshot = self.next_snapshot(session_beats.as_ref())?;
         Ok(TransportFrame {
-            session_beats,
+            trajectory: session_beats.as_ref().and(self.anchor),
             session_epoch: self.session_grid.epoch(),
             transport_revision: self.active.map(|commit| commit.revision()),
         })

@@ -64,12 +64,11 @@ class KitharaPlayerTest {
     }
 
     @Test
-    fun configuredCrossfadeDurationAppliesAtConstruction() {
-        val player = KitharaPlayer(
-            KitharaPlayer.Config(crossfadeSettings = CrossfadeSettings(duration = 3.5f))
-        )
+    fun configuredCrossfadeSettingsApplyAtConstruction() {
+        val settings = CrossfadeSettings(duration = 3.5f)
+        val player = KitharaPlayer(KitharaPlayer.Config(crossfadeSettings = settings))
 
-        assertEquals(3.5f, player.crossfadeSettings.duration, 0.0f)
+        assertEquals(settings, player.crossfadeSettings)
     }
 
     @Test

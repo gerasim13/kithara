@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicU64;
+use std::{ops::ControlFlow, sync::atomic::AtomicU64};
 
 use kithara_abr::AbrHandle;
 use kithara_events::DeferredBus;
@@ -13,11 +13,6 @@ use super::{
     park::receive_is_nonblocking,
 };
 use crate::{SourceEnd, SourceSpan};
-
-enum FetchOutcome {
-    Continue,
-    Return(Option<(AudioChunk, Option<SourceSpan>)>),
-}
 
 /// Whether a fill may park on the producer.
 ///
@@ -154,30 +149,33 @@ impl RingConsumer {
         true
     }
 
-    fn process_fetch(&mut self, fetch: Fetch<AudioChunk>) -> FetchOutcome {
+    fn process_fetch(
+        &mut self,
+        fetch: Fetch<AudioChunk>,
+    ) -> ControlFlow<Option<(AudioChunk, Option<SourceSpan>)>> {
         if !self.validator.is_valid(&fetch) && !is_producer_terminal(&fetch) {
             if let Fetch::Data { data, .. } = fetch {
                 self.discard(data);
             }
-            return FetchOutcome::Continue;
+            return ControlFlow::Continue(());
         }
 
         match fetch {
             Fetch::NaturalEof { .. } => {
                 self.phase = ConsumerPhase::AtEof;
-                FetchOutcome::Return(None)
+                ControlFlow::Break(None)
             }
             Fetch::Failure { .. } => {
                 self.phase = ConsumerPhase::Failed {
                     source: FailureSource::Producer,
                 };
-                FetchOutcome::Return(None)
+                ControlFlow::Break(None)
             }
             Fetch::Data {
                 data, source_end, ..
             } => {
                 let source_span = self.source_span(&data, source_end);
-                FetchOutcome::Return(Some((data, source_span)))
+                ControlFlow::Break(Some((data, source_span)))
             }
         }
     }
@@ -254,10 +252,10 @@ impl RingConsumer {
         loop {
             match self.recv_outcome(ctx, wait) {
                 RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                    FetchOutcome::Continue => {
+                    ControlFlow::Continue(()) => {
                         hang_tick!();
                     }
-                    FetchOutcome::Return(chunk) => {
+                    ControlFlow::Break(chunk) => {
                         hang_reset!();
                         return chunk;
                     }
@@ -298,13 +296,24 @@ impl RingConsumer {
             self.rendered_source_head = None;
             return None;
         }
-        let source_start = self
-            .rendered_source_head
-            .filter(|head| head.sample_rate() == source_end.sample_rate())
-            .map_or(data.meta.frame_offset, |head| head.frame());
+        let source_start = if data.meta.mapping_revision.is_some() {
+            data.meta.frame_offset
+        } else {
+            self.rendered_source_head
+                .filter(|head| head.sample_rate() == source_end.sample_rate())
+                .map_or(data.meta.frame_offset, |head| head.frame())
+        };
         self.rendered_source_head = Some(source_end);
-        SourceSpan::new(source_start, source_end.frame(), source_end.sample_rate())
-            .map(|span| span.with_render_revision(data.meta.render_revision))
+        SourceSpan::new(
+            source_start,
+            source_end.frame(),
+            source_end.sample_rate(),
+            u64::from(data.meta.frames),
+        )
+        .map(|span| {
+            span.with_render_revision(data.meta.render_revision)
+                .with_mapping_revision(data.meta.mapping_revision)
+        })
     }
 
     fn stage_post_seek_fetch(
@@ -475,8 +484,7 @@ mod tests {
             });
             ring.preloaded = preloaded;
             Self {
-                cursor: ChunkCursor::new(&pools, AudioChunkInfo::default().spec)
-                    .expect("cursor scratch fits test pools"),
+                cursor: ChunkCursor::new(AudioChunkInfo::default().spec),
                 pools,
                 ring,
                 data_tx,

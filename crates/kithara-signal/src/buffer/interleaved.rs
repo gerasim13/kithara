@@ -36,12 +36,15 @@ impl<'a> InterleavedView<'a> {
         })
     }
 
-    /// Deinterleave into caller-owned channel slices without allocating metadata.
+    /// Deinterleave into a frame offset of caller-owned channel slices.
     ///
     /// # Errors
-    ///
-    /// Returns [`SignalError`] when channel count, extents, or capacity do not match.
-    pub fn deinterleave_channels_into(&self, output: &mut [&mut [f32]]) -> Result<(), SignalError> {
+    /// Returns [`SignalError`] when channel shapes, frame math, or destination capacity differ.
+    pub fn deinterleave_channels_into_at(
+        &self,
+        output: &mut [&mut [f32]],
+        offset: usize,
+    ) -> Result<(), SignalError> {
         let channel_count = self.spec.channel_count()?;
         let channels = channel_count.get();
         if output.len() != channels {
@@ -60,14 +63,24 @@ impl<'a> InterleavedView<'a> {
                 });
             }
         }
-        let required = self.frames.get();
+        let required = offset.checked_add(self.frames.get()).ok_or_else(|| {
+            SignalError::SampleCountOverflow {
+                channels,
+                frames: self.frames.get(),
+            }
+        })?;
         if available < required {
             return Err(SignalError::Capacity {
                 required_samples: required.saturating_mul(channels),
                 available_samples: available.saturating_mul(channels),
             });
         }
-        fast_interleave::deinterleave_variable(self.samples, channel_count, output, 0..required);
+        fast_interleave::deinterleave_variable(
+            self.samples,
+            channel_count,
+            output,
+            offset..required,
+        );
         Ok(())
     }
 
@@ -169,7 +182,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         interleaved
-            .deinterleave_channels_into(&mut destinations)
+            .deinterleave_channels_into_at(&mut destinations, 0)
             .expect("deinterleave succeeds");
         drop(destinations);
         for (channel, samples) in channel_samples.iter().enumerate() {
@@ -196,14 +209,14 @@ mod tests {
         let mut short = [0.0; 1];
 
         assert_eq!(
-            view.deinterleave_channels_into(&mut [&mut left]),
+            view.deinterleave_channels_into_at(&mut [&mut left], 0),
             Err(SignalError::ChannelCount {
                 expected: 2,
                 actual: 1,
             })
         );
         assert_eq!(
-            view.deinterleave_channels_into(&mut [&mut left, &mut short]),
+            view.deinterleave_channels_into_at(&mut [&mut left, &mut short], 0),
             Err(SignalError::ChannelFrames {
                 channel: 1,
                 expected: 2,
@@ -220,11 +233,30 @@ mod tests {
         let mut left = [0.0; 2];
         let mut right = [0.0; 2];
 
-        view.deinterleave_channels_into(&mut [&mut left, &mut right])
+        view.deinterleave_channels_into_at(&mut [&mut left, &mut right], 0)
             .expect("caller channels fit");
 
         assert_eq!(left, [1.0, 2.0]);
         assert_eq!(right, [3.0, 6.0]);
+    }
+
+    #[kithara::test]
+    fn offset_deinterleave_preserves_surrounding_frames_and_checks_capacity() {
+        let source = stereo_pair();
+        let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
+            .expect("stereo fixture shape");
+        let mut left = [-1.0; 4];
+        let mut right = [-1.0; 4];
+        view.deinterleave_channels_into_at(&mut [&mut left, &mut right], 1)
+            .expect("destination range fits");
+        assert_eq!(left, [-1.0, 1.0, 2.0, -1.0]);
+        assert_eq!(right, [-1.0, 3.0, 6.0, -1.0]);
+        assert!(matches!(
+            view.deinterleave_channels_into_at(&mut [&mut left, &mut right], 3),
+            Err(SignalError::Capacity { .. })
+        ));
+        assert_eq!(left, [-1.0, 1.0, 2.0, -1.0]);
+        assert_eq!(right, [-1.0, 3.0, 6.0, -1.0]);
     }
 
     #[kithara::test]

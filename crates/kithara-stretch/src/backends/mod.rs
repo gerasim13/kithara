@@ -7,3 +7,6 @@ mod signalsmith;
 pub(crate) use bungee::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
 pub(crate) use signalsmith::SignalsmithElastic;
+
+mod varispeed;
+pub(crate) use varispeed::VarispeedElastic;

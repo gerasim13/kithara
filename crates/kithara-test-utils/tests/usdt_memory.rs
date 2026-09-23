@@ -11,12 +11,10 @@ use std::{
 
 use kithara_test_utils::{
     memory::{self, Counting},
-    test::{
-        setup_tracing,
-        usdt::{MAX_EVENTS, ProbeEvent, scope},
-    },
+    test::usdt::{MAX_EVENTS, ProbeEvent, layer, scope},
     tracing::{Level, event},
 };
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
@@ -89,7 +87,7 @@ fn prime_panic_backtrace() {
 
 #[test]
 fn continuous_probes_keep_the_heap_bounded() {
-    setup_tracing();
+    let _ = tracing_subscriber::registry().with(layer()).try_init();
     prime_panic_backtrace();
 
     let (peak, left) = hammer(Some("unobserved"), "unobserved");

@@ -29,11 +29,6 @@ pub const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
 /// here for the same reason as [`DEFAULT_CROSSFADE_DURATION`].
 pub const DEFAULT_PLAYING_RATE: f32 = 1.0;
 
-const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
-
 fn default_event_bus_capacity() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_EVENT_BUS_CAPACITY).unwrap_or_else(|| unreachable!())
 }
@@ -133,11 +128,11 @@ pub struct PlayerConfig<S> {
     #[debug(skip)]
     #[config(skip = "player-owned track-grid identity")]
     pub(crate) track_grid_id: BeatGridId,
-    /// Maximum accepted control-to-presented-audio response in output frames.
-    #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    /// Optional application deadline for control-to-presented-audio response, in output frames.
+    /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
     #[field(get, copy)]
     #[config(value)]
-    pub(crate) response_budget_frames: NonZeroUsize,
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Root event bus for this player.
     #[patch(skip)]
     #[debug(skip)]
@@ -201,10 +196,10 @@ mod tests {
     }
 
     #[kithara::test(native)]
-    fn default_response_budget_matches_product_contract() {
+    fn default_response_budget_leaves_the_deadline_to_the_application() {
         let config = config();
 
-        assert_eq!(config.response_budget_frames().get(), 448);
+        assert_eq!(config.response_budget_frames(), None);
     }
 }
 

@@ -1,9 +1,9 @@
 use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
-use kithara_audio::{DecodeErrorKind, SourceEnd, SourceSpan, map_decode_error_kind};
+use kithara_audio::{DecodeErrorKind, SourceEnd, map_decode_error_kind};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
-use kithara_signal::FrameCount;
+use kithara_signal::{FrameCount, SourceSpan};
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 
@@ -39,32 +39,28 @@ struct SourceWindow {
 }
 
 impl SourceWindow {
+    fn new(source: Option<SourceSpan>, frames: usize) -> Self {
+        Self { source, frames }
+    }
+
     fn source_for(&self, frames: usize) -> Option<SourceSpan> {
-        let source = self.source?;
-        let end = partial_source_end(source, frames.min(self.frames), self.frames)?;
-        SourceSpan::new(source.start(), end, source.sample_rate())
-            .map(|span| span.with_render_revision(source.render_revision()))
+        self.source?
+            .for_output_range(0..u64::try_from(frames.min(self.frames)).ok()?)
     }
 
     fn take(&mut self, frames: usize) -> Option<SourceSpan> {
         let consumed = frames.min(self.frames);
         let taken = self.source_for(consumed);
-        if let (Some(source), Some(taken)) = (self.source, taken) {
-            self.source = SourceSpan::new(taken.end(), source.end(), source.sample_rate())
-                .filter(|remaining| remaining.start() < remaining.end())
-                .map(|remaining| remaining.with_render_revision(source.render_revision()));
-        }
+        self.source = self.source.and_then(|source| {
+            (consumed < self.frames)
+                .then(|| {
+                    source.for_output_range(u64::try_from(consumed).ok()?..source.output_frames())
+                })
+                .flatten()
+        });
         self.frames -= consumed;
         taken
     }
-}
-
-fn partial_source_end(source: SourceSpan, frames: usize, span_frames: usize) -> Option<u64> {
-    let source_frames = source.end().checked_sub(source.start())?;
-    let numerator = u128::from(source_frames).checked_mul(u128::try_from(frames).ok()?)?;
-    let denominator = u128::try_from(span_frames).ok()?;
-    let consumed = u64::try_from(numerator.checked_div(denominator)?).ok()?;
-    source.start().checked_add(consumed)
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -160,11 +156,16 @@ impl PlayerResource {
                         source_start = source.start(),
                         source_end = source.end()
                     );
-                    self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
+                    self.last_source_end = Some(
+                        SourceEnd::new(source.end(), source.sample_rate())
+                            .with_mapping_revision(source.mapping_revision()),
+                    );
                 }
                 (_, source) => {
-                    self.last_source_end =
-                        source.map(|source| SourceEnd::new(source.end(), source.sample_rate()));
+                    self.last_source_end = source.map(|source| {
+                        SourceEnd::new(source.end(), source.sample_rate())
+                            .with_mapping_revision(source.mapping_revision())
+                    });
                 }
             }
             frames -= consumed;
@@ -220,8 +221,7 @@ impl PlayerResource {
             if n == 0 {
                 break;
             }
-            self.source_spans
-                .push_back(SourceWindow { source, frames: n });
+            self.source_spans.push_back(SourceWindow::new(source, n));
             self.write_len += n;
             self.write_pos += n;
         }
@@ -431,17 +431,77 @@ mod tests {
     #[kithara::test]
     fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
-        let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
-        let mut span = SourceWindow { source, frames: 10 };
+        let source = SourceSpan::new(100, 130, rate, 10).map(|span| span.with_render_revision(7));
+        let mut span = SourceWindow::new(source, 10);
 
         assert_eq!(
             span.take(4),
-            SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7))
+            SourceSpan::new(100, 112, rate, 4).map(|span| span.with_render_revision(7))
         );
         assert_eq!(span.source.map(|source| source.start()), Some(112));
         assert_eq!(
             span.take(6),
-            SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7))
+            SourceSpan::new(112, 130, rate, 6).map(|span| span.with_render_revision(7))
         );
+    }
+
+    #[kithara::test]
+    fn partial_source_frontier_is_independent_of_callback_partitions() {
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
+        let mapping = std::num::NonZeroU64::new(3);
+        let source = SourceSpan::new(100, 292, rate, 128)
+            .map(|span| span.with_render_revision(7).with_mapping_revision(mapping));
+        let mut whole = SourceWindow::new(source, 128);
+        let mut split = whole;
+        let expected = whole.take(2).expect("two output frames");
+        split.take(1).expect("first output frame");
+        let actual = split.take(1).expect("second output frame");
+        assert_eq!(actual.end(), expected.end());
+        assert_eq!(actual.end(), 103);
+        assert_eq!(actual.render_revision(), 7);
+        assert_eq!(actual.mapping_revision(), mapping);
+    }
+    #[kithara::test]
+    fn zero_source_advance_keeps_mapping_identity_until_pcm_is_consumed() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mapping = std::num::NonZeroU64::new(2);
+        let source = SourceSpan::new(41, 41, rate, 32)
+            .map(|span| span.with_render_revision(7).with_mapping_revision(mapping));
+        let mut window = SourceWindow::new(source, 32);
+        assert_eq!(
+            window.take(16),
+            source.and_then(|span| span.for_output_range(0..16))
+        );
+        assert_eq!(
+            window.source,
+            source.and_then(|span| span.for_output_range(16..32))
+        );
+        assert_eq!(
+            window.take(16),
+            source.and_then(|span| span.for_output_range(0..16))
+        );
+        assert_eq!(window.frames, 0);
+    }
+    #[kithara::test]
+    #[case::zero_origin(0)]
+    #[case::nonzero_origin(100)]
+    fn nested_audio_source_window_preserves_original_rounding(#[case] origin: u64) {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mapping = std::num::NonZeroU64::new(3);
+        let source = SourceSpan::new(origin, origin + 192, rate, 128)
+            .expect("source span")
+            .with_render_revision(7)
+            .with_mapping_revision(mapping);
+        let audio_read = source.for_output_range(0..127).expect("Audio partial read");
+        assert_eq!(audio_read.end(), origin + 190);
+        let mut window = SourceWindow::new(Some(audio_read), 127);
+        let consumed = window.take(2).expect("Play partial consumption");
+        assert_eq!(consumed.end(), origin + 3);
+        assert_eq!(
+            consumed,
+            source.for_output_range(0..2).expect("direct slice")
+        );
+        assert_eq!(consumed.render_revision(), 7);
+        assert_eq!(consumed.mapping_revision(), mapping);
     }
 }

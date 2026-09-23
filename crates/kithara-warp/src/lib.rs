@@ -9,6 +9,9 @@ mod segment;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
+#[cfg(all(test, feature = "render"))]
+#[path = "../../../tests/crates/warp/tests/grids.rs"]
+pub mod test_grids;
 mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat};
@@ -37,8 +40,9 @@ pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
     RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
-#[cfg(feature = "render")]
-pub use warp::WarpRenderer;
 pub use warp::{
-    Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, WarpMapRevision, supports_playback_rate,
+    Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, WarpMapRevision, WarpPlan,
+    WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
+#[cfg(feature = "render")]
+pub use warp::{WarpRenderError, WarpRenderer};

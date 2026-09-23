@@ -242,6 +242,8 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     let first_output = assert_no_alloc(|| {
         effect
             .render(first)
+            .continue_value()
+            .expect("prepared source must be admitted")
             .unwrap_or_else(|| panic!("active stretch must render"))
     });
     permit_alloc(|| {
@@ -252,6 +254,8 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     let second_output = assert_no_alloc(|| {
         effect
             .render(second)
+            .continue_value()
+            .expect("prepared source must be admitted")
             .unwrap_or_else(|| panic!("serviced stretch must render again"))
     });
     permit_alloc(|| {
@@ -294,6 +298,8 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
     let maximum_output = assert_no_alloc(|| {
         maximum
             .render(input)
+            .continue_value()
+            .expect("prepared source must be admitted")
             .unwrap_or_else(|| panic!("maximum prepared output must render"))
     });
     assert_eq!(maximum_output.frames(), 163_840);
@@ -312,7 +318,10 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
         (pending, input)
     });
     assert_no_alloc(|| {
-        assert!(pending.render(input).is_none());
+        assert!(matches!(
+            pending.render(input),
+            std::ops::ControlFlow::Continue(None)
+        ));
     });
     permit_alloc(|| pending.prepare(spec));
 

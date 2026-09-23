@@ -1,9 +1,15 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    ops::Range,
+};
 
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 
 use crate::AudioSpec;
+
+mod source_span;
+pub use source_span::SourceSpan;
 
 /// Position and provenance facts for one decoded-audio chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +34,8 @@ pub struct AudioChunkInfo {
     pub frame_offset: u64,
     /// Opaque producer render revision represented by this chunk.
     pub render_revision: u64,
+    /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
+    pub mapping_revision: Option<NonZeroU64>,
     /// Source bytes that produced this chunk, or zero when unknown.
     pub source_bytes: u64,
 }
@@ -61,6 +69,7 @@ impl Default for AudioChunkInfo {
             frames: 0,
             epoch: 0,
             render_revision: 0,
+            mapping_revision: None,
             frame_offset: 0,
             source_bytes: 0,
         }

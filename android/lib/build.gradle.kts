@@ -89,7 +89,7 @@ val exportTestFixtures by tasks.registering(Exec::class) {
         "--package",
         "kithara-test-fixtures",
         "--features",
-        "native-fixtures",
+        "all",
         "--bin",
         "kithara-fixture-export",
         "--",

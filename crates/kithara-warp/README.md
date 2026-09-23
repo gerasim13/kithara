@@ -25,4 +25,16 @@ synchronization protocol belong to `kithara-sync`. It does not decode audio,
 own source lifecycle, own `Player` / `PlayWorker` / Host/session state, access
 storage, or analyze samples.
 
+`WarpMap::projected` uses stamped source/session grid alignment.
+`WarpPlan::new` validates an activation before publication through
+`WarpConfig::plan().install(...)`. The resident renderer keeps its active predecessor until
+that boundary; grid publication alone does not select projection. Musical
+selection stays with Sync, and grid materialization stays outside rendering.
+
+Projected source spans come from absolute map endpoints on the same exact
+`SessionAnchor` trajectory carried by `RenderContext`. Manual rate continues
+through the existing smoother. Worker-side backend preparation selects
+Signalsmith/Bungee for keylock and Glide varispeed when keylock is off. Targets
+without elastic rendering preserve the identity path and reject projection.
+
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-warp) for ownership and dependency boundaries.

@@ -72,6 +72,7 @@ fn live_activation_primes_from_passthrough_history(
     warp_sine: Vec<f32>,
 ) {
     let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(Arc::clone(&controls))
@@ -126,6 +127,8 @@ fn live_activation_primes_from_passthrough_history(
     input.meta = meta;
     let output = renderer
         .render_quantum(input)
+        .continue_value()
+        .expect("prepared source shape")
         .expect("primed activation emits immediately");
 
     assert_eq!(
@@ -153,6 +156,8 @@ fn rendered_quantum_keeps_the_rate_revision_selected_during_planning(warp_sine: 
 
     let output = renderer
         .render_quantum(input)
+        .continue_value()
+        .expect("prepared source shape")
         .expect("prepared unity quantum renders");
     assert_eq!(output.meta.render_revision, expected_revision);
 }
@@ -164,7 +169,7 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(controls)
 }
 
-fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
+pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);
     controls.set_keylock(false);
     controls.set_backend(kind);
@@ -203,7 +208,7 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     (out, tail_frames)
 }
 
-fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
+pub(super) fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
     render_with_tail(fx, input).0
 }
 
@@ -574,6 +579,12 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
 
     controls.set_keylock(true);
     let mut stretched: Vec<f32> = Vec::new();
+    fx.prepare(spec());
+    while fx.transition_pending() {
+        if let Some(output) = flush_serviced(&mut fx) {
+            stretched.extend_from_slice(&output.samples);
+        }
+    }
     for _ in 0..24 {
         if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             stretched.extend_from_slice(&c.samples);

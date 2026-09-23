@@ -3,7 +3,7 @@ use std::ops::Range;
 use kithara_signal::OutputContext;
 use num_traits::ToPrimitive;
 
-use crate::SessionBeat;
+use crate::{SessionAnchor, SessionBeat};
 
 /// Immutable session position for one output subrange.
 ///
@@ -17,12 +17,36 @@ pub struct RenderContext {
     output: OutputContext,
     /// The corresponding half-open musical range when transport is playing.
     session_beats: Option<Range<SessionBeat>>,
+    /// Exact committed trajectory when supplied by the transport owner.
+    trajectory: Option<SessionAnchor>,
 }
 
 impl RenderContext {
-    /// Creates a context whose output and musical ranges describe the same render pass.
+    /// Creates a context from the exact committed session-clock relation.
     #[must_use]
-    pub fn new(output: OutputContext, session_beats: Option<Range<SessionBeat>>) -> Option<Self> {
+    pub fn new(output: OutputContext, trajectory: Option<SessionAnchor>) -> Option<Self> {
+        let session_beats = match trajectory {
+            Some(anchor) => {
+                if anchor.sample_rate() != output.sample_rate() {
+                    return None;
+                }
+                let frames = output.output_frames();
+                Some(anchor.beat_at(frames.start).ok()?..anchor.beat_at(frames.end).ok()?)
+            }
+            None => None,
+        };
+        let mut context = Self::new_linear(output, session_beats)?;
+        context.trajectory = trajectory;
+        Some(context)
+    }
+
+    /// Creates a context with an explicitly linear musical span.
+    /// Use [`Self::new`] when the transport supplies an exact trajectory.
+    #[must_use]
+    pub fn new_linear(
+        output: OutputContext,
+        session_beats: Option<Range<SessionBeat>>,
+    ) -> Option<Self> {
         let beats_are_ordered = session_beats
             .as_ref()
             .is_none_or(|beats| beats.start <= beats.end);
@@ -31,6 +55,7 @@ impl RenderContext {
         (beats_are_ordered && transport_matches_beats).then_some(Self {
             output,
             session_beats,
+            trajectory: None,
         })
     }
 
@@ -39,11 +64,14 @@ impl RenderContext {
     pub fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
         let total_frames = self.output.frame_count()?;
         let output = self.output.for_output_range(range.clone())?;
+        if self.trajectory.is_some() {
+            return Self::new(output, self.trajectory);
+        }
         let session_beats = match self.session_beats.as_ref() {
             Some(beats) => Some(beat_subrange(beats, range, total_frames)?),
             None => None,
         };
-        Self::new(output, session_beats)
+        Self::new_linear(output, session_beats)
     }
 }
 
@@ -93,7 +121,7 @@ mod tests {
     }
 
     fn context() -> RenderContext {
-        RenderContext::new(
+        RenderContext::new_linear(
             output(Some(TransportRevision::first())),
             Some(beat(0.0)..beat(0.02)),
         )
@@ -102,13 +130,13 @@ mod tests {
 
     #[kithara::test]
     fn rejects_beats_without_a_transport_revision() {
-        assert!(RenderContext::new(output(None), Some(beat(0.0)..beat(0.02))).is_none());
+        assert!(RenderContext::new_linear(output(None), Some(beat(0.0)..beat(0.02))).is_none());
     }
 
     #[kithara::test]
     fn rejects_unordered_beat_ranges() {
         assert!(
-            RenderContext::new(
+            RenderContext::new_linear(
                 output(Some(TransportRevision::first())),
                 Some(beat(1.0)..beat(0.0)),
             )
@@ -136,5 +164,30 @@ mod tests {
                 .for_output_range(BLOCK_FRAMES..BLOCK_FRAMES + 1)
                 .is_none()
         );
+    }
+    #[kithara::test]
+    fn ramp_subranges_follow_the_same_trajectory() {
+        let anchor = crate::SessionAnchor::new(SessionFrame::new(0), beat(0.0), 2.0, sample_rate())
+            .expect("fixture anchor is valid")
+            .retarget(SessionFrame::new(0), 3.0, 0.005)
+            .expect("fixture ramp is valid");
+        let context = RenderContext::new(output(Some(TransportRevision::first())), Some(anchor))
+            .expect("fixture context is valid");
+        for split in [1, 17, 128, 240, 479] {
+            let suffix = context
+                .for_output_range(split..BLOCK_FRAMES)
+                .expect("valid suffix");
+            let endpoint = SessionFrame::new(i64::try_from(split).expect("small frame"));
+            assert_eq!(
+                suffix.session_beats().expect("playing").start,
+                anchor.beat_at(endpoint).expect("finite beat")
+            );
+            assert_eq!(suffix.trajectory(), Some(&anchor));
+            let nested = suffix.for_output_range(0..1).expect("valid nested range");
+            let direct = context
+                .for_output_range(split..split + 1)
+                .expect("valid direct range");
+            assert_eq!(nested, direct);
+        }
     }
 }

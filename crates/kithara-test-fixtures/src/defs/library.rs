@@ -126,6 +126,84 @@ fn library_analysis(
     let flac = inputs
         .first()
         .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_flac(flac);
+    let (artifact, frames) = super::rhythm::beat_encoded(flac, "flac");
+    Ok(super::rhythm::analysis_file(artifact, frames))
+}
+
+/// Playlist tracks the application is exercised with, published as delivered
+/// by the Zvuk CDN: 320 kbit/s MP3, no re-encoding.
+#[kithara::asset(
+    ext = "mp3",
+    content_type = "audio/mpeg",
+    env = ["KITHARA_REMOTE_FIXTURES"],
+    optional
+)]
+#[case::zvuk_27390231(
+    "zvuk_27390231.mp3",
+    "91e3657174821e9a570744d3f3c6b2b7fe09c161d285d08751480554884bb5a4",
+    27984819
+)]
+#[case::zvuk_151585912(
+    "zvuk_151585912.mp3",
+    "9c5aee51a544fb268ef1f5aa42ef28bfc6019ddb7d174b9748f92fc21b6dffdb",
+    17318137
+)]
+#[case::zvuk_125475417(
+    "zvuk_125475417.mp3",
+    "05e52e3ee8ff9e324b7319cfb9bb4f6844588187ef3db63baedd016e7fa6d729",
+    20401920
+)]
+#[case::zvuk_138535169(
+    "zvuk_138535169.mp3",
+    "0c954428a6266a20cb0693ea269d058eaf9e4a4d92b60bd92b968f907e8a331b",
+    8232750
+)]
+#[case::zvuk_130432502(
+    "zvuk_130432502.mp3",
+    "1ee4fb70e14a90b4a0fb0f337f0d8b2682642928a230e1f5f1fd91d79257e278",
+    16042317
+)]
+#[case::zvuk_132017169(
+    "zvuk_132017169.mp3",
+    "156fc1ae2cab368cbaa0c2b8c5eec4adaf3fcc88be4a59e1144f3164a8c0afa7",
+    13842807
+)]
+fn library_mp3(
+    _context: &BuildContext<'_>,
+    file: &str,
+    sha256: &str,
+    length: u64,
+) -> Result<Vec<u8>, RemoteFileError> {
+    enabled()?;
+    let url = Url::parse(Library::BASE)?.join(file)?;
+    Ok(
+        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
+            panic!("requested library fixture `{file}` failed verification: {error}")
+        }),
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["library_mp3_{case}"],
+    env = ["KITHARA_REMOTE_FIXTURES"],
+    optional
+)]
+#[case::zvuk_27390231()]
+#[case::zvuk_151585912()]
+#[case::zvuk_125475417()]
+#[case::zvuk_138535169()]
+#[case::zvuk_130432502()]
+#[case::zvuk_132017169()]
+fn library_mp3_analysis(
+    _context: &BuildContext<'_>,
+    inputs: &[&[u8]],
+) -> Result<Vec<u8>, RemoteFileError> {
+    enabled()?;
+    let mp3 = inputs
+        .first()
+        .ok_or(RemoteFileError::Missing("library_mp3 dependency"))?;
+    let (artifact, frames) = super::rhythm::beat_encoded(mp3, "mp3");
     Ok(super::rhythm::analysis_file(artifact, frames))
 }

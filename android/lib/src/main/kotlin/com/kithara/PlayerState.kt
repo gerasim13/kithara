@@ -38,6 +38,7 @@ enum class ItemStatus {
  * @property items Current queue in playback order.
  * @property rate Current playback rate.
  * @property status Current player readiness status.
+ * @property items Current queue in playback order.
  */
 data class PlayerState(
     val loadedRanges: List<ItemLoadedRange> = emptyList(),
@@ -47,6 +48,7 @@ data class PlayerState(
     val items: List<KitharaPlayerItem> = emptyList(),
     val rate: Float = 0f,
     val status: PlayerStatus = PlayerStatus.Unknown,
+    val items: List<KitharaPlayerItem> = emptyList(),
 )
 
 /**

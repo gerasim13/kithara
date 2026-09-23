@@ -35,7 +35,7 @@ pub struct EngineConfig<S> {
     pub(crate) sample_rate: NonZeroU32,
     /// Player-owned response contract used to validate session geometry.
     #[config(value)]
-    pub(crate) response_budget_frames: NonZeroUsize,
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
@@ -111,7 +111,10 @@ mod tests {
             .build();
         let values = config.values();
         assert_eq!(values.sample_rate.get(), 48_000);
-        assert_eq!(values.response_budget_frames.get(), 448);
+        assert_eq!(
+            values.response_budget_frames.map(NonZeroUsize::get),
+            Some(448)
+        );
         assert_eq!(values.render_quantum_frames, None);
         assert_eq!(values.gate_smoothing, DEFAULT_GATE_SMOOTHING);
         assert_eq!(values.channels, 2);

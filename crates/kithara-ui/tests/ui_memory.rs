@@ -33,6 +33,7 @@ mod sections;
 // directory cargo leaves it alone and only this binary claims it.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[path = "ui_memory/checks.rs"]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod checks;
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]

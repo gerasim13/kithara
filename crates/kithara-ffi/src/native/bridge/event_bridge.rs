@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     /// The polling thread drives `Queue::tick`, including repeat-one replay.
-    #[kithara::test(tokio)]
+    #[kithara::test(tokio, flash(false))]
     async fn polling_thread_replays_a_consumed_track_after_eof() {
         crate::native::session::initialize_test_host();
         let worker = FfiWorker::new(

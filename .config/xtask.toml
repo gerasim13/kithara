@@ -150,6 +150,8 @@ lockbud_exclude = [
   "kithara-queue-tests",
   "kithara-storage-tests",
   "kithara-stream-tests",
+  "kithara-sync-tests",
+  "kithara-warp-tests",
   "kithara-test-macros",
   "kithara-test-utils",
   "kithara-workspace-hack",
@@ -598,6 +600,10 @@ prefix_args = [
   "kithara-storage-tests",
   "-p",
   "kithara-stream-tests",
+  "-p",
+  "kithara-warp-tests",
+  "-p",
+  "kithara-sync-tests",
   "--cargo-profile",
   "test-release",
 ]
@@ -657,7 +663,6 @@ owns = [
   "crates/kithara-record/",
   "crates/kithara-resampler/",
   "crates/kithara-stretch/",
-  "crates/kithara-warp/",
   "tests/crates/audio/",
 ]
 prefix_args = [
@@ -672,9 +677,37 @@ prefix_args = [
   "-p",
   "kithara-stretch",
   "-p",
+  "kithara-audio-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+
+[test.lanes.sync]
+program = "cargo"
+owns = ["crates/kithara-sync/", "tests/crates/sync/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-sync",
+  "-p",
+  "kithara-sync-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.warp]
+program = "cargo"
+default_backend = "none"
+owns = ["crates/kithara-warp/", "tests/crates/warp/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
   "kithara-warp",
   "-p",
-  "kithara-audio-tests",
+  "kithara-warp-tests",
   "--cargo-profile",
   "test-release",
 ]
@@ -1167,22 +1200,22 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-[test.lanes.usdt-play]
+[test.lanes.usdt-warp]
 program = "cargo"
 prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-play-tests",
+  "kithara-warp-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "play",
+  "warp_playback",
 ]
-default_features = ["kithara-play-tests/usdt"]
+default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
 suffix_args = ["-E", "test(/rate_response::/)"]
-owns = ["tests/crates/play/tests/rate_response.rs"]
+owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-play-scheduler]
 program = "cargo"
@@ -1327,6 +1360,25 @@ pins = ".config/ci-pins.toml"
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
+"kithara-integration-tests::suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
+"suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"kithara-integration-tests::suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"kithara-integration-tests::suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"kithara-integration-tests::suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"kithara-integration-tests::suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
+"kithara-integration-tests::suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
+"kithara-play-tests::play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"kithara-play-tests::play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"kithara-play-tests::play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"kithara-play-tests::play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"kithara-play-tests::play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
+"kithara-play-tests::play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
+"kithara-warp::warp::render::region_tests::" = "kithara-warp-tests::warp::region::"
 "suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
 "kithara-integration-tests::suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
 "suite_light::browser_runner_smoke::" = "kithara-harness-tests::suite_light::browser_runner_smoke::"
@@ -2326,7 +2378,7 @@ steps = [
   { args = [
     "test",
     "run",
-    "--lane=usdt-play",
+    "--lane=usdt-warp",
     "--profile",
     "ci",
   ], label = "USDT rate-response contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },

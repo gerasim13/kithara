@@ -22,7 +22,8 @@ stretch-bungee = ["dep:bungee-sys"]
 
 [dependencies]
 kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["patch", "ranged"] }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
+kithara-resampler = { workspace = true, features = ["resample-glide"] }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 

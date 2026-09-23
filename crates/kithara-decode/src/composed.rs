@@ -187,6 +187,7 @@ where
             spec: live_spec,
             epoch: self.epoch,
             render_revision: 0,
+            mapping_revision: None,
         };
         AudioChunk::new(meta, buf)
     }

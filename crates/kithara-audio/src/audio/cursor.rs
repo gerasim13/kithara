@@ -1,8 +1,9 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, ops::Range};
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView};
+use kithara_signal::{
+    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, SignalError,
+};
 use kithara_stream::PlayheadWrite;
 use kithara_test_utils::kithara;
 
@@ -24,25 +25,15 @@ pub(super) struct CursorRead {
 pub(super) struct ChunkCursor {
     #[field(get, vis = "pub(super)", copy)]
     spec: AudioSpec,
-    interleaved: Option<SampleBuffer>,
     current_chunk_consumed_frames: u64,
 }
 
 impl ChunkCursor {
-    pub(super) fn new<S>(pools: &PoolRegion<S>, spec: AudioSpec) -> Result<Self, PoolError>
-    where
-        S: HasPool<f32>,
-    {
-        let channels = usize::from(spec.channels).max(2);
-        let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
-        let capacity = sample_rate.saturating_mul(channels);
-        let mut interleaved = pools.get_with_len::<f32>(capacity)?;
-        interleaved.clear();
-        Ok(Self {
+    pub(super) const fn new(spec: AudioSpec) -> Self {
+        Self {
             spec,
             current_chunk_consumed_frames: 0,
-            interleaved: Some(interleaved),
-        })
+        }
     }
 
     pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
@@ -58,7 +49,8 @@ impl ChunkCursor {
         &mut self,
         chunk: &AudioChunk,
         source_span: Option<SourceSpan>,
-        output: &mut [f32],
+        output: &mut ReadBuffer<'_, '_>,
+        written: usize,
         playhead: &dyn PlayheadWrite,
     ) -> Result<CopyOutcome, DecodeError> {
         let channels = u64::from(chunk.meta.spec.channels.max(1));
@@ -66,7 +58,7 @@ impl ChunkCursor {
         let consumed = self.current_chunk_consumed_frames;
         if consumed >= total_frames {
             return Ok(CopyOutcome {
-                samples: 0,
+                count: 0,
                 finished: true,
                 output_frames: 0,
                 source_span: None,
@@ -74,11 +66,17 @@ impl ChunkCursor {
         }
 
         let remaining_frames = total_frames - consumed;
-        let output_frames = (output.len() as u64) / channels;
+        let output_frames =
+            u64::try_from(output.remaining_frames(written, channels)?).map_err(|_| {
+                DecodeError::SampleCountOverflow {
+                    frames: u64::MAX,
+                    channels,
+                }
+            })?;
         let take_frames = remaining_frames.min(output_frames);
         if take_frames == 0 {
             return Ok(CopyOutcome {
-                samples: 0,
+                count: 0,
                 finished: false,
                 output_frames: 0,
                 source_span: None,
@@ -87,7 +85,17 @@ impl ChunkCursor {
 
         let start_sample = frames_to_samples(consumed, channels)?;
         let samples = frames_to_samples(take_frames, channels)?;
-        output[..samples].copy_from_slice(&chunk.samples[start_sample..start_sample + samples]);
+        let view = InterleavedView::new(
+            &chunk.samples[start_sample..start_sample + samples],
+            chunk.spec(),
+            FrameCount::new(usize::try_from(take_frames).map_err(|_| {
+                DecodeError::SampleCountOverflow {
+                    frames: take_frames,
+                    channels,
+                }
+            })?),
+        )?;
+        let count = output.copy_from(view, written)?;
         let consumed_total = consumed + take_frames;
         self.current_chunk_consumed_frames = consumed_total;
         let finished = take_frames == remaining_frames;
@@ -100,14 +108,13 @@ impl ChunkCursor {
         }
         Ok(CopyOutcome {
             finished,
-            samples,
+            count,
             source_span,
             output_frames: take_frames,
         })
     }
 
     #[kithara::measure]
-    #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,
         ring: &mut RingConsumer,
@@ -116,7 +123,20 @@ impl ChunkCursor {
         recv: RecvCtx<'_>,
         buf: &mut [f32],
     ) -> Result<CursorRead, DecodeError> {
-        if buf.is_empty() {
+        self.read_into(ring, events, playhead, recv, ReadBuffer::Interleaved(buf))
+    }
+
+    #[kithara::hang_watchdog]
+    fn read_into(
+        &mut self,
+        ring: &mut RingConsumer,
+        events: &mut AudioEvents,
+        playhead: &dyn PlayheadWrite,
+        recv: RecvCtx<'_>,
+        mut output: ReadBuffer<'_, '_>,
+    ) -> Result<CursorRead, DecodeError> {
+        let capacity = output.capacity()?;
+        if capacity == 0 {
             return Ok(pending(playhead, PendingReason::Buffering));
         }
         match ring.phase {
@@ -133,7 +153,7 @@ impl ChunkCursor {
         let mut first_output_meta = None;
         let mut source_span = None;
         let mut source_output_frames = 0_u64;
-        while written < buf.len() {
+        while written < capacity {
             hang_tick!();
 
             if let Some(chunk) = ring.current_chunk.as_ref() {
@@ -149,16 +169,14 @@ impl ChunkCursor {
                     break;
                 }
                 let copied =
-                    self.copy_into(chunk, chunk_source_span, &mut buf[written..], playhead)?;
-                if copied.samples > 0 {
+                    self.copy_into(chunk, chunk_source_span, &mut output, written, playhead)?;
+                if copied.count > 0 {
                     hang_reset!();
                     first_output_meta.get_or_insert(chunk.meta);
-                    written += copied.samples;
+                    written += copied.count;
                     if let Some(next) = copied.source_span {
-                        source_span = source_span.map_or(Some(next), |current| {
-                            SourceSpan::new(current.start(), next.end(), current.sample_rate())
-                                .map(|span| span.with_render_revision(current.render_revision()))
-                        });
+                        source_span =
+                            source_span.map_or(Some(next), |current| current.followed_by(next));
                         source_output_frames = source_output_frames
                             .checked_add(copied.output_frames)
                             .ok_or(DecodeError::SampleCountOverflow {
@@ -169,12 +187,12 @@ impl ChunkCursor {
                 }
                 if copied.finished {
                     ring.recycle_current();
-                } else if copied.samples == 0 {
+                } else if copied.count == 0 {
                     break;
                 }
             }
 
-            if written >= buf.len() {
+            if written >= capacity {
                 break;
             }
             let was_playing = ring.phase == ConsumerPhase::Playing;
@@ -193,7 +211,7 @@ impl ChunkCursor {
 
         if let Some(count) = NonZeroUsize::new(written) {
             let position = playhead.position();
-            debug_assert!(count.get() <= buf.len());
+            debug_assert!(count.get() <= capacity);
             debug_assert!(
                 playhead
                     .duration()
@@ -227,66 +245,72 @@ impl ChunkCursor {
         recv: RecvCtx<'_>,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<CursorRead, DecodeError> {
-        let out_planes = output.len();
-        if out_planes == 0 {
-            return Ok(pending(playhead, PendingReason::Buffering));
-        }
-        // An interleaved source frame carries `spec.channels` samples; the plane
-        // count belongs to the device, not to the stream. Sizing, framing, and
-        // deinterleaving all follow the stream so a mono source keeps one
-        // sample per frame instead of being read as interleaved stereo.
-        let src_channels = self.spec.channel_count()?;
-        let frames = output[0].len();
-        let total_samples = frames.checked_mul(src_channels.get()).ok_or_else(|| {
-            DecodeError::SampleCountOverflow {
-                frames: u64::try_from(frames).unwrap_or(u64::MAX),
-                channels: u64::try_from(src_channels.get()).unwrap_or(u64::MAX),
-            }
-        })?;
-        let Some(mut interleaved) = self.interleaved.take() else {
-            return Err(DecodeError::ScratchDetached);
-        };
-        interleaved.clear();
-        interleaved.ensure_len(total_samples)?;
+        self.read_into(ring, events, playhead, recv, ReadBuffer::Planar(output))
+    }
+}
 
-        let result = self.read(ring, events, playhead, recv, &mut interleaved[..]);
-        let result = match result {
-            Ok(mut read) => {
-                if let ReadOutcome::Frames {
-                    count,
-                    position,
-                    source_span,
-                } = read.outcome
-                {
-                    let actual_frames = count.get() / src_channels.get();
-                    debug_assert!(actual_frames <= frames);
-                    let input = InterleavedView::new(
-                        &interleaved[..count.get()],
-                        self.spec,
-                        FrameCount::new(actual_frames),
-                    )?;
-                    let (filled, unfilled) =
-                        output.split_at_mut(src_channels.get().min(out_planes));
-                    input.deinterleave_channels_into(filled)?;
-                    spread_leading_channel(filled, unfilled, actual_frames);
-                    read.outcome = NonZeroUsize::new(actual_frames).map_or(
-                        ReadOutcome::Pending {
-                            position,
-                            reason: PendingReason::Buffering,
-                        },
-                        |count| ReadOutcome::Frames {
-                            position,
-                            count,
-                            source_span,
-                        },
-                    );
+enum ReadBuffer<'a, 'b> {
+    Interleaved(&'a mut [f32]),
+    Planar(&'a mut [&'b mut [f32]]),
+}
+
+impl ReadBuffer<'_, '_> {
+    fn capacity(&self) -> Result<usize, DecodeError> {
+        match self {
+            Self::Interleaved(output) => Ok(output.len()),
+            Self::Planar(output) => {
+                let frames = output.first().map_or(0, |plane| plane.len());
+                for (channel, plane) in output.iter().enumerate().skip(1) {
+                    if plane.len() != frames {
+                        return Err(SignalError::ChannelFrames {
+                            channel,
+                            expected: frames,
+                            actual: plane.len(),
+                        }
+                        .into());
+                    }
                 }
-                Ok(read)
+                Ok(frames)
             }
-            Err(error) => Err(error),
-        };
-        self.interleaved = Some(interleaved);
-        result
+        }
+    }
+
+    fn remaining_frames(&self, written: usize, channels: u64) -> Result<usize, DecodeError> {
+        let remaining = self.capacity()?.saturating_sub(written);
+        match self {
+            Self::Interleaved(_) => {
+                let channels =
+                    usize::try_from(channels).map_err(|_| DecodeError::SampleCountOverflow {
+                        frames: 0,
+                        channels,
+                    })?;
+                Ok(remaining / channels)
+            }
+            Self::Planar(_) => Ok(remaining),
+        }
+    }
+
+    fn copy_from(
+        &mut self,
+        source: InterleavedView<'_>,
+        written: usize,
+    ) -> Result<usize, DecodeError> {
+        match self {
+            Self::Interleaved(output) => {
+                let samples = source.samples();
+                output[written..written + samples.len()].copy_from_slice(samples);
+                Ok(samples.len())
+            }
+            Self::Planar(output) => {
+                let channels = source.spec().channel_count()?.get();
+                let planes = output.len();
+                let (filled, unfilled) = output.split_at_mut(channels.min(planes));
+                let range = written..written + source.frames().get();
+                source.deinterleave_channels_into_at(filled, written)?;
+                spread_leading_channel(filled, unfilled, range);
+                Ok(source.frames().get())
+            }
+        }
     }
 }
 
@@ -294,7 +318,7 @@ struct CopyOutcome {
     source_span: Option<SourceSpan>,
     finished: bool,
     output_frames: u64,
-    samples: usize,
+    count: usize,
 }
 
 fn source_spans_coalesce(
@@ -306,24 +330,9 @@ fn source_spans_coalesce(
     let (Some(current), Some(next)) = (current, next) else {
         return current.is_none() && next.is_none();
     };
-    if current.end() != next.start()
-        || current.sample_rate() != next.sample_rate()
-        || current.render_revision() != next.render_revision()
-        || current_output_frames == 0
-        || next_output_frames == 0
-    {
-        return false;
-    }
-    let Some(current_source_frames) = current.end().checked_sub(current.start()) else {
-        return false;
-    };
-    let Some(next_source_frames) = next.end().checked_sub(next.start()) else {
-        return false;
-    };
-    u128::from(current_source_frames)
-        .checked_mul(u128::from(next_output_frames))
-        .zip(u128::from(next_source_frames).checked_mul(u128::from(current_output_frames)))
-        .is_some_and(|(current_slope, next_slope)| current_slope == next_slope)
+    current.output_frames() == current_output_frames
+        && next.output_frames() == next_output_frames
+        && current.followed_by(next).is_some()
 }
 
 fn source_subspan(
@@ -332,35 +341,20 @@ fn source_subspan(
     output_end: u64,
     output_frames: u64,
 ) -> Option<SourceSpan> {
-    if output_frames == 0 || output_start > output_end || output_end > output_frames {
-        return None;
-    }
-    let source_frames = span.end().checked_sub(span.start())?;
-    let source_at = |output_frame: u64| {
-        let offset = u128::from(source_frames)
-            .checked_mul(u128::from(output_frame))?
-            .checked_div(u128::from(output_frames))?;
-        span.start().checked_add(u64::try_from(offset).ok()?)
-    };
-    let start = source_at(output_start)?;
-    let end = if output_end == output_frames {
-        span.end()
-    } else {
-        source_at(output_end)?
-    };
-    SourceSpan::new(start, end, span.sample_rate())
-        .map(|subspan| subspan.with_render_revision(span.render_revision()))
+    (span.output_frames() == output_frames)
+        .then(|| span.for_output_range(output_start..output_end))
+        .flatten()
 }
 
 /// Copy the leading source channel into the output planes the stream leaves
 /// untouched, so a mono stream reaches every plane of a stereo device.
-fn spread_leading_channel(filled: &[&mut [f32]], unfilled: &mut [&mut [f32]], frames: usize) {
+fn spread_leading_channel(filled: &[&mut [f32]], unfilled: &mut [&mut [f32]], range: Range<usize>) {
     let Some(leading) = filled.first() else {
         return;
     };
-    let leading = &leading[..frames];
+    let leading = &leading[range.clone()];
     for plane in unfilled {
-        plane[..frames].copy_from_slice(leading);
+        plane[range.clone()].copy_from_slice(leading);
     }
 }
 
@@ -446,7 +440,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
+        let mut cursor = ChunkCursor::new(spec);
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
@@ -533,7 +527,7 @@ mod tests {
             .expect("changed-revision rendered chunk reaches ring");
 
         let playhead = PlayheadState::new();
-        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
+        let mut cursor = ChunkCursor::new(spec);
         let mut events = AudioEvents::test();
         let mut output = [0.0; 8];
         let first_read = cursor
@@ -562,7 +556,7 @@ mod tests {
         assert_eq!(count.get(), 5);
         assert_eq!(
             source_span,
-            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(7))
+            SourceSpan::new(100, 110, rate, 5).map(|span| span.with_render_revision(7))
         );
 
         let second_read = cursor
@@ -583,7 +577,7 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(110, 112, rate, 1).map(|span| span.with_render_revision(8))
         );
 
         let final_read = cursor
@@ -604,7 +598,7 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(112, 114, rate, 1).map(|span| span.with_render_revision(8))
         );
     }
 
@@ -636,7 +630,7 @@ mod tests {
                 0,
             ))
             .expect("chunk reaches test ring");
-        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
+        let mut cursor = ChunkCursor::new(spec);
         let mut events = AudioEvents::test();
         let mut output = [0.0];
 
@@ -761,7 +755,7 @@ mod tests {
             .try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches test ring");
         (
-            ChunkCursor::new(pools, spec).expect("cursor scratch fits test pools"),
+            ChunkCursor::new(spec),
             ring,
             AudioEvents::test(),
             PlayheadState::new(),
@@ -789,5 +783,176 @@ mod tests {
             },
             sample_buffer(pools, samples),
         )
+    }
+    #[kithara::test]
+    fn planar_read_crosses_chunks_but_preserves_mapping_boundaries() {
+        let pools = pools();
+        let rate = NonZeroU32::new(48_000).expect("test rate");
+        let spec = AudioSpec::new(2, rate);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, mut trash_rx) = connect::<AudioChunk>(8, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            audio_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        let first_map = std::num::NonZeroU64::new(1);
+        let next_map = std::num::NonZeroU64::new(2);
+        for (offset, pcm, mapping) in [
+            (0, [0.0, 10.0, 1.0, 11.0], first_map),
+            (2, [2.0, 12.0, 3.0, 13.0], first_map),
+            (4, [4.0, 14.0, 5.0, 15.0], next_map),
+        ] {
+            let mut chunk = timed_chunk(
+                &pools,
+                &pcm,
+                spec,
+                2,
+                Duration::ZERO,
+                Duration::from_millis(1),
+            );
+            chunk.meta.frame_offset = offset;
+            chunk.meta.mapping_revision = mapping;
+            data_tx
+                .try_push(Fetch::rendered(chunk, 0, SourceEnd::new(offset + 2, rate)))
+                .expect("rendered chunk reaches ring");
+        }
+        let mut cursor = ChunkCursor::new(spec);
+        let mut events = AudioEvents::test();
+        let playhead = PlayheadState::new();
+        let mut left = [-1.0; 5];
+        let mut right = [-1.0; 5];
+        let read = cursor
+            .read_planar(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut [&mut left, &mut right],
+            )
+            .expect("planar read succeeds");
+        let ReadOutcome::Frames {
+            count, source_span, ..
+        } = read.outcome
+        else {
+            panic!("expected planar frames");
+        };
+        assert_eq!(count.get(), 4);
+        assert_eq!(left, [0.0, 1.0, 2.0, 3.0, -1.0]);
+        assert_eq!(right, [10.0, 11.0, 12.0, 13.0, -1.0]);
+        assert_eq!(
+            source_span,
+            SourceSpan::new(0, 4, rate, 4).map(|span| span.with_mapping_revision(first_map))
+        );
+        assert!(trash_rx.try_pop().is_some());
+        assert!(trash_rx.try_pop().is_some());
+        assert!(trash_rx.try_pop().is_none());
+        assert_eq!(
+            ring.current_chunk
+                .as_ref()
+                .expect("next map remains resident")
+                .meta
+                .mapping_revision,
+            next_map
+        );
+        assert_eq!(cursor.current_chunk_consumed_frames, 0);
+    }
+
+    #[kithara::test]
+    fn mapping_revision_boundaries_survive_source_span_slicing() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let first_map = std::num::NonZeroU64::new(1);
+        let next_map = std::num::NonZeroU64::new(2);
+        let first =
+            SourceSpan::new(0, 128, rate, 128).map(|span| span.with_mapping_revision(first_map));
+        let next =
+            SourceSpan::new(128, 256, rate, 128).map(|span| span.with_mapping_revision(next_map));
+        assert!(!source_spans_coalesce(first, 128, next, 128));
+        let first = first.expect("ordered source interval");
+        let sliced = source_subspan(first, 16, 32, 128).expect("valid slice");
+        assert_eq!(sliced.start(), 16);
+        assert_eq!(sliced.end(), 32);
+        assert_eq!(sliced.mapping_revision(), first_map);
+    }
+    #[kithara::test]
+    #[case::zero_origin(0)]
+    #[case::nonzero_origin(100)]
+    fn planar_partial_read_preserves_source_basis_for_later_consumption(#[case] origin: u64) {
+        let pools = pools();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let spec = AudioSpec {
+            channels: 2,
+            sample_rate: rate,
+        };
+        let mapping = std::num::NonZeroU64::new(3);
+        let mut chunk = timed_chunk(
+            &pools,
+            &[0.25; 256],
+            spec,
+            128,
+            Duration::ZERO,
+            Duration::from_millis(4),
+        );
+        chunk.meta.frame_offset = origin;
+        chunk.meta.render_revision = 7;
+        chunk.meta.mapping_revision = mapping;
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            audio_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        data_tx
+            .try_push(Fetch::rendered(
+                chunk,
+                0,
+                SourceEnd::new(origin + 192, rate),
+            ))
+            .expect("rendered chunk reaches ring");
+        let mut cursor = ChunkCursor::new(spec);
+        let mut events = AudioEvents::test();
+        let playhead = PlayheadState::new();
+        let mut left = [0.0; 127];
+        let mut right = [0.0; 127];
+        let read = cursor
+            .read_planar(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut [&mut left, &mut right],
+            )
+            .expect("partial read");
+        let ReadOutcome::Frames {
+            count,
+            source_span: Some(source),
+            ..
+        } = read.outcome
+        else {
+            panic!("expected mapped PCM");
+        };
+        assert_eq!(count.get(), 127);
+        assert_eq!(source.end(), origin + 190);
+        let consumed = source.for_output_range(0..2).expect("consumer subrange");
+        assert_eq!(consumed.end(), origin + 3);
+        assert_eq!(consumed.render_revision(), 7);
+        assert_eq!(consumed.mapping_revision(), mapping);
     }
 }

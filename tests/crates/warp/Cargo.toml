@@ -1,0 +1,64 @@
+[package]
+name = "kithara-warp-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[features]
+default = ["playback", "stretch-signalsmith", "usdt"]
+client-wreq = ["kithara?/client-wreq", "kithara-integration-tests?/client-wreq"]
+playback = ["dep:kithara", "dep:kithara-integration-tests", "dep:serde_json"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith", "kithara-stretch/stretch-signalsmith"]
+flash = [
+    "kithara-platform/flash",
+    "kithara-test-utils/flash",
+    "kithara?/flash",
+    "kithara-integration-tests?/flash",
+]
+no-block = [
+    "kithara-platform/no-block",
+    "kithara-test-utils/no-block",
+    "kithara?/no-block",
+    "kithara-integration-tests?/no-block",
+]
+usdt = [
+    "kithara-warp/usdt",
+    "kithara-test-utils/usdt",
+    "kithara?/usdt",
+    "kithara-integration-tests?/usdt",
+]
+
+[dependencies]
+kithara = { workspace = true, optional = true, features = ["offline", "queue", "stretch-signalsmith", "tokio-rt-multi-thread"] }
+kithara-beat = { workspace = true }
+kithara-integration-tests = { workspace = true, optional = true, features = ["all"] }
+kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
+kithara-stretch = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, features = ["render"] }
+num-traits = { workspace = true }
+serde_json = { workspace = true, optional = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+kithara-stretch = { workspace = true, default-features = false, features = ["stretch-bungee"] }
+kithara-warp = { workspace = true, features = ["stretch-bungee"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["library", "native-fixtures"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "warp"
+path = "tests/suite.rs"
+required-features = ["stretch-signalsmith"]
+
+[[test]]
+name = "warp_playback"
+path = "tests/playback.rs"
+required-features = ["playback", "stretch-signalsmith"]

@@ -604,8 +604,7 @@ mod tests {
             sample_rate,
             master_volume: 1.0,
             render_quantum_frames: None,
-            response_budget_frames: NonZeroUsize::new(448)
-                .expect("fixture response budget is non-zero"),
+            response_budget_frames: NonZeroUsize::new(448),
         }
     }
 
@@ -968,8 +967,7 @@ mod tests {
             player_id,
             master_volume: 1.0,
             render_quantum_frames: NonZeroUsize::new(64),
-            response_budget_frames: NonZeroUsize::new(441)
-                .expect("fixture response budget is non-zero"),
+            response_budget_frames: NonZeroUsize::new(441),
             sample_rate: TestState::DEFAULT_SAMPLE_RATE,
         };
 

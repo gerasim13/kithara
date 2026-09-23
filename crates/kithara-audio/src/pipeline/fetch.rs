@@ -1,10 +1,13 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
 /// Exclusive decoded-source boundary represented by rendered PCM.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceEnd {
+    /// Opaque immutable mapping revision represented by this boundary.
+    #[field(get, copy, with)]
+    mapping_revision: Option<NonZeroU64>,
     /// Sample rate of the decoded source coordinate.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
@@ -17,42 +20,11 @@ impl SourceEnd {
     /// Construct a decoded-source boundary.
     #[must_use]
     pub const fn new(frame: u64, sample_rate: NonZeroU32) -> Self {
-        Self { sample_rate, frame }
-    }
-}
-
-/// Exact decoded-source interval represented by rendered PCM.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct SourceSpan {
-    /// Sample rate of the decoded source coordinate.
-    #[field(get, copy)]
-    sample_rate: NonZeroU32,
-    /// Exclusive decoded source frame.
-    #[field(get, copy)]
-    end: u64,
-    /// Opaque producer render revision represented by this output span.
-    #[field(get, copy, with)]
-    render_revision: u64,
-    /// Inclusive decoded source frame.
-    #[field(get, copy)]
-    start: u64,
-}
-
-impl SourceSpan {
-    /// Construct a decoded-source interval.
-    #[must_use]
-    pub const fn new(start: u64, end: u64, sample_rate: NonZeroU32) -> Option<Self> {
-        if start > end {
-            return None;
-        }
-        Some(Self {
-            start,
-            end,
+        Self {
             sample_rate,
-            render_revision: 0,
-        })
+            frame,
+            mapping_revision: None,
+        }
     }
 }
 
@@ -162,6 +134,6 @@ mod tests {
     fn source_span_rejects_an_inverted_interval() {
         let rate = NonZeroU32::new(48_000).expect("test sample rate");
 
-        assert_eq!(SourceSpan::new(2, 1, rate), None);
+        assert_eq!(kithara_signal::SourceSpan::new(2, 1, rate, 1), None);
     }
 }

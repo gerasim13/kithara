@@ -3,9 +3,9 @@
 use std::{panic::AssertUnwindSafe, path::Path};
 
 use futures::FutureExt;
-use kithara::platform::time::Duration;
 use kithara_integration_tests::{TestServerHelper, kithara};
 use kithara_test_fixtures::assets::MANIFEST;
+use kithara_test_utils::kithara_platform::time::Duration;
 
 use super::sync_product_matrix::{Provider, sources};
 

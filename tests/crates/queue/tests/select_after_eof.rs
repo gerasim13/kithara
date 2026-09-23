@@ -11,7 +11,6 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    event::TestEvent,
     offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
 };
 use kithara_test_fixtures::assets;
@@ -24,15 +23,15 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
 
 /// The advance a natural end asks for, named for the entry it lands on.
-async fn wait_for_eof_advance(events: &mut EventReceiver<TestEvent>, id: TrackId) {
+async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackId) {
     let answered = time::timeout(Duration::from_secs(20), async {
         while let Ok(envelope) = events.recv().await {
             if matches!(
                 envelope.event,
-                TestEvent::Queue(QueueEvent::CurrentTrackAdvance {
+                QueueEvent::CurrentTrackAdvance {
                     id: Some(seen),
                     reason: AdvanceReason::NaturalEof,
-                }) if seen == id
+                } if seen == id
             ) {
                 return true;
             }

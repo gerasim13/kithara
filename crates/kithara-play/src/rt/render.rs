@@ -51,7 +51,7 @@ impl RenderPass {
 
     const MIN_STEREO: usize = 2;
 
-    const SCRATCH_BUF_COUNT: usize = 6;
+    const SCRATCH_BUF_COUNT: usize = 4;
 
     pub(crate) fn new<S>(
         pools: &PoolRegion<S>,
@@ -117,13 +117,10 @@ impl RenderPass {
             return (false, None);
         }
 
-        let (read, rest) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
-        let (mix, bus) = rest.split_at_mut(Self::MIN_STEREO);
+        let (read, bus) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
         let (read_buf0, read_buf1) = read.split_at_mut(1);
-        let (mix_buf0, mix_buf1) = mix.split_at_mut(1);
         let (bus_buf0, bus_buf1) = bus.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
-        let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
         let mut bus_bufs = [&mut bus_buf0[0][..frames], &mut bus_buf1[0][..frames]];
         for ch_buffer in &mut bus_bufs {
             ch_buffer.fill(0.0);
@@ -155,13 +152,9 @@ impl RenderPass {
                 continue;
             }
 
-            for ch_buffer in &mut mix_bufs {
-                ch_buffer.fill(0.0);
-            }
-
             let mut read_outcome = {
                 let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
-                    track.render(context, &mut read_bufs, &mut mix_bufs, 0..frames, &mut sink)
+                    track.render(context, &mut read_bufs, &mut bus_bufs, 0..frames, &mut sink)
                 }) else {
                     continue;
                 };
@@ -194,7 +187,7 @@ impl RenderPass {
                         track.render(
                             context,
                             &mut read_bufs,
-                            &mut mix_bufs,
+                            &mut bus_bufs,
                             offset..frames,
                             &mut sink,
                         )
@@ -229,20 +222,13 @@ impl RenderPass {
                         next_track.render(
                             context,
                             &mut read_bufs,
-                            &mut mix_bufs,
+                            &mut bus_bufs,
                             offset..frames,
                             &mut sink,
                         );
                         break;
                     }
                 }
-            }
-
-            for (bus_ch, mix_ch) in bus_bufs.iter_mut().zip(mix_bufs.iter()) {
-                bus_ch
-                    .iter_mut()
-                    .zip(mix_ch.iter())
-                    .for_each(|(bus_sample, &mix_sample)| *bus_sample += mix_sample);
             }
         }
 

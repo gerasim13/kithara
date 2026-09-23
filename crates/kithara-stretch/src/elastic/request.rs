@@ -13,6 +13,9 @@ pub struct ElasticRequest {
     /// Number of source frames consumed by this request.
     #[field(get, copy)]
     source_frames: usize,
+    /// Source-frame advance represented by the emitted output interval.
+    #[field(get, copy)]
+    output_source_frames: usize,
 }
 
 impl ElasticRequest {
@@ -29,7 +32,21 @@ impl ElasticRequest {
         Ok(Self {
             output_frames,
             source_frames,
+            output_source_frames: source_frames,
         })
+    }
+
+    /// Sets the source advance of the audible interval independently of input admission.
+    /// The ordinary constructor uses the admitted source count for both spans.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError::EmptySource`] when the audible span is empty.
+    pub const fn with_output_source_frames(mut self, frames: usize) -> Result<Self, ElasticError> {
+        if frames == 0 {
+            return Err(ElasticError::EmptySource);
+        }
+        self.output_source_frames = frames;
+        Ok(self)
     }
 
     pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {

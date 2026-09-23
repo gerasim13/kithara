@@ -1,10 +1,11 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::{marker::PhantomData, num::NonZeroU32, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RenderReader, RenderSnapshot, WarpConfig};
+use crate::{RenderReader, RenderSnapshot, WarpConfig, WarpPlanSlot, WarpRenderError};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -15,6 +16,8 @@ pub struct WarpRenderer<S> {
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
     context: RenderReader,
+    plan: Arc<WarpPlanSlot>,
+    projected: bool,
 }
 
 impl<S> WarpRenderer<S>
@@ -22,13 +25,15 @@ where
     S: HasPool<f32>,
 {
     pub(crate) fn new(
-        _config: &WarpConfig,
+        config: &WarpConfig,
         context: RenderReader,
         _spec: AudioSpec,
         _pools: PoolRegion<S>,
     ) -> Self {
         Self {
             context,
+            plan: Arc::clone(config.plan()),
+            projected: config.plan().load().is_some(),
             committed: None,
             prepared: None,
             rendered_source_end: None,
@@ -48,16 +53,26 @@ where
     }
 
     /// Prepare deferred renderer state for the current source format.
-    pub const fn prepare(&mut self, _spec: AudioSpec) {}
+    pub fn prepare(&mut self, _spec: AudioSpec) {
+        self.projected = self.plan.load().is_some();
+    }
 
     /// Select the next source span that fits the output quantum.
+    ///
+    /// # Errors
+    /// Rejects empty source and projections unavailable on this target.
     pub fn prepare_quantum(
         &mut self,
         _meta: AudioChunkInfo,
         remaining: usize,
-    ) -> Option<FrameCount> {
+    ) -> Result<FrameCount, WarpRenderError> {
+        if self.projected {
+            return Err(WarpRenderError::UnsupportedProjection);
+        }
         self.prepared = (remaining > 0).then_some(remaining);
-        self.prepared.map(FrameCount::new)
+        self.prepared
+            .map(FrameCount::new)
+            .ok_or(WarpRenderError::EmptySource)
     }
 
     /// Shrink a prepared source span at true EOF.
@@ -75,9 +90,14 @@ where
     }
 
     /// Render one complete decoded source chunk.
-    pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    ///
+    /// Returns the original input when the selected projection is unavailable.
+    pub fn render(&mut self, chunk: AudioChunk) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
+        if self.projected {
+            return ControlFlow::Break(chunk);
+        }
         self.prepared = None;
-        self.render_prepared(chunk)
+        ControlFlow::Continue(self.render_prepared(chunk))
     }
 
     fn render_prepared(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
@@ -117,9 +137,17 @@ where
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        let frames = self.prepared.take()?;
-        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
+    ///
+    /// Returns the unchanged input if no matching quantum was prepared.
+    pub fn render_quantum(
+        &mut self,
+        chunk: AudioChunk,
+    ) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
+        if self.projected || self.prepared != Some(chunk.frames()) {
+            return ControlFlow::Break(chunk);
+        }
+        self.prepared = None;
+        ControlFlow::Continue(self.render_prepared(chunk))
     }
 
     /// Exact decoded-source boundary represented by the latest emitted samples.
@@ -157,7 +185,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{pools, sample_buffer};
+    use crate::{
+        StretchControls,
+        test_pools::{pools, sample_buffer},
+    };
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
@@ -180,7 +211,11 @@ mod tests {
         );
 
         assert_eq!(renderer.rendered_source_end(), None);
-        let output = renderer.render(input).expect("identity output");
+        let output = renderer
+            .render(input)
+            .continue_value()
+            .expect("complete input")
+            .expect("identity output");
 
         assert_eq!(output.samples.as_ptr(), input_ptr);
         assert_eq!(output.samples.as_ref(), &[0.25, -0.5]);
@@ -189,5 +224,65 @@ mod tests {
         assert_eq!(renderer.rendered_source_end(), None);
         assert!(renderer.flush().is_none());
         assert!(!crate::supports_playback_rate());
+    }
+
+    #[kithara::test]
+    fn worker_preparation_observes_live_unsupported_projection(warp_pair: Vec<f32>) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+        let config = WarpConfig::builder().build();
+        let mut renderer = WarpRenderer::new(
+            &config,
+            crate::RenderPublisher::default().reader(),
+            spec,
+            pools.clone(),
+        );
+        let meta = AudioChunkInfo {
+            spec,
+            frames: 1,
+            ..AudioChunkInfo::default()
+        };
+        assert!(!renderer.requires_staging());
+        assert!(!renderer.transition_pending());
+        renderer.prepare_quantum(meta, 1).expect("manual quantum");
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
+        let output = renderer
+            .render_quantum(input)
+            .continue_value()
+            .expect("manual source shape")
+            .expect("manual PCM");
+        assert_eq!(&*output.samples, &warp_pair);
+        assert_eq!(output.meta.mapping_revision, None);
+
+        config
+            .plan()
+            .install(Some(Arc::new(crate::test_grids::projected_plan(
+                120.0,
+                180.0,
+                spec.sample_rate,
+            ))));
+        renderer.prepare(spec);
+        assert!(matches!(
+            renderer.prepare_quantum(meta, 1),
+            Err(WarpRenderError::UnsupportedProjection)
+        ));
+        assert_eq!(renderer.rendered_source_end(), Some((1, spec.sample_rate)));
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
+        let rejected = renderer
+            .render(input)
+            .break_value()
+            .expect("unsupported plan");
+        assert_eq!(&*rejected.samples, &warp_pair);
+
+        config.plan().install(None);
+        renderer.prepare(spec);
+        renderer.prepare_quantum(meta, 1).expect("manual restored");
+        let output = renderer
+            .render_quantum(rejected)
+            .continue_value()
+            .expect("manual source shape")
+            .expect("restored manual PCM");
+        assert_eq!(&*output.samples, &warp_pair);
+        assert_eq!(output.meta.mapping_revision, None);
     }
 }

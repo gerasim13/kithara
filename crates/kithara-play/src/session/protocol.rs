@@ -98,7 +98,7 @@ mod wire {
             master_volume: f32,
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
+            response_budget_frames: Option<NonZeroUsize>,
             sample_rate: u32,
         },
         StopPlayer {
@@ -521,7 +521,7 @@ mod handle {
             player_id: PlayerId,
             master_volume: f32,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
+            response_budget_frames: Option<NonZeroUsize>,
         ) -> Result<(), PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
@@ -708,12 +708,7 @@ mod tests {
 
         capture.applied.store(0, Ordering::Relaxed);
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None, NonZeroUsize::new(448))
             .expect("start player");
         assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
     }
@@ -740,12 +735,7 @@ mod tests {
             .expect("register player")
             .id;
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None, NonZeroUsize::new(448))
             .expect("start player");
 
         assert_eq!(capture.queries.load(Ordering::Relaxed), 0);

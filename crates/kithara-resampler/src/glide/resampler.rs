@@ -1,4 +1,7 @@
-use std::num::NonZeroUsize;
+use std::{
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut},
+};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
@@ -60,6 +63,70 @@ impl GlideResampler {
             options: settings.options,
             cursor: 0.0,
         })
+    }
+
+    /// Render one exact source/output span without backend buffering.
+    ///
+    /// # Errors
+    /// Returns [`ResamplerError`] when the planar shape or prepared limits do
+    /// not match the requested span.
+    pub fn process_exact_span<I, O>(
+        &mut self,
+        input: &[I],
+        output: &mut [O],
+    ) -> Result<(), ResamplerError>
+    where
+        I: Deref<Target = [f32]>,
+        O: DerefMut<Target = [f32]>,
+    {
+        let input_frames = validate_input(input, self.channels.get())?;
+        let output_frames = validate_output(output, self.channels.get())?;
+        if input_frames == 0 || output_frames == 0 {
+            return Err(ResamplerError::InvalidBuffer {
+                detail: "exact Glide spans must be non-empty",
+            });
+        }
+        if input_frames > self.input_frames || output_frames > self.engine.position_capacity() {
+            return Err(ResamplerError::InvalidBuffer {
+                detail: "exact Glide span exceeds prepared frame limits",
+            });
+        }
+        let ratio = input_frames
+            .to_f64()
+            .and_then(|input| output_frames.to_f64().map(|output| input / output))
+            .ok_or(ResamplerError::InvalidBuffer {
+                detail: "exact Glide span ratio is not representable",
+            })?;
+        validate_runtime_ratio(self.options, ratio)?;
+        self.seed_previous(input);
+        let positions = self.engine.positions_mut(output_frames)?;
+        for (frame, position) in positions.iter_mut().enumerate() {
+            *position = frame
+                .to_f64()
+                .map(|frame| frame.mul_add(ratio, 1.0))
+                .and_then(|position| position.to_f32())
+                .ok_or(ResamplerError::InvalidBuffer {
+                    detail: "exact Glide source position is not representable",
+                })?;
+        }
+        self.engine.render(RenderRequest {
+            input,
+            output,
+            produced: output_frames,
+            filter_ratio: if (ratio - 1.0).abs() <= self.options.passthrough_tolerance {
+                1.0
+            } else {
+                ratio
+            },
+            previous: &self.previous,
+            config: self.config,
+            mode: self.mode,
+        })?;
+        self.store_previous(input, input_frames);
+        self.current_ratio = ratio;
+        self.glide = GlideState::default();
+        self.cursor = 0.0;
+        Ok(())
     }
 
     fn can_passthrough(&self) -> bool {
@@ -134,7 +201,7 @@ impl GlideResampler {
         }
     }
 
-    fn store_previous(&mut self, input: &[&[f32]], consumed: usize) {
+    fn store_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I], consumed: usize) {
         if consumed == 0 {
             return;
         }
@@ -144,12 +211,12 @@ impl GlideResampler {
             .iter_mut()
             .zip(&input[..channels])
             .for_each(|(previous, input)| {
-                previous[0] = input[frame];
+                previous[0] = input.deref()[frame];
             });
         self.previous_valid = true;
     }
 
-    fn seed_previous(&mut self, input: &[&[f32]]) {
+    fn seed_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I]) {
         if self.previous_valid {
             return;
         }
@@ -157,7 +224,7 @@ impl GlideResampler {
             .iter_mut()
             .zip(&input[..self.channels.get()])
             .for_each(|(previous, input)| {
-                previous[0] = input.first().copied().unwrap_or(0.0);
+                previous[0] = input.deref().first().copied().unwrap_or(0.0);
             });
         self.previous_valid = true;
     }
@@ -354,17 +421,20 @@ where
     Ok(buffers)
 }
 
-fn validate_input(input: &[&[f32]], channels: usize) -> Result<usize, ResamplerError> {
+fn validate_input<I: Deref<Target = [f32]>>(
+    input: &[I],
+    channels: usize,
+) -> Result<usize, ResamplerError> {
     if input.len() < channels {
         return Err(ResamplerError::InvalidBuffer {
             detail: "not enough input channels for glide resampler",
         });
     }
-    let frames = input[0].len();
+    let frames = input[0].deref().len();
     if input
         .iter()
         .take(channels)
-        .any(|channel| channel.len() != frames)
+        .any(|channel| channel.deref().len() != frames)
     {
         return Err(ResamplerError::InvalidBuffer {
             detail: "input channels must have equal frame counts",
@@ -373,17 +443,20 @@ fn validate_input(input: &[&[f32]], channels: usize) -> Result<usize, ResamplerE
     Ok(frames)
 }
 
-fn validate_output(output: &[&mut [f32]], channels: usize) -> Result<usize, ResamplerError> {
+fn validate_output<O: Deref<Target = [f32]>>(
+    output: &[O],
+    channels: usize,
+) -> Result<usize, ResamplerError> {
     if output.len() < channels {
         return Err(ResamplerError::InvalidBuffer {
             detail: "not enough output channels for glide resampler",
         });
     }
-    let frames = output[0].len();
+    let frames = output[0].deref().len();
     if output
         .iter()
         .take(channels)
-        .any(|channel| channel.len() != frames)
+        .any(|channel| channel.deref().len() != frames)
     {
         return Err(ResamplerError::InvalidBuffer {
             detail: "output channels must have equal frame counts",
