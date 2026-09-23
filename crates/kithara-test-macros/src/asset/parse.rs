@@ -1,5 +1,5 @@
 use syn::{
-    Error, Ident, LitStr, Token, bracketed,
+    Error, Ident, LitStr, Path, Token, bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -49,6 +49,8 @@ pub(crate) struct AssetArgs {
     pub(crate) depends_on: Vec<LitStr>,
     /// Environment variables that invalidate this producer.
     pub(crate) env: Vec<LitStr>,
+    /// Function returning a sample of the output format, keyed into the id.
+    pub(crate) format: Option<Path>,
     /// Pass the build context to a required producer.
     pub(crate) context: bool,
     /// Bake the asset into filesystem-free wasm binaries.
@@ -65,6 +67,7 @@ impl Parse for AssetArgs {
         let mut embed = false;
         let mut env: Option<Vec<LitStr>> = None;
         let mut ext: Option<LitStr> = None;
+        let mut format: Option<Path> = None;
         let mut optional = false;
 
         while !input.is_empty() {
@@ -110,6 +113,16 @@ impl Parse for AssetArgs {
                 }
                 continue;
             }
+            if key == "format" {
+                if format.is_some() {
+                    return Err(Error::new(key.span(), format!("duplicate key `{key}`")));
+                }
+                format = Some(input.parse::<Path>()?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             let value = input.parse::<LitStr>()?;
             let slot = match key.to_string().as_str() {
                 "content_type" => &mut content_type,
@@ -119,7 +132,7 @@ impl Parse for AssetArgs {
                         key.span(),
                         format!(
                             "unknown asset key `{other}`; expected `ext`, `content_type`, \
-                             `depends_on`, `env`, `context`, `embed`, or `optional`"
+                             `depends_on`, `env`, `format`, `context`, `embed`, or `optional`"
                         ),
                     ));
                 }
@@ -153,6 +166,7 @@ impl Parse for AssetArgs {
             context,
             embed,
             ext,
+            format,
             optional,
             depends_on: depends_on.unwrap_or_default(),
             env: env.unwrap_or_default(),
@@ -233,6 +247,33 @@ mod tests {
         assert!(
             syn::parse_str::<AssetArgs>(r#"ext = "wav", ext = "mp3", content_type = "audio/wav""#)
                 .is_err(),
+        );
+    }
+
+    #[test]
+    fn format_names_a_sample_function() {
+        let plain = syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav""#)
+            .expect("valid attribute");
+        assert!(plain.format.is_none());
+
+        let keyed = syn::parse_str::<AssetArgs>(
+            r#"ext = "analysis", format = super::analysis_format, content_type = "application/x-kithara-analysis""#,
+        )
+        .expect("valid attribute");
+        let format = keyed.format.expect("format path");
+        assert_eq!(
+            quote::quote!(#format).to_string(),
+            "super :: analysis_format"
+        );
+    }
+
+    #[test]
+    fn format_is_rejected_twice() {
+        assert!(
+            syn::parse_str::<AssetArgs>(
+                r#"ext = "analysis", content_type = "application/x-kithara-analysis", format = a, format = b"#
+            )
+            .is_err(),
         );
     }
 
