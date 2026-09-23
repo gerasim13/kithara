@@ -28,6 +28,9 @@ pub enum AnalysisFileError {
     /// Header, index, or payload bounds are internally inconsistent.
     #[error("analysis file is corrupt")]
     Corrupt,
+    /// The pass's playback ingress could not be acquired under the pool budget.
+    #[error("analysis ingress allocation failed: {0}")]
+    Pool(#[from] kithara_bufpool::PoolError),
     /// The latest full snapshot payload is invalid.
     #[error("analysis payload is invalid: {0}")]
     Payload(#[from] BlobError),

@@ -3,15 +3,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use bon::Builder;
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
+use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_platform::CancelToken;
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
-use crate::{
-    PlayWorker,
-    effects::eq::{EqBandConfig, generate_log_spaced_bands},
-    session::SessionBinding,
-};
+use crate::{PlayWorker, session::SessionBinding};
 
 fn allocate_grid_id() -> BeatGridId {
     let Ok(id) = BeatGridId::allocate() else {

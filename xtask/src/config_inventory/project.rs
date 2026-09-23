@@ -45,7 +45,7 @@ pub(super) fn render(registrations: &[Registration]) -> Result<String> {
             .iter()
             .find(|registration| {
                 registration.kind == "retained"
-                    && registration.package == delegate.package
+                    && registration.package == "kithara-effects"
                     && registration.owner == "EqBandConfig"
             })
             .ok_or_else(|| anyhow::anyhow!("EqBandConfig is not registered"))?;
@@ -124,8 +124,8 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
     if registration.owner == "CrossfadeSettings" {
         output.push_str("\nimpl From<kithara::play::CrossfadeSettings> for FfiCrossfadeSettings {\n    fn from(value: kithara::play::CrossfadeSettings) -> Self {\n        let values = kithara_config::Config::values(&value);\n        Self {\n            duration: values.duration,\n            curve: match values.curve {\n                kithara::play::CrossfadeCurve::Linear => crate::types::FfiCrossfadeCurve::Linear,\n                kithara::play::CrossfadeCurve::EqualPower => {\n                    crate::types::FfiCrossfadeCurve::EqualPower\n                }\n                _ => crate::types::FfiCrossfadeCurve::Unknown,\n            },\n            depth: values.depth,\n            position: values.position,\n        }\n    }\n}\n\nimpl TryFrom<FfiCrossfadeSettings> for kithara::play::CrossfadeSettings {\n    type Error = crate::types::FfiError;\n\n    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {\n        let curve = match value.curve {\n            crate::types::FfiCrossfadeCurve::Linear => kithara::play::CrossfadeCurve::Linear,\n            crate::types::FfiCrossfadeCurve::EqualPower => {\n                kithara::play::CrossfadeCurve::EqualPower\n            }\n            crate::types::FfiCrossfadeCurve::Unknown => {\n                return Err(crate::types::FfiError::InvalidArgument {\n                    reason: \"unknown crossfade curve\".into(),\n                });\n            }\n        };\n        Self::new(value.duration, curve, value.depth, value.position)\n            .map_err(crate::types::FfiError::from)\n    }\n}\n");
     }
-    if registration.package == "kithara-play" && registration.owner == "LimiterConfig" {
-        output.push_str("\nimpl Default for FfiLimiterConfig {\n    fn default() -> Self {\n        let config = kithara::play::effects::LimiterConfig::default();\n        Self {\n");
+    if registration.package == "kithara-effects" && registration.owner == "LimiterConfig" {
+        output.push_str("\nimpl Default for FfiLimiterConfig {\n    fn default() -> Self {\n        let config = kithara::effects::LimiterConfig::default();\n        Self {\n");
         for field in &fields {
             writeln!(
                 output,
@@ -133,7 +133,7 @@ fn render_sdk_record(output: &mut String, registration: &Registration) -> Result
                 field.name, field.name
             )?;
         }
-        output.push_str("        }\n    }\n}\n\nimpl TryFrom<FfiLimiterConfig> for kithara::play::effects::LimiterConfig {\n    type Error = crate::types::FfiError;\n\n    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {\n        Self::builder()\n");
+        output.push_str("        }\n    }\n}\n\nimpl TryFrom<FfiLimiterConfig> for kithara::effects::LimiterConfig {\n    type Error = crate::types::FfiError;\n\n    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {\n        Self::builder()\n");
         for field in &fields {
             writeln!(output, "            .{}(config.{})", field.name, field.name)?;
         }
@@ -221,18 +221,24 @@ mod tests {
                 /// Frequency in hertz.
                 #[config(value)] frequency: f32,
             }
+        "#;
+        let delegate = r#"
             impl PlayerControl {
                 #[kithara_config::config(delegate = "eq_layout", sdk)]
                 fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
             }
         "#;
-        let registered = registrations("crates/kithara-play/src/eq.rs", source).unwrap();
+        let mut registered =
+            registrations("crates/kithara-effects/src/eq/band.rs", source).unwrap();
+        registered.extend(registrations("crates/kithara-play/src/player.rs", delegate).unwrap());
         let generated = render(&registered).unwrap();
         assert!(generated.contains("pub frequency: f32"));
         assert!(generated.contains(".frequency(value.frequency)"));
 
         let unsupported = source.replace("frequency: f32", "frequency: Mystery");
-        let registered = registrations("crates/kithara-play/src/eq.rs", &unsupported).unwrap();
+        let mut registered =
+            registrations("crates/kithara-effects/src/eq/band.rs", &unsupported).unwrap();
+        registered.extend(registrations("crates/kithara-play/src/player.rs", delegate).unwrap());
         assert!(
             render(&registered)
                 .unwrap_err()
@@ -252,16 +258,19 @@ mod tests {
                 /// Release in milliseconds.
                 #[config(value)] release_ms: f32,
             }
-            impl PlayerControl {
-                #[kithara_config::config(delegate = "eq_layout", sdk)]
-                fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
-            }
             #[kithara_config::config]
             struct EqBandConfig {
                 #[config(value)] frequency: f32,
             }
         "#;
-        let registered = registrations("crates/kithara-play/src/eq.rs", source).unwrap();
+        let delegate = r#"
+            impl PlayerControl {
+                #[kithara_config::config(delegate = "eq_layout", sdk)]
+                fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
+            }
+        "#;
+        let mut registered = registrations("crates/kithara-effects/src/eq.rs", source).unwrap();
+        registered.extend(registrations("crates/kithara-play/src/player.rs", delegate).unwrap());
         let generated = render(&registered).unwrap();
         assert!(generated.contains("pub struct FfiLimiterConfig"));
         assert!(generated.contains("pub release_ms: f32"));
@@ -270,7 +279,9 @@ mod tests {
         assert!(generated.contains(".release_ms(config.release_ms)"));
 
         let unsupported = source.replace("ceiling: f32", "ceiling: FilterKind");
-        let registered = registrations("crates/kithara-play/src/eq.rs", &unsupported).unwrap();
+        let mut registered =
+            registrations("crates/kithara-effects/src/eq.rs", &unsupported).unwrap();
+        registered.extend(registrations("crates/kithara-play/src/player.rs", delegate).unwrap());
         assert!(
             render(&registered)
                 .unwrap_err()
@@ -293,10 +304,12 @@ mod tests {
                 #[kithara_config::config(delegate = "eq_layout", sdk)]
                 fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {}
             }
-            #[kithara_config::config]
-            struct EqBandConfig { #[config(value)] frequency: f32 }
         "#;
-        let registered = registrations("crates/kithara-play/src/api/crossfade.rs", source).unwrap();
+        let band =
+            "#[kithara_config::config] struct EqBandConfig { #[config(value)] frequency: f32 }";
+        let mut registered =
+            registrations("crates/kithara-play/src/api/crossfade.rs", source).unwrap();
+        registered.extend(registrations("crates/kithara-effects/src/eq/band.rs", band).unwrap());
         let generated = render(&registered).unwrap();
         assert!(generated.contains("let values = kithara_config::Config::values(&value)"));
         assert!(
@@ -307,7 +320,9 @@ mod tests {
             "#[config(value)] position: f32,",
             "#[config(value)] position: f32, #[config(value)] offset: f32,",
         );
-        let registered = registrations("crates/kithara-play/src/api/crossfade.rs", &extra).unwrap();
+        let mut registered =
+            registrations("crates/kithara-play/src/api/crossfade.rs", &extra).unwrap();
+        registered.extend(registrations("crates/kithara-effects/src/eq/band.rs", band).unwrap());
         assert!(
             render(&registered)
                 .unwrap_err()

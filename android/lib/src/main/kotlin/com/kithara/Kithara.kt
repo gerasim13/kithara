@@ -4,6 +4,8 @@ import android.content.Context
 import com.kithara.ffi.FfiHostConfig
 import com.kithara.ffi.defaultHostConfig
 import com.kithara.ffi.initializeHost
+import com.kithara.net.HttpTransport
+import com.kithara.net.NativeHttpTransport
 
 /**
  * Minimum log level forwarded from the Rust layer to logcat.
@@ -26,8 +28,8 @@ enum class LogLevel {
  * `Application.onCreate`. After that, create players and items directly:
  *
  * ```kotlin
- * // In Application.onCreate:
- * Kithara.initialize(applicationContext, logLevel = LogLevel.Debug)
+ * // In Application.onCreate, with the adapter from `kithara-okhttp`:
+ * Kithara.initialize(applicationContext, OkHttpTransport(okHttpClient), logLevel = LogLevel.Debug)
  *
  * // Anywhere in the app:
  * val player = KitharaPlayer()
@@ -49,44 +51,68 @@ object Kithara {
     private var initializedStore: AssetStore? = null
     private var platformInitialized = false
 
+    private var installedTransport: HttpTransport? = null
+
     val defaultStore: AssetStore
         get() = initializedStore ?: throw KitharaError.NotInitialized
 
     /**
      * Initialize the native Kithara library.
      *
-     * Must be called once before creating any [KitharaPlayer] or [KitharaPlayerItem].
-     * A second call fails with the typed native `AlreadyInitialized` error.
+     * Must be called before creating any [KitharaPlayer] or [KitharaPlayerItem].
+     * The process keeps the transport of the first call: a later call with the
+     * same transport changes nothing, and a later call with another transport
+     * throws.
      *
      * @param context Any [Context]; the application context is used internally.
+     * @param transport The HTTP transport every request runs through; `kithara-okhttp` provides one.
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
      * @param hostConfig Host settings fixed for the process lifetime. `null` uses Rust defaults.
+     * @throws IllegalStateException when an earlier call installed another transport.
      */
     @Throws(KitharaError::class)
     fun initialize(
         context: Context,
+        transport: HttpTransport,
         logLevel: LogLevel = LogLevel.Warn,
         hostConfig: FfiHostConfig? = null,
     ) {
-        try {
-            synchronized(this) {
+        synchronized(this) {
+            val installed = installedTransport
+            if (installed != null) {
+                check(installed === transport) {
+                    "Kithara is already initialized with another HttpTransport"
+                }
+                if (initializedStore != null) {
+                    if (hostConfig != null) {
+                        try {
+                            initializeHost(hostConfig)
+                        } catch (error: com.kithara.ffi.FfiException) {
+                            throw KitharaError.fromFfi(error)
+                        }
+                    }
+                    return
+                }
+            } else {
                 if (!platformInitialized) {
                     System.loadLibrary("kithara_ffi")
                     nativeInit(context.applicationContext, logLevel.ordinal)
                     platformInitialized = true
                 }
-            }
-            if (initializedStore != null) {
-                initializeHost(hostConfig ?: defaultHostConfig())
-                return
+                NativeHttpTransport.install(transport)
+                installedTransport = transport
             }
             val store = AssetStore(
-                root = context.applicationContext.cacheDir.resolve("kithara").absolutePath,
+                root = context.applicationContext.cacheDir
+                    .resolve("kithara")
+                    .absolutePath,
             )
-            initializeHost(hostConfig ?: defaultHostConfig())
+            try {
+                initializeHost(hostConfig ?: defaultHostConfig())
+            } catch (error: com.kithara.ffi.FfiException) {
+                throw KitharaError.fromFfi(error)
+            }
             initializedStore = store
-        } catch (error: com.kithara.ffi.FfiException) {
-            throw KitharaError.fromFfi(error)
         }
     }
 

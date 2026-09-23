@@ -42,6 +42,44 @@ impl From<FfiEqBandConfig> for EqBandConfig {
     }
 }
 
+/// Output ceiling and gain recovery of one `PeakLimiter`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+pub struct FfiLimiterConfig {
+    /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
+    pub ceiling: f32,
+    /// Milliseconds the gain takes to recover toward unity.
+    pub release_ms: f32,
+}
+
+impl Default for FfiLimiterConfig {
+    fn default() -> Self {
+        let config = kithara::effects::LimiterConfig::default();
+        Self {
+            ceiling: config.ceiling(),
+            release_ms: config.release_ms(),
+        }
+    }
+}
+
+impl TryFrom<FfiLimiterConfig> for kithara::effects::LimiterConfig {
+    type Error = crate::types::FfiError;
+
+    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {
+        Self::builder()
+            .ceiling(config.ceiling)
+            .release_ms(config.release_ms)
+            .build()
+            .map_err(|error| crate::types::FfiError::InvalidArgument {
+                reason: error.to_string(),
+            })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     any(feature = "uniffi", feature = "uniffi-web"),
@@ -93,43 +131,5 @@ impl TryFrom<FfiCrossfadeSettings> for kithara::play::CrossfadeSettings {
         };
         Self::new(value.duration, curve, value.depth, value.position)
             .map_err(crate::types::FfiError::from)
-    }
-}
-
-/// Output ceiling and gain recovery of one `PeakLimiter`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    any(feature = "uniffi", feature = "uniffi-web"),
-    derive(uniffi::Record)
-)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
-pub struct FfiLimiterConfig {
-    /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
-    pub ceiling: f32,
-    /// Milliseconds the gain takes to recover toward unity.
-    pub release_ms: f32,
-}
-
-impl Default for FfiLimiterConfig {
-    fn default() -> Self {
-        let config = kithara::play::effects::LimiterConfig::default();
-        Self {
-            ceiling: config.ceiling(),
-            release_ms: config.release_ms(),
-        }
-    }
-}
-
-impl TryFrom<FfiLimiterConfig> for kithara::play::effects::LimiterConfig {
-    type Error = crate::types::FfiError;
-
-    fn try_from(config: FfiLimiterConfig) -> Result<Self, Self::Error> {
-        Self::builder()
-            .ceiling(config.ceiling)
-            .release_ms(config.release_ms)
-            .build()
-            .map_err(|error| crate::types::FfiError::InvalidArgument {
-                reason: error.to_string(),
-            })
     }
 }

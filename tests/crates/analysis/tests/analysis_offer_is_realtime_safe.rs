@@ -46,13 +46,15 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
         .cancel(cancel)
         .build(),
     );
-    let (_analysis, mut producer) = worker.analyze(
-        stalled_reader(spec(rate)),
-        "rt-track".into(),
-        rate,
-        0,
-        AnalysisDemand::ALL,
-    );
+    let (_analysis, mut producer) = worker
+        .analyze(
+            stalled_reader(spec(rate)),
+            "rt-track".into(),
+            rate,
+            0,
+            AnalysisDemand::ALL,
+        )
+        .expect("the analysis pass opens");
 
     // Allocated before the realtime region opens, the way a decoded chunk is.
     let pcm = &quarter[..SAMPLES];

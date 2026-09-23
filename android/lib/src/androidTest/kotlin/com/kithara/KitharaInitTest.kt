@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.kithara.ffi.FfiHostConfig
+import com.kithara.okhttp.OkHttpTransport
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
@@ -17,7 +19,7 @@ class KitharaInitTest {
     @Test
     fun multiplePlayersCanBeCreated() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        TestHost.initialize(context)
+        Kithara.initialize(context, TestTransport.okHttp)
 
         val p1 = KitharaPlayer()
         val p2 = KitharaPlayer()
@@ -25,14 +27,15 @@ class KitharaInitTest {
     }
 
     @Test
-    fun repeatedInitializationIsRejectedWithoutReplacingTheStore() {
+    fun repeatedInitializationKeepsStoreAndRejectsNewHostConfig() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        TestHost.initialize(context)
+        Kithara.initialize(context, TestTransport.okHttp)
         val store = Kithara.defaultStore
 
         assertThrows(KitharaError.AlreadyInitialized::class.java) {
             Kithara.initialize(
                 context,
+                TestTransport.okHttp,
                 hostConfig = FfiHostConfig(
                     sampleRateHint = 0u,
                     outputBlockFrames = null,
@@ -40,15 +43,29 @@ class KitharaInitTest {
                 ),
             )
         }
+        Kithara.initialize(context, TestTransport.okHttp)
 
         assertSame(store, Kithara.defaultStore)
         assertSame(store, KitharaPlayer.Config().store)
     }
 
     @Test
+    fun initializeRefusesAnotherTransport() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        Kithara.initialize(context, TestTransport.okHttp)
+        val store = Kithara.defaultStore
+
+        assertThrows(IllegalStateException::class.java) {
+            Kithara.initialize(context, OkHttpTransport(OkHttpClient()))
+        }
+
+        assertSame(store, Kithara.defaultStore)
+    }
+
+    @Test
     fun nativeRegistryAndStoreCanCreatePlayer() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        TestHost.initialize(context)
+        Kithara.initialize(context, TestTransport.okHttp)
         val layouts = AssetLayoutRegistry().apply {
             register(FixedLayout, AssetLayoutTarget.File)
         }
@@ -65,7 +82,7 @@ class KitharaInitTest {
     @Test
     fun queryIdentityLayoutRegistersForFileAndHls() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        TestHost.initialize(context)
+        Kithara.initialize(context, TestTransport.okHttp)
         val layout = AssetLayouts.queryIdentity(
             listOf(
                 CacheIdentityRule(

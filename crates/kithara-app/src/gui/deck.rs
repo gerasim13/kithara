@@ -1,7 +1,7 @@
 use kithara::{
     abr::AbrMode,
+    effects::GainDb,
     platform::sync::Arc,
-    play::effects::eq::GainDb,
     queue::{TrackId, Transition},
 };
 use kithara_derive::Ranged;

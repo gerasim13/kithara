@@ -1,5 +1,5 @@
 use kithara::{
-    play::effects::eq::GainDb,
+    effects::GainDb,
     ui::render::{Node, ReadValue, Scope, WaveformView},
 };
 use num_traits::cast::AsPrimitive;

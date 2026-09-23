@@ -19,7 +19,7 @@ class KitharaPlayerItemTest {
         @BeforeClass
         fun setUpClass() {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            TestHost.initialize(context)
+            Kithara.initialize(context, TestTransport.okHttp)
         }
     }
 

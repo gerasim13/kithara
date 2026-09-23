@@ -308,6 +308,12 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
         first_onset_frame(&after_eof, 0.005).is_some(),
         "repeat-one must restart the track its own EOF ended"
     );
+    wait_for_eof_advance(&mut advances, id).await;
+    let after_second_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
+    assert!(
+        first_onset_frame(&after_second_eof, 0.005).is_some(),
+        "repeat-one must restart after a second natural EOF"
+    );
     drop(queue);
     harness.close().await;
 }

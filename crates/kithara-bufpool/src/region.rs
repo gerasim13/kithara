@@ -1,6 +1,7 @@
-use std::{cell::RefCell, fmt, marker::PhantomData};
+use std::{cell::RefCell, fmt, marker::PhantomData, ops::DerefMut};
 
 use kithara_platform::sync::{Arc, Weak};
+use kithara_ring::RingHalves;
 
 use crate::{
     HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, PoolKeyWithLen, PoolStats,
@@ -83,6 +84,26 @@ impl<S> PoolRegion<S> {
     {
         let slot = self.slot::<K>();
         K::__get_with_len(&slot.core, len, PoolAccess::new())
+    }
+
+    /// Acquire a buffer of at least `capacity` elements as the slots of a
+    /// single-producer single-consumer ring.
+    ///
+    /// The buffer returns to its pool once both halves are dropped, and its
+    /// slots count against both hard budgets for the ring's lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `capacity` is zero, or when the buffer cannot be
+    /// acquired under either hard budget.
+    pub fn ring<K>(&self, capacity: usize) -> Result<RingHalves<K::Buffer>, PoolError>
+    where
+        K: PoolKeyWithLen,
+        S: HasPool<K>,
+        K::Buffer: DerefMut<Target = [K::Item]>,
+        K::Item: Copy,
+    {
+        kithara_ring::split(self.get_with_len::<K>(capacity)?).map_err(|_| PoolError::EmptyRing)
     }
 
     /// Snapshot reuse counters for the pool registered for `K`.

@@ -1,5 +1,5 @@
 use kithara::{
-    play::effects::eq::GainDb,
+    effects::GainDb,
     ui::render::{
         ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
     },

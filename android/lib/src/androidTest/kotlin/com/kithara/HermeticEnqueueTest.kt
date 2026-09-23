@@ -39,7 +39,7 @@ class HermeticEnqueueTest {
         @BeforeClass
         fun setUpClass() {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            TestHost.initialize(context, logLevel = LogLevel.Debug)
+            Kithara.initialize(context, TestTransport.okHttp, logLevel = LogLevel.Debug)
         }
     }
 

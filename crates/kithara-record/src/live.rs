@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, RingProd, SampleBuffer};
 use kithara_output::LiveOutput;
 use kithara_platform::sync::{
     Arc, Mutex,
@@ -69,7 +69,7 @@ pub struct RecordingOutput {
     control: Arc<Control>,
     spec: AudioSpec,
     formats: HeapProd<FormatChange>,
-    pcm: HeapProd<f32>,
+    pcm: RingProd<SampleBuffer>,
     wake: Wake,
 }
 
@@ -241,7 +241,7 @@ impl LiveRecorder {
             .checked_mul(Consts::STEREO)
             .ok_or(LiveRecordingError::CapacityOverflow)?;
         let scratch = config.pools.get_with_len::<f32>(tick_samples)?;
-        let (pcm_tx, pcm_rx) = HeapRb::new(buffer_samples).split();
+        let (pcm_tx, pcm_rx) = config.pools.ring::<f32>(buffer_samples)?;
         let (format_tx, format_rx) = HeapRb::new(config.generation_capacity.get()).split();
         let sample_rate = NonZeroU32::new(config.recording.encode().sample_rate)
             .ok_or(LiveRecordingError::InvalidSampleRate)?;

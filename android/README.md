@@ -9,51 +9,44 @@
 # Kithara for Android
 
 Kotlin bindings for the Kithara audio engine: queue-based playback with seek,
-adaptive bitrate, and reactive state through `StateFlow`. The Rust core is
-exposed through UniFFI and ships as a Gradle module carrying JNI slices for
-`arm64-v8a` and `x86_64`.
+adaptive bitrate, and reactive state through `StateFlow`. Ships as
+`kithara.aar` with JNI libraries for `arm64-v8a` and `x86_64`, plus
+`kithara-okhttp.aar`, the HTTP transport over OkHttp.
 
 ## Build
 
 ```bash
 just platform android                          # JNI libraries + Kotlin bindings, debug
-just platform android build --profile release
 just platform android aar                      # release AARs
-just platform android run                      # boot an emulator, install and launch the demo
-just platform android test                     # instrumented tests on an emulator
+just platform android run                      # install and launch the demo
+just platform android test                     # tests on an emulator
 ```
 
-The recipe checks `cargo-ndk`, `rustup`, and the installed Rust targets itself
-and prints the exact command for whatever is missing. The NDK comes from
-`ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`, or `NDK_HOME`, else the newest version
-installed under the Android SDK. Toolchain versions are pinned in
-`.config/ci-pins.toml`.
+Run the build once before the first IDE sync: the generated Kotlin bindings are
+a source directory of the `lib` module.
 
-Generated output lands in `android/lib/build/generated/`: `jniLibs/` per ABI and
-`uniffi/kotlin/`. The AAR export writes `android/lib/build/outputs/aar/` —
-`kithara.aar` plus `rust-tls.aar`, the rustls platform verifier, which must be
-distributed alongside it. A file-dependency integration also needs `jna` and
-`kotlinx-coroutines-core`.
+## Installation
 
-Traps:
+An AAR carries no dependency metadata, so the application declares them:
 
-- The Android target graph excludes `kithara-workspace-hack`; host feature
-  unification must not leak into NDK builds, and the build must leave
-  `Cargo.lock` and the generated workspace-hack manifest untouched.
-- Gradle *configuration* — not just the build — shells out to `cargo metadata`
-  from `settings.gradle.kts` and `lib/build.gradle.kts` to locate the rustls
-  verifier AAR, so a sync fails without a reachable cargo. It looks at `CARGO`,
-  then `~/.cargo/bin/cargo`, then `PATH`; Android Studio does not always
-  inherit a shell `PATH`.
-- The generated Kotlin is a source directory of the `lib` module. The IDE
-  cannot resolve it until it exists, so run the build once before the first
-  sync.
+```kotlin
+dependencies {
+    implementation(files("libs/kithara.aar"))
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+
+    implementation(files("libs/kithara-okhttp.aar"))
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}
+```
+
+The last two lines are needed only with the OkHttp transport.
 
 ## Quick Start
 
 ```kotlin
-// Application.onCreate:
-Kithara.initialize(applicationContext)
+// Application.onCreate
+Kithara.initialize(applicationContext, OkHttpTransport(okHttpClient))
 
 val player = KitharaPlayer()
 val item = KitharaPlayerItem("https://example.com/track.mp3")
@@ -64,46 +57,29 @@ lifecycleScope.launch {
 }
 ```
 
+Every request runs through the application's HTTP client, which owns TLS,
+proxies, cookies, timeouts and pooling. An application on another client
+implements `com.kithara.net.HttpTransport`, whose documentation states the
+protocol. The process keeps the first transport: initializing again with
+another one throws.
+
 ## Usage
 
-### Playback and queue
-
 ```kotlin
-player.play()
 player.pause()
-player.playingRate = 1.5f            // target playback speed
+player.playingRate = 1.5f
+player.seek(30.0)
 
-player.insert(second, after = first)
-player.remove(first)
-player.removeAllItems()
+lifecycleScope.launch { player.state.collect { println("${it.status} ${it.currentTime}s") } }
 
-try {
-    player.seek(30.0)
-} catch (e: KitharaError) { /* seek failed */ }
-```
-
-### State
-
-```kotlin
-lifecycleScope.launch {
-    player.state.collect { println("${it.status} ${it.currentTime}s / ${it.duration}s rate ${it.rate}") }
-}
-lifecycleScope.launch { player.currentItemChanges.collect { /* item switched */ } }
-lifecycleScope.launch { item.state.collect { it.error?.let(::println) } }
-
-// Explicit preload is optional; insert can auto-load with player config.
-lifecycleScope.launch { item.load() }
-```
-
-### Per-item options
-
-```kotlin
-val item = KitharaPlayerItem(
+val hls = KitharaPlayerItem(
     url = "https://example.com/stream.m3u8",
     preferredPeakBitrate = 256_000.0,
-    preferredPeakBitrateForExpensiveNetworks = 128_000.0,
     additionalHeaders = mapOf("Authorization" to "Bearer <token>"),
 )
+
+val store = AssetStore(root = application.filesDir.resolve("kithara-cache").absolutePath)
+val cached = KitharaPlayer(config = KitharaPlayer.Config(store = store))
 ```
 
 ### Cache location and layout
@@ -168,9 +144,11 @@ The release AAR decodes the AAC family, MP3, and FLAC through the Android
 
 ## Demo App
 
-[`example`](example) is a minimal player: URL or local file, play/pause/stop,
-reactive status. `just platform android run` boots an emulator, installs it, and
-launches it.
+[`example`](example) is a minimal player; `just platform android run` launches
+it.
+
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-android) for
+the detailed contract.
 
 ## License
 

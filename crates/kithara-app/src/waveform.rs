@@ -8,6 +8,7 @@ use kithara::{
         BeatAnalysisConfig,
     },
     audio::AudioReader,
+    bufpool::PoolError,
     platform::{
         CancelToken,
         sync::Arc,
@@ -99,6 +100,11 @@ impl TrackAnalysisRunner {
     /// `demand` names the artifacts this pass is opened for: a track that
     /// already has one of them asks for the rest, and the pass reports the
     /// fingerprint of what it actually produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the pass's playback ingress cannot be acquired
+    /// under the pool budget.
     pub fn analyze<D>(
         &mut self,
         config: AppResourceConfig,
@@ -107,13 +113,13 @@ impl TrackAnalysisRunner {
         revision: u64,
         demand: AnalysisDemand,
         deliver: D,
-    ) -> watch::Receiver<Option<AnalysisProgress>>
+    ) -> Result<watch::Receiver<Option<AnalysisProgress>>, PoolError>
     where
         D: FnOnce(AnalysisProducer),
     {
         self.clear();
 
-        let (rx, producer, pass) = self.worker.open(token, rate, revision, demand);
+        let (rx, producer, pass) = self.worker.open(token, rate, revision, demand)?;
         let run = pass.cancel_token().clone();
         deliver(producer);
         let task = task::spawn(run_analysis(
@@ -124,7 +130,7 @@ impl TrackAnalysisRunner {
             pass,
         ));
         self.current = Some(RunHandle { task, cancel: run });
-        rx
+        Ok(rx)
     }
 
     /// Cancel the in-flight run.

@@ -306,7 +306,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,
@@ -361,7 +361,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
     let open = |token: &str| {
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);
-        let (writer, ingest) = ring::open_for(rate);
+        let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
         jobs.send(Job {
             demand: AnalysisDemand::ALL,
             tx,
@@ -417,7 +417,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     };
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,
@@ -467,7 +467,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,
@@ -567,7 +567,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,
@@ -677,7 +677,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,
@@ -917,7 +917,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
     let rate = super::fixtures::spec().sample_rate;
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "same-track".into());
     let mut results = enqueue(
         &jobs,
@@ -1242,7 +1242,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "drain-track".into());
     let mut results = enqueue(
         &jobs,
@@ -1412,7 +1412,7 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
-    let (writer, ingest) = ring::open_for(rate);
+    let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         demand: AnalysisDemand::ALL,

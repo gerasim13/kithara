@@ -369,6 +369,7 @@ miri *ARGS:
         -p kithara-download \
         -p kithara-events \
         -p kithara-queue \
+        -p kithara-ring \
         -p kithara-stream \
         "$@"
 
