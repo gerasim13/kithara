@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use anyhow::Result;
 use glob::Pattern;
@@ -6,7 +6,7 @@ use glob::Pattern;
 use super::{Check, Context};
 use crate::common::{
     violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_text_files_scoped},
+    walker::{compile_globs, matches_any, relative_to},
 };
 
 pub(crate) const ID: &str = "non_english_text";
@@ -22,14 +22,14 @@ impl Check for NonEnglishText {
         let cfg = &ctx.config.thresholds.non_english_text;
         let excludes = compile_globs(&cfg.exclude_paths);
         let mut violations = Vec::new();
-        for path in workspace_text_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.text_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             if path_excluded(&excludes, &rel) {
                 continue;
             }
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             violations.extend(scan_lines(&rel, &src, cfg.excerpt_chars));

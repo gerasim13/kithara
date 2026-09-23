@@ -22,7 +22,7 @@ use crate::{
         fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
+        walker::relative_to,
     },
     idioms::config::DerivableSeverity,
 };
@@ -126,14 +126,14 @@ pub(super) fn run(
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-        let Ok(src) = fs::read_to_string(&path) else {
+    for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+        let Some(src) = ctx.scan.source(path) else {
             continue;
         };
         let Ok(file) = syn::parse_file(&src) else {
             continue;
         };
-        let rel = relative_to(ctx.workspace_root, &path)
+        let rel = relative_to(ctx.workspace_root, path)
             .to_string_lossy()
             .replace('\\', "/");
         for candidate in candidates(&src, &file, kind) {
@@ -168,14 +168,14 @@ pub(super) fn fix(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<FixOut
         return Ok(FixOutcome::default());
     }
     let mut outcome = FixOutcome::default();
-    for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-        let Ok(src) = fs::read_to_string(&path) else {
+    for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+        let Some(src) = ctx.scan.source(path) else {
             continue;
         };
         let Ok(file) = syn::parse_file(&src) else {
             continue;
         };
-        let rel = relative_to(ctx.workspace_root, &path)
+        let rel = relative_to(ctx.workspace_root, path)
             .to_string_lossy()
             .replace('\\', "/");
         let found = candidates(&src, &file, kind);
@@ -221,7 +221,7 @@ pub(super) fn fix(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<FixOut
             continue;
         }
         let rewritten = rewriter.finish().context("apply derive-collapse edits")?;
-        fs::write(&path, rewritten).with_context(|| format!("write {}", path.display()))?;
+        fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
         outcome.writes += 1;
     }
     Ok(outcome)

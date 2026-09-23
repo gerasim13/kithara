@@ -19,9 +19,9 @@ use super::{Check, Context};
 use crate::{
     common::{
         fix::{BlockRange, ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
-        parse::parse_file,
+        scan::Scan,
         violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
+        walker::relative_to,
     },
     style::config::StructInitOrderConfig,
 };
@@ -34,10 +34,10 @@ impl Check for StructInitOrder {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut outcome = FixOutcome::default();
-        let files = workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)?;
-        let decls = DeclIndex::from_files(ctx.workspace_root, &files);
-        for path in files {
-            let rel = relative_to(ctx.workspace_root, &path)
+        let files = ctx.scan.rs_files(ctx.scope)?;
+        let decls = DeclIndex::from_files(ctx.scan, ctx.workspace_root, &files);
+        for path in files.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
             let krate = crate_of(&rel);
@@ -47,7 +47,7 @@ impl Check for StructInitOrder {
             let mut skipped = HashSet::new();
             let mut wrote = false;
             for pass in 0.. {
-                let Ok(src) = std::fs::read_to_string(&path) else {
+                let Some(src) = ctx.scan.source(path) else {
                     break;
                 };
                 let Ok(file) = syn::parse_file(&src) else {
@@ -77,7 +77,7 @@ impl Check for StructInitOrder {
                 let new_src = rw
                     .finish()
                     .with_context(|| format!("{ID} fix failed for {rel}"))?;
-                std::fs::write(&path, new_src)?;
+                std::fs::write(path, new_src)?;
                 wrote = true;
             }
             outcome.writes += usize::from(wrote);
@@ -93,10 +93,10 @@ impl Check for StructInitOrder {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut violations = Vec::new();
-        let files = workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)?;
-        let decls = DeclIndex::from_files(ctx.workspace_root, &files);
-        for path in &files {
-            let Ok(file) = parse_file(path) else {
+        let files = ctx.scan.rs_files(ctx.scope)?;
+        let decls = DeclIndex::from_files(ctx.scan, ctx.workspace_root, &files);
+        for path in files.iter() {
+            let Ok(file) = ctx.scan.parse_file(path) else {
                 continue;
             };
             let rel = relative_to(ctx.workspace_root, path)
@@ -348,10 +348,10 @@ impl DeclIndex {
     /// The declarations of a whole scope. A literal names its type without
     /// saying where the type lives, and the file it lives in is rarely the
     /// file that writes the literal.
-    fn from_files(root: &Path, paths: &[PathBuf]) -> Self {
+    fn from_files(scan: &Scan, root: &Path, paths: &[PathBuf]) -> Self {
         let mut index = Self::default();
         for path in paths {
-            if let Ok(file) = parse_file(path) {
+            if let Ok(file) = scan.parse_file(path) {
                 let rel = relative_to(root, path).to_string_lossy().replace('\\', "/");
                 index.absorb(&crate_of(&rel), &file);
             }

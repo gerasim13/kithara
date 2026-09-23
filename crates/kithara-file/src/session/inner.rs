@@ -1,4 +1,5 @@
 use std::{
+    io,
     sync::{
         OnceLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -9,6 +10,7 @@ use std::{
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
+use kithara_mp4::ReadAt;
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
@@ -61,6 +63,15 @@ pub(crate) struct FileAssetCtx<S> {
     pub(crate) reader: AssetReader<S>,
     pub(crate) headers: Option<Headers>,
     pub(crate) url: Url,
+}
+
+impl<S> ReadAt for FileAssetCtx<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader.read_at(offset, buf).map_err(io::Error::other)
+    }
 }
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
@@ -145,17 +156,16 @@ where
         lease.register_reader_waker(waker);
     }
 
-    /// Read the fully cached file bytes and parse a fragmented-mp4 index,
-    /// or `None` when the file is not yet complete or not fragmented mp4.
+    /// Walk the fully cached file's box headers and parse a fragmented-mp4
+    /// index, or `None` when the file is not yet complete or not fragmented
+    /// mp4. The walk seeks over `mdat`, so a long track costs no more than a
+    /// short one.
     fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
         let total = self.asset.reader.len()?;
         if total == 0 || !self.asset.reader.contains_range(0..total) {
             return None;
         }
-        let total_usize = usize::try_from(total).ok()?;
-        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.asset.reader.read_at(0, &mut buf).ok()?;
-        FileSegmentIndex::try_build(&buf)
+        FileSegmentIndex::try_build(&self.asset, total)
     }
 
     /// Commit the epoch once every byte up to `final_len` has landed.

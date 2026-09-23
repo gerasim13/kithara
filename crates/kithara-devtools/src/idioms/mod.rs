@@ -9,12 +9,14 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
+use rayon::prelude::*;
 
 mod checks;
 mod config;
@@ -27,8 +29,9 @@ use crate::common::{
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
     project::ProjectConfig,
     report,
+    scan::Scan,
     scope::Scope,
-    violation::Report,
+    violation::{Report, Violation},
 };
 
 #[derive(Debug, Default, Args)]
@@ -53,6 +56,9 @@ pub struct IdiomsArgs {
     pub fix: bool,
     #[arg(long)]
     pub json: bool,
+    /// Print each check's wall time to stderr, slowest first.
+    #[arg(long)]
+    pub timings: bool,
     #[arg(long = "update-baseline")]
     pub update_baseline: bool,
 }
@@ -65,11 +71,13 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     let config = IdiomsConfig::load(&args.config_dir)?;
     let scope = Scope::new(args.crates.clone(), args.paths.clone());
 
+    let fix_scan = Scan::new(&workspace_root);
     let ctx = Context {
         workspace_root: &workspace_root,
         metadata: &metadata,
         config: &config,
         scope: &scope,
+        scan: &fix_scan,
     };
 
     let registry = registry();
@@ -91,30 +99,31 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     }
 
     let project = ProjectConfig::load(&workspace_root)?;
+
+    let scan = Scan::new(&workspace_root);
+    let ctx = Context { scan: &scan, ..ctx };
+
+    let selected: Vec<&dyn Check> = registry
+        .iter()
+        .map(Box::as_ref)
+        .filter(|check| filter.as_ref().is_none_or(|ids| ids.contains(check.id())))
+        .collect();
+    let ran: Vec<&'static str> = selected.iter().map(|check| check.id()).collect();
+
+    let outcomes = run_checks(&selected, &ctx, &scope, &project, &workspace_root)?;
+
+    if args.timings {
+        let rows: Vec<_> = ran
+            .iter()
+            .copied()
+            .zip(outcomes.iter().map(|(elapsed, _)| *elapsed))
+            .collect();
+        report::print_timings("idioms", &rows);
+    }
+
     let mut report = Report::default();
-    let mut ran: Vec<&'static str> = Vec::new();
-    for check in &registry {
-        if let Some(filter) = &filter
-            && !filter.contains(check.id())
-        {
-            continue;
-        }
-        ran.push(check.id());
-        let effective_scope = check.policy().scope(&scope);
-        let check_ctx = Context {
-            scope: &effective_scope,
-            ..ctx
-        };
-        let mut check_report = Report::default();
-        check_report.extend(check.run(&check_ctx)?);
-        apply_common_exclusions(
-            &mut check_report,
-            check.policy(),
-            &project.lint_exclude.runtime_paths(),
-            &project.lint_exclude.modules,
-            &workspace_root,
-        );
-        report.extend(check_report.violations);
+    for (_, violations) in outcomes {
+        report.extend(violations);
     }
 
     if args.update_baseline {
@@ -167,7 +176,7 @@ fn apply_common_exclusions(
     policy: checks::CheckPolicy,
     path_patterns: &[String],
     module_patterns: &[String],
-    workspace_root: &std::path::Path,
+    workspace_root: &Path,
 ) {
     if policy.keeps_source_findings() {
         return;
@@ -175,6 +184,47 @@ fn apply_common_exclusions(
     apply_path_excludes(report, path_patterns);
     apply_cfg_test_exclusion(report, workspace_root);
     apply_module_excludes(report, module_patterns, workspace_root);
+}
+
+/// Runs each selected check, returning its wall time and its violations in
+/// registry order.
+///
+/// A parsed `syn::File` holds `proc_macro2` spans and is neither `Send` nor
+/// `Sync`, so a tree can be neither shared between checks nor moved across a
+/// thread; what spreads is the checks themselves. The shared scan means they
+/// no longer each re-walk the tree or re-read the same bytes.
+///
+/// Memory scales with the pool, not the registry: a worker holds one file's
+/// tree at a time. Measured with twelve workers the run peaks at 2.0 GB; a
+/// host with many more cores than memory sets `RAYON_NUM_THREADS`.
+fn run_checks(
+    selected: &[&dyn Check],
+    ctx: &Context<'_>,
+    scope: &Scope,
+    project: &ProjectConfig,
+    workspace_root: &Path,
+) -> Result<Vec<(Duration, Vec<Violation>)>> {
+    selected
+        .par_iter()
+        .map(|check| {
+            let effective_scope = check.policy().scope(scope);
+            let check_ctx = Context {
+                scope: &effective_scope,
+                ..*ctx
+            };
+            let started = Instant::now();
+            let mut check_report = Report::default();
+            check_report.extend(check.run(&check_ctx)?);
+            apply_common_exclusions(
+                &mut check_report,
+                check.policy(),
+                &project.lint_exclude.runtime_paths(),
+                &project.lint_exclude.modules,
+                workspace_root,
+            );
+            Ok((started.elapsed(), check_report.violations))
+        })
+        .collect()
 }
 
 fn run_fix(
@@ -248,6 +298,16 @@ fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
     );
 }
 
+fn validate(args: &IdiomsArgs) -> Result<()> {
+    if args.update_baseline && (args.report.is_some() || args.json) {
+        bail!("--update-baseline cannot be combined with --report or --json");
+    }
+    if args.json && args.report.is_some() {
+        bail!("--json and --report are mutually exclusive");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,14 +366,4 @@ mod tests {
         let event = DerivableEvent;
         assert_eq!(event.policy(), checks::CheckPolicy::Default);
     }
-}
-
-fn validate(args: &IdiomsArgs) -> Result<()> {
-    if args.update_baseline && (args.report.is_some() || args.json) {
-        bail!("--update-baseline cannot be combined with --report or --json");
-    }
-    if args.json && args.report.is_some() {
-        bail!("--json and --report are mutually exclusive");
-    }
-    Ok(())
 }

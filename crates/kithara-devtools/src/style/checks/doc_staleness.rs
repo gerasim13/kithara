@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeSet, HashSet},
-    fs,
     path::Path,
 };
 
@@ -9,11 +8,9 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::{
     common::{
+        scan::Scan,
         violation::Violation,
-        walker::{
-            compile_globs, matches_any, relative_to, workspace_text_files_scoped,
-            workspace_tracked_files,
-        },
+        walker::{compile_globs, matches_any, relative_to, workspace_tracked_files},
     },
     style::config::DocStalenessConfig,
 };
@@ -29,13 +26,13 @@ impl Check for DocStaleness {
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.doc_staleness;
-        let known = source_identifiers(ctx.workspace_root)?;
+        let known = source_identifiers(ctx.scan, ctx.workspace_root)?;
         let mut violations = Vec::new();
-        for path in workspace_text_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
+        for path in ctx.scan.text_files(ctx.scope)?.iter() {
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let Ok(src) = fs::read_to_string(&path) else {
+            let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
             violations.extend(scan_content(cfg, &rel, &src, &|ident| {
@@ -52,13 +49,13 @@ impl Check for DocStaleness {
 }
 
 /// Every identifier-shaped token the workspace sources contain.
-fn source_identifiers(workspace_root: &Path) -> Result<HashSet<String>> {
+fn source_identifiers(scan: &Scan, workspace_root: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for path in workspace_tracked_files(workspace_root)? {
         if path.extension().is_none_or(|ext| ext != "rs") {
             continue;
         }
-        let Ok(src) = fs::read_to_string(&path) else {
+        let Some(src) = scan.source(&path) else {
             continue;
         };
         for token in src.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {

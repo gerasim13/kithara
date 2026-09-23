@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::Path,
@@ -58,6 +59,24 @@ fn mc(arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// The disk a scope's bucket is allowed, which is not one number for the
+/// fleet.
+///
+/// The scopes hold different things: the trusted one carries the layers every
+/// job restores, a review scope carries whatever the branches under it happen
+/// to publish. They were sized apart on the live host by hand, and a single
+/// `CACHE_BUCKET_QUOTA` meant the next initialize would flatten them back to
+/// one value - measured as 200 and 800 gibibytes standing against an
+/// environment that still said 50. A scope may name its own, and the shared
+/// value is what a scope that does not is given.
+fn scope_quota(scope: &str, shared: &str) -> String {
+    let named = format!(
+        "CACHE_BUCKET_QUOTA_{}",
+        scope.to_ascii_uppercase().replace('-', "_")
+    );
+    env::var(&named).unwrap_or_else(|_| shared.to_owned())
+}
+
 fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
@@ -95,7 +114,7 @@ pub(super) fn initialize() -> Result<()> {
         &read_secret(&root.join("admin-password"))?,
     ])?;
     for scope in scopes.split_whitespace() {
-        initialize_scope(scope, &quota, &endpoint, uid)?;
+        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid)?;
     }
     Ok(())
 }
@@ -110,15 +129,7 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     mc(&["mb", "--ignore-existing", &destination])?;
     mc(&["quota", "set", &destination, "--size", quota])?;
     let mut lifecycle = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(
-        &mut lifecycle,
-        &json!({
-            "Rules": [{
-                "ID": "cache-retention", "Status": "Enabled",
-                "Filter": {"Prefix": ""}, "Expiration": {"Days": 1}
-            }]
-        }),
-    )?;
+    serde_json::to_writer(&mut lifecycle, &retention())?;
     let status = Command::new("mc")
         .args(["ilm", "rule", "import", &destination])
         .stdin(File::open(lifecycle.path())?)
@@ -148,6 +159,47 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     ensure!(status.success(), "cache client ownership failed: {status}");
     info!(%scope, "compiler cache scope initialized");
     Ok(())
+}
+
+/// Where sccache keeps its objects inside a scope's bucket.
+///
+/// They used to sit at the bucket root with no common prefix, which is why
+/// retention had to be a single unfiltered rule expiring everything after a
+/// day. That rule also governed the snapshot layers, so a multi-gigabyte
+/// source layer would have been republished daily. Naming the compiler cache
+/// makes retention expressible per layer. The cost is paid once: existing
+/// compiler-cache objects sit at the old keys and are not read again.
+pub(crate) const SCCACHE_PREFIX: &str = "sccache";
+
+/// How long each layer in a scope's bucket lives.
+///
+/// The compiler cache keeps its day: it is large, churns with every commit,
+/// and a miss costs one compilation. The snapshot layers are keyed by content
+/// (a target fingerprint, a `Cargo.lock`), so an object still named by a lock
+/// file is still the right answer weeks later, and expiring it daily would
+/// mean paying the full fetch every morning to rebuild the same bytes.
+/// `MinIO` applies the earliest matching expiry, so these prefixes must not
+/// overlap.
+fn retention() -> serde_json::Value {
+    json!({
+        "Rules": [
+            {
+                "ID": "compiler-cache", "Status": "Enabled",
+                "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/")},
+                "Expiration": {"Days": 1}
+            },
+            {
+                "ID": "target-snapshots", "Status": "Enabled",
+                "Filter": {"Prefix": "target-snapshots/"},
+                "Expiration": {"Days": 7}
+            },
+            {
+                "ID": "source-snapshots", "Status": "Enabled",
+                "Filter": {"Prefix": "source-snapshots/"},
+                "Expiration": {"Days": 30}
+            }
+        ]
+    })
 }
 
 fn policy(scope: &str, bucket: &str) -> serde_json::Value {
@@ -195,6 +247,7 @@ fn write_environment(
     let mut file = tempfile::NamedTempFile::new_in(directory)?;
     for (name, value) in [
         ("SCCACHE_BUCKET", bucket),
+        ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
         ("SCCACHE_ENDPOINT", endpoint),
         ("SCCACHE_REGION", "us-east-1"),
         (
@@ -218,6 +271,20 @@ fn write_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Scopes were sized apart on the live host and a shared quota would flatten
+    /// them on the next initialize, so a scope names its own and only a scope
+    /// that says nothing takes the shared one.
+    #[test]
+    fn a_scope_keeps_the_quota_it_names() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            env::set_var("CACHE_BUCKET_QUOTA_REVIEW", "800GiB");
+        }
+
+        assert_eq!(scope_quota("review", "50GiB"), "800GiB");
+        assert_eq!(scope_quota("trusted", "50GiB"), "50GiB");
+    }
 
     #[test]
     fn cache_scope_cannot_escape_its_bucket() {
@@ -275,5 +342,38 @@ b",
         let original = secret(&path).unwrap();
         assert_eq!(secret(&path).unwrap(), original);
         assert_eq!(original.len(), 64);
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    /// MinIO applies the earliest matching expiry, so an unfiltered rule would
+    /// silently govern the snapshot prefixes too - which is what expired a
+    /// content-keyed source layer after a day and would have made a
+    /// multi-gigabyte object a daily republish.
+    #[test]
+    fn each_layer_carries_its_own_retention_and_no_rule_is_unfiltered() {
+        let rules = retention();
+        let rules = rules["Rules"].as_array().expect("rules");
+        assert_eq!(rules.len(), 3);
+
+        let mut days = std::collections::BTreeMap::new();
+        for rule in rules {
+            let prefix = rule["Filter"]["Prefix"].as_str().expect("prefix");
+            assert!(!prefix.is_empty(), "an unfiltered rule governs every layer");
+            assert!(prefix.ends_with('/'), "{prefix} must name a whole prefix");
+            days.insert(
+                prefix.to_owned(),
+                rule["Expiration"]["Days"].as_u64().expect("days"),
+            );
+        }
+
+        let compiler = days[&format!("{SCCACHE_PREFIX}/")];
+        assert!(
+            days["source-snapshots/"] > compiler && days["target-snapshots/"] > compiler,
+            "a content-keyed snapshot must outlive the compiler cache: {days:?}"
+        );
     }
 }

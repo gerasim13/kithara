@@ -25,6 +25,7 @@ fs4 = { workspace = true }
 glob = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 quote = { workspace = true, optional = true }
+rayon = { workspace = true }
 regex = { workspace = true }
 roxmltree = { workspace = true }
 serde = { workspace = true }
