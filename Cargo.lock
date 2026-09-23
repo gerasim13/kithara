@@ -4432,6 +4432,7 @@ dependencies = [
  "kithara-beat",
  "kithara-blob",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-events",
