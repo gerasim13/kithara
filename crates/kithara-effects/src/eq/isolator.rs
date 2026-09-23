@@ -8,7 +8,11 @@ use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::GainBank};
+use super::{EqBandConfig, EqConfig};
+use crate::{
+    GainDb,
+    dsp::{filter::CrossoverFilters, gain::GainBank},
+};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
@@ -20,6 +24,12 @@ pub struct IsolatorEq {
 }
 
 impl IsolatorEq {
+    /// Build a single-channel isolator over `bands`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when the region cannot hand out the crossover
+    /// filter states and the gain bank this isolator runs on.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],

@@ -1,8 +1,8 @@
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::AudioChunk;
 
-use super::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
-use crate::effects::AudioEffect;
+use super::{EqBandConfig, EqConfig, IsolatorEq};
+use crate::{AudioEffect, GainDb};
 
 #[non_exhaustive]
 pub struct EqEffect {
@@ -14,6 +14,11 @@ pub struct EqEffect {
 
 impl EqEffect {
     /// Create a new EQ effect with the given bands and audio format.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when the region cannot hand out the per-band
+    /// filter and gain buffers the two channel isolators need.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: Vec<EqBandConfig>,

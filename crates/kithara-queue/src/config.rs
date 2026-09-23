@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_derive::Patch;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{CrossfadeSettings, PlayerImpl};
 
 use crate::{ActionAtItemEnd, PlaybackOrder};
@@ -51,6 +51,14 @@ where
     #[patch(skip)]
     #[debug(skip)]
     pub store: Option<AssetStore<S>>,
+
+    /// Runtime the queue runs its loads and load completions on. `None`
+    /// takes the runtime current where the queue is built; an embedding
+    /// that drives the queue from threads without one (FFI hosts) passes
+    /// its own.
+    #[patch(skip)]
+    #[debug(skip)]
+    pub runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
     #[patch(skip)]

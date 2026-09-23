@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
+use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     PlayError,
-    effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};

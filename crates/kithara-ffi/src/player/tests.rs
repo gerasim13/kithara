@@ -127,3 +127,35 @@ fn anchorless_insert_goes_to_the_head_and_append_to_the_tail() {
 fn test_item(url: &str) -> std::sync::Arc<crate::item::AudioPlayerItem> {
     crate::item::AudioPlayerItem::new(crate::types::FfiItemConfig::for_test(url))
 }
+
+struct FailureSignal(std::sync::mpsc::Sender<()>);
+
+impl crate::observer::PlayerObserver for FailureSignal {
+    fn on_event(&self, event: crate::types::FfiPlayerEvent) {
+        if let crate::types::FfiPlayerEvent::TrackStatusChanged {
+            status: crate::types::FfiTrackStatus::Failed { .. },
+            ..
+        } = event
+        {
+            let _ = self.0.send(());
+        }
+    }
+}
+
+/// The host calls `play()` from its own thread, which has no Tokio runtime.
+/// Retrying a failed track must still start its load on the queue's own
+/// runtime instead of panicking across the FFI boundary.
+#[kithara::test]
+fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    let (failed_tx, failed_rx) = std::sync::mpsc::channel();
+    player.set_observer(std::sync::Arc::new(FailureSignal(failed_tx)));
+    player
+        .append(test_item("/nonexistent/kithara-ffi/missing.mp3"))
+        .expect("queue accepts the item");
+    failed_rx.recv().expect("the missing file fails to load");
+
+    player.play();
+
+    assert_eq!(player.item_count(), 1);
+}

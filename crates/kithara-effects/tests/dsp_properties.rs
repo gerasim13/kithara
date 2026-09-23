@@ -1,24 +1,31 @@
+#![forbid(unsafe_code)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test binary - unwraps are acceptable in test code"
+)]
+
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     ops::Range,
 };
 
-use kithara::{
-    play::effects::{
-        AudioEffect, LimiterConfig, PeakLimiter,
-        eq::{EqConfig, EqEffect, GainDb, generate_log_spaced_bands},
-    },
-    resampler::{
-        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
-        ResamplerSettings, create_resampler, rubato::RubatoBackend,
-    },
-    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+use kithara_effects::{
+    AudioEffect, GainDb, LimiterConfig, PeakLimiter,
+    eq::{EqConfig, EqEffect, generate_log_spaced_bands},
 };
-use kithara_integration_tests::bufpool_ext::{Pools, pools};
+use kithara_resampler::{
+    Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
+    ResamplerSettings, create_resampler, rubato::RubatoBackend,
+};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::integration_fixtures::{
     dsp_silence, dsp_sweep, dsp_tone_a220, dsp_tone_a440, dsp_tone_ceiling, dsp_tone_ceiling_low,
     dsp_tone_ceiling_unity, dsp_tone_round_low, dsp_tone_round_mid, dsp_tone_round_poison,
     dsp_tone_unity,
+};
+use kithara_test_utils::{
+    bufpool::{Pools, pools},
+    kithara,
 };
 
 const HOST_RATE: u16 = 48_000;

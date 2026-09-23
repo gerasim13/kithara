@@ -1,3 +1,4 @@
+use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
 
@@ -7,7 +8,6 @@ use crate::{
         InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
         SlotId,
     },
-    effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
 };

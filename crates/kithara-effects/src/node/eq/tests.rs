@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 
 use super::MasterEqNode;
 use crate::{
-    effects::eq::{EqConfig, generate_log_spaced_bands},
+    eq::{EqConfig, generate_log_spaced_bands},
     test_pools::pools_with_budget,
 };
 

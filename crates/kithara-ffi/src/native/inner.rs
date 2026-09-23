@@ -6,6 +6,7 @@ use kithara::{
     abr::AbrMode,
     download::{Downloader, DownloaderConfig},
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
+    effects::eq::generate_log_spaced_bands,
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     host::HostOwned,
@@ -16,7 +17,6 @@ use kithara::{
     },
     play::{
         InterruptionKind, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
-        effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, QueueError, RepeatMode, Transition},
@@ -225,6 +225,7 @@ impl NativeInner {
         let player = PlayerImpl::new(player_config);
         let queue_config = QueueConfig::builder()
             .player(player)
+            .runtime(crate::FFI_RUNTIME.clone())
             .store(queue_store)
             .playback_order(playback_order.try_into()?)
             .action_at_item_end(action_at_item_end.try_into()?)
@@ -260,7 +261,6 @@ impl NativeInner {
     }
 
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .next(Transition::None)
             .map(|_| ())
@@ -270,7 +270,6 @@ impl NativeInner {
     }
 
     pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .previous(Transition::None)
             .map(|_| ())
@@ -280,16 +279,33 @@ impl NativeInner {
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
-        self.queue
-            .append_with_id(id, source)
-            .map_err(|error| FfiError::Internal {
-                description: error.to_string(),
-            })?;
-        *item.inserted.lock() = true;
+        self.enqueue(item, || {
+            self.queue
+                .append_with_id(id, source)
+                .map(|_| ())
+                .map_err(|error| FfiError::Internal {
+                    description: error.to_string(),
+                })
+        })
+    }
+
+    /// Registers `item` before `add` puts it into the queue: a load that
+    /// fails at once reports its status while `add` is still returning, and
+    /// the event bridge drops a status for an item it cannot find.
+    fn enqueue(
+        &self,
+        item: &Arc<AudioPlayerItem>,
+        add: impl FnOnce() -> Result<(), FfiError>,
+    ) -> Result<(), FfiError> {
+        let id = item.track_id();
         self.items.lock().insert(id, Arc::clone(item));
+        if let Err(error) = add() {
+            self.items.lock().remove(&id);
+            return Err(error);
+        }
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -316,21 +332,18 @@ impl NativeInner {
         item: &Arc<AudioPlayerItem>,
         after: Option<&Arc<AudioPlayerItem>>,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
         let after_id = after.map(|i| i.track_id());
 
-        self.queue
-            .insert_with_id(id, source, after_id)
-            .map_err(|e| FfiError::InvalidArgument {
-                reason: e.to_string(),
-            })?;
-
-        *item.inserted.lock() = true;
-        self.items.lock().insert(id, Arc::clone(item));
-        item.restart_bridge();
-        Ok(())
+        self.enqueue(item, || {
+            self.queue
+                .insert_with_id(id, source, after_id)
+                .map(|_| ())
+                .map_err(|e| FfiError::InvalidArgument {
+                    reason: e.to_string(),
+                })
+        })
     }
 
     pub(crate) fn item_count(&self) -> u32 {
@@ -391,7 +404,6 @@ impl NativeInner {
         index: u32,
         item: &Arc<AudioPlayerItem>,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         let idx = index as usize;
         let tracks = self.queue.tracks();
         let old = tracks.get(idx).ok_or_else(|| FfiError::InvalidArgument {
@@ -441,7 +453,6 @@ impl NativeInner {
         item: &AudioPlayerItem,
         transition: crate::types::FfiTransition,
     ) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
         self.queue
             .select(item.track_id(), transition.try_into()?)
             .map_err(|e| match e {

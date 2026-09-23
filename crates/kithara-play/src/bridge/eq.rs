@@ -1,10 +1,11 @@
 use core::{fmt, sync::atomic::Ordering};
 
 use arc_swap::ArcSwap;
+use kithara_effects::GainDb;
 use kithara_platform::sync::Arc;
 use portable_atomic::AtomicF32;
 
-use crate::{effects::eq::GainDb, error::PlayError};
+use crate::error::PlayError;
 
 #[derive(Clone)]
 pub struct SharedEq {

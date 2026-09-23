@@ -135,6 +135,7 @@ lockbud_exclude = [
   "kithara-bufpool-tests",
   "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-effects-tests",
   "kithara-encode-tests",
   "kithara-events-tests",
   "kithara-ffi-web-analysis-tests",
@@ -790,6 +791,20 @@ prefix_args = [
   "kithara-decode",
   "-p",
   "kithara-decode-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.effects]
+program = "cargo"
+owns = ["crates/kithara-effects/", "tests/crates/effects/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-effects",
+  "-p",
+  "kithara-effects-tests",
   "--cargo-profile",
   "test-release",
 ]

@@ -23,7 +23,10 @@ use kithara_bufpool::{HasPool, PoolError};
 use kithara_test_utils::kithara;
 use tracing::warn;
 
-use crate::effects::eq::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
+use crate::{
+    GainDb,
+    eq::{EqBandConfig, EqConfig, IsolatorEq},
+};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -45,7 +48,7 @@ pub struct MasterEqNode<S> {
 /// A band layout on its way to the processor. Built on the control thread;
 /// leaves the audio thread carrying the retired pair, so nothing is freed there.
 #[derive(Default)]
-pub(in crate::rt) struct MasterEqLayout {
+pub(in crate::node) struct MasterEqLayout {
     bands: Vec<MasterEqBand>,
     equalizers: Option<(IsolatorEq, IsolatorEq)>,
 }
