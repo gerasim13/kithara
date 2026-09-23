@@ -53,9 +53,35 @@ fn eq_band_count_from_config() {
 }
 
 #[kithara::test]
+fn native_eq_count_above_web_limit_remains_usable() {
+    let player = AudioPlayer::new(FfiPlayerConfig {
+        eq_band_count: 65,
+        ..FfiPlayerConfig::for_test()
+    })
+    .expect("native EQ layout accepted");
+    assert_eq!(player.eq_band_count(), 65);
+    player.set_eq_gain(64, 3.0).expect("set last band gain");
+    assert_eq!(player.eq_gain(64), 3.0);
+    player.reset_eq().expect("reset EQ");
+    assert_eq!(player.eq_gain(64), 0.0);
+}
+
+#[kithara::test]
 fn oversized_eq_config_is_rejected_before_player_construction() {
     let result = AudioPlayer::new(FfiPlayerConfig {
         eq_band_count: u32::MAX,
+        ..FfiPlayerConfig::for_test()
+    });
+    assert!(matches!(
+        result,
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
+}
+
+#[kithara::test]
+fn native_eq_count_above_resource_budget_is_typed_error() {
+    let result = AudioPlayer::new(FfiPlayerConfig {
+        eq_band_count: 129,
         ..FfiPlayerConfig::for_test()
     });
     assert!(matches!(
@@ -89,7 +115,7 @@ fn oversized_eq_layout_does_not_replace_the_owner_layout() {
         q_factor: 0.8,
     };
     assert!(matches!(
-        player.set_eq_layout(vec![band; 65]),
+        player.set_eq_layout(vec![band; 129]),
         Err(crate::types::FfiError::InvalidArgument { .. })
     ));
     assert_eq!(player.eq_band_count(), 10);

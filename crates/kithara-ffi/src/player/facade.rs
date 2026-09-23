@@ -335,7 +335,7 @@ impl AudioPlayer {
     /// Replace the complete live equalizer layout through the owning player.
     ///
     /// # Errors
-    /// Returns an error when the layout exceeds 64 bands or the player cannot
+    /// Returns an error when the layout exceeds the platform's band budget or the player cannot
     /// prepare or publish it.
     pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
         validate_eq_band_count(layout.len())?;
