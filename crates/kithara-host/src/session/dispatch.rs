@@ -495,6 +495,7 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
+    use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
@@ -684,7 +685,23 @@ mod tests {
             .topology()
             .expect("the host topology remains valid");
         assert_eq!(started.stamp(), registered.stamp());
-        assert_eq!(started.members(), registered.members());
+        // The stream may open a new session epoch at any time; each deck
+        // grid descends onto the host's axis without a topology change, so
+        // members are compared by identity and by the axis they follow.
+        let identity = |topology: &SyncGroupSnapshot| {
+            topology
+                .members()
+                .iter()
+                .map(|member| {
+                    assert_eq!(member.grid().axis(), topology.group_grid().axis());
+                    (
+                        member.grid().id(),
+                        member.group_topology().map(SyncGroupSnapshot::stamp),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(identity(&started), identity(&registered));
 
         assert!(matches!(
             run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
@@ -697,7 +714,7 @@ mod tests {
             .topology()
             .expect("the canonical member outlives its graph projection");
         assert_eq!(retained.stamp(), started.stamp());
-        assert_eq!(retained.members(), started.members());
+        assert_eq!(identity(&retained), identity(&started));
         assert_eq!(deck_count(&state), 0);
     }
 
