@@ -45,7 +45,7 @@ fn bench_dispatcher(c: &mut Criterion) {
     let mut group = c.benchmark_group("dispatcher");
     group.sample_size(50);
     group.throughput(Throughput::Elements(
-        u64::try_from(TICKS).unwrap_or_else(|_| panic!("tick count exceeds u64")),
+        u64::try_from(TICKS).expect("tick count exceeds u64"),
     ));
 
     group.bench_function("register_wake_and_progress", |b| {

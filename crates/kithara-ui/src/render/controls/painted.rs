@@ -1923,7 +1923,7 @@ mod pressed {
         let skin = builtin::skin();
         let mark = IconName::Play
             .mark()
-            .unwrap_or_else(|| panic!("the play icon must have a mark"));
+            .expect("the play icon must have a mark");
         let paint = Paint::new(
             NavItem::new(skin),
             NavData {
@@ -1946,7 +1946,7 @@ mod pressed {
 
         let action = gesture
             .on_input(&mut state, &press, bounds, cursor)
-            .unwrap_or_else(|| panic!("a press inside the bounds must publish"));
+            .expect("a press inside the bounds must publish");
 
         assert_eq!(
             action.into_inner(),
@@ -1969,7 +1969,7 @@ mod pressed {
         let skin = builtin::skin();
         let mark = IconName::Gear
             .mark()
-            .unwrap_or_else(|| panic!("the gear icon must have a mark"));
+            .expect("the gear icon must have a mark");
         let gesture = Gesture::command(
             "bar/settings",
             Paint::new(Settings::new(skin), mark, skin),
@@ -1987,7 +1987,7 @@ mod pressed {
 
         let action = gesture
             .on_input(&mut state, &press, bounds, cursor)
-            .unwrap_or_else(|| panic!("a press inside the bounds must publish"));
+            .expect("a press inside the bounds must publish");
 
         assert_eq!(
             action.into_inner(),
@@ -2022,7 +2022,7 @@ mod pressed {
         let released = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
         let action = gesture
             .on_input(&mut state, &released, bounds, cursor)
-            .unwrap_or_else(|| panic!("letting go of a pressed button must repaint it"));
+            .expect("letting go of a pressed button must repaint it");
 
         assert!(!state.press.is_pressed());
         assert_eq!(action.into_inner().0, None);
@@ -2153,7 +2153,7 @@ mod dragged {
                 bounds,
                 Cursor::Available(Point::new(20.0, 20.0)),
             )
-            .unwrap_or_else(|| panic!("a drag after a press must publish"));
+            .expect("a drag after a press must publish");
 
         assert_eq!(
             action.into_inner().0,
@@ -2272,7 +2272,7 @@ mod dragged {
                 bounds,
                 Cursor::Available(Point::new(50.0, 20.0)),
             )
-            .unwrap_or_else(|| panic!("an absolute press must seek"));
+            .expect("an absolute press must seek");
 
         assert_eq!(
             action.into_inner().0,
