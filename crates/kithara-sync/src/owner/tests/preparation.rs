@@ -26,7 +26,7 @@ const OPEN_END: i64 = i64::MAX;
 
 /// Beats every `beat_frames` from `first_beat_frame` through `covered`, on a
 /// recording `extent` frames long.
-fn asset_segments_from(
+pub(super) fn asset_segments_from(
     extent: u64,
     covered: u64,
     beat_frames: u64,
@@ -63,7 +63,7 @@ fn asset_segments(frames: u64, beat_frames: u64, meter: Option<MeterFacts>) -> S
     asset_segments_from(frames, frames, beat_frames, 0, meter)
 }
 
-fn complete(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
+pub(super) fn complete(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
     BeatGridSnapshot::segments(
         id,
         BeatGridRevision::first(),
@@ -82,7 +82,7 @@ fn asset_grid_with_meter(
     complete(id, asset_segments(frames, beat_frames, meter))
 }
 
-fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
+pub(super) fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
     asset_grid_with_meter(id, frames, beat_frames, None)
 }
 
@@ -96,11 +96,11 @@ fn four_four() -> Meter {
 }
 
 /// A four-four track grid, so bar phase is observable in the entry window.
-fn four_four_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
+pub(super) fn four_four_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
     asset_grid_with_meter(id, frames, beat_frames, observed(four_four()))
 }
 
-fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) {
+pub(super) fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) {
     let base = group.topology().expect("topology").stamp();
     let _ = group
         .transact(SyncOperation::Topology {
@@ -115,15 +115,15 @@ fn attach_grid(group: &mut Group, grid: BeatGridSnapshot) {
         .expect("a deck admits a track grid");
 }
 
-fn window(earliest: i64, end: i64) -> Range<SessionFrame> {
+pub(super) fn window(earliest: i64, end: i64) -> Range<SessionFrame> {
     SessionFrame::new(earliest)..SessionFrame::new(end)
 }
 
-fn cue(frame: u64) -> AlignmentSource {
+pub(super) fn cue(frame: u64) -> AlignmentSource {
     AlignmentSource::Prepared(AssetFrame::new(frame as f64).expect("fixture cue is finite"))
 }
 
-fn frontier(source: u64, output: i64) -> AlignmentSource {
+pub(super) fn frontier(source: u64, output: i64) -> AlignmentSource {
     AlignmentSource::Audible(
         PresentationFrontier::builder()
             .source(source)
@@ -132,7 +132,7 @@ fn frontier(source: u64, output: i64) -> AlignmentSource {
     )
 }
 
-fn prepare_in(
+pub(super) fn prepare_in(
     group: &mut Group,
     target: BeatGridId,
     source: AlignmentSource,
@@ -149,7 +149,7 @@ fn prepare_in(
         .map_err(|rejected| rejected.error().clone())
 }
 
-fn prepare(
+pub(super) fn prepare(
     group: &mut Group,
     target: BeatGridId,
     source: AlignmentSource,
@@ -159,7 +159,7 @@ fn prepare(
         .expect("the preparation is admitted")
 }
 
-fn projection(admission: &SyncAdmission) -> (BeatAlignment, &WarpPlan) {
+pub(super) fn projection(admission: &SyncAdmission) -> (BeatAlignment, &WarpPlan) {
     let SyncAdmission::Prepared(preparation) = admission else {
         panic!("expected a prepared member, got {admission:?}");
     };
@@ -167,7 +167,7 @@ fn projection(admission: &SyncAdmission) -> (BeatAlignment, &WarpPlan) {
     (*alignment, plan)
 }
 
-fn source_and_activation(admission: &SyncAdmission) -> (u64, SessionFrame) {
+pub(super) fn source_and_activation(admission: &SyncAdmission) -> (u64, SessionFrame) {
     let (_, plan) = projection(admission);
     (plan.activation().source(), plan.activation().output())
 }
@@ -554,7 +554,7 @@ fn a_member_absent_from_the_group_is_not_prepared() {
     assert!(group.pending.is_empty());
 }
 
-fn building(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
+pub(super) fn building(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
     BeatGridSnapshot::segments(
         id,
         BeatGridRevision::first(),
@@ -564,7 +564,7 @@ fn building(id: BeatGridId, segments: SegmentSet) -> BeatGridSnapshot {
     .expect("a building grid is valid")
 }
 
-fn replace_grid(group: &mut Group, grid: BeatGridSnapshot) {
+pub(super) fn replace_grid(group: &mut Group, grid: BeatGridSnapshot) {
     let base = group.topology().expect("topology").stamp();
     let _ = group
         .transact(SyncOperation::Topology {

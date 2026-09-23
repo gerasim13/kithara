@@ -194,8 +194,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Err(reject(error, operations));
         }
         apply_topology_operations(&mut self.members, operations);
-        self.pending
-            .retain(|pending| owns_direct_grid(&self.members, pending.member()));
+        self.retain_current_pending();
         self.topology_revision = revision;
         advance_operation(&mut self.next_operation);
         Ok(SyncAdmission::TopologyChanged {

@@ -5,6 +5,7 @@ use kithara_warp::{
 };
 
 use super::{
+    descent::Descent,
     state::{GroupState, Withdrawal, validate_successor},
     transaction::take_operation,
 };
@@ -46,11 +47,20 @@ enum ModeEffect {
     Changed {
         timeline: Timeline,
         grid: BeatGridSnapshot,
+        descent: Option<Descent>,
     },
     Unchanged,
     Deferred {
         required: MapRegion,
     },
+}
+
+/// What a mode operation reports once its staged state is validated.
+#[derive(Clone, Copy)]
+enum Committed {
+    Changed(Timeline),
+    Unchanged,
+    Deferred(MapRegion),
 }
 
 impl Timeline {
@@ -154,14 +164,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         if matches!(self.timeline, Timeline::Host) {
             return Ok(ModeEffect::Unchanged);
         }
-        let grid = match self.parent {
-            Some(parent) => self.derived_grid(parent.epoch(), parent.anchor(), parent.meter())?,
-            None => self.withdrawn_grid()?,
+        let (grid, descent) = match self.parent {
+            Some(parent) => {
+                let (grid, descent) =
+                    self.derived_grid(parent.epoch(), parent.anchor(), parent.meter())?;
+                (grid, Some(descent))
+            }
+            None => (self.withdrawn_grid()?, None),
         };
         validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
         Ok(ModeEffect::Changed {
             timeline: Timeline::Host,
             grid,
+            descent,
         })
     }
 
@@ -188,6 +203,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(ModeEffect::Changed {
             timeline: Timeline::Off,
             grid,
+            descent: None,
         })
     }
 
@@ -197,27 +213,27 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 state: self.grid.state(),
             });
         };
-        let grid = self.derived_grid(axis.epoch(), local.anchor, local.meter)?;
+        let (grid, descent) = self.derived_grid(axis.epoch(), local.anchor, local.meter)?;
         validate_successor(&self.grid, &grid, Withdrawal::Refused)?;
         Ok(ModeEffect::Changed {
             timeline: Timeline::Local(Some(local)),
             grid,
+            descent: Some(descent),
         })
     }
 
+    /// The next grid revision following `anchor`, and the segment it hands
+    /// every direct child group.
     pub(super) fn derived_grid(
         &self,
         epoch: SessionEpoch,
         anchor: SessionAnchor,
         meter: Option<MeterFacts>,
-    ) -> Result<BeatGridSnapshot, SyncError> {
-        Ok(BeatGridSnapshot::session(
-            self.grid.id(),
-            self.next_revision()?,
-            epoch,
-            anchor,
-            meter,
-        ))
+    ) -> Result<(BeatGridSnapshot, Descent), SyncError> {
+        let grid =
+            BeatGridSnapshot::session(self.grid.id(), self.next_revision()?, epoch, anchor, meter);
+        let segment = ParentGridUpdate::new(grid.stamp(), epoch, anchor, meter);
+        Ok((grid, Descent::Parent(segment)))
     }
 
     fn withdrawn_grid(&self) -> Result<BeatGridSnapshot, SyncError> {
@@ -236,12 +252,24 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     }
 
     fn commit(&mut self, effect: ModeEffect) -> Result<SyncAdmission, SyncError> {
+        let (effect, staged) = match effect {
+            ModeEffect::Changed {
+                timeline,
+                grid,
+                descent,
+            } => {
+                let staged = self.stage(grid, timeline, self.parent, descent)?;
+                self.check_staged(Some(&staged))?;
+                (Committed::Changed(timeline), Some(staged))
+            }
+            ModeEffect::Unchanged => (Committed::Unchanged, None),
+            ModeEffect::Deferred { required } => (Committed::Deferred(required), None),
+        };
         let operation = take_operation(self.grid.id(), &mut self.next_operation)?;
         let topology = self.topology_stamp();
+        self.commit_staged(staged)?;
         Ok(match effect {
-            ModeEffect::Changed { timeline, grid } => {
-                self.timeline = timeline;
-                self.grid = grid;
+            Committed::Changed(timeline) => {
                 self.blocked = None;
                 SyncAdmission::StateChanged {
                     operation,
@@ -250,14 +278,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     grid: self.grid.stamp(),
                 }
             }
-            ModeEffect::Unchanged => {
+            Committed::Unchanged => {
                 self.blocked = None;
                 SyncAdmission::Unchanged {
                     operation,
                     topology,
                 }
             }
-            ModeEffect::Deferred { required } => {
+            Committed::Deferred(required) => {
                 self.blocked = Some(Blocked {
                     operation,
                     required,

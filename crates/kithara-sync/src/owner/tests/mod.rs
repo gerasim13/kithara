@@ -15,6 +15,7 @@ use crate::{
 
 mod modes;
 mod preparation;
+mod refresh;
 
 /// Test-only recursive group that delegates to the real owner state.
 ///

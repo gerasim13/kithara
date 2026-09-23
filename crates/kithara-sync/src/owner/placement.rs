@@ -109,6 +109,31 @@ pub(super) fn place(
     })
 }
 
+/// Carries a prepared `alignment` onto the successor `owner` grid.
+///
+/// The member and group beats that sound together stay the same; only the
+/// session frame at which the group reaches its beat moves. `None` when that
+/// frame leaves the launch `window` the preparation was asked for.
+pub(super) fn carry(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    alignment: BeatAlignment,
+    window: &Range<SessionFrame>,
+) -> Result<Option<Placement>, Missing> {
+    let owner_beat = *alignment.target().value();
+    let activation = session_frame(owner, owner_beat, MapPosition::Session(window.start))?;
+    if !window.contains(&activation) {
+        return Ok(None);
+    }
+    Ok(Some(Placement {
+        alignment: BeatAlignment::new(
+            MapPoint::new(member.stamp(), *alignment.source().value()),
+            MapPoint::new(owner.stamp(), owner_beat),
+        ),
+        activation,
+    }))
+}
+
 /// Freezes `placement` as map revision `revision` and its activation plan.
 pub(super) fn project(
     owner: &BeatGridSnapshot,

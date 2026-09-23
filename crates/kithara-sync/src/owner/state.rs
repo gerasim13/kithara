@@ -136,9 +136,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Ok(());
         }
         validate_successor(&self.grid, &candidate, Withdrawal::Refused)?;
-        self.check_descent(descent)?;
-        self.grid = candidate;
-        self.descend(descent)
+        let staged = self.stage(candidate, self.timeline, self.parent, descent)?;
+        self.commit_staged(Some(staged))
     }
 
     /// Creates an empty group whose session-axis grid is not available yet.
@@ -280,7 +279,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 topology,
                 required: *required,
             },
-            Some(Pending::Prepared(preparation)) => {
+            Some(Pending::Prepared { preparation, .. }) => {
                 let (warp_map, activation) = preparation.activation();
                 SyncStatusSnapshot::Prepared {
                     operation: preparation.stamp().operation(),

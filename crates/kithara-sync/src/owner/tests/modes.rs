@@ -62,7 +62,7 @@ pub(super) fn synced_deck() -> Group {
     deck
 }
 
-fn sync(target: BeatGridId, intent: SyncIntent) -> SyncOperation<TestGroup> {
+pub(super) fn sync(target: BeatGridId, intent: SyncIntent) -> SyncOperation<TestGroup> {
     sync_at(target, intent, SessionFrame::new(0))
 }
 
@@ -85,7 +85,11 @@ fn tempo(target: BeatGridId, value: f64) -> SyncOperation<TestGroup> {
     tempo_at(target, value, SessionFrame::new(0))
 }
 
-fn tempo_at(target: BeatGridId, value: f64, commit: SessionFrame) -> SyncOperation<TestGroup> {
+pub(super) fn tempo_at(
+    target: BeatGridId,
+    value: f64,
+    commit: SessionFrame,
+) -> SyncOperation<TestGroup> {
     SyncOperation::Tempo {
         target,
         tempo: BeatsPerMinute::try_from(value).expect("finite positive bpm"),
@@ -139,7 +143,7 @@ fn grid_tempo_at(group: &Group, frame: i64) -> f64 {
     f64::from(*estimate.value())
 }
 
-fn grid_beat_at(group: &Group, frame: i64) -> f64 {
+pub(super) fn grid_beat_at(group: &Group, frame: i64) -> f64 {
     let grid = group.snapshot();
     let BeatGridQuery::Resolved(estimate) = grid.beat_at(MapPoint::new(
         grid.stamp(),
@@ -665,7 +669,7 @@ fn free_withdraws_the_timeline_without_a_new_epoch() {
     assert_eq!(*rejected.error(), transport_unavailable());
 }
 
-fn attach_group(parent: &mut Group, child: Group) {
+pub(super) fn attach_group(parent: &mut Group, child: Group) {
     let base = parent.topology().expect("topology").stamp();
     let _ = parent
         .transact(SyncOperation::Topology {
@@ -680,7 +684,7 @@ fn attach_group(parent: &mut Group, child: Group) {
         .expect("a group admits a nested group");
 }
 
-fn nested<R: 'static>(root: &Group, path: &[BeatGridId], read: fn(&Group) -> R) -> R {
+pub(super) fn nested<R: 'static>(root: &Group, path: &[BeatGridId], read: fn(&Group) -> R) -> R {
     match path {
         [] => read(root),
         [child, rest @ ..] => root

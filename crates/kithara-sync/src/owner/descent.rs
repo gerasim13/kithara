@@ -1,6 +1,7 @@
-use kithara_warp::{BeatGridSnapshot, MapAxis};
+use kithara_warp::{BeatGridSnapshot, MapAxis, WarpMapRevision};
 
 use super::{
+    preparation::{Pending, Refreshed},
     state::{GroupState, Withdrawal, validate_successor},
     timeline::Timeline,
 };
@@ -13,12 +14,16 @@ pub(super) enum Descent {
     Axis(SessionAxisUpdate),
 }
 
-/// One group's reaction to a fact from its parent, computed before mutation.
+/// One group's successor grid together with everything it moves: the pending
+/// decisions of its direct members and the segment its child groups follow,
+/// computed before mutation.
 pub(super) struct Staged {
     grid: BeatGridSnapshot,
     timeline: Timeline,
     parent: Option<ParentGridUpdate>,
     descent: Option<Descent>,
+    pending: Vec<Pending>,
+    next_map: Option<WarpMapRevision>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -72,24 +77,15 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         let (grid, descent) = match self.timeline {
             Timeline::Host => {
-                let grid = self.derived_grid(update.epoch(), update.anchor(), update.meter())?;
+                let (grid, descent) =
+                    self.derived_grid(update.epoch(), update.anchor(), update.meter())?;
                 validate_successor(&self.grid, &grid, Withdrawal::Refused)?;
-                let segment = ParentGridUpdate::new(
-                    grid.stamp(),
-                    update.epoch(),
-                    update.anchor(),
-                    update.meter(),
-                );
-                (grid, Some(Descent::Parent(segment)))
+                (grid, Some(descent))
             }
             Timeline::Off | Timeline::Local(_) => (self.grid.clone(), None),
         };
-        Ok(Some(Staged {
-            grid,
-            timeline: self.timeline,
-            parent: Some(update),
-            descent,
-        }))
+        self.stage(grid, self.timeline, Some(update), descent)
+            .map(Some)
     }
 
     pub(super) fn stage_axis(
@@ -102,12 +98,33 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         let grid = BeatGridSnapshot::unavailable(self.grid.id(), self.next_revision()?, axis);
         validate_successor(&self.grid, &grid, Withdrawal::Refused)?;
-        Ok(Some(Staged {
+        self.stage(
             grid,
-            timeline: self.timeline.on_new_axis(),
-            parent: None,
-            descent: Some(Descent::Axis(update)),
-        }))
+            self.timeline.on_new_axis(),
+            None,
+            Some(Descent::Axis(update)),
+        )
+        .map(Some)
+    }
+
+    /// Stages `grid` under `timeline` as this group's successor, carrying
+    /// every pending member decision onto it.
+    pub(super) fn stage(
+        &self,
+        grid: BeatGridSnapshot,
+        timeline: Timeline,
+        parent: Option<ParentGridUpdate>,
+        descent: Option<Descent>,
+    ) -> Result<Staged, SyncError> {
+        let Refreshed { pending, next_map } = self.refreshed(&grid, timeline)?;
+        Ok(Staged {
+            grid,
+            timeline,
+            parent,
+            descent,
+            pending,
+            next_map,
+        })
     }
 
     pub(super) fn check_staged(&self, staged: Option<&Staged>) -> Result<(), SyncError> {
@@ -119,12 +136,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Ok(());
         };
         self.check_descent(staged.descent)?;
-        if matches!(staged.descent, Some(Descent::Axis(_))) {
-            self.pending.clear();
-        }
         self.grid = staged.grid;
         self.timeline = staged.timeline;
         self.parent = staged.parent;
+        self.pending = staged.pending;
+        self.next_map = staged.next_map;
         self.descend(staged.descent)
     }
 }
