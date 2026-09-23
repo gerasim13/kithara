@@ -46,6 +46,15 @@ async function main() {
   if (generatedPlayer.eqBandCount() !== 1 || generatedPlayer.eqGain(0) !== 3) {
     throw new Error("generated player EQ layout did not reach owner readback");
   }
+  let oversizedLayout = false;
+  try {
+    generatedPlayer.setEqLayout(Array(65).fill({ kind: FfiEqFilterKind.Peaking, gainDb: 0, frequency: 1000, qFactor: 0.7 }));
+  } catch (error) {
+    oversizedLayout = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!oversizedLayout || generatedPlayer.eqBandCount() !== 1) {
+    throw new Error("oversized EQ layout changed the player owner");
+  }
   if (!(generatedPlayer instanceof UniAudioPlayer)) throw new Error("generated player has no owned handle");
   generatedPlayer.uniffiDestroy();
   const player = new AudioPlayer();

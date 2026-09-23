@@ -342,7 +342,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Configuration for player creation.
     public struct Config: Sendable {
-        /// Number of EQ bands (log-spaced). Default: 10.
+        /// Number of EQ bands (log-spaced), at most 64. Default: 10.
         public var eqBandCount: Int
         /// Domain-scoped DRM rules. Evaluated in order; first match wins.
         /// Wildcard `"*"` rules must come last — they mask any rule
@@ -381,6 +381,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Create a new player instance.
     public init(config: Config = Config()) throws {
+        guard let eqBandCount = UInt32(exactly: config.eqBandCount) else {
+            throw KitharaError.invalidArgument("EQ band count must be non-negative and fit in UInt32")
+        }
         let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
             FfiKeyRule(
                 processor: KeyProcessorBridge(processor: rule.processor),
@@ -393,7 +396,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         let ffiConfig = FfiPlayerConfig(
             store: config.store,
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            eqBandCount: UInt32(config.eqBandCount),
+            eqBandCount: eqBandCount,
             authToken: config.authToken,
             playingRate: config.playingRate,
             playbackOrder: config.playbackOrder.ffi,

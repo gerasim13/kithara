@@ -197,6 +197,7 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Result<Self, FfiError> {
+        crate::player::validate_eq_band_count(config.eq_band_count as usize)?;
         let FfiPlayerConfig {
             key_options,
             store,

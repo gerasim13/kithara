@@ -773,7 +773,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Replace the complete live equalizer layout through the owning player.
      *
      * # Errors
-     * Returns an error when the player cannot prepare or publish the layout.
+     * Returns an error when the layout exceeds 64 bands or the player cannot
+     * prepare or publish it.
      */
     func setEqLayout(layout: [FfiEqBandConfig]) throws
 
@@ -1309,7 +1310,8 @@ open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(
      * Replace the complete live equalizer layout through the owning player.
      *
      * # Errors
-     * Returns an error when the player cannot prepare or publish the layout.
+     * Returns an error when the layout exceeds 64 bands or the player cannot
+     * prepare or publish it.
      */
 open func setEqLayout(layout: [FfiEqBandConfig])throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_set_eq_layout(
@@ -4545,7 +4547,7 @@ public struct FfiPlayerConfig {
      */
     public let keyOptions: FfiKeyOptions
     /**
-     * Number of EQ bands (log-spaced). Default: 10.
+     * Number of EQ bands (log-spaced), at most 64. Default: 10.
      */
     public let eqBandCount: UInt32
     /**
@@ -4570,7 +4572,7 @@ public struct FfiPlayerConfig {
          * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
-         * Number of EQ bands (log-spaced). Default: 10.
+         * Number of EQ bands (log-spaced), at most 64. Default: 10.
          */eqBandCount: UInt32,
         /**
          * Player-wide auth token merged into item HTTP headers. Empty means no token.
@@ -9830,7 +9832,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 47675) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 47101) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {

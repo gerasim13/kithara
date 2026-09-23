@@ -20,6 +20,18 @@ struct KitharaPlayerTests {
         #expect(player.duration == nil)
     }
 
+    @Test("negative EQ band count returns an argument error")
+    func negativeEqBandCountIsRejected() {
+        do {
+            _ = try KitharaPlayer(config: .init(eqBandCount: -1))
+            Issue.record("negative EQ band count was accepted")
+        } catch KitharaError.invalidArgument {
+            // Expected before conversion to the unsigned FFI value.
+        } catch {
+            Issue.record("wrong error: \(error)")
+        }
+    }
+
     @Test("playing rate is 1.0")
     func playingRateIsOne() throws {
         let player = try KitharaPlayer()
