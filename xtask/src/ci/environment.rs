@@ -546,6 +546,14 @@ enum TargetOwner {
     Slot(String, usize),
     /// The fleet's build root and the lane that builds in it.
     Lane(PathBuf, String),
+    /// A lane building in the executor cache, inside the job's trust scope.
+    ///
+    /// A runner slot is whichever job the runner picked up, so lanes with other
+    /// profiles, features and toolchains took turns in one slot directory and
+    /// each found the last one's build. Measured on the Mac host: `apple-lint`
+    /// rebuilt 825-908 units after `apple-test` or `apple-msrv` held its slot,
+    /// and about 70 after another `apple-lint`.
+    ScopedLane(String),
 }
 
 /// Where a runner mounts the build root every lane claims a directory under.
@@ -567,6 +575,9 @@ fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result
         return Ok(TargetOwner::Job(
             env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?,
         ));
+    }
+    if let Some(lane) = lane {
+        return Ok(TargetOwner::ScopedLane(lane.to_owned()));
     }
     Ok(TargetOwner::Slot(
         env::var("CI_CONCURRENT_ID")
@@ -590,6 +601,7 @@ fn build_target_dir(
         TargetOwner::Slot(concurrent_id, slots) => {
             format!("slot-{}", disposable_slot(Some(&concurrent_id), slots)?)
         }
+        TargetOwner::ScopedLane(lane) => format!("lane-{lane}"),
     };
     Ok(shared_root
         .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
@@ -606,7 +618,7 @@ fn prepare_build_target(
     lane: Option<&str>,
 ) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
     let owner = target_owner(config, isolated_target, lane)?;
-    let shared_by_lane = matches!(owner, TargetOwner::Lane(..));
+    let shared_by_lane = matches!(owner, TargetOwner::Lane(..) | TargetOwner::ScopedLane(_));
     let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
@@ -857,6 +869,7 @@ mod tests {
     impl ChildEnv {
         const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
         const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
+        const LANE_PREPARED: &str = "KITHARA_TEST_LANE_PREPARED_ENV_CHILD";
         const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
     }
 
@@ -1113,6 +1126,92 @@ mod tests {
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
             .env_remove("CI_PROJECT_DIR")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A GitLab lane builds in its own directory inside the trust scope rather
+    /// than in the runner slot it happened to land on, and holds that
+    /// directory against a concurrent job of the same lane.
+    #[cfg(unix)]
+    #[test]
+    fn a_gitlab_lane_owns_its_build_directory_across_runner_slots() {
+        if env::var_os(ChildEnv::LANE_PREPARED).is_some() {
+            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+            let project = root.join("project");
+            let ctx = Ctx::new(project, ProjectConfig::default());
+            let config = super::super::config::fixture();
+
+            let environment =
+                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, Some("apple-lint"))
+                    .unwrap();
+
+            let backing = root
+                .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+                .join(format!(
+                    "review-{}-{}-lane-apple-lint",
+                    env::consts::OS,
+                    env::consts::ARCH
+                ))
+                .join("cargo");
+            assert_eq!(
+                fs::canonicalize(
+                    environment
+                        .vars()
+                        .get(OsStr::new("CARGO_TARGET_DIR"))
+                        .expect("prepared environment names its Cargo target")
+                )
+                .unwrap(),
+                fs::canonicalize(&backing).unwrap()
+            );
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(backing.join(".kithara-lane.lock"))
+                .unwrap();
+            assert!(matches!(
+                FileLock::try_exclusive(lock),
+                Err(TryLockError::WouldBlock)
+            ));
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let init = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&project)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("a_gitlab_lane_owns_its_build_directory_across_runner_slots")
+            .arg("--nocapture")
+            .env(ChildEnv::LANE_PREPARED, "1")
+            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env("KITHARA_CI_CACHE_ROOT", directory.path())
+            .env("KITHARA_CACHE_TRUST", "review")
+            .env("GITLAB_CI", "true")
+            .env("CI_RUNNER_ID", "999")
+            .env("CI_CONCURRENT_ID", "1")
+            .env("CI_JOB_ID", "29")
+            .env("HOME", directory.path().join("home"))
+            .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
             .output()
             .unwrap();
 
