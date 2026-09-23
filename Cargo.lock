@@ -5629,6 +5629,7 @@ dependencies = [
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-test-fixtures",
  "kithara-test-utils",
