@@ -4391,6 +4391,7 @@ dependencies = [
  "fieldwork",
  "humantime-serde",
  "kithara-abr",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-platform",

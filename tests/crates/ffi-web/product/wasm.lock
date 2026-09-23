@@ -2026,6 +2026,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "humantime-serde",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-platform",
