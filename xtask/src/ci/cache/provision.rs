@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::Path,
@@ -58,6 +59,24 @@ fn mc(arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// The disk a scope's bucket is allowed, which is not one number for the
+/// fleet.
+///
+/// The scopes hold different things: the trusted one carries the layers every
+/// job restores, a review scope carries whatever the branches under it happen
+/// to publish. They were sized apart on the live host by hand, and a single
+/// `CACHE_BUCKET_QUOTA` meant the next initialize would flatten them back to
+/// one value - measured as 200 and 800 gibibytes standing against an
+/// environment that still said 50. A scope may name its own, and the shared
+/// value is what a scope that does not is given.
+fn scope_quota(scope: &str, shared: &str) -> String {
+    let named = format!(
+        "CACHE_BUCKET_QUOTA_{}",
+        scope.to_ascii_uppercase().replace('-', "_")
+    );
+    env::var(&named).unwrap_or_else(|_| shared.to_owned())
+}
+
 fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
@@ -95,7 +114,7 @@ pub(super) fn initialize() -> Result<()> {
         &read_secret(&root.join("admin-password"))?,
     ])?;
     for scope in scopes.split_whitespace() {
-        initialize_scope(scope, &quota, &endpoint, uid)?;
+        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid)?;
     }
     Ok(())
 }
@@ -252,6 +271,20 @@ fn write_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Scopes were sized apart on the live host and a shared quota would flatten
+    /// them on the next initialize, so a scope names its own and only a scope
+    /// that says nothing takes the shared one.
+    #[test]
+    fn a_scope_keeps_the_quota_it_names() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            env::set_var("CACHE_BUCKET_QUOTA_REVIEW", "800GiB");
+        }
+
+        assert_eq!(scope_quota("review", "50GiB"), "800GiB");
+        assert_eq!(scope_quota("trusted", "50GiB"), "50GiB");
+    }
 
     #[test]
     fn cache_scope_cannot_escape_its_bucket() {
