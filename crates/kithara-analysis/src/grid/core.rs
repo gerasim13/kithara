@@ -43,8 +43,7 @@ impl Consts {
 #[kithara_config::config(builder = false)]
 #[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
 pub(crate) struct GridParams {
-    #[config(value)]
-    #[builder(default = Consts::MAX_BAR_RATIO)]
+    #[config(value, builder(default = Consts::MAX_BAR_RATIO))]
     pub(crate) max_bar_ratio: f64,
     #[config(value)]
     #[builder(default = Consts::MEDIAN_TRUST_RATIO)]

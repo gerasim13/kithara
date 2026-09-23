@@ -1,7 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Expr, Field, GenericParam, Generics, LitStr, Result, Type, parenthesized, visit::Visit as _,
+    Expr, Field, GenericParam, Generics, LitStr, Meta, Result, Token, Type, parenthesized,
+    parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
 enum Role {
@@ -31,12 +32,32 @@ pub(super) fn expand(
     let mut role = None;
     let mut update = false;
     let mut preserved: Vec<syn::Attribute> = Vec::new();
+    let mut forwarded: Vec<syn::Path> = Vec::new();
     for attr in &field.attrs {
         if !attr.path().is_ident("config") {
             preserved.push(attr.clone());
             continue;
         }
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("builder")
+                || meta.path.is_ident("field")
+                || meta.path.is_ident("patch")
+            {
+                if forwarded.contains(&meta.path) {
+                    return Err(meta.error("duplicate config field attribute group"));
+                }
+                let content;
+                parenthesized!(content in meta.input);
+                let arguments: TokenStream = content.parse()?;
+                if arguments.is_empty() {
+                    return Err(meta.error("config field attribute group cannot be empty"));
+                }
+                Punctuated::<Meta, Token![,]>::parse_terminated.parse2(arguments.clone())?;
+                let path = &meta.path;
+                preserved.push(syn::parse_quote!(#[#path(#arguments)]));
+                forwarded.push(meta.path.clone());
+                return Ok(());
+            }
             if meta.path.is_ident("update") {
                 if update {
                     return Err(meta.error("duplicate config field option"));
@@ -77,24 +98,42 @@ pub(super) fn expand(
             Ok(())
         })?;
     }
+    for path in &forwarded {
+        if field.attrs.iter().any(|attr| attr.path() == path) {
+            return Err(syn::Error::new_spanned(
+                path,
+                "choose either a native field attribute or its config group",
+            ));
+        }
+    }
     let role = role.ok_or_else(|| {
         syn::Error::new_spanned(
             &*field,
             "classify each config field as value, nested, or skip = reason",
         )
     })?;
-    field.attrs = preserved;
-    let name = field
-        .ident
-        .as_ref()
-        .ok_or_else(|| syn::Error::new_spanned(&*field, "config requires named fields"))?;
-    let original_type = &field.ty;
     if update && !matches!(role, Role::Value) {
         return Err(syn::Error::new_spanned(
             &*field,
             "runtime update currently requires a retained value field",
         ));
     }
+    if update {
+        for attribute in &preserved {
+            if patch_skips(attribute)? {
+                return Err(syn::Error::new_spanned(
+                    &*field,
+                    "runtime update cannot use patch(skip): the generated Patch field is absent",
+                ));
+            }
+        }
+    }
+    field.attrs = preserved;
+    let name = field
+        .ident
+        .as_ref()
+        .ok_or_else(|| syn::Error::new_spanned(&*field, "config requires named fields"))?;
+    let original_type = &field.ty;
     let (ty, expression): (Type, Expr) = match role {
         Role::Skip => return Ok(None),
         Role::Value => (
@@ -128,6 +167,14 @@ pub(super) fn expand(
         read: quote! { #(#gates)* #name: #expression },
         update,
     }))
+}
+
+fn patch_skips(attribute: &syn::Attribute) -> Result<bool> {
+    if !attribute.path().is_ident("patch") {
+        return Ok(false);
+    }
+    let options = attribute.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+    Ok(options.iter().any(|option| option.path().is_ident("skip")))
 }
 
 fn update_tokens(

@@ -341,6 +341,103 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn field_groups_forward_to_existing_derives_without_changing_value_role() {
+        let expanded = expand(
+            quote!(builder = false),
+            quote! {
+                struct Settings {
+                    #[config(value, builder(default = Consts::MAX_BAR_RATIO), field(get, copy), patch(skip))]
+                    ratio: f64,
+                }
+            },
+        )
+        .expect("independent field namespaces are accepted")
+        .to_string();
+
+        assert!(expanded.contains("builder (default = Consts :: MAX_BAR_RATIO)"));
+        assert!(expanded.contains("field (get , copy)"));
+        assert!(expanded.contains("patch (skip)"));
+        assert!(expanded.contains("pub ratio : f64"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn duplicate_native_and_wrapped_field_namespaces_are_rejected() {
+        for (native, wrapped) in [
+            (quote!(#[builder(default)]), quote!(builder(default))),
+            (quote!(#[field(get, copy)]), quote!(field(get, copy))),
+            (quote!(#[patch(skip)]), quote!(patch(skip))),
+        ] {
+            let error = expand(
+                quote!(builder = false),
+                quote! {
+                    struct Settings {
+                        #native
+                        #[config(value, #wrapped)]
+                        field: u32,
+                    }
+                },
+            )
+            .expect_err("one field namespace cannot have two owners");
+            assert!(
+                error
+                    .to_string()
+                    .contains("choose either a native field attribute or its config group"),
+                "{error}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn duplicate_or_malformed_field_groups_are_rejected() {
+        for group in [
+            quote!(builder(default), builder(required)),
+            quote!(builder()),
+            quote!(field),
+            quote!(patch(skip =)),
+        ] {
+            assert!(
+                expand(
+                    quote!(builder = false),
+                    quote! {
+                        struct Settings {
+                            #[config(value, #group)]
+                            field: u32,
+                        }
+                    },
+                )
+                .is_err(),
+                "malformed field group was accepted: {group}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn runtime_update_cannot_lower_through_a_skipped_patch_field() {
+        for declaration in [
+            quote!(#[config(value, update, patch(skip))]),
+            quote!(#[patch(skip)] #[config(value, update)]),
+        ] {
+            let error = expand(
+                quote!(builder = false, update),
+                quote! {
+                    #[derive(Patch)]
+                    struct Settings {
+                        #declaration
+                        value: u32,
+                    }
+                },
+            )
+            .expect_err("the update target must exist in Patch");
+            assert!(
+                error
+                    .to_string()
+                    .contains("runtime update cannot use patch(skip)"),
+                "{error}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
     fn delegated_operations_require_a_named_sdk_property() {
         let expanded = expand(
             quote!(delegate = "eq_layout", sdk),
@@ -384,8 +481,7 @@ mod tests {
             quote! {
                 #[derive(Clone, Patch)]
                 struct Settings {
-                    #[config(value, update)]
-                    #[builder(required, default = Some(3))]
+                    #[config(value, update, builder(default = Some(3)))]
                     width: Option<usize>,
                     #[config(value, update)]
                     required: usize,

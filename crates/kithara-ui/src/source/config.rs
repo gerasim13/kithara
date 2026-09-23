@@ -83,8 +83,7 @@ pub struct UiConfig {
     /// build that registers no matching kind -- a document-shaped failure for
     /// a code-owned fact.
     #[builder(default)]
-    #[patch(skip)]
-    #[config(value)]
+    #[config(value, patch(skip))]
     pub custom_kinds: BTreeSet<String>,
     #[builder(default)]
     #[patch(nested)]

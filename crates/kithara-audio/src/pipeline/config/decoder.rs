@@ -48,9 +48,8 @@ where
 #[derive(kithara_derive::BuiltDefault)]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     /// Decoder implementation selected for this resource.
-    #[config(value)]
+    #[config(value, field(get, copy))]
     #[builder(default)]
-    #[field(get, copy)]
     pub(crate) backend: DecoderBackend,
     /// Treatment of encoder delay and tail padding.
     #[config(value)]
