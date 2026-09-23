@@ -37,7 +37,7 @@ extension IntegrationRegressionsIOS {
             )
             defer { try? FileManager.default.removeItem(at: cacheURL) }
 
-            let player = try KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+            let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
             let item = KitharaPlayerItem(
                 url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
             )

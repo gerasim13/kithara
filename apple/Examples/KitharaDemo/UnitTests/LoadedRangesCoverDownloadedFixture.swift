@@ -20,7 +20,7 @@ extension IntegrationRegressionsIOS {
             withIntermediateDirectories: true
         )
 
-        let player = try KitharaPlayer(
+        let player = KitharaPlayer(
             config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(url: fixtureURL.absoluteString)

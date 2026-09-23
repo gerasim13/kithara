@@ -79,6 +79,16 @@ pub fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
     }
 }
 
+/// Ensure the native process host exists with its default configuration.
+///
+/// # Errors
+/// Returns a host-construction error if default initialization fails.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn ensure_default_host() -> Result<(), FfiError> {
+    crate::native::session::ensure_default_host()
+}
+
 #[cfg(test)]
 mod tests {
     use ::kithara::play::effects::LimiterConfig;

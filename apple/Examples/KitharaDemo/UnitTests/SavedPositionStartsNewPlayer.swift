@@ -43,7 +43,7 @@ extension IntegrationRegressionsIOS {
         fixtureURL: String,
         cacheURL: URL
     ) async throws -> TimeInterval {
-        let player = try KitharaPlayer(
+        let player = KitharaPlayer(
             config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(url: fixtureURL)
@@ -69,7 +69,7 @@ extension IntegrationRegressionsIOS {
         cacheURL: URL,
         savedPosition: TimeInterval
     ) async throws {
-        let player = try KitharaPlayer(
+        let player = KitharaPlayer(
             config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(url: fixtureURL)

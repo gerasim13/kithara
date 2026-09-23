@@ -91,7 +91,7 @@ extension IntegrationRegressionsIOS {
         cacheURL: URL,
         baselinePaths: Set<String>
     ) async throws -> [URL] {
-        let player = try KitharaPlayer()
+        let player = KitharaPlayer()
         let item = KitharaPlayerItem(url: fixtureURL.absoluteString)
         defer {
             player.stop()

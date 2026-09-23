@@ -41,12 +41,6 @@ public enum TimeControlStatus: Sendable {
 
 /// Public error type surfaced by the Kithara Swift layer.
 public enum KitharaError: Error, Sendable {
-    /// The process audio host has not been initialized.
-    case notInitialized
-    /// Another caller is currently initializing the process audio host.
-    case initializationInProgress
-    /// The process audio host was already initialized.
-    case alreadyInitialized
     /// Operation requires a prepared item or a ready player state.
     case notReady
     /// Item playback or loading failed. The associated value is a human-readable reason.
@@ -450,11 +444,11 @@ extension KitharaError {
     public init(ffi: FfiError) {
         switch ffi {
         case .NotInitialized:
-            self = .notInitialized
+            self = .internal("process audio host is not initialized")
         case .InitializationInProgress:
-            self = .initializationInProgress
+            self = .internal("process audio host initialization is in progress")
         case .AlreadyInitialized:
-            self = .alreadyInitialized
+            self = .internal("process audio host is already initialized")
         case .NotReady:
             self = .notReady
         case let .ItemFailed(reason):

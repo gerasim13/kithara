@@ -19,12 +19,16 @@ pub(crate) fn initialize_host(config: FfiHostConfig) -> Result<(), FfiError> {
     HOST.initialize(|| FfiHost::new(config.into_domain()?).map_err(FfiError::from))
 }
 
+pub(crate) fn ensure_default_host() -> Result<(), FfiError> {
+    HOST.ensure_initialized(|| {
+        FfiHost::new(FfiHostConfig::default().into_domain()?).map_err(FfiError::from)
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn initialize_test_host() {
-    match initialize_host(FfiHostConfig::default()) {
-        Ok(()) | Err(FfiError::AlreadyInitialized) => {}
-        Err(error) => panic!("test FFI host initialization failed: {error}"),
-    }
+    ensure_default_host()
+        .unwrap_or_else(|error| panic!("test FFI host initialization failed: {error}"));
 }
 
 pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, FfiError>

@@ -19,8 +19,8 @@ final class PlaygroundModel: ObservableObject {
     private let player: KitharaPlayer
     private var cancellables = Set<AnyCancellable>()
 
-    init() throws {
-        player = try KitharaPlayer()
+    init() {
+        player = KitharaPlayer()
         player.eventPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
@@ -102,8 +102,8 @@ final class PlaygroundModel: ObservableObject {
 struct PlaygroundView: View {
     @StateObject private var model: PlaygroundModel
 
-    init() throws {
-        _model = StateObject(wrappedValue: try PlaygroundModel())
+    init() {
+        _model = StateObject(wrappedValue: PlaygroundModel())
     }
 
     var body: some View {
@@ -153,5 +153,4 @@ struct PlaygroundView: View {
     }
 }
 
-try KitharaHost.initialize()
-PlaygroundPage.current.setLiveView(try PlaygroundView())
+PlaygroundPage.current.setLiveView(PlaygroundView())

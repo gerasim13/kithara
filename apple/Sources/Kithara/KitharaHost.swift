@@ -2,6 +2,16 @@ import KitharaFFI
 
 /// Process-wide Kithara audio host lifecycle.
 public enum KitharaHost {
+    /// Errors from explicit process-host initialization.
+    public enum InitializationError: Error, Sendable {
+        /// Another caller is currently initializing the host.
+        case initializationInProgress
+        /// The process host was already initialized.
+        case alreadyInitialized
+        /// Host settings were rejected or host construction failed.
+        case failed(KitharaError)
+    }
+
     /// Settings fixed for the lifetime of the process audio host.
     public struct Configuration: Sendable {
         /// Initial output sample-rate hint in hertz.
@@ -34,7 +44,14 @@ public enum KitharaHost {
                 )
             )
         } catch let error as FfiError {
-            throw KitharaError(ffi: error)
+            switch error {
+            case .InitializationInProgress:
+                throw InitializationError.initializationInProgress
+            case .AlreadyInitialized:
+                throw InitializationError.alreadyInitialized
+            default:
+                throw InitializationError.failed(KitharaError(ffi: error))
+            }
         }
     }
 }

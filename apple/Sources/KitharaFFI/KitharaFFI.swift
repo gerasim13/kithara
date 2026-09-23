@@ -776,7 +776,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Replace the complete live equalizer layout through the owning player.
      *
      * # Errors
-     * Returns an error when the layout exceeds 64 bands or the player cannot
+     * Returns an error when the layout exceeds the platform's band budget or the player cannot
      * prepare or publish it.
      */
     func setEqLayout(layout: [FfiEqBandConfig]) throws
@@ -1316,7 +1316,7 @@ open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(
      * Replace the complete live equalizer layout through the owning player.
      *
      * # Errors
-     * Returns an error when the layout exceeds 64 bands or the player cannot
+     * Returns an error when the layout exceeds the platform's band budget or the player cannot
      * prepare or publish it.
      */
 open func setEqLayout(layout: [FfiEqBandConfig])throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
@@ -9639,6 +9639,17 @@ public func defaultHostConfig() -> FfiHostConfig  {
 })
 }
 /**
+ * Ensure the native process host exists with its default configuration.
+ *
+ * # Errors
+ * Returns a host-construction error if default initialization fails.
+ */
+public func ensureDefaultHost()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_func_ensure_default_host($0
+    )
+}
+}
+/**
  * Initialize the platform host through the generated SDK surface.
  *
  * # Errors
@@ -9704,6 +9715,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_default_host_config() != 64921) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_ensure_default_host() != 9526) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_initialize_host() != 32440) {
@@ -9862,7 +9876,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 47101) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 25575) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {

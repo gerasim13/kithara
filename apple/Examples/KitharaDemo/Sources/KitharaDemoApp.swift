@@ -4,17 +4,12 @@ import SwiftUI
 
 @main
 struct KitharaDemoApp: App {
-    private let playerResult: Result<PlayerViewModel, Error>?
     #if os(iOS)
     private let isAudioSessionReady: Bool
     #endif
 
     init() {
         Kithara.initLogging(level: .debug)
-        let hostResult = Result { try KitharaHost.initialize() }
-        playerResult = Self.isHostingTests
-            ? nil
-            : hostResult.flatMap { Result { try PlayerViewModel() } }
         #if os(iOS)
         isAudioSessionReady = Self.configureAudioSession()
         #endif
@@ -41,10 +36,10 @@ struct KitharaDemoApp: App {
                 if !isAudioSessionReady {
                     Text("KitharaDemo could not configure audio playback.")
                 } else {
-                    playerContent
+                    PlayerView()
                 }
                 #else
-                playerContent
+                PlayerView()
                     .onAppear {
                     // CLI-launched executables (not .app bundles) don't
                     // automatically become the active app on macOS,
@@ -62,18 +57,6 @@ struct KitharaDemoApp: App {
         // Quit the process when the last window is closed.
         .defaultSize(width: 520, height: 760)
         #endif
-    }
-
-    @ViewBuilder
-    private var playerContent: some View {
-        if let playerResult {
-            switch playerResult {
-            case let .success(viewModel):
-                PlayerView(viewModel: viewModel)
-            case let .failure(error):
-                Text("Kithara initialization failed: \(error.localizedDescription)")
-            }
-        }
     }
 
     #if os(iOS)

@@ -15,7 +15,7 @@ enum TestHost {
         guard !state.initialized else { return }
         do {
             try KitharaHost.initialize()
-        } catch KitharaError.alreadyInitialized {
+        } catch KitharaHost.InitializationError.alreadyInitialized {
             // Another suite in this test process initialized the one process host.
         }
         state.initialized = true

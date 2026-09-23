@@ -13,8 +13,7 @@ import AVFoundation
 /// updates through ``eventPublisher``.
 ///
 /// ```swift
-/// try KitharaHost.initialize()
-/// let player = try KitharaPlayer()
+/// let player = KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// player.play()
@@ -385,9 +384,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     }
 
     /// Create a new player instance.
-    public init(config: Config = Config()) throws {
+    public init(config: Config = Config()) {
         guard let eqBandCount = UInt32(exactly: config.eqBandCount) else {
-            throw KitharaError.invalidArgument("EQ band count must be non-negative and fit in UInt32")
+            preconditionFailure("EQ band count must be non-negative and fit in UInt32")
         }
         let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
             FfiKeyRule(
@@ -408,7 +407,16 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             actionAtItemEnd: config.actionAtItemEnd.ffi,
             crossfadeSettings: config.crossfadeSettings.ffi
         )
-        self._inner = try AudioPlayer(config: ffiConfig)
+        do {
+            try ensureDefaultHost()
+        } catch {
+            preconditionFailure("audio host initialization failed: \(error)")
+        }
+        do {
+            self._inner = try AudioPlayer(config: ffiConfig)
+        } catch {
+            preconditionFailure("validated player configuration was rejected: \(error)")
+        }
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)

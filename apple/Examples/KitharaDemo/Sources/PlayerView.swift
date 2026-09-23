@@ -25,11 +25,7 @@ extension Color {
 // MARK: - Player View
 
 struct PlayerView: View {
-    @StateObject private var viewModel: PlayerViewModel
-
-    init(viewModel: PlayerViewModel) {
-        _viewModel = StateObject(wrappedValue: viewModel)
-    }
+    @StateObject private var viewModel = PlayerViewModel()
 
     var body: some View {
         ScrollView {
