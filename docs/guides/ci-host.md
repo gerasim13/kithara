@@ -251,9 +251,9 @@ only what the next initialize would apply.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
-started with still said 50, and the fork scopes `gerasim13` and `shirokih`
-existed outside the `CACHE_SCOPES` it named - so an initialize run would have
-flattened every quota and known nothing of half the buckets. A scope that needs
+started with still said 50, and the per-fork scopes existed outside the
+`CACHE_SCOPES` it named - so an initialize run would have flattened every quota
+and known nothing of half the buckets. A scope that needs
 its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
 `CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
 environment on the host states what the buckets actually are, so applying it is
