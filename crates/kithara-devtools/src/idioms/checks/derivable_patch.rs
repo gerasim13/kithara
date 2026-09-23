@@ -2,14 +2,13 @@ use std::fs;
 
 use anyhow::Result;
 use quote::ToTokens;
-use syn::{Attribute, visit::Visit};
+use syn::{Attribute, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
     common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
-use syn::visit;
 
 pub(crate) struct DerivablePatch;
 
@@ -57,7 +56,8 @@ struct PatchVisitor {
 
 impl<'ast> Visit<'ast> for PatchVisitor {
     fn visit_attribute(&mut self, attribute: &'ast Attribute) {
-        const VERBOSE_HUMANTIME: &str = "patch (attribute (serde (with = \"humantime_serde::option\")))";
+        const VERBOSE_HUMANTIME: &str =
+            "patch (attribute (serde (with = \"humantime_serde::option\")))";
 
         if attribute.meta.to_token_stream().to_string() == VERBOSE_HUMANTIME {
             self.findings.push(attribute.pound_token.span.start().line);

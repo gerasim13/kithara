@@ -1,9 +1,11 @@
 use std::{ffi::c_void, ptr::NonNull};
 
-use super::{format::OwnedFormat, sys};
+use super::{
+    format::OwnedFormat,
+    sys,
+    sys::{Off64, SSize},
+};
 use crate::error::AndroidBackendError;
-use super::sys::Off64;
-use super::sys::SSize;
 
 /// Byte source behind an `AMediaDataSource`. The platform calls it serially.
 pub trait MediaDataSource: Send + 'static {

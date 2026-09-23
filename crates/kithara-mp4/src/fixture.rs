@@ -7,11 +7,11 @@
 
 use std::{
     io,
+    io::Error,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::ReadAt;
-use std::io::Error;
 
 /// Media timescale of the synthetic track, in ticks per second.
 pub(crate) const TIMESCALE: u32 = 44_100;
@@ -245,10 +245,8 @@ impl ReadAt for CountingSource {
         };
         let n = tail.len().min(buf.len());
         buf[..n].copy_from_slice(&tail[..n]);
-        self.delivered.fetch_add(
-            u64::try_from(n).map_err(Error::other)?,
-            Ordering::Relaxed,
-        );
+        self.delivered
+            .fetch_add(u64::try_from(n).map_err(Error::other)?, Ordering::Relaxed);
         Ok(n)
     }
 }

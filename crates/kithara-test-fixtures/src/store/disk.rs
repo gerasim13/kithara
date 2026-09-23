@@ -1,15 +1,13 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
+    io::{self, Error, ErrorKind, Read as _, Write as _},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
 
+use fs4::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use fs4::FileExt;
-use std::io::Error;
-use std::io::ErrorKind;
 
 /// Absolute store root, required at build time and optional as a runtime override.
 pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
@@ -467,8 +465,7 @@ mod tests {
         );
 
         drop(held);
-        FileExt::try_lock(&contender)
-            .expect("the entry lock must release with its file handle");
+        FileExt::try_lock(&contender).expect("the entry lock must release with its file handle");
     }
 
     #[kithara::test(native, flash(false))]

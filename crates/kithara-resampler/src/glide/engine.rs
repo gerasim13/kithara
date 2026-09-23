@@ -7,9 +7,9 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
+use self::filter::Filter;
 use super::{GlideConfig, GlideInterpolation};
 use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
-use self::filter::Filter;
 
 pub(in crate::glide) struct RenderRequest<'a, I, O> {
     pub(in crate::glide) input: &'a [I],

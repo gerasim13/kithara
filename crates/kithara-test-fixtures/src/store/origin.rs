@@ -1,7 +1,7 @@
 use std::{
     fmt::Write as _,
     fs::{self, File},
-    io::{self, Read as _, Write as _},
+    io::{self, Error, ErrorKind, Read as _, Write as _},
     net::{SocketAddr, TcpStream},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
@@ -10,8 +10,6 @@ use std::{
 use kithara_platform::time::Duration;
 
 use super::disk;
-use std::io::Error;
-use std::io::ErrorKind;
 
 struct Consts;
 
@@ -163,10 +161,7 @@ fn cache_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         ".{}.tmp.{}",
         path.file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| Error::new(
-                ErrorKind::InvalidData,
-                "fixture filename is not UTF-8"
-            ))?,
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "fixture filename is not UTF-8"))?,
         std::process::id()
     ));
     let write = (|| -> io::Result<()> {
@@ -228,9 +223,9 @@ fn encode_relative(relative: &Path) -> io::Result<String> {
                 "fixture path must remain under its store",
             ));
         };
-        let part = part.to_str().ok_or_else(|| {
-            Error::new(ErrorKind::InvalidData, "fixture path is not UTF-8")
-        })?;
+        let part = part
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "fixture path is not UTF-8"))?;
         if !encoded.is_empty() {
             encoded.push('/');
         }

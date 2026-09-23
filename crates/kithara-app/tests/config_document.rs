@@ -5,6 +5,17 @@ use std::{fs, path::PathBuf};
 use kithara_app::document::Config;
 use tempfile::TempDir;
 
+/// Every test here overlays the DRM section with a provider whose cipher key
+/// is an inline literal. The shipped providers reference `$KITHARA_...` names
+/// that only a build holding credentials resolves, and a test that passes or
+/// fails on what the machine happens to export is not a test. The shipped
+/// providers' own validity and salt shapes are pinned in `document::policy`,
+/// which reads the baked document without expanding it.
+const NEUTRAL_DRM: &str = concat!(
+    "drm:\n  providers:\n    - name: test\n",
+    "      domains: [keys.test]\n      cipher_key: not-a-secret\n",
+);
+
 fn tempdir() -> TempDir {
     tempfile::tempdir().expect("a temporary directory")
 }
@@ -17,17 +28,6 @@ fn write(dir: &TempDir, contents: &str) -> PathBuf {
 
 #[kithara::test(native, flash(false))]
 fn the_shipped_document_configures_the_application() {
-    /// Every test here overlays the DRM section with a provider whose cipher key
-    /// is an inline literal. The shipped providers reference `$KITHARA_...` names
-    /// that only a build holding credentials resolves, and a test that passes or
-    /// fails on what the machine happens to export is not a test. The shipped
-    /// providers' own validity and salt shapes are pinned in `document::policy`,
-    /// which reads the baked document without expanding it.
-    const NEUTRAL_DRM: &str = concat!(
-        "drm:\n  providers:\n    - name: test\n",
-        "      domains: [keys.test]\n      cipher_key: not-a-secret\n",
-    );
-
     let dir = tempdir();
     let path = write(&dir, NEUTRAL_DRM);
 

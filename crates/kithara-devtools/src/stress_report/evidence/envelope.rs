@@ -22,6 +22,8 @@ use super::{
 use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
 
 const MAX_ENVELOPE_BYTES: u64 = 4 * 1_024 * 1_024;
+const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
+
 /// Flight-recorder tail lines from attempt envelopes, clustered across
 /// repeats. Only failed attempts write dumps, so the passed column stays
 /// zero; the signal is how many failed attempts share a line.
@@ -291,8 +293,6 @@ fn add_wait_signatures(
 }
 
 fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
-    const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
-
     let entries = fs::read_dir(dir).ok()?;
     let mut paths = Vec::new();
     let mut invalid = 0usize;

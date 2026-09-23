@@ -1,5 +1,6 @@
 use std::{
     io,
+    io::Error,
     sync::{
         OnceLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -22,7 +23,6 @@ use url::Url;
 
 use super::segments::FileSegmentIndex;
 use crate::{FileError, FileEvent, TotalBytesSource, coord::FileCoord};
-use std::io::Error;
 
 const CODEC_SNIFF_BYTES: usize = 16;
 

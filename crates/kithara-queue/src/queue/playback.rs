@@ -1,5 +1,7 @@
 use kithara_bufpool::HasPool;
-use kithara_play::{InterruptionKind, PlayError, SeekOutcome, SessionDuckingMode};
+use kithara_play::{
+    InterruptionKind, PlayError, SeekOutcome, SelectionPlayback, SessionDuckingMode,
+};
 use smallvec::SmallVec;
 
 use super::{
@@ -11,7 +13,6 @@ use crate::{
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
 };
-use kithara_play::SelectionPlayback;
 
 impl<S> QueueControl<S>
 where

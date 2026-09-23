@@ -5,10 +5,14 @@ use iced::{
     advanced::{
         Clipboard, Renderer as _, Shell, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         renderer,
-        widget::{{tree::State, tree::Tag}, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
+    event::Status,
     mouse::{self, Cursor},
     widget::canvas::Action,
 };
@@ -39,8 +43,6 @@ use crate::{
     shaping::{TextContext, TextResources},
     solve,
 };
-use iced::advanced::layout::Node;
-use iced::event::Status;
 
 /// One neutral painter drawn straight into an iced canvas.
 ///
@@ -289,11 +291,7 @@ where
 
     /// The box the toolkit settles on: what the painter asks for, resolved
     /// against the room it is offered and the size it measures for itself.
-    fn node(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        limits: &layout::Limits,
-    ) -> Node {
+    fn node(&self, state: &PaintState<ControlKey<Painter>>, limits: &layout::Limits) -> Node {
         let (width, height) = self.length();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
@@ -484,12 +482,7 @@ where
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         self.node(
             tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
             limits,
@@ -746,12 +739,7 @@ where
             .paint_visual_into(&state.paint, renderer, layout.bounds(), visual);
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         self.paint.node(
             &tree.state.downcast_ref::<GestureState<Painter>>().paint,
             limits,

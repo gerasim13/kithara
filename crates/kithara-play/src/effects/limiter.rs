@@ -1,8 +1,10 @@
-use core::num::{NonZeroU32, NonZeroUsize};
+use core::{
+    f32::consts::PI,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
-use core::f32::consts::PI;
 
 struct Consts;
 
@@ -367,9 +369,7 @@ mod tests {
                         let argument = PI * distance;
                         argument.sin() / argument
                     };
-                    let window = 0.5
-                        * (1.0 + (PI * distance / HALF_WIDTH as f32).cos())
-                            .max(0.0);
+                    let window = 0.5 * (1.0 + (PI * distance / HALF_WIDTH as f32).cos()).max(0.0);
                     value += sample * sinc * window;
                 }
                 peak = peak.max(value.abs());

@@ -35,14 +35,12 @@ impl Check for ConstLocality {
                 continue;
             };
             let mut rw = SourceRewriter::new(&src);
+            stage_moves(&src, &file.findings, &mut rw);
             for finding in &file.findings {
                 match &finding.locality {
-                    Locality::SingleFn { label, body } => {
-                        stage_move(&src, finding, *body, &mut rw);
-                        outcome
-                            .changes
-                            .push(format!("{}: `{}` into `{label}`", file.rel, finding.name));
-                    }
+                    Locality::SingleFn { label, .. } => outcome
+                        .changes
+                        .push(format!("{}: `{}` into `{label}`", file.rel, finding.name)),
                     Locality::SingleImpl(target) => outcome.skipped.push(format!(
                         "{}: `{}` is shared by the methods of `impl {target}`; choose \
                          where it lives by hand",
@@ -305,7 +303,24 @@ fn is_intra_crate(vis: &Visibility) -> bool {
 /// Moves the const, with the comments attached above it, to the top of the
 /// body that opens at `body`, dropping its visibility and re-indenting it to
 /// that body.
-fn stage_move(src: &str, finding: &Finding, body: usize, rw: &mut SourceRewriter<'_>) {
+/// Move every const a single fn owns into that fn. Consts bound for one body
+/// are inserted together, so they stay one block.
+fn stage_moves(src: &str, findings: &[Finding], rw: &mut SourceRewriter<'_>) {
+    let mut moved: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for finding in findings {
+        if let Locality::SingleFn { body, .. } = finding.locality {
+            let text = stage_removal(src, finding, body, rw);
+            moved.entry(body).or_default().push(text);
+        }
+    }
+    for (body, consts) in moved {
+        rw.replace(body..body, format!("\n{}\n", consts.join("\n")));
+    }
+}
+
+/// Stage the removal of `finding` and return its text re-indented for the
+/// body opening at `body`.
+fn stage_removal(src: &str, finding: &Finding, body: usize, rw: &mut SourceRewriter<'_>) -> String {
     let start = line_start(
         src,
         leading_trivia_start(src, finding.item.start, finding.container),
@@ -332,8 +347,7 @@ fn stage_move(src: &str, finding: &Finding, body: usize, rw: &mut SourceRewriter
         &src[body_line..body_line + indent_len(&src[body_line..])]
     );
     let first_line = src[..start].matches('\n').count() + 1;
-    let moved: Vec<String> = text
-        .split('\n')
+    text.split('\n')
         .enumerate()
         .map(|(offset, line)| {
             if finding.literal_lines.contains(&(first_line + offset)) || line.is_empty() {
@@ -342,8 +356,8 @@ fn stage_move(src: &str, finding: &Finding, body: usize, rw: &mut SourceRewriter
             line.strip_prefix(from)
                 .map_or_else(|| line.to_owned(), |rest| format!("{to}{rest}"))
         })
-        .collect();
-    rw.replace(body..body, format!("\n{}\n", moved.join("\n")));
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn indent_len(line: &str) -> usize {
@@ -616,7 +630,32 @@ fn token_stream_mentions(tokens: &TokenStream, name: &str) -> bool {
     tokens.clone().into_iter().any(|tt| match tt {
         TokenTree::Ident(id) => id == name,
         TokenTree::Group(g) => token_stream_mentions(&g.stream(), name),
-        _ => false,
+        TokenTree::Literal(lit) => format_captures(&lit.to_string()).any(|c| c == name),
+        TokenTree::Punct(_) => false,
+    })
+}
+
+/// The identifiers a format string captures inline — `{NAME}`, `{NAME:>4}` —
+/// which name a binding from inside a string literal, where no path is seen.
+/// An escaped `{{` opens no capture.
+fn format_captures(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        loop {
+            let open = rest.find('{')?;
+            let after = &rest[open + 1..];
+            if let Some(escaped) = after.strip_prefix('{') {
+                rest = escaped;
+                continue;
+            }
+            let len = after
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            rest = &after[len..];
+            if len > 0 && (rest.starts_with('}') || rest.starts_with(':')) {
+                return Some(&after[..len]);
+            }
+        }
     })
 }
 
@@ -643,7 +682,10 @@ fn collect_token_idents(tokens: &TokenStream, out: &mut HashSet<String>) {
                 out.insert(id.to_string());
             }
             TokenTree::Group(g) => collect_token_idents(&g.stream(), out),
-            _ => {}
+            TokenTree::Literal(lit) => {
+                out.extend(format_captures(&lit.to_string()).map(str::to_owned));
+            }
+            TokenTree::Punct(_) => {}
         }
     }
 }
@@ -687,11 +729,11 @@ mod tests {
     fn fix(src: &str) -> String {
         let file = syn::parse_file(src).expect("valid Rust source");
         let mut rw = SourceRewriter::new(src);
-        for finding in analyze_file("fixture.rs", &file, &HashSet::new()) {
-            if let Locality::SingleFn { body, .. } = finding.locality {
-                stage_move(src, &finding, body, &mut rw);
-            }
-        }
+        stage_moves(
+            src,
+            &analyze_file("fixture.rs", &file, &HashSet::new()),
+            &mut rw,
+        );
         rw.finish().expect("non-overlapping edits")
     }
 
@@ -775,6 +817,29 @@ fn header() -> &'static str {
   second\";
 
     HEADER
+}
+"
+        );
+    }
+
+    #[test]
+    fn a_fix_moves_the_consts_of_one_fn_as_one_block() {
+        let src = "\
+const WIDTH: usize = 4;
+const HEIGHT: usize = 3;
+
+fn area() -> usize {
+    WIDTH * HEIGHT
+}
+";
+        assert_eq!(
+            fix(src),
+            "\
+fn area() -> usize {
+    const WIDTH: usize = 4;
+    const HEIGHT: usize = 3;
+
+    WIDTH * HEIGHT
 }
 "
         );
@@ -866,6 +931,36 @@ fn check(v: usize) {
             run(src).is_empty(),
             "a const referenced only inside a macro token stream is unprovable — must not flag"
         );
+    }
+
+    #[test]
+    fn format_capture_ref_is_not_flagged() {
+        // `envelope.rs::MAX_ENVELOPE_DIRECTORY_ENTRIES` shape: the second fn
+        // names the const only as an inline capture inside a format string.
+        let src = "\
+const LIMIT: usize = 100;
+fn check(n: usize) -> bool { n >= LIMIT }
+fn explain() -> String { format!(\"limit of {LIMIT} entries, {{LIMIT}} escaped\") }
+";
+        assert!(
+            run(src).is_empty(),
+            "a format-string capture is a use the fixer must not move away from"
+        );
+    }
+
+    #[test]
+    fn format_capture_in_another_file_is_not_flagged() {
+        let src = "\
+const LIMIT: usize = 100;
+fn check(n: usize) -> bool { n >= LIMIT }
+";
+        let file: syn::File = syn::parse_str("fn explain() -> String { format!(\"{LIMIT:>4}\") }")
+            .expect("valid Rust source");
+        let mut names = HashSet::new();
+        NameCollector { names: &mut names }.visit_file(&file);
+        let external: HashSet<&str> = names.iter().map(String::as_str).collect();
+
+        assert!(run_with_external(src, &external).is_empty());
     }
 
     #[test]

@@ -1,4 +1,10 @@
-use std::{fs, io, path::Path, str::from_utf8, sync::OnceLock};
+use std::{
+    fs, io,
+    io::{Error, ErrorKind},
+    path::Path,
+    str::from_utf8,
+    sync::OnceLock,
+};
 
 use kithara_test_macros as kithara;
 
@@ -8,8 +14,6 @@ use crate::{
     signal::Wave,
     variant_input::{VariantCatalog, VariantInput},
 };
-use std::io::Error;
-use std::io::ErrorKind;
 
 /// Finite stereo saw WAV header and PCM for 6 200 KB segments.
 #[kithara::fixture]

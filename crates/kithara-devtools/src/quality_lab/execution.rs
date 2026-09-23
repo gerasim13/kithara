@@ -433,6 +433,12 @@ mod tests {
     /// The name of the double's binary target.
     const DOUBLE: &str = "kithara-devtools-fake-tool";
 
+    /// The version the double answers `--version` with.
+    ///
+    /// It reaches the double through its behaviour file rather than being
+    /// compiled into it, so this test and the double cannot drift apart.
+    const DOUBLE_VERSION: &str = "1.2.3";
+
     #[test]
     fn version_matching_rejects_prefix_versions() {
         assert!(contains_exact_version("rustqual 1.8.1", "1.8.1"));
@@ -442,12 +448,6 @@ mod tests {
 
     #[test]
     fn maps_expected_nonzero_exit_to_findings_after_version_check() {
-        /// The version the double answers `--version` with.
-        ///
-        /// It reaches the double through its behaviour file rather than being
-        /// compiled into it, so this test and the double cannot drift apart.
-        const DOUBLE_VERSION: &str = "1.2.3";
-
         let temp = tempfile::tempdir().expect("tempdir");
         let spec = fake_spec(&temp, r#"{"findings":1}"#, 1);
         let mut invocations = Vec::new();

@@ -13,7 +13,7 @@ use kithara::{
         tokio::task::spawn as task_spawn,
     },
     play::{
-        PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        CrossfadeSettings, PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, TrackId, Transition},
@@ -27,7 +27,6 @@ use crate::{
     },
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
-use kithara::play::CrossfadeSettings;
 
 struct Consts;
 

@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
+use bevy_platform::time::Instant;
 use bon::Builder;
 use firewheel::{
     ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
@@ -9,7 +10,6 @@ use firewheel::{
 use kithara_platform::time::Duration;
 
 use super::{CHANNELS, OfflineSessionError};
-use bevy_platform::time::Instant;
 
 #[derive(Builder, Clone, Copy)]
 #[builder(state_mod(vis = "pub(crate)"))]

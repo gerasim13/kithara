@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
-use kithara_warp::{PresentationFrontier, RenderContext};
+use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -13,7 +13,6 @@ use super::{
 use crate::bridge::{
     PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
 };
-use kithara_warp::WarpMapRevision;
 
 struct TrackReadContext<'a> {
     range: Range<usize>,
@@ -392,11 +391,8 @@ impl PlayerTrack {
         {
             self.resource.publish_render(
                 &context,
-                presentation_frontier(&context, source.frame()).with_warp_map(
-                    source
-                        .mapping_revision()
-                        .map(WarpMapRevision::from),
-                ),
+                presentation_frontier(&context, source.frame())
+                    .with_warp_map(source.mapping_revision().map(WarpMapRevision::from)),
             );
         } else {
             self.resource.clear_render();

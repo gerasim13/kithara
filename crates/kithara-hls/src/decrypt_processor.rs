@@ -22,7 +22,7 @@ impl DecryptProcessor {
         let (key, iv) = identity.split_at_mut(ctx.key.len());
         key.copy_from_slice(&ctx.key);
         iv.copy_from_slice(&ctx.iv);
-        Self { ctx, identity, }
+        Self { ctx, identity }
     }
 }
 

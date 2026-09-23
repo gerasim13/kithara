@@ -1,5 +1,6 @@
 use std::{
     fs, io,
+    io::{Error, ErrorKind},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -7,8 +8,6 @@ use std::{
 use kithara_test_fixtures::assets::by_name;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::store;
-use std::io::Error;
-use std::io::ErrorKind;
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);

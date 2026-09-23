@@ -48,7 +48,7 @@ impl WarpPlan {
             refusal => return Err(WarpPlanError::Rate(refusal)),
         }
         let activation = map.reanchor(source, output);
-        Ok(Self { activation, map, })
+        Ok(Self { activation, map })
     }
 
     delegate::delegate! {

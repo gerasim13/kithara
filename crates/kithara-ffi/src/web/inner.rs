@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
+    play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, InterruptionKind},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
@@ -15,9 +16,6 @@ use crate::{
     },
     web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
 };
-use kithara::play::CrossfadeSettings;
-use kithara::play::DEFAULT_CROSSFADE_DURATION;
-use kithara::play::InterruptionKind;
 
 /// Number of EQ bands surfaced through the wasm facade. Module-level
 /// because the struct's `eq_gains` array length references it (a position

@@ -1,11 +1,10 @@
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Error, Read, Seek, SeekFrom};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 use re_mp4::{BoxHeader, BoxType, Mp4, StsdBoxContent};
 
 use crate::error::{DecodeError, DecodeResult};
-use std::io::Error;
 
 struct Consts;
 

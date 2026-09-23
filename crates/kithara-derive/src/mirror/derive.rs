@@ -1,14 +1,10 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DeriveInput, Fields, Generics, Ident, Lifetime,
-    LifetimeParam, Path,
+    Attribute, Data, DataEnum, DataStruct, DeriveInput, Error, Fields, GenericParam, Generics,
+    Ident, Index, Lifetime, LifetimeParam, Path,
 };
-use proc_macro2::Span;
-use syn::Error;
-use syn::GenericParam;
-use syn::Index;
 
 #[derive(Default)]
 struct Options {

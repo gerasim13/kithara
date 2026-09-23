@@ -1,8 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Ident, LitStr, Token, parse::Parse};
-use syn::Error;
-use syn::parse::ParseStream;
+use syn::{
+    Data, DeriveInput, Error, Fields, Ident, LitStr, Token,
+    parse::{Parse, ParseStream},
+};
 
 struct Options {
     all: Ident,
@@ -47,10 +48,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .ok_or_else(|| Error::new_spanned(&input.ident, "missing #[enum_str(...)]"))?
         .parse_args::<Options>()?;
     let Data::Enum(data) = input.data else {
-        return Err(Error::new_spanned(
-            input.ident,
-            "EnumStr requires an enum",
-        ));
+        return Err(Error::new_spanned(input.ident, "EnumStr requires an enum"));
     };
     let name = input.ident;
     let all = options.all;

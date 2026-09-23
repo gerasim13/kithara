@@ -1,7 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields};
-use syn::Error;
+use syn::{Data, DeriveInput, Error, Fields};
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     expand_inner(syn::parse_macro_input!(input as DeriveInput))
@@ -11,10 +10,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
 fn expand_inner(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let Data::Enum(data) = input.data else {
-        return Err(Error::new_spanned(
-            input.ident,
-            "Variants requires an enum",
-        ));
+        return Err(Error::new_spanned(input.ident, "Variants requires an enum"));
     };
     if let Some(variant) = data
         .variants

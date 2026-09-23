@@ -1,3 +1,4 @@
+use core::mem;
 use std::{num::NonZeroU32, ops::Range};
 
 use firewheel::{
@@ -13,7 +14,6 @@ use super::commit::{
     TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
-use core::mem;
 
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {

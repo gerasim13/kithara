@@ -2,7 +2,8 @@
 
 use std::{
     fs,
-    io::{{Error, ErrorKind}, Read, Write},
+    fs::File,
+    io::{Error, ErrorKind, Read, Write},
     path::PathBuf,
 };
 
@@ -10,7 +11,6 @@ use kithara_bufpool::ByteBuffer;
 use tempfile::NamedTempFile;
 
 use crate::error::{AssetsError, AssetsResult};
-use std::fs::File;
 
 /// One on-disk index snapshot, read and replaced whole.
 ///

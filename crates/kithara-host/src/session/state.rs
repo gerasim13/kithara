@@ -2,8 +2,12 @@ use std::num::NonZeroU32;
 
 use arc_swap::ArcSwap;
 use firewheel::{
-    FirewheelConfig, FirewheelContext, channel_config::ChannelCount, diff::Memo, node::NodeID,
-    nodes::volume::VolumeNode, param::smoother::SmootherConfig,
+    FirewheelConfig, FirewheelContext,
+    channel_config::ChannelCount,
+    diff::Memo,
+    node::{AudioNode, NodeID},
+    nodes::volume::VolumeNode,
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
@@ -29,7 +33,6 @@ use crate::{
     effects::eq::{EqBandConfig, GainDb},
     rt::{LimiterNode, MasterEqNode},
 };
-use firewheel::node::AudioNode;
 
 #[derive(Debug)]
 pub(super) struct SlotNodes {

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::FirewheelContext;
+use firewheel_web_audio::WebAudioBackend;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, mpsc};
 
@@ -13,7 +14,6 @@ use crate::{
         state::ensure_ctx,
     },
 };
-use firewheel_web_audio::WebAudioBackend;
 
 thread_local! {
     static BRIDGE_PLAYBACK: RefCell<Option<Arc<PlaybackShared>>> = const { RefCell::new(None) };

@@ -6,9 +6,11 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-fn main() {
-    const FULL_FILE: &str = "beat_this_full.onnx";
+/// Where a fetched model lands, so a rebuild does not fetch it again.
+const CACHE_ENV: &str = "KITHARA_BEAT_MODEL_CACHE";
+const FULL_FILE: &str = "beat_this_full.onnx";
 
+fn main() {
     const FULL_URL: &str =
         "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx";
 
@@ -29,9 +31,6 @@ fn main() {
 }
 
 fn cache_dir() -> PathBuf {
-    /// Where a fetched model lands, so a rebuild does not fetch it again.
-    const CACHE_ENV: &str = "KITHARA_BEAT_MODEL_CACHE";
-
     env::var_os(CACHE_ENV).map_or_else(
         || env::temp_dir().join("kithara-beat-models"),
         PathBuf::from,

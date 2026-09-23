@@ -1,5 +1,4 @@
-use std::io::{self, Read, Seek, SeekFrom};
-use std::io::Error;
+use std::io::{self, Error, Read, Seek, SeekFrom};
 
 /// Window the box walk reads through. Box headers are 8 or 16 bytes and the
 /// `moov`/`moof` boxes an index is made of are kilobytes, so one window
@@ -61,9 +60,9 @@ impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
             self.window_start = self.pos;
         }
         let offset = hit.unwrap_or(0);
-        self.window.get(offset..self.window_len).ok_or_else(|| {
-            Error::other("BUG: mp4 walk window offset outside the filled window")
-        })
+        self.window
+            .get(offset..self.window_len)
+            .ok_or_else(|| Error::other("BUG: mp4 walk window offset outside the filled window"))
     }
 }
 

@@ -1,7 +1,7 @@
 use kithara::{
     play::effects::eq::GainDb,
     ui::render::{
-        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, Zoom, zoom_in, zoom_out,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -19,7 +19,6 @@ use crate::{
         mix::MixMsg,
     },
 };
-use kithara::ui::render::Zoom;
 
 /// Translate a compiled-UI event into an app message, applying host-owned
 /// view state (zoom, module collapse, deck layout) in place. Control paths

@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
+use core::fmt::Debug;
+
 use kithara_platform::tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::{Envelope, EventBus, EventMeta, TopicReceiver};
-use core::fmt::Debug;
 
 /// A value that can travel on its own channel.
 ///

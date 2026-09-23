@@ -10,14 +10,15 @@ use std::{
 
 use regex::{Captures, Regex};
 
-use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
+use self::{
+    attempt::{AttemptKey, AttemptOutcome, attempt_outcomes},
+    envelope::{FlightClusters, Input},
+};
 use super::{StressReportArgs, markdown_cell, test_id};
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
     junit::CaseTiming,
 };
-use self::envelope::FlightClusters;
-use self::envelope::Input;
 
 mod attempt;
 mod divergence;

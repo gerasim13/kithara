@@ -1,5 +1,4 @@
-use kithara_bufpool::Percent;
-use kithara_bufpool::PoolConfig;
+use kithara_bufpool::{Percent, PoolConfig};
 
 struct Consts;
 
@@ -57,11 +56,7 @@ pub fn pools_with_budget(overall_bytes: usize) -> Pools {
 ///
 /// Panics when the region cannot satisfy the requested initial allocation.
 #[must_use]
-pub fn pools_with(
-    overall_bytes: usize,
-    bytes: PoolConfig,
-    samples: PoolConfig,
-) -> Pools {
+pub fn pools_with(overall_bytes: usize, bytes: PoolConfig, samples: PoolConfig) -> Pools {
     TestPools::region(
         kithara_bufpool::OverallBudget(overall_bytes),
         bytes,

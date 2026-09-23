@@ -1,14 +1,13 @@
 use std::fs;
 
 use anyhow::Result;
-use syn::{Expr, ImplItem, ItemImpl, Stmt, visit::Visit};
+use syn::{Expr, ImplItem, ItemImpl, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
     common::{parse::self_ty_name, violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
-use syn::visit;
 
 pub(crate) struct DerivableRetained;
 

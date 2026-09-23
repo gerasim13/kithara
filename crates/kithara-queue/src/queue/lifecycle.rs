@@ -2,6 +2,7 @@ use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
+use kithara_play::SelectionPlayback;
 use smallvec::SmallVec;
 
 use super::{
@@ -18,7 +19,6 @@ use crate::{
     navigation::{NavigationState, PlaybackOrder},
     track::{TrackRecord, TrackSource},
 };
-use kithara_play::SelectionPlayback;
 
 impl<S> QueueControl<S>
 where
