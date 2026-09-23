@@ -369,17 +369,6 @@ uniffi-runtime-javascript = { path = "", features = ["wasm32"] }
             "wasm-bindgen".into(),
             workspace["workspace"]["dependencies"]["wasm-bindgen"].clone(),
         );
-    let mut crates_io = toml::value::Table::new();
-    crates_io.insert(
-        "firewheel-web-audio".into(),
-        workspace["patch"]["crates-io"]["firewheel-web-audio"].clone(),
-    );
-    let mut patch = toml::value::Table::new();
-    patch.insert("crates-io".into(), toml::Value::Table(crates_io));
-    manifest
-        .as_table_mut()
-        .context("product shim manifest")?
-        .insert("patch".into(), toml::Value::Table(patch));
     fs::write(
         shim.join("src/lib.rs"),
         "use kithara_ffi as _;\nmod kithara_ffi_module;\n",

@@ -5879,3 +5879,23 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "btls-sys"
+version = "0.5.6"
+source = "git+https://github.com/0x676e67/btls?rev=ac7fe822bb1a3386c0ef0b44b4784a9429ba9903#ac7fe822bb1a3386c0ef0b44b4784a9429ba9903"
+
+[[patch.unused]]
+name = "vello"
+version = "0.6.0"
+source = "git+https://github.com/gerasim13/vello?rev=b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431#b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431"
+
+[[patch.unused]]
+name = "vello_encoding"
+version = "0.6.0"
+source = "git+https://github.com/gerasim13/vello?rev=b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431#b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431"
+
+[[patch.unused]]
+name = "vello_shaders"
+version = "0.6.0"
+source = "git+https://github.com/gerasim13/vello?rev=b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431#b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431"
