@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AssetAxis, AssetExtent, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
+    AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis, MapPoint, MapPosition,
     SessionAnchor, SessionAxis, SessionBeat,
 };
@@ -18,13 +18,13 @@ use crate::{
 /// Time constant the tempo fixtures approach a new target with.
 const SMOOTHING_SECONDS: f64 = 0.005;
 
-type Group = GroupState<TestGroup>;
+pub(super) type Group = GroupState<TestGroup>;
 
-fn rate(value: u32) -> NonZeroU32 {
+pub(super) fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).expect("invariant: fixture sample rate is non-zero")
 }
 
-fn group_in(mode: SyncMode, member_kind: SyncMemberKind) -> Group {
+pub(super) fn group_in(mode: SyncMode, member_kind: SyncMemberKind) -> Group {
     GroupState::unavailable(
         BeatGridId::allocate().expect("invariant: fixture group id is available"),
         rate(48_000),
@@ -51,7 +51,7 @@ fn live_deck() -> Group {
 }
 
 /// A deck owning a local 120 BPM timeline latched from its live grid.
-fn synced_deck() -> Group {
+pub(super) fn synced_deck() -> Group {
     let mut deck = live_deck();
     let _ = deck
         .transact(sync(deck.id(), SyncIntent::Disable))
@@ -75,7 +75,7 @@ fn sync_at(
         target,
         load: LoadGeneration::first(),
         transport: TransportRevision::first(),
-        source: AlignmentSource::Prepared,
+        source: AlignmentSource::Prepared(AssetFrame::default()),
         activation,
         intent,
     }
@@ -100,7 +100,7 @@ fn transport_unavailable() -> SyncError {
     }
 }
 
-fn anchor_at_rate(beats_per_second: f64, sample_rate: u32) -> SessionAnchor {
+pub(super) fn anchor_at_rate(beats_per_second: f64, sample_rate: u32) -> SessionAnchor {
     SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("beat"),
@@ -110,11 +110,11 @@ fn anchor_at_rate(beats_per_second: f64, sample_rate: u32) -> SessionAnchor {
     .expect("session anchor")
 }
 
-fn parent_update(parent: BeatGridStamp, anchor: SessionAnchor) -> ParentGridUpdate {
+pub(super) fn parent_update(parent: BeatGridStamp, anchor: SessionAnchor) -> ParentGridUpdate {
     ParentGridUpdate::new(parent, SessionEpoch::new(0), anchor, None)
 }
 
-fn parent_stamp(parent: BeatGridId, revision: u32) -> BeatGridStamp {
+pub(super) fn parent_stamp(parent: BeatGridId, revision: u32) -> BeatGridStamp {
     let mut value = BeatGridRevision::first();
     for _ in 1..revision {
         value = value
@@ -124,7 +124,7 @@ fn parent_stamp(parent: BeatGridId, revision: u32) -> BeatGridStamp {
     BeatGridStamp::new(parent, value)
 }
 
-fn parent_id() -> BeatGridId {
+pub(super) fn parent_id() -> BeatGridId {
     BeatGridId::allocate().expect("parent identity")
 }
 

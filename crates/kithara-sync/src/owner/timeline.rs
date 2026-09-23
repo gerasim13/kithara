@@ -33,19 +33,12 @@ pub(super) struct LocalTimeline {
     meter: Option<MeterFacts>,
 }
 
-/// A status a group reports until a later operation supersedes it.
+/// A mode operation that needs grid coverage not yet published, reported
+/// until a later operation supersedes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Blocked {
-    /// The operation needs grid coverage not yet published.
-    Waiting {
-        operation: SyncOperationId,
-        required: MapRegion,
-    },
-    /// The operation needs a capability this group does not have.
-    Unavailable {
-        operation: SyncOperationId,
-        capability: SyncCapability,
-    },
+pub(super) struct Blocked {
+    pub(super) operation: SyncOperationId,
+    pub(super) required: MapRegion,
 }
 
 /// A mode operation evaluated against frozen state, before any mutation.
@@ -265,7 +258,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 }
             }
             ModeEffect::Deferred { required } => {
-                self.blocked = Some(Blocked::Waiting {
+                self.blocked = Some(Blocked {
                     operation,
                     required,
                 });

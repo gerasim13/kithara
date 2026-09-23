@@ -5,8 +5,8 @@ use super::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
         preview_topology, routed_group, validate_topology_candidate,
     },
+    preparation::PrepareRequest,
     state::GroupState,
-    timeline::Blocked,
 };
 use crate::{
     SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncOperation, SyncOperationId,
@@ -84,7 +84,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 smoothing,
                 ..
             } => self.transact_tempo(*tempo, *commit, *smoothing),
-            SyncOperation::Transport { .. } | SyncOperation::Reconcile { .. } => {
+            SyncOperation::Transport { .. } | SyncOperation::Prepare { .. } => {
                 return self.transact_member(operation);
             }
         };
@@ -112,9 +112,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 })
             }
-            SyncOperation::Reconcile { .. } => {
-                self.unavailable_admission(SyncCapability::Reconciliation)
-            }
+            SyncOperation::Prepare {
+                target,
+                load,
+                transport,
+                source,
+                window,
+            } => self.transact_prepare(PrepareRequest {
+                target: *target,
+                load: *load,
+                transport: *transport,
+                source: *source,
+                window: window.clone(),
+            }),
             SyncOperation::Topology { .. }
             | SyncOperation::Sync { .. }
             | SyncOperation::Tempo { .. } => Err(SyncError::CapabilityUnavailable {
@@ -122,22 +132,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }),
         };
         result.map_err(|error| SyncRejected::new(error, operation))
-    }
-
-    fn unavailable_admission(
-        &mut self,
-        capability: SyncCapability,
-    ) -> Result<SyncAdmission, SyncError> {
-        let operation = take_operation(self.grid.id(), &mut self.next_operation)?;
-        self.blocked = Some(Blocked::Unavailable {
-            operation,
-            capability,
-        });
-        Ok(SyncAdmission::Unavailable {
-            operation,
-            topology: self.topology_stamp(),
-            capability,
-        })
     }
 
     fn transact_topology(
@@ -200,6 +194,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Err(reject(error, operations));
         }
         apply_topology_operations(&mut self.members, operations);
+        self.pending
+            .retain(|pending| owns_direct_grid(&self.members, pending.member()));
         self.topology_revision = revision;
         advance_operation(&mut self.next_operation);
         Ok(SyncAdmission::TopologyChanged {

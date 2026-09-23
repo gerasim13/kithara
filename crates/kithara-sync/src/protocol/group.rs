@@ -1,7 +1,7 @@
 use kithara_signal::SessionFrame;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, CoordinateError,
-    MapAxis, MapRegion, WarpMapRevision,
+    GridProjectionError, MapAxis, MapRegion, WarpMapRevision,
 };
 
 use crate::{
@@ -29,12 +29,6 @@ pub enum SyncStatusSnapshot {
         topology: TopologyStamp,
         warp_map: WarpMapRevision,
         activation: SessionFrame,
-    },
-    /// The requested behavior is not implemented by the current group.
-    Unavailable {
-        operation: SyncOperationId,
-        topology: TopologyStamp,
-        capability: SyncCapability,
     },
     /// The renderer has applied a continuity-preserving correction.
     Converging {
@@ -150,6 +144,28 @@ pub enum SyncError {
     /// The candidate ownership tree violates a topology invariant.
     #[error(transparent)]
     Topology(#[from] SyncGroupTopologyError),
+    /// No admissible beat boundary lies inside the launch window.
+    #[error("member {member_id} can first enter at {first:?}, not before the window end {end:?}")]
+    NoAdmissibleBoundary {
+        member_id: BeatGridId,
+        first: SessionFrame,
+        end: SessionFrame,
+    },
+    /// A finished grid proves the requested position or beat lies outside it.
+    #[error("grid {grid_id} places nothing at the requested coordinate")]
+    OutsideGrid { grid_id: BeatGridId },
+    /// A member grid cannot be projected onto its group grid.
+    #[error(transparent)]
+    Projection(Box<GridProjectionError>),
+    /// An audible member names a warp map this group never applied.
+    #[error("member {member_id} sounds through unknown warp map {given:?}")]
+    UnknownWarpMap {
+        member_id: BeatGridId,
+        given: WarpMapRevision,
+    },
+    /// A group owner cannot mint another warp-map revision.
+    #[error("warp-map revision space is exhausted for group {group_id}")]
+    WarpMapRevisionExhausted { group_id: BeatGridId },
 }
 
 /// Live owner protocol for a recursive group of beat grids.

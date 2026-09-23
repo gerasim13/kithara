@@ -3,12 +3,13 @@ use std::num::NonZeroU32;
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    BeatsPerMinute, MapAxis, SessionAxis,
+    BeatsPerMinute, MapAxis, SessionAxis, WarpMapRevision,
 };
 
 use super::{
     descent::Descent,
     mutation::materialize_topology,
+    preparation::Pending,
     timeline::{Blocked, Timeline},
 };
 use crate::{
@@ -28,6 +29,8 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) parent: Option<ParentGridUpdate>,
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
+    pub(super) pending: Vec<Pending>,
+    pub(super) next_map: Option<WarpMapRevision>,
     pub(super) member_kind: SyncMemberKind,
     pub(super) topology_revision: TopologyRevision,
     pub(super) members: Vec<SyncMember<G>>,
@@ -47,6 +50,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
             blocked: None,
+            pending: Vec::new(),
+            next_map: Some(WarpMapRevision::first()),
         }
     }
 
@@ -243,24 +248,47 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
 
     fn status(&self) -> SyncStatusSnapshot {
         let topology = self.topology_stamp();
-        match self.blocked {
+        if let Some(Blocked {
+            operation,
+            required,
+        }) = self.blocked
+        {
+            return SyncStatusSnapshot::WaitingForGrid {
+                operation,
+                topology,
+                required,
+            };
+        }
+        let waiting = self
+            .pending
+            .iter()
+            .filter(|pending| matches!(pending, Pending::Waiting { .. }))
+            .max_by_key(|pending| pending.operation());
+        let latest = waiting.or_else(|| {
+            self.pending
+                .iter()
+                .max_by_key(|pending| pending.operation())
+        });
+        match latest {
             None => SyncStatusSnapshot::Off { topology },
-            Some(Blocked::Waiting {
+            Some(Pending::Waiting {
                 operation,
                 required,
+                ..
             }) => SyncStatusSnapshot::WaitingForGrid {
-                operation,
+                operation: *operation,
                 topology,
-                required,
+                required: *required,
             },
-            Some(Blocked::Unavailable {
-                operation,
-                capability,
-            }) => SyncStatusSnapshot::Unavailable {
-                operation,
-                topology,
-                capability,
-            },
+            Some(Pending::Prepared(preparation)) => {
+                let (warp_map, activation) = preparation.activation();
+                SyncStatusSnapshot::Prepared {
+                    operation: preparation.stamp().operation(),
+                    topology: preparation.stamp().topology(),
+                    warp_map,
+                    activation,
+                }
+            }
         }
     }
 

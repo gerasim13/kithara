@@ -1,5 +1,7 @@
 mod descent;
 mod mutation;
+mod placement;
+mod preparation;
 mod state;
 #[cfg(test)]
 mod tests;

@@ -119,6 +119,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Ok(());
         };
         self.check_descent(staged.descent)?;
+        if matches!(staged.descent, Some(Descent::Axis(_))) {
+            self.pending.clear();
+        }
         self.grid = staged.grid;
         self.timeline = staged.timeline;
         self.parent = staged.parent;
