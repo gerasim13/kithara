@@ -28,7 +28,7 @@ fn host_deck(parent: BeatGridId, anchor: SessionAnchor) -> Group {
     deck
 }
 
-fn prepared(group: &Group, member: BeatGridId) -> SyncPreparation {
+pub(super) fn prepared(group: &Group, member: BeatGridId) -> SyncPreparation {
     group
         .pending
         .iter()
@@ -44,12 +44,16 @@ fn prepared(group: &Group, member: BeatGridId) -> SyncPreparation {
 }
 
 fn activation_beat(preparation: &SyncPreparation) -> f64 {
-    let SyncEffect::Projection { alignment, .. } = preparation.effect();
+    let SyncEffect::Projection { alignment, .. } = preparation.effect() else {
+        panic!("expected a projection, got {preparation:?}");
+    };
     f64::from(*alignment.target().value())
 }
 
 fn activation(preparation: &SyncPreparation) -> (u64, SessionFrame) {
-    let SyncEffect::Projection { plan, .. } = preparation.effect();
+    let SyncEffect::Projection { plan, .. } = preparation.effect() else {
+        panic!("expected a projection, got {preparation:?}");
+    };
     (plan.activation().source(), plan.activation().output())
 }
 
@@ -128,7 +132,7 @@ fn assert_on_beat(beat: f64, preparation: &SyncPreparation) {
     );
 }
 
-fn pending_members(group: &Group) -> Vec<BeatGridId> {
+pub(super) fn pending_members(group: &Group) -> Vec<BeatGridId> {
     group.pending.iter().map(Pending::member).collect()
 }
 

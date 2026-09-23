@@ -1,5 +1,5 @@
 use kithara_signal::{SessionFrame, TransportRevision};
-use kithara_warp::{BeatAlignment, BeatGridStamp, WarpMapRevision, WarpPlan};
+use kithara_warp::{AssetFrame, BeatAlignment, BeatGridStamp, WarpMapRevision, WarpPlan};
 
 use crate::{LoadGeneration, SyncOperationId, TopologyStamp};
 
@@ -43,6 +43,20 @@ pub enum SyncEffect {
         alignment: BeatAlignment,
         /// The projected map and the boundary at which it takes over.
         plan: WarpPlan,
+        /// The applied map the plan takes over from; `None` when the member
+        /// starts sounding with it.
+        replaces: Option<WarpMapRevision>,
+    },
+    /// Release a member from the group's beats: from `activation` its
+    /// recording continues unsynchronized from `source`, where the applied
+    /// map had carried it.
+    Handoff {
+        /// The applied map the member leaves.
+        replaces: WarpMapRevision,
+        /// The recording frame the applied map reaches at `activation`.
+        source: AssetFrame,
+        /// The session frame at which the member leaves the map.
+        activation: SessionFrame,
     },
 }
 
@@ -64,23 +78,19 @@ pub struct SyncPreparation {
 }
 
 impl SyncPreparation {
-    pub(crate) const fn projection(
-        stamp: SyncExecutionStamp,
-        alignment: BeatAlignment,
-        plan: WarpPlan,
-    ) -> Self {
-        Self {
-            stamp,
-            effect: SyncEffect::Projection { alignment, plan },
-        }
+    pub(crate) const fn new(stamp: SyncExecutionStamp, effect: SyncEffect) -> Self {
+        Self { stamp, effect }
     }
 
-    /// The map revision and session boundary at which the effect takes over.
-    pub(crate) fn activation(&self) -> (WarpMapRevision, SessionFrame) {
+    /// The map the effect renders from its activation on, `None` for a
+    /// handoff, and the session boundary at which it takes over.
+    pub(crate) fn activation(&self) -> (Option<WarpMapRevision>, SessionFrame) {
         match &self.effect {
-            SyncEffect::Projection { plan, .. } => {
-                (plan.activation().revision(), plan.activation().output())
-            }
+            SyncEffect::Projection { plan, .. } => (
+                Some(plan.activation().revision()),
+                plan.activation().output(),
+            ),
+            SyncEffect::Handoff { activation, .. } => (None, *activation),
         }
     }
 }

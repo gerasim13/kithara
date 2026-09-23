@@ -1,13 +1,13 @@
 use kithara_signal::SessionFrame;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, CoordinateError,
-    GridProjectionError, MapAxis, MapRegion, WarpMapRevision,
+    GridProjectionError, MapAxis, MapRegion, PresentationFrontier, WarpMapRevision,
 };
 
 use crate::{
     ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncCapability,
-    SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncRejected, TopologyStamp,
+    SyncExecutionStamp, SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode,
+    SyncOperation, SyncOperationId, SyncReceipt, SyncRejected, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -23,11 +23,12 @@ pub enum SyncStatusSnapshot {
         topology: TopologyStamp,
         required: MapRegion,
     },
-    /// A warp map is admitted but its activation has not been acknowledged.
+    /// A preparation is issued but its activation has not been presented;
+    /// a free handoff carries no map.
     Prepared {
         operation: SyncOperationId,
         topology: TopologyStamp,
-        warp_map: WarpMapRevision,
+        warp_map: Option<WarpMapRevision>,
         activation: SessionFrame,
     },
     /// The renderer has applied a continuity-preserving correction.
@@ -123,23 +124,37 @@ pub enum SyncError {
     /// A group owner cannot mint another operation identity.
     #[error("synchronization operation identity space is exhausted for group {group_id}")]
     OperationIdExhausted { group_id: BeatGridId },
-    /// No prepared renderer operation can accept an acknowledgement.
+    /// The member a receipt names holds no preparation.
     #[error("synchronization group has no prepared operation")]
     NoPreparedOperation,
-    /// The renderer repeated an acknowledgement that was already committed.
+    /// The executor repeated a receipt the group already recorded.
     #[error("synchronization operation {operation} was already acknowledged")]
     DuplicateAcknowledgement { operation: SyncOperationId },
-    /// The renderer acknowledged another operation than the prepared one.
+    /// The executor reported another operation than the one the member holds.
     #[error("renderer acknowledged operation {given}, expected {expected}")]
     StaleAcknowledgement {
         expected: SyncOperationId,
         given: SyncOperationId,
     },
-    /// One or more renderer acknowledgement stamps do not match the prepared warp map.
-    #[error("renderer acknowledgement {given:?} does not match {expected:?}")]
-    AppliedMismatch {
-        expected: Box<SyncApplied>,
-        given: Box<SyncApplied>,
+    /// A receipt names the member's operation under other facts than the
+    /// preparation the member holds.
+    #[error("receipt {given:?} does not match the held preparation {expected:?}")]
+    ReceiptMismatch {
+        expected: Box<SyncExecutionStamp>,
+        given: Box<SyncExecutionStamp>,
+    },
+    /// A receipt skips or reverses a phase: armed before installed, presented
+    /// before armed, or rejected once armed.
+    #[error("receipt for operation {operation} does not follow its current phase")]
+    ReceiptOutOfOrder { operation: SyncOperationId },
+    /// A presented frontier does not lie on the preparation's map.
+    #[error(
+        "presented frontier {given:?} does not lie on map {expected:?} of operation {operation}"
+    )]
+    PresentationMismatch {
+        operation: SyncOperationId,
+        expected: Option<WarpMapRevision>,
+        given: PresentationFrontier,
     },
     /// The candidate ownership tree violates a topology invariant.
     #[error(transparent)]
@@ -157,11 +172,24 @@ pub enum SyncError {
     /// A member grid cannot be projected onto its group grid.
     #[error(transparent)]
     Projection(Box<GridProjectionError>),
-    /// An audible member names a warp map this group never applied.
-    #[error("member {member_id} sounds through unknown warp map {given:?}")]
-    UnknownWarpMap {
+    /// An audible member names another warp map than the one this group
+    /// applied to it.
+    #[error("member {member_id} sounds through map {given:?}, not the applied {expected:?}")]
+    AudibleMapMismatch {
         member_id: BeatGridId,
-        given: WarpMapRevision,
+        expected: Option<WarpMapRevision>,
+        given: Option<WarpMapRevision>,
+    },
+    /// A member that already sounds through an applied map was asked to
+    /// start again; only an audible retarget can move it.
+    #[error("member {member_id} already sounds")]
+    MemberAudible { member_id: BeatGridId },
+    /// A member's armed preparation is committed to the output until it is
+    /// presented.
+    #[error("member {member_id} is committed to operation {operation}")]
+    ArmedOperation {
+        member_id: BeatGridId,
+        operation: SyncOperationId,
     },
     /// A group owner cannot mint another warp-map revision.
     #[error("warp-map revision space is exhausted for group {group_id}")]
@@ -196,13 +224,15 @@ pub trait SyncGroup: BeatGrid {
     /// segment; nothing in the subtree changes then.
     fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
 
-    /// Commits an operation as audibly applied and returns the resulting sync state.
+    /// Records an executor's receipt for one preparation in this subtree and
+    /// returns the resulting state of the group that issued it.
     ///
     /// # Errors
     ///
-    /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
-    /// does not match the currently prepared operation.
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+    /// Returns [`SyncError`] when the receipt is stale, duplicate, out of
+    /// order, or does not match the preparation its member holds; nothing
+    /// changes then.
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
 
     /// Checks without mutation that this subtree accepts a new session axis,
     /// so a parent can refuse it before any of its members changes.

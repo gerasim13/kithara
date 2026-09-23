@@ -1,11 +1,11 @@
-use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_warp::{
     BeatGridQuery, BeatGridSnapshot, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion,
     MeterFacts, SessionAnchor, SessionBeat,
 };
 
 use super::{
-    descent::Descent,
+    descent::{Descent, Takeover},
     state::{GroupState, Withdrawal, validate_successor},
     transaction::take_operation,
 };
@@ -44,10 +44,14 @@ pub(super) struct Blocked {
 
 /// A mode operation evaluated against frozen state, before any mutation.
 enum ModeEffect {
+    /// The group moves onto `grid` from `at` on; `release` hands every
+    /// sounding member off under that transport when the timeline ends.
     Changed {
         timeline: Timeline,
         grid: BeatGridSnapshot,
         descent: Option<Descent>,
+        at: SessionFrame,
+        release: Option<TransportRevision>,
     },
     Unchanged,
     Deferred {
@@ -105,12 +109,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         &mut self,
         intent: SyncIntent,
         activation: SessionFrame,
+        transport: TransportRevision,
     ) -> Result<SyncAdmission, SyncError> {
         self.reserve_operation()?;
         let effect = match intent {
-            SyncIntent::Enable | SyncIntent::AlignNow => self.follow_parent()?,
+            SyncIntent::Enable | SyncIntent::AlignNow => self.follow_parent(activation)?,
             SyncIntent::Disable => self.latch(activation)?,
-            SyncIntent::Free => self.leave_timeline()?,
+            SyncIntent::Free => self.leave_timeline(activation, transport)?,
         };
         self.commit(effect)
     }
@@ -156,11 +161,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
         };
         self.reserve_operation()?;
-        let effect = self.local_effect(local)?;
+        let effect = self.local_effect(local, commit)?;
         self.commit(effect)
     }
 
-    fn follow_parent(&self) -> Result<ModeEffect, SyncError> {
+    fn follow_parent(&self, at: SessionFrame) -> Result<ModeEffect, SyncError> {
         if matches!(self.timeline, Timeline::Host) {
             return Ok(ModeEffect::Unchanged);
         }
@@ -177,6 +182,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             timeline: Timeline::Host,
             grid,
             descent,
+            at,
+            release: None,
         })
     }
 
@@ -191,10 +198,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 required: MapRegion::point(MapPosition::Session(activation)),
             });
         };
-        self.local_effect(local)
+        self.local_effect(local, activation)
     }
 
-    fn leave_timeline(&self) -> Result<ModeEffect, SyncError> {
+    fn leave_timeline(
+        &self,
+        at: SessionFrame,
+        transport: TransportRevision,
+    ) -> Result<ModeEffect, SyncError> {
         if matches!(self.timeline, Timeline::Off) {
             return Ok(ModeEffect::Unchanged);
         }
@@ -204,10 +215,16 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             timeline: Timeline::Off,
             grid,
             descent: None,
+            at,
+            release: Some(transport),
         })
     }
 
-    fn local_effect(&self, local: LocalTimeline) -> Result<ModeEffect, SyncError> {
+    fn local_effect(
+        &self,
+        local: LocalTimeline,
+        at: SessionFrame,
+    ) -> Result<ModeEffect, SyncError> {
         let MapAxis::Session(axis) = self.grid.axis() else {
             return Err(SyncError::InvalidGroupGridState {
                 state: self.grid.state(),
@@ -219,6 +236,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             timeline: Timeline::Local(Some(local)),
             grid,
             descent: Some(descent),
+            at,
+            release: None,
         })
     }
 
@@ -251,22 +270,39 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
     }
 
+    /// Stages and validates `effect` in full, then commits it.
+    ///
+    /// The operation itself takes the first identity; retargets and handoffs
+    /// its staging mints take the ones after it.
     fn commit(&mut self, effect: ModeEffect) -> Result<SyncAdmission, SyncError> {
+        let mut next_operation = self.next_operation;
+        let operation = take_operation(self.grid.id(), &mut next_operation)?;
         let (effect, staged) = match effect {
             ModeEffect::Changed {
                 timeline,
                 grid,
                 descent,
+                at,
+                release,
             } => {
-                let staged = self.stage(grid, timeline, self.parent, descent)?;
+                let takeover = Takeover {
+                    commit: Some(at),
+                    next_operation,
+                };
+                let mut staged = self.stage(grid, timeline, self.parent, descent, takeover)?;
+                if let Some(transport) = release {
+                    staged.pending = self.handoffs(&staged.grid, operation, transport, at)?;
+                }
                 self.check_staged(Some(&staged))?;
                 (Committed::Changed(timeline), Some(staged))
             }
             ModeEffect::Unchanged => (Committed::Unchanged, None),
             ModeEffect::Deferred { required } => (Committed::Deferred(required), None),
         };
-        let operation = take_operation(self.grid.id(), &mut self.next_operation)?;
         let topology = self.topology_stamp();
+        if staged.is_none() {
+            self.next_operation = next_operation;
+        }
         self.commit_staged(staged)?;
         Ok(match effect {
             Committed::Changed(timeline) => {

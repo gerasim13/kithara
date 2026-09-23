@@ -1,11 +1,15 @@
+use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGridSnapshot, MapAxis, WarpMapRevision};
 
 use super::{
+    lifecycle::Applied,
     preparation::{Pending, Refreshed},
     state::{GroupState, Withdrawal, validate_successor},
     timeline::Timeline,
 };
-use crate::{ParentGridUpdate, SessionAxisUpdate, SyncError, SyncGroup, SyncMember};
+use crate::{
+    ParentGridUpdate, SessionAxisUpdate, SyncError, SyncGroup, SyncMember, SyncOperationId,
+};
 
 /// A timeline fact one group passes on to its direct child groups.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -14,16 +18,25 @@ pub(super) enum Descent {
     Axis(SessionAxisUpdate),
 }
 
-/// One group's successor grid together with everything it moves: the pending
-/// decisions of its direct members and the segment its child groups follow,
-/// computed before mutation.
+/// One group's successor grid together with everything it moves: the
+/// decisions and applied maps of its direct members, the identities they
+/// spend, and the segment its child groups follow, computed before mutation.
 pub(super) struct Staged {
-    grid: BeatGridSnapshot,
+    pub(super) grid: BeatGridSnapshot,
     timeline: Timeline,
     parent: Option<ParentGridUpdate>,
     descent: Option<Descent>,
-    pending: Vec<Pending>,
+    pub(super) pending: Vec<Pending>,
+    applied: Vec<Applied>,
     next_map: Option<WarpMapRevision>,
+    next_operation: Option<SyncOperationId>,
+}
+
+/// Where a staged grid takes over, and the identities a retarget may spend.
+#[derive(Clone, Copy)]
+pub(super) struct Takeover {
+    pub(super) commit: Option<SessionFrame>,
+    pub(super) next_operation: Option<SyncOperationId>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -84,7 +97,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             Timeline::Off | Timeline::Local(_) => (self.grid.clone(), None),
         };
-        self.stage(grid, self.timeline, Some(update), descent)
+        let takeover = Takeover {
+            commit: Some(update.anchor().frame()),
+            next_operation: self.next_operation,
+        };
+        self.stage(grid, self.timeline, Some(update), descent, takeover)
             .map(Some)
     }
 
@@ -103,27 +120,39 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             self.timeline.on_new_axis(),
             None,
             Some(Descent::Axis(update)),
+            Takeover {
+                commit: None,
+                next_operation: self.next_operation,
+            },
         )
         .map(Some)
     }
 
     /// Stages `grid` under `timeline` as this group's successor, carrying
-    /// every pending member decision onto it.
+    /// every member decision and applied map onto it.
     pub(super) fn stage(
         &self,
         grid: BeatGridSnapshot,
         timeline: Timeline,
         parent: Option<ParentGridUpdate>,
         descent: Option<Descent>,
+        takeover: Takeover,
     ) -> Result<Staged, SyncError> {
-        let Refreshed { pending, next_map } = self.refreshed(&grid, timeline)?;
+        let Refreshed {
+            pending,
+            applied,
+            next_map,
+            next_operation,
+        } = self.refreshed(&grid, timeline, takeover)?;
         Ok(Staged {
             grid,
             timeline,
             parent,
             descent,
             pending,
+            applied,
             next_map,
+            next_operation,
         })
     }
 
@@ -140,7 +169,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.timeline = staged.timeline;
         self.parent = staged.parent;
         self.pending = staged.pending;
+        self.applied = staged.applied;
         self.next_map = staged.next_map;
+        self.next_operation = staged.next_operation;
         self.descend(staged.descent)
     }
 }

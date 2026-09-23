@@ -76,8 +76,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         let result = match &operation {
             SyncOperation::Topology { .. } => return self.transact_topology(operation),
             SyncOperation::Sync {
-                intent, activation, ..
-            } => self.transact_intent(*intent, *activation),
+                intent,
+                activation,
+                transport,
+                ..
+            } => self.transact_intent(*intent, *activation, *transport),
             SyncOperation::Tempo {
                 tempo,
                 commit,

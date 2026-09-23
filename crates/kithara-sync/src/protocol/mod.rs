@@ -8,7 +8,7 @@ mod rejected;
 mod revision;
 mod topology;
 
-pub use applied::SyncApplied;
+pub use applied::{SyncApplied, SyncExecutionReject, SyncReceipt};
 pub use facts::{ParentGridUpdate, SessionAxisUpdate};
 pub use group::{SyncError, SyncGroup, SyncStatusSnapshot};
 pub use member::SyncMember;

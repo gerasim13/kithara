@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
@@ -70,11 +70,11 @@ impl SyncGroup for PlayerSync {
             })
     }
 
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
         self.owned
             .as_mut()
             .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.acknowledge(applied)
+                owned.acknowledge(receipt)
             })
     }
 
@@ -165,7 +165,7 @@ impl SyncGroup for PlayerMember {
                 operation: SyncOperation<Self>,
             ) -> Result<SyncAdmission, SyncRejected<Self>>;
             fn status(&self) -> SyncStatusSnapshot;
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
 }

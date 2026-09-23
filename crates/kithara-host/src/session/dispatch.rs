@@ -54,8 +54,8 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
                 base: topology.stamp(),
             }
         }
-        SyncCmd::Acknowledge(applied) => {
-            let result = state.root.acknowledge(applied);
+        SyncCmd::Acknowledge(receipt) => {
+            let result = state.root.acknowledge(receipt);
             if result.is_ok() {
                 state.publish_root();
             }

@@ -8,8 +8,9 @@ mod protocol;
 pub use owner::GroupState;
 pub use protocol::{
     AlignmentSource, LoadGeneration, ParentGridUpdate, SessionAxisUpdate, SyncAdmission,
-    SyncApplied, SyncCapability, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup,
-    SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMemberSnapshot, SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
+    SyncApplied, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt,
+    SyncRejected, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
+    TransportOperation,
 };

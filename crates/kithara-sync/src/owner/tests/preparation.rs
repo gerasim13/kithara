@@ -163,7 +163,12 @@ pub(super) fn projection(admission: &SyncAdmission) -> (BeatAlignment, &WarpPlan
     let SyncAdmission::Prepared(preparation) = admission else {
         panic!("expected a prepared member, got {admission:?}");
     };
-    let SyncEffect::Projection { alignment, plan } = preparation.effect();
+    let SyncEffect::Projection {
+        alignment, plan, ..
+    } = preparation.effect()
+    else {
+        panic!("expected a projection, got {preparation:?}");
+    };
     (*alignment, plan)
 }
 
@@ -504,7 +509,7 @@ fn an_off_deck_prepares_no_member() {
 }
 
 #[kithara::test]
-fn an_audible_member_under_an_unknown_map_is_refused() {
+fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
     attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
@@ -519,9 +524,10 @@ fn an_audible_member_under_an_unknown_map_is_refused() {
 
     assert_eq!(
         prepare_in(&mut group, track, source, window(0, OPEN_END)),
-        Err(SyncError::UnknownWarpMap {
+        Err(SyncError::AudibleMapMismatch {
             member_id: track,
-            given,
+            expected: None,
+            given: Some(given),
         })
     );
 }

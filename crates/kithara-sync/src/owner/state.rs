@@ -7,14 +7,15 @@ use kithara_warp::{
 };
 
 use super::{
-    descent::Descent,
-    mutation::materialize_topology,
+    descent::{Descent, Takeover},
+    lifecycle::Applied,
+    mutation::{materialize_topology, routed_group},
     preparation::Pending,
     timeline::{Blocked, Timeline},
 };
 use crate::{
-    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
     SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
 };
 
@@ -30,6 +31,7 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
     pub(super) pending: Vec<Pending>,
+    pub(super) applied: Vec<Applied>,
     pub(super) next_map: Option<WarpMapRevision>,
     pub(super) member_kind: SyncMemberKind,
     pub(super) topology_revision: TopologyRevision,
@@ -51,6 +53,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             topology_revision: TopologyRevision::first(),
             blocked: None,
             pending: Vec::new(),
+            applied: Vec::new(),
             next_map: Some(WarpMapRevision::first()),
         }
     }
@@ -136,7 +139,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Ok(());
         }
         validate_successor(&self.grid, &candidate, Withdrawal::Refused)?;
-        let staged = self.stage(candidate, self.timeline, self.parent, descent)?;
+        let takeover = Takeover {
+            commit: None,
+            next_operation: self.next_operation,
+        };
+        let staged = self.stage(candidate, self.timeline, self.parent, descent, takeover)?;
         self.commit_staged(Some(staged))
     }
 
@@ -208,6 +215,30 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     pub(super) fn topology_stamp(&self) -> TopologyStamp {
         TopologyStamp::new(self.grid.id(), self.topology_revision)
     }
+
+    /// The state of the latest map a member sounds through: locked while it
+    /// follows the current group grid, converging while the grid moved on.
+    fn applied_status(&self, topology: TopologyStamp) -> SyncStatusSnapshot {
+        let Some(lane) = self
+            .applied
+            .iter()
+            .max_by_key(|lane| lane.applied().stamp().operation())
+        else {
+            return SyncStatusSnapshot::Off { topology };
+        };
+        let (applied, phase_error_frames) = (lane.applied(), lane.phase_error_frames());
+        if applied.stamp().group() == self.grid.stamp() {
+            SyncStatusSnapshot::Locked {
+                applied,
+                phase_error_frames,
+            }
+        } else {
+            SyncStatusSnapshot::Converging {
+                applied,
+                phase_error_frames,
+            }
+        }
+    }
 }
 
 impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
@@ -233,8 +264,14 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
         self.commit_staged(staged)
     }
 
-    fn acknowledge(&mut self, _applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        Err(SyncError::NoPreparedOperation)
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
+        let group_id = receipt.stamp().group().grid_id();
+        if group_id == self.grid.id() {
+            return self.record(receipt);
+        }
+        routed_group(&mut self.members, group_id)?
+            .ok_or(SyncError::GroupNotFound { group_id })?
+            .acknowledge(receipt)
     }
 
     fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError> {
@@ -269,7 +306,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 .max_by_key(|pending| pending.operation())
         });
         match latest {
-            None => SyncStatusSnapshot::Off { topology },
+            None => self.applied_status(topology),
             Some(Pending::Waiting {
                 operation,
                 required,

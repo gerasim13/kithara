@@ -2,12 +2,14 @@ use std::ops::Range;
 
 use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_warp::{
-    BeatAlignment, BeatGridId, BeatGridSnapshot, BeatGridState, MapRegion, WarpMapRevision,
-    WarpPlan,
+    BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState, MapRegion,
+    WarpMapRevision, WarpPlan,
 };
 
 use super::{
-    placement::{Missing, carry, place, project},
+    descent::Takeover,
+    lifecycle::Applied,
+    placement::{Missing, carry, continue_on, place, project},
     state::GroupState,
     timeline::Timeline,
     transaction::take_operation,
@@ -20,11 +22,11 @@ use crate::{
 /// The one unapplied decision a group holds for a direct member.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Pending {
-    /// The member's preparation waits for its executor, and must keep its
-    /// activation inside the launch window it was asked for.
+    /// The member's preparation is issued to its executor.
     Prepared {
         preparation: SyncPreparation,
-        window: Range<SessionFrame>,
+        entry: Entry,
+        phase: Phase,
     },
     /// The member's preparation needs grid coverage not yet published.
     Waiting {
@@ -32,6 +34,28 @@ pub(super) enum Pending {
         operation: SyncOperationId,
         required: MapRegion,
     },
+}
+
+/// How a preparation moves its member.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Entry {
+    /// A silent member starts to sound, and its activation must stay inside
+    /// the launch window it was asked for.
+    Launch(Range<SessionFrame>),
+    /// A sounding member leaves its applied map.
+    Replace,
+}
+
+/// How far the executor carried a preparation out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Phase {
+    /// Issued and not acknowledged yet.
+    Issued,
+    /// Held by the executor, which may still drop it.
+    Installed,
+    /// Committed to the output; only its presentation or a new session axis
+    /// ends it.
+    Armed,
 }
 
 impl Pending {
@@ -48,6 +72,16 @@ impl Pending {
             Self::Waiting { operation, .. } => *operation,
         }
     }
+
+    const fn armed(&self) -> bool {
+        matches!(
+            self,
+            Self::Prepared {
+                phase: Phase::Armed,
+                ..
+            }
+        )
+    }
 }
 
 /// The request one preparation answers.
@@ -59,11 +93,13 @@ pub(super) struct PrepareRequest {
     pub(super) window: Range<SessionFrame>,
 }
 
-/// The pending decisions of every direct member on a successor group grid,
-/// computed before anything changes.
+/// Every direct member's decisions on a successor group grid, computed
+/// before anything changes.
 pub(super) struct Refreshed {
     pub(super) pending: Vec<Pending>,
+    pub(super) applied: Vec<Applied>,
     pub(super) next_map: Option<WarpMapRevision>,
+    pub(super) next_operation: Option<SyncOperationId>,
 }
 
 /// The facts one preparation is minted from, besides its placement.
@@ -74,15 +110,18 @@ struct Mint<'a> {
     topology: TopologyStamp,
     load: LoadGeneration,
     transport: TransportRevision,
-    window: Range<SessionFrame>,
+    entry: Entry,
+    replaces: Option<WarpMapRevision>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
-    /// Prepares one direct grid member to enter this group's beat timeline.
+    /// Prepares one direct grid member to enter this group's beat timeline,
+    /// or a sounding one to continue on it.
     ///
-    /// A preparation replaces only the member's own pending decision. A
-    /// refusal changes nothing and spends no operation identity; a missing
-    /// coverage spends one, so the wait it reports stays addressable.
+    /// A preparation replaces only the member's own pending decision and
+    /// leaves its applied map in place. A refusal changes nothing and spends
+    /// no operation identity; a missing coverage spends one, so the wait it
+    /// reports stays addressable.
     pub(super) fn transact_prepare(
         &mut self,
         request: PrepareRequest,
@@ -105,8 +144,46 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 group_id: self.grid.id(),
                 member_id: target,
             })?;
+        if let Some(held) = self.pending_of(target).filter(|held| held.armed()) {
+            return Err(SyncError::ArmedOperation {
+                member_id: target,
+                operation: held.operation(),
+            });
+        }
+        let lane = self.applied_of(target);
+        let replaces = lane.map(Applied::map);
+        let (entry, placement) = match (source, lane) {
+            (AlignmentSource::Prepared(_), Some(_)) => {
+                return Err(SyncError::MemberAudible { member_id: target });
+            }
+            (AlignmentSource::Audible(frontier), _) if frontier.warp_map() != replaces => {
+                return Err(SyncError::AudibleMapMismatch {
+                    member_id: target,
+                    expected: replaces,
+                    given: frontier.warp_map(),
+                });
+            }
+            (AlignmentSource::Audible(frontier), Some(lane)) => {
+                let activation = window.start.max(frontier.output());
+                if activation >= window.end {
+                    return Err(SyncError::NoAdmissibleBoundary {
+                        member_id: target,
+                        first: activation,
+                        end: window.end,
+                    });
+                }
+                (
+                    Entry::Replace,
+                    continue_on(&self.grid, &member, lane.plan(), activation),
+                )
+            }
+            (source, None) => (
+                Entry::Launch(window.clone()),
+                place(&self.grid, &member, source, &window),
+            ),
+        };
         let mut next_map = self.next_map;
-        let planned = place(&self.grid, &member, source, &window).and_then(|placement| {
+        let planned = placement.and_then(|placement| {
             project(
                 &self.grid,
                 &member,
@@ -127,7 +204,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             topology,
             load,
             transport,
-            window,
+            entry,
+            replaces,
         }
         .pending(planned, &mut next_map)?;
         let admission = match &pending {
@@ -144,76 +222,179 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(admission)
     }
 
-    /// Carries every pending decision onto the successor grid `grid` under
-    /// `timeline`, without changing anything.
+    /// Carries every direct member's decisions onto the successor `grid`
+    /// under `timeline`, without changing anything.
     ///
-    /// A preparation keeps its operation and the beats that sound together
-    /// and gets a new map on the new grid; one whose activation leaves its
-    /// window, or whose member grid changed since, is withdrawn. A timeline
-    /// without geometry, or on another axis, withdraws every decision.
+    /// An armed preparation is kept as it is. A launch keeps its operation
+    /// and the beats that sound together and gets a new map on the new grid;
+    /// one whose activation leaves its window, or whose member grid changed
+    /// since, is withdrawn. A sounding member is retargeted from the commit
+    /// frame on, continuing the recording its applied map plays there. A
+    /// timeline without geometry withdraws every decision but a handoff, and
+    /// a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
         &self,
         grid: &BeatGridSnapshot,
         timeline: Timeline,
+        takeover: Takeover,
     ) -> Result<Refreshed, SyncError> {
+        let Takeover {
+            commit,
+            mut next_operation,
+        } = takeover;
         let mut next_map = self.next_map;
         if grid.stamp() == self.grid.stamp() {
             return Ok(Refreshed {
                 pending: self.pending.clone(),
+                applied: self.applied.clone(),
                 next_map,
+                next_operation,
             });
         }
-        if matches!(timeline, Timeline::Off)
-            || grid.state() != BeatGridState::Live
-            || grid.axis() != self.grid.axis()
-        {
+        if grid.axis() != self.grid.axis() {
             return Ok(Refreshed {
                 pending: Vec::new(),
+                applied: Vec::new(),
                 next_map,
+                next_operation,
             });
         }
+        let live = !matches!(timeline, Timeline::Off) && grid.state() == BeatGridState::Live;
         let mut pending: Vec<Pending> = Vec::with_capacity(self.pending.len());
-        for held in &self.pending {
-            let Pending::Prepared {
-                preparation,
-                window,
-            } = held
-            else {
-                pending.push(held.clone());
-                continue;
+        for member in self.members.iter().filter_map(|member| match member {
+            SyncMember::Grid { grid, .. } => Some(grid.snapshot()),
+            SyncMember::Group { .. } => None,
+        }) {
+            let held = self.pending_of(member.id());
+            let decided = match (held, self.applied_of(member.id())) {
+                (Some(held), _) if held.armed() => Some(held.clone()),
+                (Some(held), _) if !live => handoff(held).cloned(),
+                (_, Some(lane)) if live => {
+                    let Some(commit) = commit else {
+                        continue;
+                    };
+                    let operation = match held {
+                        Some(held) => held.operation(),
+                        None => take_operation(self.grid.id(), &mut next_operation)?,
+                    };
+                    let activation = commit.max(lane.applied().frontier().output());
+                    let planned =
+                        continue_on(grid, &member, lane.plan(), activation).and_then(|placement| {
+                            project(grid, &member, placement, map_revision(grid, next_map)?)
+                        });
+                    let stamp = lane.applied().stamp();
+                    let mint = Mint {
+                        owner: grid,
+                        member: &member,
+                        operation,
+                        topology: self.topology_stamp(),
+                        load: stamp.load(),
+                        transport: stamp.transport(),
+                        entry: Entry::Replace,
+                        replaces: Some(lane.map()),
+                    };
+                    Some(mint.pending(planned, &mut next_map)?)
+                }
+                (Some(waiting @ Pending::Waiting { .. }), None) => Some(waiting.clone()),
+                (
+                    Some(Pending::Prepared {
+                        preparation,
+                        entry: Entry::Launch(window),
+                        ..
+                    }),
+                    None,
+                ) if preparation.stamp().member() == member.stamp() => {
+                    let SyncEffect::Projection { alignment, .. } = preparation.effect() else {
+                        continue;
+                    };
+                    let planned = match carry(grid, &member, *alignment, window) {
+                        Ok(Some(placement)) => map_revision(grid, next_map)
+                            .and_then(|revision| project(grid, &member, placement, revision)),
+                        Ok(None) => continue,
+                        Err(missing) => Err(missing),
+                    };
+                    let stamp = preparation.stamp();
+                    let mint = Mint {
+                        owner: grid,
+                        member: &member,
+                        operation: stamp.operation(),
+                        topology: stamp.topology(),
+                        load: stamp.load(),
+                        transport: stamp.transport(),
+                        entry: Entry::Launch(window.clone()),
+                        replaces: None,
+                    };
+                    Some(mint.pending(planned, &mut next_map)?)
+                }
+                _ => None,
             };
-            let stamp = preparation.stamp();
-            let Some(member) = self
-                .direct_grid(stamp.member().grid_id())
-                .filter(|member| member.stamp() == stamp.member())
-            else {
-                continue;
-            };
-            let SyncEffect::Projection { alignment, .. } = preparation.effect();
-            let placement = match carry(grid, &member, *alignment, window) {
-                Ok(Some(placement)) => Ok(placement),
-                Ok(None) => continue,
-                Err(missing) => Err(missing),
-            };
-            let planned = placement.and_then(|placement| {
-                project(grid, &member, placement, map_revision(grid, next_map)?)
-            });
-            let mint = Mint {
-                owner: grid,
-                member: &member,
-                operation: stamp.operation(),
-                topology: stamp.topology(),
-                load: stamp.load(),
-                transport: stamp.transport(),
-                window: window.clone(),
-            };
-            pending.push(mint.pending(planned, &mut next_map)?);
+            pending.extend(decided);
         }
-        Ok(Refreshed { pending, next_map })
+        Ok(Refreshed {
+            pending,
+            applied: self.applied.clone(),
+            next_map,
+            next_operation,
+        })
     }
 
-    /// Drops every pending decision whose member left the group or, for a
-    /// preparation, no longer holds the grid it was projected from.
+    /// Releases every sounding member of a group that leaves its timeline at
+    /// `activation`: each one continues unsynchronized from the recording
+    /// frame its applied map reaches there.
+    pub(super) fn handoffs(
+        &self,
+        group: &BeatGridSnapshot,
+        operation: SyncOperationId,
+        transport: TransportRevision,
+        activation: SessionFrame,
+    ) -> Result<Vec<Pending>, SyncError> {
+        if let Some(held) = self.pending.iter().find(|held| held.armed()) {
+            return Err(SyncError::ArmedOperation {
+                member_id: held.member(),
+                operation: held.operation(),
+            });
+        }
+        let mut handoffs: Vec<Pending> = Vec::with_capacity(self.applied.len());
+        for lane in &self.applied {
+            let member =
+                self.direct_grid(lane.member())
+                    .ok_or_else(|| SyncError::MemberNotFound {
+                        group_id: self.grid.id(),
+                        member_id: lane.member(),
+                    })?;
+            let BeatGridQuery::Resolved(source) = lane.plan().source_at(activation) else {
+                return Err(SyncError::OutsideGrid {
+                    grid_id: member.id(),
+                });
+            };
+            let preparation = SyncPreparation::new(
+                SyncExecutionStamp::new(
+                    operation,
+                    member.stamp(),
+                    group.stamp(),
+                    self.topology_stamp(),
+                    lane.applied().stamp().load(),
+                    transport,
+                ),
+                SyncEffect::Handoff {
+                    replaces: lane.map(),
+                    source,
+                    activation,
+                },
+            );
+            handoffs.push(Pending::Prepared {
+                preparation,
+                entry: Entry::Replace,
+                phase: Phase::Issued,
+            });
+        }
+        Ok(handoffs)
+    }
+
+    /// Drops every decision whose member left the group, and every issued or
+    /// installed preparation whose member no longer holds the grid it was
+    /// projected from. What is armed or applied already sounds, so a
+    /// replaced member keeps it.
     pub(super) fn retain_current_pending(&mut self) {
         let pending = std::mem::take(&mut self.pending);
         self.pending = pending
@@ -221,21 +402,45 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .filter(|held| {
                 self.direct_grid(held.member())
                     .is_some_and(|member| match held {
-                        Pending::Prepared { preparation, .. } => {
-                            member.stamp() == preparation.stamp().member()
-                        }
-                        Pending::Waiting { .. } => true,
+                        Pending::Prepared {
+                            preparation,
+                            phase: Phase::Issued | Phase::Installed,
+                            ..
+                        } => member.stamp() == preparation.stamp().member(),
+                        Pending::Prepared { .. } | Pending::Waiting { .. } => true,
                     })
             })
+            .collect();
+        let applied = std::mem::take(&mut self.applied);
+        self.applied = applied
+            .into_iter()
+            .filter(|lane| self.direct_grid(lane.member()).is_some())
             .collect();
     }
 
     /// Returns the frozen grid of the direct grid member `id`.
-    fn direct_grid(&self, id: BeatGridId) -> Option<BeatGridSnapshot> {
+    pub(super) fn direct_grid(&self, id: BeatGridId) -> Option<BeatGridSnapshot> {
         self.members.iter().find_map(|member| match member {
             SyncMember::Grid { grid, .. } if grid.id() == id => Some(grid.snapshot()),
             SyncMember::Grid { .. } | SyncMember::Group { .. } => None,
         })
+    }
+
+    fn pending_of(&self, member: BeatGridId) -> Option<&Pending> {
+        self.pending.iter().find(|held| held.member() == member)
+    }
+}
+
+/// `held` when it still releases its member from a timeline that lost its
+/// geometry: a handoff.
+fn handoff(held: &Pending) -> Option<&Pending> {
+    match held {
+        Pending::Prepared { preparation, .. }
+            if matches!(preparation.effect(), SyncEffect::Handoff { .. }) =>
+        {
+            Some(held)
+        }
+        Pending::Prepared { .. } | Pending::Waiting { .. } => None,
     }
 }
 
@@ -251,7 +456,7 @@ impl Mint<'_> {
             Ok((alignment, plan)) => {
                 *next_map = plan.activation().revision().checked_next();
                 Ok(Pending::Prepared {
-                    preparation: SyncPreparation::projection(
+                    preparation: SyncPreparation::new(
                         SyncExecutionStamp::new(
                             self.operation,
                             self.member.stamp(),
@@ -260,10 +465,14 @@ impl Mint<'_> {
                             self.load,
                             self.transport,
                         ),
-                        alignment,
-                        plan,
+                        SyncEffect::Projection {
+                            alignment,
+                            plan,
+                            replaces: self.replaces,
+                        },
                     ),
-                    window: self.window,
+                    entry: self.entry,
+                    phase: Phase::Issued,
                 })
             }
             Err(Missing::Coverage(required)) => Ok(Pending::Waiting {

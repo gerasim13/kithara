@@ -66,12 +66,6 @@ pub(super) fn place(
             (owner_beat, member_beat)
         }
         AlignmentSource::Audible(frontier) => {
-            if let Some(given) = frontier.warp_map() {
-                return Err(Missing::Refused(SyncError::UnknownWarpMap {
-                    member_id: member.id(),
-                    given,
-                }));
-            }
             let past_frontier = i64::from(frontier.output())
                 .checked_add(1)
                 .map(SessionFrame::new)
@@ -132,6 +126,35 @@ pub(super) fn carry(
         ),
         activation,
     }))
+}
+
+/// Continues a sounding `member` from `activation` on, where its applied
+/// `plan` carries it.
+///
+/// The recording frame the plan reaches at the activation and the group beat
+/// playing there sound together, so the member neither jumps nor drops out
+/// of phase while the successor map takes over.
+pub(super) fn continue_on(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    plan: &WarpPlan,
+    activation: SessionFrame,
+) -> Result<Placement, Missing> {
+    let at = MapPosition::Session(activation);
+    let source = MapPosition::Asset(resolve(member, plan.source_at(activation), at)?);
+    let member_beat = resolve(
+        member,
+        member.beat_at(MapPoint::new(member.stamp(), source)),
+        source,
+    )?;
+    let owner_beat = owner_beat_at(owner, at)?;
+    Ok(Placement {
+        alignment: BeatAlignment::new(
+            MapPoint::new(member.stamp(), *member_beat.value().value()),
+            MapPoint::new(owner.stamp(), owner_beat),
+        ),
+        activation,
+    })
 }
 
 /// Freezes `placement` as map revision `revision` and its activation plan.

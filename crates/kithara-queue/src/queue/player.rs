@@ -4,8 +4,8 @@ use kithara_play::{
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
 use kithara_sync::{
-    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
 };
 
 use super::Queue;
@@ -47,7 +47,7 @@ where
 
             fn acknowledge(
                 &mut self,
-                applied: SyncApplied,
+                receipt: SyncReceipt,
             ) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }

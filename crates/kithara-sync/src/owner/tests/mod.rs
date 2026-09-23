@@ -8,11 +8,12 @@ use kithara_warp::{
 };
 
 use crate::{
-    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected,
+    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected,
     SyncStatusSnapshot,
 };
 
+mod lifecycle;
 mod modes;
 mod preparation;
 mod refresh;
@@ -77,7 +78,7 @@ impl SyncGroup for TestGroup {
             fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<(), SyncError>;
             fn check_axis(&self, update: SessionAxisUpdate) -> Result<(), SyncError>;
             fn check_parent(&self, update: ParentGridUpdate) -> Result<(), SyncError>;
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(

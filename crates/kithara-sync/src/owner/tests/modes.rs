@@ -66,7 +66,7 @@ pub(super) fn sync(target: BeatGridId, intent: SyncIntent) -> SyncOperation<Test
     sync_at(target, intent, SessionFrame::new(0))
 }
 
-fn sync_at(
+pub(super) fn sync_at(
     target: BeatGridId,
     intent: SyncIntent,
     activation: SessionFrame,

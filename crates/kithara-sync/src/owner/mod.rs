@@ -1,4 +1,5 @@
 mod descent;
+mod lifecycle;
 mod mutation;
 mod placement;
 mod preparation;

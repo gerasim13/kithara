@@ -9,8 +9,8 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
+    GroupState, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
     SyncRejected, SyncStatusSnapshot, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
@@ -426,7 +426,7 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
             fn status(&self) -> SyncStatusSnapshot;
         }
         to self.dispatcher {
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
 }
