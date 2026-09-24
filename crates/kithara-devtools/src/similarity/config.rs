@@ -22,7 +22,6 @@ use crate::{
 struct Consts;
 impl Consts {
     const CONFIG_REL: &'static str = ".config/similarity.toml";
-
     const INSTALL_HINT: &'static str = "cargo install similarity-rs";
 }
 
