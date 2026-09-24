@@ -407,10 +407,11 @@ impl WasmInner {
         self.send(WorkerCmd::SetVolume(volume));
     }
 
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
+    pub(crate) fn try_set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
         let rate = rate.max(kithara::play::StretchControls::MIN_SPEED);
+        self.try_send(WorkerCmd::SetPlayingRate(rate))?;
         store_f32(&self.playing_rate, rate);
-        self.send(WorkerCmd::SetPlayingRate(rate));
+        Ok(())
     }
 
     pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {

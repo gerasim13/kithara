@@ -226,6 +226,11 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_playing_rate(&self, rate: f32) {
+        self.inner.set_playing_rate(rate);
+    }
+
     /// Change the queue repeat mode.
     ///
     /// # Errors
@@ -311,10 +316,6 @@ impl AudioPlayer {
         self.inner.playing_rate()
     }
 
-    pub fn set_playing_rate(&self, rate: f32) {
-        self.inner.set_playing_rate(rate);
-    }
-
     /// Crossfade profile currently submitted to the owning queue.
     pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
         self.inner.crossfade_settings()
@@ -340,22 +341,6 @@ impl AudioPlayer {
     pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
         validate_eq_band_count(layout.len())?;
         self.inner.set_eq_layout(layout)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[cfg_attr(feature = "uniffi-web", uniffi::export)]
-impl AudioPlayer {
-    /// Create a Web player attached to the initialized host.
-    ///
-    /// # Errors
-    /// Returns a lifecycle error if the host is not ready.
-    #[cfg_attr(feature = "uniffi-web", uniffi::constructor)]
-    pub fn new_web() -> Result<Arc<Self>, FfiError> {
-        crate::web::bridge::require_initialized_domain()?;
-        Ok(Arc::new(Self {
-            inner: Inner::default(),
-        }))
     }
 }
 
