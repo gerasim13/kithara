@@ -15,7 +15,9 @@ use crate::{
         FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
-    web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
+    web::{
+        bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes, worker::DEFAULT_VOLUME,
+    },
 };
 
 /// Number of EQ bands surfaced through the wasm facade. Module-level
@@ -65,7 +67,7 @@ impl Default for WasmInner {
             bridge: WorkerBridge::default(),
             routes: Routes::new(Arc::clone(&queue_view)),
             queue_view,
-            volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
+            volume: AtomicU32::new(DEFAULT_VOLUME.to_bits()),
             crossfade_settings: Mutex::new(FfiCrossfadeSettings::default()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
@@ -88,8 +90,6 @@ fn store_f32(a: &AtomicU32, v: f32) {
 impl WasmInner {
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = kithara::play::DEFAULT_PLAYING_RATE;
-    /// Default output volume, matching the legacy wasm player.
-    const DEFAULT_VOLUME: f32 = 0.5;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -395,9 +395,12 @@ impl WasmInner {
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
-        *self.muted.lock() = muted;
-        let volume = if muted { 0.0 } else { load_f32(&self.volume) };
-        self.send(WorkerCmd::SetVolume(volume));
+        let mut requested = self.muted.lock();
+        if let Err(error) = self.try_send(WorkerCmd::SetMuted(muted)) {
+            tracing::warn!(?error, muted, "wasm mute update rejected");
+            return;
+        }
+        *requested = muted;
     }
 
     pub(crate) fn try_set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
@@ -438,10 +441,12 @@ impl WasmInner {
     }
 
     pub(crate) fn set_volume(&self, volume: f32) {
-        store_f32(&self.volume, volume);
-        if !*self.muted.lock() {
-            self.send(WorkerCmd::SetVolume(volume));
+        let volume = volume.clamp(0.0, 1.0);
+        if let Err(error) = self.try_send(WorkerCmd::SetVolume(volume)) {
+            tracing::warn!(?error, volume, "wasm volume update rejected");
+            return;
         }
+        store_f32(&self.volume, volume);
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {

@@ -98,6 +98,27 @@ async function main() {
     throw new Error("invalid crossfade changed the player owner");
   }
   await workerApplied;
+  const liveValues = new Promise<void>((resolve, reject) => {
+    const seen: string[] = [];
+    const timeout = setTimeout(() => reject(new Error(`worker did not retain mute and volume: ${seen.join(",")}`)), 10_000);
+    const observe = ({ data }: MessageEvent) => {
+      if (data.kind === "MuteChanged") seen.push(`mute:${data.muted}`);
+      if (data.kind === "VolumeChanged") seen.push(`volume:${data.volume}`);
+      if (seen.length !== 3) return;
+      events.removeEventListener("message", observe);
+      clearTimeout(timeout);
+      if (seen.join(",") === `mute:true,volume:${Math.fround(0.4)},mute:false`) resolve();
+      else reject(new Error(`worker retained wrong mute and volume: ${seen.join(",")}`));
+    };
+    events.addEventListener("message", observe);
+  });
+  generatedPlayer.setMuted(true);
+  generatedPlayer.setVolume(0.4);
+  if (!generatedPlayer.isMuted() || generatedPlayer.volume() !== Math.fround(0.4)) {
+    throw new Error("generated player lost submitted mute or volume");
+  }
+  generatedPlayer.setMuted(false);
+  await liveValues;
   const url = `${location.origin}/tone.wav`;
   const loadedTrack = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("generated player did not load the HTTP track")), 10_000);

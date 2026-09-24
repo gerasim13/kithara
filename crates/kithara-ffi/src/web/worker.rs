@@ -40,6 +40,9 @@ impl Consts {
     const ASSET_CACHE_MAX_BYTES: u64 = 128 * 1024 * 1024;
 }
 
+/// Web's established initial volume, retained by the worker's PlayerConfig.
+pub(crate) const DEFAULT_VOLUME: f32 = 0.5;
+
 /// Player-wide DRM + network state owned by the engine Worker, parallel to
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
@@ -104,6 +107,7 @@ pub(crate) fn worker_main(
                 .worker(state.worker.clone())
                 .build(),
         );
+        player.set_volume(DEFAULT_VOLUME);
         let queue = FfiQueue::new(
             QueueConfig::builder()
                 .player(player)
@@ -180,6 +184,7 @@ fn dispatch_cmd(
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
         }
         WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
+        WorkerCmd::SetMuted(muted) => queue.set_muted(muted),
         WorkerCmd::SetPlayingRate(rate) => queue.set_default_rate(rate),
         WorkerCmd::SetCrossfade(settings) => {
             let _ = queue.set_crossfade_settings(settings);

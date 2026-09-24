@@ -94,10 +94,6 @@ impl AudioPlayer {
         self.inner.insert(&item, after.as_ref())
     }
 
-    pub fn is_muted(&self) -> bool {
-        self.inner.is_muted()
-    }
-
     pub fn item_count(&self) -> u32 {
         self.inner.item_count()
     }
@@ -186,10 +182,6 @@ impl AudioPlayer {
         self.inner.set_eq_gain(band, gain_db)
     }
 
-    pub fn set_muted(&self, muted: bool) {
-        self.inner.set_muted(muted);
-    }
-
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
         self.inner.set_observer(observer);
     }
@@ -207,10 +199,6 @@ impl AudioPlayer {
     /// meaning.
     pub fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
         self.inner.set_repeat_mode(mode)
-    }
-
-    pub fn set_volume(&self, volume: f32) {
-        self.inner.set_volume(volume);
     }
 
     /// Register a runtime DRM key processor for every host (`"*"`).
@@ -268,14 +256,30 @@ impl AudioPlayer {
     pub fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
         self.inner.update_peak_bitrate(wifi_bps, cellular_bps);
     }
-
-    pub fn volume(&self) -> f32 {
-        self.inner.volume()
-    }
 }
 
 #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayer {
+    /// Current requested mute state.
+    pub fn is_muted(&self) -> bool {
+        self.inner.is_muted()
+    }
+
+    /// Current requested output volume.
+    pub fn volume(&self) -> f32 {
+        self.inner.volume()
+    }
+
+    /// Submit a mute change to the owning player.
+    pub fn set_muted(&self, muted: bool) {
+        self.inner.set_muted(muted);
+    }
+
+    /// Submit a volume change to the owning player.
+    pub fn set_volume(&self, volume: f32) {
+        self.inner.set_volume(volume);
+    }
+
     /// Append an item to the tail of the queue. AVQueuePlayer-style
     /// counterpart of [`Self::insert`], which follows the iOS protocol
     /// shape (`after == nil` ⇒ head).
