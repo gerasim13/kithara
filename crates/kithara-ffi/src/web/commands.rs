@@ -21,6 +21,7 @@ pub(crate) enum WorkerCmd {
     Stop,
     Seek(f64),
     SetVolume(f32),
+    SetPlayingRate(f32),
     SetCrossfade(CrossfadeSettings),
     Next,
     Previous,

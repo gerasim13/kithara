@@ -408,7 +408,9 @@ impl WasmInner {
     }
 
     pub(crate) fn set_playing_rate(&self, rate: f32) {
+        let rate = rate.max(kithara::play::StretchControls::MIN_SPEED);
         store_f32(&self.playing_rate, rate);
+        self.send(WorkerCmd::SetPlayingRate(rate));
     }
 
     pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {

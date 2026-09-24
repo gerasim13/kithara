@@ -134,14 +134,6 @@ impl AudioPlayer {
         self.inner.play();
     }
 
-    /// Target playback speed used by `play()`. When the player is
-    /// playing, the live `rate()` equals this value; on pause it falls
-    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
-    /// terminology.
-    pub fn playing_rate(&self) -> f32 {
-        self.inner.playing_rate()
-    }
-
     pub fn rate(&self) -> f32 {
         self.inner.rate()
     }
@@ -234,10 +226,6 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
-    pub fn set_playing_rate(&self, rate: f32) {
-        self.inner.set_playing_rate(rate);
-    }
-
     /// Change the queue repeat mode.
     ///
     /// # Errors
@@ -315,6 +303,18 @@ impl AudioPlayer {
 
 #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayer {
+    /// Target playback speed used by `play()`. When the player is
+    /// playing, the live `rate()` equals this value; on pause it falls
+    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+    /// terminology.
+    pub fn playing_rate(&self) -> f32 {
+        self.inner.playing_rate()
+    }
+
+    pub fn set_playing_rate(&self, rate: f32) {
+        self.inner.set_playing_rate(rate);
+    }
+
     /// Crossfade profile currently submitted to the owning queue.
     pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
         self.inner.crossfade_settings()

@@ -78,6 +78,11 @@ async function main() {
       }
     };
   });
+  generatedPlayer.setPlayingRate(0);
+  if (generatedPlayer.playingRate() !== Math.fround(0.05)) throw new Error("generated playback rate did not clamp to the Rust minimum");
+  generatedPlayer.setPlayingRate(0.75);
+  if (generatedPlayer.playingRate() !== 0.75) throw new Error("generated playback rate readback is wrong");
+  // The crossfade event fences the preceding rate command on the worker queue.
   generatedPlayer.setCrossfadeSettings(crossfade);
   const appliedCrossfade = generatedPlayer.crossfadeSettings();
   if (appliedCrossfade.duration !== crossfade.duration || appliedCrossfade.curve !== crossfade.curve || appliedCrossfade.depth !== crossfade.depth || appliedCrossfade.position !== Math.fround(crossfade.position)) {
