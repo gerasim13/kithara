@@ -300,7 +300,7 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     }
 
     /// `and:`-labelled overload for call sites that prefer that spelling.
-    /// Delegates to ``isPlayable(progress:ranges:)``.
+    /// Delegates to `isPlayable(progress:ranges:)`.
     public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
         isPlayable(progress: progress, ranges: ranges)
     }
