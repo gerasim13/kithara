@@ -1,8 +1,9 @@
-use std::{fmt, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use portable_atomic::{AtomicBool, AtomicF32};
 
 /// Lock-free retained boolean setting. Cloning creates an independent snapshot.
+#[derive(Debug)]
 pub struct LiveBool(AtomicBool);
 
 impl LiveBool {
@@ -27,13 +28,8 @@ impl Clone for LiveBool {
     }
 }
 
-impl fmt::Debug for LiveBool {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.load().fmt(formatter)
-    }
-}
-
 /// Lock-free retained floating-point setting. Cloning creates an independent snapshot.
+#[derive(Debug)]
 pub struct LiveF32(AtomicF32);
 
 impl LiveF32 {
@@ -55,11 +51,5 @@ impl LiveF32 {
 impl Clone for LiveF32 {
     fn clone(&self) -> Self {
         Self::new(self.load())
-    }
-}
-
-impl fmt::Debug for LiveF32 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.load().fmt(formatter)
     }
 }
