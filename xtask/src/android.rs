@@ -21,6 +21,7 @@ use kithara_devtools::{
     lock::FileLock,
     util::{check_rust_target, check_tool},
 };
+use regex::Regex;
 
 use self::device::{Request, Reverse, Screen, Selected};
 use crate::{
@@ -190,6 +191,38 @@ fn has_kotlin_source(path: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// `UniFFI` copies Rust intra-doc links verbatim, but Dokka cannot resolve them.
+/// Keep the label as inline code in generated `KDoc`; the Rust source retains its link.
+fn normalize_kotlin_docs(path: &Path, links: &Regex) -> Result<()> {
+    for entry in fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))? {
+        let path = entry
+            .with_context(|| format!("read_dir {}", path.display()))?
+            .path();
+        if path.is_dir() {
+            normalize_kotlin_docs(&path, links)?;
+        } else if path.extension().is_some_and(|kind| kind == "kt") {
+            let source = fs::read_to_string(&path)
+                .with_context(|| format!("reading generated Kotlin {}", path.display()))?;
+            let rendered = source
+                .lines()
+                .map(|line| {
+                    if line.trim_start().starts_with('*') || line.trim_start().starts_with("/**") {
+                        links.replace_all(line, "`$1`").into_owned()
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if rendered != source.trim_end_matches('\n') {
+                fs::write(&path, format!("{rendered}\n"))
+                    .with_context(|| format!("writing generated Kotlin {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn recreate_dir(path: &Path) -> Result<()> {
@@ -396,6 +429,7 @@ pub(crate) fn run_build(
             lib_path.display()
         );
     }
+    normalize_kotlin_docs(&kotlin_dir, &Regex::new(r"\[`([^`]+)`\]")?)?;
 
     println!("==> Done!");
     println!("==> JNI libs: {}", jni_dir.display());
@@ -973,4 +1007,27 @@ fn print_jdwp_attach_hint(device: &Selected) {
         println!("    Forward the JDWP socket:    adb forward tcp:8700 jdwp:<pid>");
     }
     println!("    Then attach your debugger to localhost:8700.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_kdoc_does_not_keep_rust_intra_doc_links() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("bindings.kt");
+        fs::write(
+            &file,
+            "/** [`FfiError`] */\n * Calls [`Self::insert`].\nval raw = \"[`unchanged`]\"\n",
+        )?;
+
+        normalize_kotlin_docs(dir.path(), &Regex::new(r"\[`([^`]+)`\]")?)?;
+
+        assert_eq!(
+            fs::read_to_string(&file)?,
+            "/** `FfiError` */\n * Calls `Self::insert`.\nval raw = \"[`unchanged`]\"\n"
+        );
+        Ok(())
+    }
 }
