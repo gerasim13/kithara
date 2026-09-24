@@ -17,6 +17,7 @@ mod registry;
 pub(crate) mod split_module;
 pub(crate) mod struct_field_order;
 pub(crate) mod struct_init_order;
+pub(crate) mod thin_module_dir;
 pub(crate) mod trait_item_order;
 
 pub(crate) use registry::{Check, Context, registry};

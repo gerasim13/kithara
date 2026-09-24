@@ -1,3 +1,5 @@
+#![cfg(feature = "phase")]
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Error, GenericParam, Path, Type, WherePredicate, parse_macro_input};

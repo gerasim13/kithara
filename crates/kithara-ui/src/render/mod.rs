@@ -19,6 +19,7 @@ mod owner;
 mod parity;
 mod picker;
 pub mod picture;
+#[cfg(feature = "iced")]
 mod placed;
 pub(crate) mod scroll;
 pub mod shader;

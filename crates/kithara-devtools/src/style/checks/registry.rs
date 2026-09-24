@@ -6,7 +6,7 @@ use cargo_metadata::Metadata;
 use super::{
     super::config::StyleConfig, comment_hygiene, const_locality, dead_doc_refs, doc_size,
     doc_staleness, non_english_text, qualified_path_depth, readme_shape, split_module,
-    struct_field_order, struct_init_order, trait_item_order,
+    struct_field_order, struct_init_order, thin_module_dir, trait_item_order,
 };
 use crate::common::{fix::FixOutcome, scan::Scan, scope::Scope, violation::Violation};
 
@@ -52,5 +52,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(struct_field_order::StructFieldOrder),
         Box::new(trait_item_order::TraitItemOrder),
         Box::new(struct_init_order::StructInitOrder),
+        Box::new(thin_module_dir::ThinModuleDir),
     ]
 }

@@ -1,3 +1,5 @@
+//! Placement of one scene child, and the drag that carries it.
+
 use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     advanced::{

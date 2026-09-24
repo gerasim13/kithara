@@ -10,7 +10,7 @@ use crate::{
         bar::context::Context,
         deck::{clock::Clock, summary::Summary},
         design::segmented::Segmented,
-        label::telemetry::Telemetry,
+        label::Telemetry,
         painter::{ControlPainter, Labelled},
         pivot::{map::PortalMap, range::Range},
         readout::Readout,

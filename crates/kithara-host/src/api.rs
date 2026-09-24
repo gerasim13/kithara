@@ -1,5 +1,9 @@
 use core::f32::consts::PI;
 
+pub use kithara_play::{
+    SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
+    TransportRevision,
+};
 use kithara_warp::BeatGridId;
 
 use crate::error::PlayError;

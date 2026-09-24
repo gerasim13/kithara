@@ -6,6 +6,7 @@ use std::{
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
 
+pub use crate::api::equalizer::EqualizerMock;
 use crate::{
     PlayError, SharedEq, SlotId, StreamShape,
     bridge::{NodeInputs, slot_channels},

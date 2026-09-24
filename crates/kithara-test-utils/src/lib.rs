@@ -22,6 +22,7 @@ pub mod bufpool;
 pub mod flight;
 pub mod hang;
 pub mod memory;
+#[cfg(feature = "mock")]
 pub mod mock;
 pub mod no_block;
 #[cfg(not(target_arch = "wasm32"))]

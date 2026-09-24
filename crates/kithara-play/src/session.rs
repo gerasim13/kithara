@@ -1,3 +1,5 @@
+//! Lower player-to-host session protocol.
+
 mod wire {
     use std::num::{NonZeroU32, NonZeroUsize};
 

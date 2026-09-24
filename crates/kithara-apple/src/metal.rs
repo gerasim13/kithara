@@ -1,4 +1,5 @@
-//! The device's own account of the memory it holds for this process.
+//! What the process's Metal device holds: the device's own account of the
+//! memory it holds for this process.
 //!
 //! A renderer's counters see only the resources it asked for; the bulk of a
 //! frame's cost is the command-buffer storage the driver allocates underneath

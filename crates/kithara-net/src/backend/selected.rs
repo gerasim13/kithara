@@ -15,7 +15,7 @@ pub(crate) use self::native::{
 };
 
 #[cfg(target_arch = "wasm32")]
-#[path = "wasm/mod.rs"]
+#[path = "wasm.rs"]
 mod wasm;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use self::wasm::{

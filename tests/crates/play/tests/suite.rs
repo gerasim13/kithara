@@ -11,7 +11,7 @@ use kithara_test_dylib as _;
 mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
-#[path = "../../integration/tests/common/continuity.rs"]
+#[path = "../../integration/tests/continuity.rs"]
 mod continuity;
 pub use kithara_integration_tests::gapless as gapless_common;
 
