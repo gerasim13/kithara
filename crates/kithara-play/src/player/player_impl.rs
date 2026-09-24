@@ -41,6 +41,15 @@ impl<S> Deref for PlayerImpl<S> {
 }
 
 impl<S> PlayerImpl<S> {
+    /// Submit a crossfade duration while this player is open.
+    ///
+    /// # Errors
+    /// Returns a closed-owner or slot command admission error.
+    pub fn try_set_crossfade_duration(&self, seconds: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.try_set_crossfade_duration(seconds))
+    }
+
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {

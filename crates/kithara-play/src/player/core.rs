@@ -360,6 +360,25 @@ mod tests {
         assert!(values.muted);
     }
 
+    #[kithara::test]
+    fn checked_crossfade_update_respects_closed_owner() {
+        let player = player();
+        player
+            .try_set_crossfade_duration(2.0)
+            .expect("idle player retains the next slot's setting");
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+
+        player
+            .make_control()
+            .close()
+            .expect("fixture player closes");
+        assert!(matches!(
+            player.try_set_crossfade_duration(3.0),
+            Err(PlayError::Closed)
+        ));
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn close_waits_for_an_admitted_operation() {

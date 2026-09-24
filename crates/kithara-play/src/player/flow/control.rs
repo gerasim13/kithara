@@ -1,6 +1,7 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
+use tracing::warn;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -78,9 +79,19 @@ impl<S> PlayerRuntime<S> {
 
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
+        if let Err(error) = self.try_set_crossfade_duration(seconds) {
+            warn!(?error, seconds, "crossfade duration update rejected");
+        }
+    }
+
+    /// Submit a crossfade duration to the active slot, or retain it for the next slot.
+    ///
+    /// # Errors
+    /// Returns a slot command admission error without changing the retained value.
+    pub(crate) fn try_set_crossfade_duration(&self, seconds: f32) -> Result<(), PlayError> {
         self.core
             .config
-            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
+            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
     /// Set the playback rate used by `play()` and `select_item()`, and apply it
@@ -122,9 +133,19 @@ impl<S> PlayerRuntime<S> {
     /// Controls how early the next queued item is loaded into the processor
     /// before EOF. Independent of crossfade activation.
     pub fn set_prefetch_duration(&self, seconds: f32) {
+        if let Err(error) = self.try_set_prefetch_duration(seconds) {
+            warn!(?error, seconds, "prefetch duration update rejected");
+        }
+    }
+
+    /// Submit a prefetch duration to the active slot, or retain it for the next slot.
+    ///
+    /// # Errors
+    /// Returns a slot command admission error without changing the retained value.
+    pub(crate) fn try_set_prefetch_duration(&self, seconds: f32) -> Result<(), PlayError> {
         self.core
             .config
-            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
     /// Set the requested rate target, clamped to

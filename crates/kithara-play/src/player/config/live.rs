@@ -53,10 +53,14 @@ impl<S> PlayerConfig<S> {
         &self,
         seconds: f32,
         send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
-    ) {
+    ) -> Result<(), PlayError> {
         let clamped = seconds.max(0.0);
+        match send(PlayerCmd::SetFadeDuration(clamped)) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
+        }
         self.crossfade_duration.store(clamped);
-        let _ = send(PlayerCmd::SetFadeDuration(clamped));
+        Ok(())
     }
 
     pub(crate) fn set_default_rate(&self, rate: f32) -> f32 {
@@ -82,10 +86,14 @@ impl<S> PlayerConfig<S> {
         &self,
         seconds: f32,
         send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
-    ) {
+    ) -> Result<(), PlayError> {
         let clamped = seconds.max(0.0);
+        match send(PlayerCmd::SetPrefetchDuration(clamped)) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
+        }
         self.prefetch_duration.store(clamped);
-        let _ = send(PlayerCmd::SetPrefetchDuration(clamped));
+        Ok(())
     }
 
     pub(crate) fn set_volume(
@@ -116,5 +124,52 @@ fn apply_effective_volume(
         }
     } else {
         debug!(volume, "apply_effective_volume: no slot allocated yet");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_config::Config as _;
+    use kithara_events::SlotId;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        PlayWorker, PlayWorkerConfig, mock,
+        test_pools::{TestPools, pools},
+    };
+
+    fn config() -> PlayerConfig<TestPools> {
+        PlayerConfig::builder()
+            .sample_rate(mock::SAMPLE_RATE)
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build()
+    }
+
+    #[kithara::test]
+    fn rejected_live_commands_leave_requested_values_unchanged() {
+        let config = config();
+        let rejected = || PlayError::SlotChannelFull {
+            slot: SlotId::new(1),
+        };
+
+        assert!(matches!(
+            config.set_crossfade_duration(2.0, |_| Err(rejected())),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert_eq!(config.values().crossfade_duration, 1.0);
+
+        assert!(matches!(
+            config.set_prefetch_duration(5.0, |_| Err(rejected())),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert_eq!(config.values().prefetch_duration, 3.5);
+
+        assert!(
+            config
+                .set_crossfade_duration(2.0, |_| Err(PlayError::NoActiveSlot))
+                .is_ok()
+        );
+        assert_eq!(config.values().crossfade_duration, 2.0);
     }
 }
