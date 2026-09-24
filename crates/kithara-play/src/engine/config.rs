@@ -6,7 +6,7 @@ use firewheel::{
 };
 use kithara_bufpool::PoolRegion;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_warp::BeatGridId;
 
 use crate::session::SessionBinding;
@@ -21,7 +21,6 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-#[derive_where::derive_where(Clone)]
 #[derive(derive_more::Debug)]
 pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
@@ -51,15 +50,16 @@ pub struct EngineConfig<S> {
     /// Typed pool facade for audio-thread scratch buffers.
     #[config(skip = "injected pooled scratch resource")]
     pub(crate) pools: PoolRegion<S>,
-    /// EQ band layout per player. Default: 10-band log-spaced. Not a
-    /// document key: every construction site in the workspace derives this
-    /// from a generator (`generate_log_spaced_bands`), and a custom layout
-    /// is installed at runtime through `PlayerImpl::set_eq_layout` rather
-    /// than through config.
-    #[config(skip = "layout moves to the live equalizer owner")]
-    #[builder(default = generate_log_spaced_bands(10))]
+    /// EQ band layout per player. The engine retains the live layout here;
+    /// the session receives a prepared copy when the player is registered.
+    /// Default: 10-band log-spaced. Not a document key: callers install a
+    /// custom layout through `PlayerImpl::set_eq_layout`.
+    #[config(
+        value(Vec<EqBandConfig>, self.eq_layout.lock().clone()),
+        builder(default = Mutex::new(generate_log_spaced_bands(10)), with = |layout: Vec<EqBandConfig>| Mutex::new(layout))
+    )]
     #[debug(skip)]
-    pub(crate) eq_layout: Vec<EqBandConfig>,
+    pub(crate) eq_layout: Mutex<Vec<EqBandConfig>>,
     /// Render-pass slot gate smoothing. Default: 5 ms.
     #[config(value)]
     #[builder(default = DEFAULT_GATE_SMOOTHING)]
@@ -74,6 +74,24 @@ pub struct EngineConfig<S> {
     #[config(value)]
     #[builder(default = 4)]
     pub(crate) max_slots: usize,
+}
+
+impl<S> Clone for EngineConfig<S> {
+    fn clone(&self) -> Self {
+        Self {
+            grid_id: self.grid_id,
+            sample_rate: self.sample_rate,
+            response_budget_frames: self.response_budget_frames,
+            cancel: self.cancel.clone(),
+            render_quantum_frames: self.render_quantum_frames,
+            session: self.session.clone(),
+            pools: self.pools.clone(),
+            eq_layout: Mutex::new(self.eq_layout.lock().clone()),
+            gate_smoothing: self.gate_smoothing,
+            channels: self.channels,
+            max_slots: self.max_slots,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -95,12 +113,12 @@ mod tests {
 
         assert_eq!(config.channels, 2);
         assert_eq!(config.max_slots, 4);
-        assert_eq!(config.eq_layout.len(), 10);
+        assert_eq!(config.eq_layout.lock().len(), 10);
         assert_eq!(config.gate_smoothing, DEFAULT_GATE_SMOOTHING);
     }
 
     #[kithara::test]
-    fn retained_values_exclude_moved_layout_and_injected_resources() {
+    fn retained_values_include_layout_and_exclude_injected_resources() {
         let config: EngineConfig<TestPools> = EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("a grid identity"))
             .pools(pools())
@@ -117,5 +135,6 @@ mod tests {
         assert_eq!(values.gate_smoothing, DEFAULT_GATE_SMOOTHING);
         assert_eq!(values.channels, 2);
         assert_eq!(values.max_slots, 4);
+        assert_eq!(values.eq_layout.len(), 10);
     }
 }
