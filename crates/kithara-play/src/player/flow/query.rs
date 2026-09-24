@@ -1,6 +1,5 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -140,9 +139,6 @@ impl<S> PlayerRuntime<S> {
             pub fn bus(&self) -> &EventBus;
             /// Number of EQ bands available for this player.
             pub fn eq_band_count(&self) -> usize;
-            /// Runtime handle captured by this player's engine.
-            #[must_use]
-            pub const fn runtime(&self) -> Option<&RuntimeHandle>;
         }
         to self {
             /// Returns `true` if the player is in playing state.

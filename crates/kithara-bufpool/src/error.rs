@@ -49,6 +49,9 @@ pub enum PoolError {
         /// Size of one element in bytes.
         element_size: usize,
     },
+    /// A ring was requested without a single slot.
+    #[error("a ring needs at least one slot")]
+    EmptyRing,
     /// A pool configuration cannot satisfy its declared policy.
     #[error("invalid pool configuration for {field}: {reason}")]
     InvalidConfig {

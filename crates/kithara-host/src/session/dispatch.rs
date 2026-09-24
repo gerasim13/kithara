@@ -54,8 +54,8 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
                 base: topology.stamp(),
             }
         }
-        SyncCmd::Acknowledge(applied) => {
-            let result = state.root.acknowledge(applied);
+        SyncCmd::Acknowledge(receipt) => {
+            let result = state.root.acknowledge(receipt);
             if result.is_ok() {
                 state.publish_root();
             }
@@ -495,6 +495,7 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
+    use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
@@ -684,7 +685,23 @@ mod tests {
             .topology()
             .expect("the host topology remains valid");
         assert_eq!(started.stamp(), registered.stamp());
-        assert_eq!(started.members(), registered.members());
+        // The stream may open a new session epoch at any time; each deck
+        // grid descends onto the host's axis without a topology change, so
+        // members are compared by identity and by the axis they follow.
+        let identity = |topology: &SyncGroupSnapshot| {
+            topology
+                .members()
+                .iter()
+                .map(|member| {
+                    assert_eq!(member.grid().axis(), topology.group_grid().axis());
+                    (
+                        member.grid().id(),
+                        member.group_topology().map(SyncGroupSnapshot::stamp),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(identity(&started), identity(&registered));
 
         assert!(matches!(
             run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
@@ -697,7 +714,7 @@ mod tests {
             .topology()
             .expect("the canonical member outlives its graph projection");
         assert_eq!(retained.stamp(), started.stamp());
-        assert_eq!(retained.members(), started.members());
+        assert_eq!(identity(&retained), identity(&started));
         assert_eq!(deck_count(&state), 0);
     }
 
@@ -1425,6 +1442,29 @@ mod tests {
             state.mix_tap.is_none(),
             "idle teardown must clear the mix tap with the context it lived in"
         );
+    }
+
+    #[kithara::test]
+    fn a_player_attached_after_an_idle_teardown_stops_through_the_next_one() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let first = register_player(&mut state);
+        start_player_cmd(&mut state, first);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: first }),
+            Reply::Ok
+        ));
+
+        let second = register_player(&mut state);
+        start_player_cmd(&mut state, second);
+        match run_cmd(&mut state, Cmd::StopPlayer { player_id: second }) {
+            Reply::Ok => {}
+            Reply::Err(error) => {
+                panic!("a player that joined after a route boundary must follow the next: {error}")
+            }
+            _ => panic!("stop returned an unexpected reply"),
+        }
     }
 
     #[kithara::test]

@@ -1,6 +1,6 @@
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
-    SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
@@ -55,12 +55,16 @@ impl SyncGroup for PlayerMember {
     }
 
     delegate::delegate! {
+        to self.inner.as_ref() {
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+        }
         to self.inner.as_mut() {
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn transact(
                 &mut self,
                 operation: SyncOperation<Self>,
             ) -> Result<SyncAdmission, SyncRejected<Self>>;
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
 }

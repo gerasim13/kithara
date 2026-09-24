@@ -19,6 +19,9 @@ pub(crate) struct AssetDef {
     pub(crate) content_type: &'static str,
     /// File extension inside the store.
     pub(crate) ext: &'static str,
+    /// Writes a sample of the output format the case is stored in. Its digest
+    /// joins the case id, so a format change re-addresses every stored case.
+    pub(crate) format: Option<fn() -> Vec<u8>>,
     /// Generator function name.
     pub(crate) func: &'static str,
     /// Bake the bytes into filesystem-free wasm binaries.

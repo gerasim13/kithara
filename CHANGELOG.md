@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **sync**: S2 strict transition contract: modes, strict preparations, recursive transaction, receipt lifecycle ([#432](https://github.com/zvuk/kithara/pull/432))
+- **bufpool**: Back cross-thread PCM rings with pooled memory ([#428](https://github.com/zvuk/kithara/pull/428))
+- **Breaking** — **android**: Run every Android request through the host application's HTTP client ([#420](https://github.com/zvuk/kithara/pull/420))
 - **warp**: Render projected tempo trajectories and varispeed ([#419](https://github.com/zvuk/kithara/pull/419))
 - **play**: Open a track with prepared geometry and publish it ([#411](https://github.com/zvuk/kithara/pull/411))
 - **warp**: Materialize the served beat grid and project it onto the session ([#407](https://github.com/zvuk/kithara/pull/407))
@@ -18,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **ffi**: Add modular framework features ([#376](https://github.com/zvuk/kithara/pull/376))
 - **android**: Render and release the Kotlin API documentation ([#375](https://github.com/zvuk/kithara/pull/375))
 - **dsp**: One smoothing primitive per parameter with its config on the owner ([#323](https://github.com/zvuk/kithara/pull/323))
-- **host,platform**: Build the browser host without a backend feature, and abort a wasm task ([#356](https://github.com/zvuk/kithara/pull/356))
+- **Breaking** — **host,platform**: Build the browser host without a backend feature, and abort a wasm task ([#356](https://github.com/zvuk/kithara/pull/356))
 - **derive**: Replace the ranged macro with #[derive(Ranged)] ([#341](https://github.com/zvuk/kithara/pull/341))
 - **analysis**: Compute the waveform and beat grid in the browser ([#318](https://github.com/zvuk/kithara/pull/318))
 - **app**: Configure kithara from a configuration document ([#254](https://github.com/zvuk/kithara/pull/254))
@@ -58,6 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **effects**: Extract audio effects into kithara-effects ([#423](https://github.com/zvuk/kithara/pull/423))
 - **ui**: Size the renderer's buffers for the frame, not for an 8K scene ([#403](https://github.com/zvuk/kithara/pull/403))
 - **sync**: Give the synchronization group its own crate ([#406](https://github.com/zvuk/kithara/pull/406))
 - **signal**: Own the physical render output axis ([#404](https://github.com/zvuk/kithara/pull/404))

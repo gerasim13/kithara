@@ -90,7 +90,7 @@ fn run(
     let mut builder = builder(pools.clone());
     let mut detector = builder.take_detector().expect("a detector is configured");
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
-    let (_writer, ingest) = ring::open_for(rate());
+    let (_writer, ingest) = ring::open_for(&pools, rate()).expect("test ring fits the pools");
     let job = Job {
         ingest,
         tx,

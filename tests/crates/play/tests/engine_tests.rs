@@ -97,7 +97,7 @@ fn engine_config_builder() {
         .max_slots(8)
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .channels(1)
-        .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
+        .eq_layout(kithara::effects::eq::generate_log_spaced_bands(5))
         .pools(pools())
         .response_budget_frames(response_budget())
         .build();

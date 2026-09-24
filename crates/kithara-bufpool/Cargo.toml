@@ -15,6 +15,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 [dependencies]
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-platform = { workspace = true }
+kithara-ring = { workspace = true }
 kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }

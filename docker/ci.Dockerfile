@@ -144,12 +144,17 @@ ENV KITHARA_RTSAN_LIB_DIR=/opt/rtsan
 # not the component is installed, so without this the health stage does not
 # report a missing tool — it reports `rust-analyzer scip … exited with code 1`.
 #
+# The nightly toolchain carries `llvm-tools-preview` as well: the lanes that
+# run under it resolve `llvm-nm` from the active sysroot, and the Android
+# export tests read the staged libraries' symbols with it.
+#
 # The lockbud toolchain is a fourth one and costs 1.3 GB, most of it `rustc-dev`.
 # A driver cannot borrow another toolchain's compiler internals, so a deadlock
 # verdict is what that gigabyte buys.
 RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
+      --component llvm-tools-preview \
       --component miri \
       --component rust-src \
       --component rustfmt \
@@ -241,3 +246,12 @@ RUN useradd --create-home --shell /bin/bash runner
 RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > /etc/asound.conf \
  && mkdir -p /etc/pulse/client.conf.d \
  && printf 'autospawn = yes\n' > /etc/pulse/client.conf.d/00-kithara-ci.conf
+
+# The ALSA plugin asks the server for no latency, so the null sink runs at
+# its two-second maximum: it pulls two seconds of the stream at once and asks
+# again only when they are spent. Audio a test starts after the stream opened
+# was rendered two seconds late, and a two-second wait for a 2 ms track's end
+# failed in a third of cold runs. A requested latency keeps the pull short;
+# 50 ms and below measured the same as none, 150 to 500 ms all ended the
+# track within one queue tick.
+ENV PULSE_LATENCY_MSEC=200

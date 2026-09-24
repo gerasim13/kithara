@@ -3,16 +3,17 @@ use std::num::NonZeroU32;
 use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    effects::LimiterConfig, player::PlayerMember,
+    player::PlayerMember,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
+    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
     TopologyOperation,
 };
 #[cfg(test)]
@@ -117,6 +118,7 @@ where
         sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
+        SyncMode::Off,
     );
     let root_view = RootView::new(&root, sample_rate);
     SessionState::new(

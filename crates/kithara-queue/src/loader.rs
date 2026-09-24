@@ -8,6 +8,7 @@ use kithara_events::{Envelope, EventBus, RecvError, ScopeLabel, TrackId};
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, CancelToken,
+    maybe_send::MaybeSend,
     sync::Arc,
     time::Duration,
     tokio,
@@ -194,9 +195,8 @@ where
         track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
-        let runtime = self.runtime.clone();
         let this = Arc::clone(self);
-        let future = async move {
+        self.spawn(async move {
             let id = ticket.id;
             let cancel = CancelGroup::new(vec![track_cancel.clone(), this.cancel.clone()]);
             let lane = match class {
@@ -232,9 +232,19 @@ where
             };
             this.tracks.finish_attempt(&ticket, failure);
             result
-        };
-        match runtime {
-            Some(runtime) => spawn_on(&runtime, future),
+        })
+    }
+
+    /// Spawns queue-owned async work on the queue's runtime, or on the
+    /// caller's current runtime when the queue was built outside one.
+    #[track_caller]
+    pub(crate) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + MaybeSend + 'static,
+        F::Output: MaybeSend + 'static,
+    {
+        match &self.runtime {
+            Some(runtime) => spawn_on(runtime, future),
             None => spawn(future),
         }
     }
@@ -619,7 +629,7 @@ mod tests {
             let store = AssetStore::builder(player.pools().clone()).build();
             let loader = Arc::new(Loader::new(
                 player.control(),
-                player.runtime().cloned(),
+                RuntimeHandle::try_current().ok(),
                 store,
                 self.cap,
                 Arc::clone(&tracks),

@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{RingCons, SampleBuffer};
 use kithara_platform::sync::{Arc, atomic::Ordering};
 use kithara_worker::{Task, TickResult};
 use ringbuf::{
@@ -20,7 +20,7 @@ where
     control: Arc<Control>,
     factory: F,
     formats: HeapCons<FormatChange>,
-    pcm: HeapCons<f32>,
+    pcm: RingCons<SampleBuffer>,
     core: Option<RecordingCore<F::Sink>>,
     next_format: Option<FormatChange>,
     rotation_frames: Option<NonZeroU64>,
@@ -39,7 +39,7 @@ where
 {
     pub(super) fn new<S>(
         config: LiveRecordingConfig<F, S>,
-        pcm: HeapCons<f32>,
+        pcm: RingCons<SampleBuffer>,
         formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         buffer_frames: usize,

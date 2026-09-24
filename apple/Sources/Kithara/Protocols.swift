@@ -111,9 +111,6 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Mirrors iOS `playingRate`.
     var playingRate: Float { get set }
 
-    /// Queue behavior after the current item reaches its end.
-    var repeatMode: RepeatMode { get set }
-
     var playbackOrder: PlaybackOrder { get }
     var actionAtItemEnd: ActionAtItemEnd { get }
     var crossfadeSettings: CrossfadeSettings { get }

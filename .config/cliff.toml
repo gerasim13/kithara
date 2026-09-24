@@ -21,7 +21,7 @@ body = """
 ### {{ group | striptags | trim }}
 
 {% for commit in commits -%}
-- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}
+- {% if commit.breaking %}**Breaking** — {% endif %}{% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}
 {% endfor -%}
 {% endfor %}
 

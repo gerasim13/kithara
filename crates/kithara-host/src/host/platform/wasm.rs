@@ -1,10 +1,10 @@
 use std::{collections::HashMap, mem, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
+use kithara_effects::LimiterConfig;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
     PlayError,
-    effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_sync::{

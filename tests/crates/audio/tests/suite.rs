@@ -12,7 +12,6 @@ mod common {
 pub use kithara_integration_tests::gapless as gapless_common;
 
 mod audio_tests;
-mod dsp_properties;
 mod file_ephemeral_mp3;
 #[cfg(not(target_arch = "wasm32"))]
 mod gapless_crossfade;

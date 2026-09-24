@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{RingCons, SampleBuffer};
 use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_platform::sync::{Arc, atomic::Ordering, mpsc::Sender};
 use kithara_worker::{Task, TickResult};
@@ -23,7 +23,7 @@ pub(super) struct BroadcastTask<S> {
     origin: Arc<Origin>,
     config: BroadcastConfig<S>,
     formats: HeapCons<FormatChange>,
-    pcm: HeapCons<f32>,
+    pcm: RingCons<SampleBuffer>,
     window: LiveWindow,
     completed: Option<Sender<()>>,
     encoder: Option<StreamEncoder>,
@@ -41,7 +41,7 @@ where
 {
     pub(super) fn new(
         config: BroadcastConfig<S>,
-        pcm: HeapCons<f32>,
+        pcm: RingCons<SampleBuffer>,
         formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         scratch: SampleBuffer,
