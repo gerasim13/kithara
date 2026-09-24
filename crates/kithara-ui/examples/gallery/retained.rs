@@ -6,8 +6,8 @@ use kithara_ui::{
     app::{Config, Ui},
     builtin,
     capture::{Film, Geometry, Locate, Offscreen, Stage, shoot_part, shoot_set},
-    draw::Rect,
 };
+use kurbo::Rect;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -123,7 +123,14 @@ impl<'config> Masonry<'config> {
 
 impl Locate for Masonry<'_> {
     fn locate(&self, path: &str) -> Option<Rect> {
-        self.page.as_ref()?.rect_of(path)
+        let rect = self.page.as_ref()?.rect_of(path)?;
+        let (x, y) = (f64::from(rect.x), f64::from(rect.y));
+        Some(Rect::new(
+            x,
+            y,
+            x + f64::from(rect.w),
+            y + f64::from(rect.h),
+        ))
     }
 }
 

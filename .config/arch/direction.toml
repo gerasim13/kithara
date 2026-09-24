@@ -24,6 +24,7 @@ crates = [
   "kithara-net",
   "kithara-ring",
   "kithara-signal",
+  "kithara-ui-capture",
 ]
 
 [[layer]]
