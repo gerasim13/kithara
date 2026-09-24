@@ -52,6 +52,8 @@ impl ActiveDecode {
         )
     }
 
+    /// A finished incoming may trim to an empty tail: the end-of-track hard cut proves nothing
+    /// exists past the cut, and an empty tail is exactly consistent with that proof.
     pub(crate) fn prepare_promotion(&mut self) -> Option<PreparedPromotion> {
         let (transition, span) = {
             let IncomingDecode::Priming {
@@ -80,8 +82,6 @@ impl ActiveDecode {
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
         };
-        // WHY: A finished incoming may trim to empty: the end-of-track hard cut proves there is nothing past the cut, and an empty tail is
-        // exactly consistent with that proof.
         let trimmed = trim_staged_head(&mut generation, span.overlap);
         assert!(
             trimmed || generation.is_finished(),

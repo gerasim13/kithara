@@ -63,6 +63,7 @@ pub(crate) fn try_read_info_tag(buf: &[u8], header: &FrameHeader) -> Option<Xing
     try_read_info_tag_inner(buf, header).ok().flatten()
 }
 
+/// The stored CRC is not itself part of the checksum it validates.
 fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<XingInfoTag>> {
     /// The full LAME extension size.
     const LAME_EXT_LEN: u64 = 36;
@@ -151,7 +152,6 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
             let _music_crc = reader.read_be_u16()?;
 
             if header.has_crc || encoder[..LameLayout::ENCODER_ID_LEN] == *b"LAME" {
-                // WHY: The stored CRC is not part of the checksum it validates.
                 Some(reader.inner_mut().read_be_u16()?)
             } else {
                 None

@@ -216,11 +216,11 @@ impl ReaderOutputWake {
 }
 
 impl WakeSignal for ReaderOutputWake {
+    /// A pre-push emptiness snapshot can race a consumer that is draining the ring.
     fn flush_deferred(&self) {
         self.emit.flush();
         if self.pending.swap(false, Ordering::AcqRel) {
             WakeSignal::wake(self.thread.as_ref());
-            // A pre-push emptiness snapshot can race a consumer draining the ring.
             self.emit.bus().publish(AudioEvent::OutputAvailable);
         }
     }

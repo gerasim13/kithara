@@ -52,11 +52,12 @@ impl CasAnchorCell {
             .is_ok()
     }
 
+    /// Bails early under a writer's demand gate instead of spinning, then validates a fenced,
+    /// version-sandwiched snapshot: an unchanged version and matching generation reject torn reads
+    /// or entries a concurrent `clear` retired.
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
-            // WHY: A writer owns the body: bail to not-ready for this poll instead of spinning. The level-triggered re-poll observes the demand
-            // a tick
             return None;
         }
         let generation = self.active.load(Ordering::Acquire);
@@ -65,15 +66,10 @@ impl CasAnchorCell {
         }
         let segment = self.segment.load(Ordering::Relaxed);
         let anchor = self.anchor.load(Ordering::Relaxed);
-        // WHY: Pin the Relaxed body loads before the re-validation: on weak-memory targets (AArch64) they could otherwise sink past the
-        // version/`active` recheck and accept a torn `{segment, anchor}` from a newer writer.
         fence(Ordering::Acquire);
-        // WHY: Version sandwich: an unchanged even version proves no writer touched body or `active` across the read, so the snapshot is
-        // coherent.
         if self.version.load(Ordering::Acquire) != start {
             return None;
         }
-        // WHY: Reject a snapshot a concurrent `clear` already retired.
         if self.active.load(Ordering::Acquire) != generation {
             return None;
         }
@@ -84,13 +80,14 @@ impl CasAnchorCell {
         })
     }
 
+    /// Wraps around 2^64 generations, treated as practically unreachable; 0 stays reserved to mean
+    /// absent.
     fn next_gen(&self) -> u64 {
         let generation = self
             .next_gen
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
         if generation == 0 {
-            // WHY: 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
             self.next_gen
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
@@ -102,6 +99,9 @@ impl CasAnchorCell {
     /// Multi-writer publish. Acquires the version with a CAS (even -> odd); a
     /// racing writer retries. `active` and the body are written under the lock,
     /// so two writers' publishes serialize and never lost-update each other.
+    ///
+    /// Stores `active` as 0 before writing `segment`/`anchor`, hiding the entry from `load` until
+    /// the write completes, so a stale `take_if(old)` cannot observe a torn update.
     pub(super) fn set(&self, segment: u32, anchor: u64) {
         let held = loop {
             let cur = self.version.load(Ordering::Acquire);
@@ -121,12 +121,10 @@ impl CasAnchorCell {
             spin_loop();
         };
         let generation = self.next_gen();
-        // WHY: Hide the demand for the body write so a stale `take_if(old)` cannot
         self.active.store(0, Ordering::Release);
         self.segment.store(segment, Ordering::Relaxed);
         self.anchor.store(anchor, Ordering::Relaxed);
         self.active.store(generation, Ordering::Release);
-        // WHY: Release the version lock (odd -> even).
         self.version.store(held.wrapping_add(1), Ordering::Release);
     }
 }

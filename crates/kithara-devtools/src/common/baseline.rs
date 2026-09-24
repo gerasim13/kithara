@@ -30,10 +30,6 @@ impl Baseline {
     /// Compare observations against this baseline.
     #[must_use]
     pub fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
-        // Match on the canonical (line-insensitive) identity so that edits
-        // which merely shift line numbers — e.g. rustfmt re-wrapping an import
-        // block above a violation — do not re-fingerprint an unchanged
-        // violation as new. See `canonical_key`.
         let mut baseline_counts: BTreeMap<(&str, String), u64> = BTreeMap::new();
         for (check, keys) in &self.checks {
             for (key, &recorded) in keys {

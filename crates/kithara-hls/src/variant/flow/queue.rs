@@ -67,10 +67,11 @@ where
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
+    /// A rebuild with nothing to re-plan still claims plan ownership, so a fetch the triggering
+    /// rearm cancelled in flight settles into a foreign plan instead of resurrecting a prefix
+    /// behind the target.
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
-            // WHY: Nothing to re-plan, but the rebuild still claims plan ownership: a fetch the triggering rearm cancelled in flight must settle
-            // into a foreign plan, not resurrect a prefix behind the target (see `PlanGuard::supersede`).
             self.flow.queue.lock().supersede();
             return;
         }

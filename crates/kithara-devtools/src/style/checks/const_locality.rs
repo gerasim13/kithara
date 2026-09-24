@@ -190,24 +190,19 @@ fn crate_key_for(workspace_root: &Path, file: &Path) -> String {
     String::new()
 }
 
+/// A const is only "local to one fn" when every reference to its name is an expression-position use
+/// inside a single fn/method body in the const's own module; any other reference makes the locality
+/// claim unprovable, so analysis stays conservative and skips it.
 fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>) -> Vec<Finding> {
     let mut consts: Vec<ConstSite> = Vec::new();
     collect_consts(&file.items, 0, &mut Vec::new(), &mut consts);
 
     let mut findings = Vec::new();
     for site in consts {
-        // Referenced from another file of the same crate → shared, not local.
         if external.contains(site.name.as_str()) {
             continue;
         }
 
-        // Whole-file reference scan: a const is only "local to one fn" when
-        // *every* reference to its name is an expression-position use inside
-        // a single fn/method body *in the const's own module*. References in
-        // another fn, a different (e.g. `#[cfg(test)]`) module, a
-        // macro/attribute token stream, a doc comment, or a type /
-        // const-generic / array-length position make the locality claim
-        // unprovable, so we stay conservative and skip.
         let mut analyzer = RefAnalyzer::new(&site.name, &site.mod_path);
         analyzer.visit_file(file);
         if analyzer.disqualified {
@@ -464,8 +459,6 @@ impl<'a> RefAnalyzer<'a> {
     }
 
     fn record_owner(&mut self) {
-        // A reference from a different module than the const lives in is a
-        // cross-module use; the const cannot be made fn-body-local there.
         if self.current_mod_path != self.const_mod_path {
             self.disqualified = true;
             return;
@@ -476,8 +469,6 @@ impl<'a> RefAnalyzer<'a> {
                     self.owners.push(owner.clone());
                 }
             }
-            // Reference reached in expression position but outside any
-            // fn/method body (e.g. a top-level const/static initializer).
             None => self.disqualified = true,
         }
     }
@@ -489,9 +480,6 @@ impl<'a> RefAnalyzer<'a> {
 
 impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
     fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        // Covers attribute-macro args (`#[case(..)]`,
-        // `#[kithara::test(timeout(..))]`) and doc comments
-        // (`#[doc = "...[`NAME`]..."]`, including intra-doc links).
         if attr_mentions_name(a, self.name) {
             self.disqualified = true;
         }
@@ -499,8 +487,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
     }
 
     fn visit_expr_repeat(&mut self, e: &'ast syn::ExprRepeat) {
-        // `[value; LEN]` — the length is a const expression position, so a
-        // reference there is not a movable body-local const.
         self.visit_expr(&e.expr);
         self.type_depth += 1;
         self.visit_expr(&e.len);
@@ -508,7 +494,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
     }
 
     fn visit_generic_argument(&mut self, arg: &'ast GenericArgument) {
-        // `GenericArgument::Const` is a const-generic value position.
         if let GenericArgument::Const(_) = arg {
             self.type_depth += 1;
             visit::visit_generic_argument(self, arg);
@@ -525,8 +510,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         for attr in &f.attrs {
             self.visit_attribute(attr);
         }
-        // Signature (generics, args, return type) is *not* the fn body.
-        // A reference there cannot be turned into a body-local const.
         self.visit_signature(&f.sig);
         let saved = self.current_owner.take();
         self.current_owner = Some(Owner::TopFn {
@@ -544,7 +527,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         let impl_id = self.impl_counter;
         self.impl_counter += 1;
         let target = self_ty_name(&im.self_ty).unwrap_or_else(|| format!("<impl#{impl_id}>"));
-        // The impl header (self type + generics + trait path) is not a body.
         self.type_depth += 1;
         self.visit_type(&im.self_ty);
         self.type_depth -= 1;
@@ -587,8 +569,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
     }
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
-        // syn does not parse macro token streams; a reference inside one
-        // cannot be proven to be expression-position-local, so we bail.
         if self.tokens_mention_name(&m.tokens) {
             self.disqualified = true;
         }
@@ -602,14 +582,11 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         let is_match = p.segments.last().is_some_and(|s| s.ident == self.name);
         if is_match {
             if self.type_depth > 0 {
-                // Type / const-generic / array-length position.
                 self.disqualified = true;
             } else {
                 self.record_owner();
             }
-            // Still descend so nested generic args (e.g. turbofish) are seen.
         }
-        // Path segment arguments can contain types / const-generics.
         for seg in &p.segments {
             if let PathArguments::AngleBracketed(args) = &seg.arguments {
                 for arg in &args.args {
@@ -663,8 +640,6 @@ fn attr_mentions_name(a: &syn::Attribute, name: &str) -> bool {
     match &a.meta {
         Meta::Path(_) => false,
         Meta::List(list) => token_stream_mentions(&list.tokens, name),
-        // Doc comments and other name-value attrs: scan the value (catches
-        // intra-doc links such as `[`NAME`]` in `#[doc = "..."]`).
         Meta::NameValue(nv) => match &nv.value {
             Expr::Lit(lit) => match &lit.lit {
                 Lit::Str(s) => s.value().contains(name),

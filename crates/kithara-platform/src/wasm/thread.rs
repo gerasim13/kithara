@@ -50,7 +50,6 @@ pub fn keep_worker_alive() {
 }
 
 pub type Thread = wasm_safe_thread::Thread;
-
 pub type ThreadId = wasm_safe_thread::ThreadId;
 
 fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
@@ -157,13 +156,13 @@ where
     spawn(counted(f))
 }
 
+/// Uses the consumer-registered shim name (`set_wasm_shim_name`) when set, falling back to
+/// `wasm_safe_thread`'s Performance-API auto-detection otherwise.
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    // WHY: Use the consumer-registered shim name (see `set_wasm_shim_name`); fall back to `wasm_safe_thread`'s Performance-API
-    // auto-detection only when unset.
     let mut builder = WasmThreadBuilder::new();
     if let Some(shim) = wasm_shim_name().get() {
         builder = builder.shim_name(shim.clone());

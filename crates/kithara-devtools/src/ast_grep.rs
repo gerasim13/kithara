@@ -134,15 +134,15 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
             });
         entry.hits.push(Hit {
             file: m.file,
-            // ast-grep counts from zero and every reader of this report counts
-            // from one. Printing its own numbers sent each hit one line above
-            // the code it is about, which is a different statement.
             line: m.range.start.line + 1,
             column: m.range.start.column + 1,
         });
     }
 }
 
+/// Runs a second pass for hard-correctness rules that must also see tests: the main scan applies
+/// `[lint_exclude].paths` (production-only), so each `scan_all` rule is re-run standalone with no
+/// exclude globs, replacing its prod-only group.
 fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let project = &ctx.config;
 
@@ -166,10 +166,6 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     parse_into(&String::from_utf8_lossy(&output.stdout), &mut by_rule);
     let mut ok = output.status.success();
 
-    // Second pass: hard-correctness rules that must see tests too. The main
-    // scan applied the `[lint_exclude].paths` globs (production-only); re-run
-    // each `scan_all` rule standalone with NO exclude globs so its own
-    // `files:`/`ignores:` are the only scope, then replace its prod-only group.
     for rule_id in &project.lint_exclude.scan_all_rules {
         let rule_file = format!(".config/ast-grep/{rule_id}.yml");
         let mut rule_cmd = Command::new(ctx.config.tools.program("ast-grep"));
@@ -355,6 +351,47 @@ mod tests {
 
     fn magic_number_hits(source: &str) -> usize {
         rule_hits("style.no-magic-numbers.yml", source)
+    }
+
+    fn module_root_hits(relative_path: &str, source: &str) -> usize {
+        rule_hits_at("style.no-items-in-lib-or-mod-rs.yml", relative_path, source)
+    }
+
+    #[test]
+    fn module_root_rule_reports_code_in_every_module_root() {
+        let source = "mod child;\npub use child::Item;\n\nfn helper() {}\n";
+        for path in [
+            "crates/kithara-audio/src/lib.rs",
+            "crates/kithara-audio/src/engine/mod.rs",
+            "crates/kithara-audio/src/engine/tests/mod.rs",
+            "crates/kithara-audio/tests/common/mod.rs",
+            "tests/crates/core/src/lib.rs",
+            "xtask/src/android/mod.rs",
+        ] {
+            assert_eq!(module_root_hits(path, source), 1, "{path}");
+        }
+    }
+
+    #[test]
+    fn module_root_rule_allows_declarations_and_reexports() {
+        let root = "//! Engine.\n\nmod child;\n#[cfg(test)]\nmod tests;\n\npub use child::Item;\npub(crate) use child::{helper, other};\n";
+        assert_eq!(
+            module_root_hits("crates/kithara-audio/src/engine/mod.rs", root),
+            0
+        );
+
+        let code = "fn helper() {}\n";
+        assert_eq!(
+            module_root_hits("crates/kithara-audio/src/engine/child.rs", code),
+            0
+        );
+        assert_eq!(
+            module_root_hits(
+                "crates/kithara-devtools/tests/fixtures/workspace/crates/demo/src/lib.rs",
+                code
+            ),
+            0
+        );
     }
 
     #[test]

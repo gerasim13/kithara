@@ -94,6 +94,26 @@ struct KitharaPlayerTests {
         _ = cancellable
     }
 
+    @Test("advanceToNextItem is a non-throwing no-op on the last item")
+    func advanceToNextItemIsANoOpOnTheLastItem() throws {
+        let player = KitharaPlayer()
+        let only = KitharaPlayerItem(
+            url: "https://example.com/only.mp3",
+            audioId: 42,
+            uuid: 123
+        )
+        var errors: [KitharaPlayerError] = []
+        let cancellable = player.contextualError.sink { errors.append($0) }
+
+        try player.insert(only)
+        player.advanceToNextItem()
+
+        #expect(player.currentAudioItem?.uuid == only.uuid)
+        #expect(player.items().map(\.uuid) == [only.uuid])
+        #expect(errors.isEmpty)
+        _ = cancellable
+    }
+
     @Test("represented item follows queue identity")
     func representedItemFollowsQueueIdentity() throws {
         let player = KitharaPlayer()

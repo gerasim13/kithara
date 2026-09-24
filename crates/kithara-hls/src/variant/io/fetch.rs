@@ -16,6 +16,10 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Builds a fetch command whose completion settles the claim under its cancellation epoch.
+    ///
+    /// A concurrent cache commit supplies the authoritative on-disk length. The writer fires
+    /// byte-arrival wakes before terminal settle, since stalled-escape reconciliation and the audio
+    /// worker have no reader progress to notice otherwise.
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
@@ -26,7 +30,6 @@ where
     ) -> Option<FetchCmd> {
         let writer = match acq {
             AcquisitionResult::Pending(writer) => writer,
-            // WHY: A concurrent cache commit supplies the authoritative on-disk length.
             AcquisitionResult::Ready(reader) => {
                 match reader.status() {
                     ResourceStatus::Committed { final_len: Some(n) } => {
@@ -53,18 +56,15 @@ where
             signal: signal.clone(),
             bus: self.profile.bus.clone(),
         };
-        // WHY: The timeout hook needs the slot cell after the claim moves into `on_complete`.
         let slow_slot = slot.handle.slot_state();
         let slow_signal = signal.clone();
         let on_slow: OnSlowFn = Box::new(move || {
             slow_slot.mark_slow();
-            // WHY: Stalled-escape reconciliation has no reader progress to wake it.
             slow_signal.wake_peer();
         });
         let demand_slot = slot.handle.slot_state();
         let demand: DemandFn = Box::new(move || demand_slot.is_reader_demanded());
         let mut inner_writer = slot.writer();
-        // WHY: Readers and the audio worker need byte-arrival wakes before terminal settle.
         let writer_fn: WriterFn = Box::new(move |chunk: &[u8]| {
             let result = inner_writer(chunk);
             if result.is_ok() {

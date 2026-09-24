@@ -7,7 +7,7 @@ use crate::{
             fader::Fader,
             status_dot::{StatusDot, StatusDotData},
         },
-        label::telemetry::Telemetry,
+        label::Telemetry,
         tab::TabLarge,
         wave::face::{Drawn, Wave},
     },

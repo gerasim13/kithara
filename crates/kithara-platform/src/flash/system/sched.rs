@@ -223,9 +223,9 @@ impl Core {
         })
     }
 
+    /// No `pinning_async` veto: a paced target exists only while a real I/O op is in flight, where
+    /// the pin must not suppress it (see `try_advance`).
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        // WHY: No `pinning_async` veto: a paced target exists only while an op is in flight, and there the pin must not suppress it - see
-        // `try_advance`.
         if self.registry.active != 0 {
             return None;
         }
@@ -256,16 +256,15 @@ impl Core {
     /// it never fires `indef`, which has no deadline. Fires nothing unless
     /// every participant is parked (`active == 0`) and at least one timed
     /// waiter exists.
+    ///
+    /// Quiescence requires both the sync and async participant counts at zero, except async slots
+    /// no thread can currently poll (`pinning_async`), which do not block the advance while a paced
+    /// op is in flight.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
-        // WHY: While an op is in flight the advance below is capped at real pace, and a capped advance is what a wall clock does to a
-        // mid-poll task anyway.
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
-            // WHY: A running participant (sync OS thread OR async task mid-poll): do not jump. Both counters must be zero for genuine quiescence
-            // - except for async slots no thread can currently poll (`pinning_async`).
             return WakeBatch(Vec::new());
         }
-        // WHY: Cooperative yielders re-poll at the CURRENT instant before the clock can advance to a `Thread` (`park_timeout`) deadline.
         if !self.sched.yielders.is_empty()
             && self
                 .sched
@@ -280,16 +279,8 @@ impl Core {
             return WakeBatch(woken);
         }
         let Some((&(earliest, _), _)) = self.sched.timed.iter().next() else {
-            // WHY: Quiescent with NO timed waiter to advance to. Any parked yield-waiter was already drained above (when `timed` is empty the
-            // all-`Thread` guard is vacuously true), so reaching here means there is nothing runnable at all: stay put.
             return WakeBatch(Vec::new());
         };
-        // WHY: A BACKSTOP park re-checks an edge that only another participant can move (`ParkRole::Backstop`). Stopping a PURELY VIRTUAL
-        // advance at one prices every wait at a hop per poll interval: behind a live worker a virtual day costs millions of hops and burns
-        // real seconds. Such an advance BOUNDS the jump instead - the loop below wakes every park the jump passed - and when no other
-        // deadline exists the backstop IS the target, so its timeout still fires and the clock can never freeze. A PACED advance keeps the
-        // earliest deadline: virtual time is tied to real time there, so a backstop costs nothing, while targeting a later deadline would
-        // hold the clock until real time reached it - the producer behind the backstop would starve.
         let min = if paced {
             earliest
         } else {
@@ -300,12 +291,7 @@ impl Core {
                 .map_or(earliest, |(&(deadline, _), _)| deadline)
         };
         if paced {
-            // WHY: PACE while real I/O is in flight: virtual time may not outrun real time, so the earliest deadline fires only once the
-            // equivalent REAL time has accrued since the first in-flight op anchored the pace.
             if self.pace_owed(min) > 0 {
-                // WHY: Wake the pacer to re-target the next real deadline - but NEVER the pacer waking itself. The pacer runs this same advance rule
-                // after each park, and a self-unpark would arm its own park token, so the following `park_timeout` returns immediately -> busy-spin
-                // until the deadline comes due.
                 if let Some(t) = &self.sched.pacer_wake
                     && t.id() != std::thread::current().id()
                 {
@@ -323,7 +309,6 @@ impl Core {
         self.sched.advance_log.push(min);
         let mut woken: Vec<Wake> = Vec::new();
         while let Some((&(d, _), _)) = self.sched.timed.iter().next() {
-            // WHY: `>`, not `!=`: the target skips BACKSTOP parks, so one jump can pass several of them and every one it passed is due.
             if d > min {
                 break;
             }
@@ -331,8 +316,6 @@ impl Core {
                 woken.push(entry.wake);
             }
         }
-        // WHY: A clock advance is progress: wake every cooperative-yield waiter to re-check its poll condition. They carry no deadline, so
-        // an advance is the only thing that reschedules them.
         for (_, wake) in std::mem::take(&mut self.sched.yielders) {
             woken.push(wake);
         }
@@ -406,6 +389,9 @@ impl FlashInner {
     /// slip between reading the clock and inserting. A pending `unpark` (one that
     /// arrived while this thread was running) is consumed here and returns
     /// immediately without parking or touching `active`.
+    ///
+    /// If a wake already landed before parking, returns without touching credit accounting, since
+    /// the thread never entered a wait.
     pub(in crate::flash) fn park_timed_unparkable(
         &self,
         d: crate::flash::Duration,
@@ -416,7 +402,6 @@ impl FlashInner {
         let token = Token::new();
         let mut s = self.core.lock();
         if s.sched.unpark_pending.remove(&thread_id) {
-            // WHY: A wake already landed: do not park (and do not touch credit - we never entered a wait, so the thread stays as it was).
             return;
         }
         let deadline = self.clock.now_nanos().saturating_add(delta);
@@ -484,8 +469,6 @@ impl FlashInner {
         if let Some(key) = key
             && let Some(entry) = s.sched.timed.remove(&key)
         {
-            // WHY: A Thread-park entry is always `Sync` (see `park_timed_unparkable`), so this bumps `active` by exactly one; `mark_granted` is
-            // a Task-only no-op.
             s.registry.account_woken(std::slice::from_ref(&entry.wake));
             drop(s);
             entry.wake.fire();
@@ -548,8 +531,6 @@ impl FlashInner {
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
-        // WHY: The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this lock; an async sleep could have jumped the clock
-        // since, leaving the deadline below the current virtual instant.
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -659,8 +640,6 @@ impl FlashInner {
                 woken.push(entry.wake);
             }
         }
-        // WHY: Condvar waiters never share a cvid with Task waiters (one cvid per primitive from the single allocator), so every wake here
-        // is `Sync` and the per-Sync bump equals the old `+= woken.len()`.
         s.registry.account_woken(&woken);
         drop(s);
         for t in woken {
@@ -964,7 +943,6 @@ impl FlashInner {
             woken.push(entry.wake);
         }
         if woken.is_empty() {
-            // WHY: No waiter: store a permit (notify_one) so the next notified() returns
             s.sched.notify_permits.insert(cvid);
         } else {
             s.registry.account_woken(&woken);

@@ -21,6 +21,7 @@ where
     decode(curve, periods, tempo, pools).map(|(beats, _)| beats)
 }
 
+/// Decoding starts as if a beat fell just before the first frame.
 fn decode<S>(
     curve: &[f32],
     periods: &[f32],
@@ -51,7 +52,6 @@ where
         .iter()
         .map(|&p| log_hazard(p, states, tempo, pools))
         .collect::<Result<_, _>>()?;
-    // The path starts as if a beat fell just before the first frame.
     let mut previous = pools.get_with_len::<f32>(states)?;
     previous.fill(f32::NEG_INFINITY);
     if let Some(first) = previous.first_mut() {

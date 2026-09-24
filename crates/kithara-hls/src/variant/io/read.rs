@@ -17,9 +17,10 @@ impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Reads the membership mirror rather than the queue lock, since this runs on the produce core
+    /// inside `phase_at`, where a blocking lock would spin into `sched_yield` under planner
+    /// contention in a real-time context.
     pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
-        // WHY: Runs on the produce core inside `phase_at`: the membership mirror, not the queue lock - a blocking lock here spins into
-        // `sched_yield` in a real-time context under planner contention.
         self.flow.queue.planned(planned)
     }
 
@@ -92,7 +93,6 @@ where
             range.end
         };
         let mut cursor = range.start;
-        // WHY: Check the init before advancing into media descriptor space.
         if let Some(init_range) = self.init_descriptor_at(cursor) {
             if self.init_failed() {
                 return true;
@@ -116,6 +116,8 @@ where
         self.range_ready_with(range, || {})
     }
 
+    /// Treats an incomplete total as only a lower bound: treating it as EOF would admit a
+    /// zero-width ready range before an unsized segment arrives.
     fn range_ready_published_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {
         let total = self.total_bytes();
         after_total();
@@ -123,8 +125,6 @@ where
         let clamp_alias_to_eof = uses_seek_alias
             && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             && self.eof_ready();
-        // WHY: An incomplete total is only a lower bound; treating it as EOF would
-        // admit a zero-width ready range before the unsized segment arrives.
         if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             return false;
         }

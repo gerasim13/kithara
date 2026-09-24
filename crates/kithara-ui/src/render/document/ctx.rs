@@ -161,13 +161,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
         match binding.kind {
             BindingKind::Command => None,
-            // The screen's own state, which no application declares and none is
-            // asked for.
             BindingKind::View { .. } => Some(ReadValue::Bool(
                 self.view.flag(self.ui.resolve(binding.key)),
             )),
-            // Whether the page this binding names is the page standing, which
-            // is how a nav item lights the page it turns to.
             BindingKind::Page { name } => Some(ReadValue::Bool(
                 self.ui
                     .views()

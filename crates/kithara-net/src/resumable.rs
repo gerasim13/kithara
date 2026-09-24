@@ -169,10 +169,11 @@ impl State {
     /// non-range (`200`) resume re-sent, advance `consumed`, and return the
     /// bytes to yield — `None` when the chunk was prefix only (still
     /// progress: the stall timer re-arms on the next chunk await).
+    ///
+    /// `usize -> u64` widens losslessly; `u64 -> usize` narrows and goes through checked
+    /// conversion, with `min` capping the skip at the chunk length so the fallback split point is
+    /// always valid.
     fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
-        // WHY: `usize -> u64` is a widening cast (lossless on every target), so `AsPrimitive` is infallible; `u64 -> usize` can narrow, so
-        // it goes through checked `ToPrimitive` - `min` caps the skip at the chunk length, so it always fits and the fallback is a valid
-        // split point.
         let received: u64 = bytes.len().as_();
         let skip = self.to_skip.min(received);
         self.to_skip -= skip;
@@ -226,6 +227,9 @@ async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
 /// consumed offset up to `policy.max_retries` times (with `policy` backoff),
 /// then yields a terminal [`NetError::RetryExhausted`]. A clean EOF, a
 /// non-transient error, or cancellation end the stream immediately.
+///
+/// `Option<State>` doubles as the unfold's alive/finished switch: a terminal error is yielded
+/// together with `None`, so the next poll ends the stream.
 pub(crate) fn resumable_body(
     first: ByteStream,
     refetch: Refetch,
@@ -253,8 +257,6 @@ pub(crate) fn resumable_body(
         to_skip: 0,
         resumes: 0,
     };
-    // WHY: `Option<State>` is the unfold's alive/finished switch: a terminal error is yielded together with `None`, so the next poll
-    // ends the stream.
     Box::pin(stream::unfold(Some(state), |st| async move {
         let mut st = st?;
         loop {

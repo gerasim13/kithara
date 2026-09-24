@@ -264,10 +264,11 @@ impl Demuxer for SymphoniaDemuxer {
         Ok(())
     }
 
+    /// Parks before the target by the larger of priming warmup or one codec packet, so the trim
+    /// guard lands on a packet boundary; the resulting seek is the authoritative resume point and
+    /// clears any pending strand recovery.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
-        // WHY: park before target by max(priming warmup, one codec packet) so the trim
-        // guard lands on a packet boundary.
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
@@ -288,8 +289,6 @@ impl Demuxer for SymphoniaDemuxer {
 
         let landed_at = self.ts_to_duration(seeked.actual_ts);
 
-        // WHY: A fresh seek defines the authoritative resume point and clears any pending strand recovery left over from the prior read
-        // position.
         self.resume_ts = seeked.actual_ts.get();
         self.resume_pending = None;
 
@@ -325,11 +324,12 @@ fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i
 }
 
 impl SymphoniaDemuxer {
+    /// A read interrupted at a not-ready boundary can strand bytes `MediaSourceStream` already
+    /// consumed into a packet that was then discarded, advancing its read position without emitting
+    /// the packet.
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
     fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
-        // was then discarded, advancing its read position).
         let resume_floor = if let Some(reason) = self.resume_pending {
             match self.reseek_to_resume() {
                 Ok(()) => {
@@ -362,8 +362,6 @@ impl SymphoniaDemuxer {
                     let Some(reason) = pending_reason(&error) else {
                         return Err(DecodeError::backend(error));
                     };
-                    // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
-                    // position advanced, no packet emitted).
                     if !self.format_reader.restores_interrupted_packet() {
                         self.resume_pending = Some(reason);
                     }
@@ -378,8 +376,6 @@ impl SymphoniaDemuxer {
             {
                 continue;
             }
-            // WHY: This packet was emitted cleanly; the next one must start at its end. Track the resume point in native timebase units so a
-            // strand re-seek round-trips exactly to this boundary.
             self.resume_ts = packet
                 .pts
                 .get()
@@ -544,6 +540,8 @@ const fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
     )
 }
 
+/// The typed payload behind `Interrupted` is lost by the time it reaches here, so only its variant
+/// name can be logged.
 fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     match err {
         SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => DecodeError::SeekOutOfRange {
@@ -572,8 +570,6 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
                     .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
             }) =>
         {
-            // WHY: The typed payload (`StreamPending`: pos/phase/epoch/flushing) dies here - `Interrupted` is a unit variant, and the seek
-            // recovery above can only log the name.
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
         }

@@ -62,6 +62,8 @@ where
     type Events = EventBus;
     type Source = HlsSource<S>;
 
+    /// Builds a single readiness-gate handle shared by the off-RT `wait_range(_, None)` park and
+    /// the late-bound audio-worker wake.
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let stream_scope = CancelScope::new(config.cancel.clone());
         let cancel = stream_scope.token();
@@ -138,8 +140,6 @@ where
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // WHY: Unified reader-wake handle: the shared readiness gate for the off-RT
-        // `wait_range(_, None)` park paired with the late-bound audio-worker wake.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 

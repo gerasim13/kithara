@@ -32,12 +32,14 @@ impl<D: DriverIo> ResourceCore<D> {
     /// snapshot is parked rather than dropped here: a write publishes a new
     /// generation on every chunk, and a read that races one would otherwise be
     /// its last owner and free the range tree on the audio thread.
+    ///
+    /// Takes a lock-free fast path once committed: a published snapshot always covers the whole
+    /// `[0, committed_len)` since both drivers are linear with no eviction, so coverage reduces to
+    /// a single length comparison.
     pub(super) fn contains_range_inner(&self, range: Range<u64>) -> bool {
         if range.is_empty() {
             return true;
         }
-        // WHY: Lock-free committed fast path. A published committed snapshot covers the whole `[0, committed_len)` (both drivers are linear
-        // - `valid_window()` is `None`, no eviction - so a snapshot implies no gaps), so coverage reduces
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
@@ -55,6 +57,8 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.gate.notify_all();
     }
 
+    /// The write side pays the frees that produce-core reads parked, rather than leaving them for
+    /// the reader that raced the write.
     fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
         self.check_health()?;
 
@@ -86,7 +90,6 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
-        // WHY: The write side pays the frees the produce-core reads parked.
         self.inner.retired.drain();
 
         if let Some(len) = final_len
@@ -98,9 +101,10 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
+    /// The committed snapshot stays published across a `reactivate`, so this confirms the lock-free
+    /// lifecycle flag is still committed before trusting the snapshot's length as the resource's
+    /// final length.
     pub(super) fn len_inner(&self) -> Option<u64> {
-        // WHY: The committed snapshot stays published across a `reactivate` so reads remain consistent, so confirm the *lifecycle* is still
-        // committed (the lock-free flag) before reporting its length as the resource's final length.
         if self.inner.committed.load(Ordering::Acquire)
             && let Some(committed_len) = self.inner.driver.committed_len()
         {
@@ -124,6 +128,8 @@ impl<D: DriverIo> ResourceCore<D> {
             .map(|gap| gap.start..gap.end.min(upper))
     }
 
+    /// A new write generation starts armed: `abandon` only waives the anti-hang stamp for the
+    /// writer that owns this refill, never for whoever writes next over the same core.
     pub(super) fn reactivate_inner(&self) -> StorageResult<()> {
         if self.inner.cancel.is_cancelled() {
             return Err(crate::StorageError::Cancelled);
@@ -131,8 +137,6 @@ impl<D: DriverIo> ResourceCore<D> {
 
         self.inner.driver.reactivate()?;
         self.inner.committed.store(false, Ordering::Release);
-        // WHY: A new write generation starts armed: `abandon` waives the anti-hang stamp for the writer that owns the refill, not for
-        // whoever writes next over the same core.
         self.inner.stamp_on_drop.store(true, Ordering::Release);
 
         {

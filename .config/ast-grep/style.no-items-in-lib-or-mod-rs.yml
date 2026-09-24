@@ -9,14 +9,11 @@ message: |
 severity: error
 language: Rust
 files:
-  - crates/**/src/lib.rs
-  - crates/**/src/**/mod.rs
+  - "**/lib.rs"
+  - "**/mod.rs"
 ignores:
-  - "**/tests/**"
-  - "**/test_*.rs"
-  - "**/*_test.rs"
-  - "**/*_tests.rs"
-  - "**/tests.rs"
+  # Lint-engine fixtures carry the shapes the checks detect, on purpose.
+  - "**/tests/fixtures/**"
   # Proc-macro crates: rustc requires `#[proc_macro_*]` functions to be
   # physically defined in lib.rs (the crate root). `pub use` re-exports
   # of proc-macros are rejected with E0658-style error

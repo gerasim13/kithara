@@ -260,6 +260,10 @@ pub(super) mod lifecycle {
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
+    ///
+    /// Reserves a successor before stopping, since backends may defer processor drop after
+    /// `stop_stream` and teardown must not depend on the RT `stream_stopped` callback reaching this
+    /// handle.
     pub(in crate::session) fn shutdown_if_idle<T, S>(
         state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {
@@ -283,11 +287,6 @@ pub(super) mod lifecycle {
                     .map_err(|error| graph_state(error.message()))?,
                 None => observed_session_grid,
             };
-            // Backends may defer processor drop after `stop_stream`. Reserve a
-            // successor before stopping so teardown never depends on the RT
-            // `stream_stopped` callback reaching this control handle. Control
-            // admits at most one unobserved commit; the next context advances
-            // once more before publishing.
             session_grid_generation
                 .advance_restart()
                 .map_err(|error| graph_state(error.message()))?;
@@ -498,8 +497,6 @@ pub(super) mod controls {
             if resolved.iter().any(|&(seen, _)| seen == idx) {
                 return Err(SessionError::DuplicatePlayer(player_id));
             }
-            // Checked here so the apply pass below is infallible
-            // (all-or-nothing).
             let player = deck_at(state, idx)?;
             if player.started
                 && (state.ctx.is_none()

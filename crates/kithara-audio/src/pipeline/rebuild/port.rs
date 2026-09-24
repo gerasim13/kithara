@@ -235,6 +235,8 @@ impl<T: StreamType> RebuildPort<T> {
     }
 }
 
+/// A generation built here has nothing buffered yet, and this runs on the off-RT builder, so the
+/// sink has nothing to carry.
 fn run<T: StreamType>(job: PendingJob<T>) {
     let PendingJob {
         build,
@@ -278,7 +280,6 @@ fn run<T: StreamType>(job: PendingJob<T>) {
             pending_head_skip,
             deps.gapless_mode,
         );
-        // WHY: A generation built here has nothing buffered yet, and this runs on the off-RT builder, so the sink has nothing to carry.
         if landing.is_some_and(|landing| !landing.is_zero()) {
             generation.notify_seek(&DropChunks);
         }

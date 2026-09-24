@@ -209,9 +209,6 @@ fn plan_file(cfg: &QualifiedPathDepthConfig, file: &syn::File) -> FilePlan {
         }
     }
     let mut imports = settle(proposed, &mut plan.skipped);
-    // A name this file cannot see through - the same item spelled another way
-    // somewhere the import would reach - takes its import down with it, and
-    // that may be the only thing another import was riding on.
     for _ in 0..imports.len().min(4) {
         let pass = walk(&imports, &file.items, &scope);
         if pass.suspect.is_empty() {
@@ -493,6 +490,9 @@ impl Pass<'_> {
 
     /// Walk one inline module, which reads the level around it only when it
     /// opens itself to those names.
+    ///
+    /// Whatever the module reads out of the level around it keeps that name alive there, whether or
+    /// not the module is walked further.
     fn module(&mut self, item: &ItemMod, stack: &mut Vec<Level>) {
         let Some((_, items)) = &item.content else {
             return;
@@ -501,8 +501,6 @@ impl Pass<'_> {
         let prefix = join(&stack[here].scope.prefix, &item.ident.to_string());
         let scope = Scope::of_items(items, &prefix);
         let inherits = scope.glob.inherited;
-        // Whatever the module reads out of the level around it keeps that
-        // name alive there, whether or not the module is walked further.
         let mut names = PathVisitor::default();
         for item in items {
             names.visit_item(item);
@@ -1074,9 +1072,9 @@ impl<'ast> Visit<'ast> for PathVisitor<'ast> {
         self.under_cfg(attrs, |this| visit::visit_item(this, item));
     }
 
+    /// A `macro_rules!` body is expanded wherever the macro is called, so this file's own imports
+    /// do not travel there and cannot shorten paths inside it.
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        // A `macro_rules!` body is expanded wherever the macro is called, and
-        // this file's imports do not travel there.
         if item.ident.is_none() {
             visit::visit_item_macro(self, item);
         }

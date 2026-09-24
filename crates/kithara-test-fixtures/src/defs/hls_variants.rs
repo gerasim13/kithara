@@ -258,7 +258,6 @@ impl Profile {
 
 fn inputs() -> Vec<VariantInput> {
     let mut profiles = Vec::new();
-    // Default AAC shapes used by HLS, queue, play, and regression suites.
     for (segments, seconds) in [
         (1, 2.0),
         (3, 4.0),
@@ -302,7 +301,6 @@ fn inputs() -> Vec<VariantInput> {
         descending.signal = Wave::SawtoothDescending;
         profiles.push(descending);
     }
-    // PCM identity stress profiles keep the original phase for every variant.
     for (segments, seconds) in [
         (3, 2.0),
         (4, 2.0),
@@ -366,7 +364,6 @@ fn inputs() -> Vec<VariantInput> {
 
 fn gapless_profiles() -> Vec<Profile> {
     let mut profiles = Vec::new();
-    // Decoder metadata parity and gapless playback use 48 kHz AAC-LC.
     for gapless in [
         GaplessEncoding::None,
         GaplessEncoding::Edts,

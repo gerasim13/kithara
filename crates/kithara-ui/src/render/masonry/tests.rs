@@ -260,7 +260,7 @@ impl Reads for PopoverReads {
 mod preset_registry {
     use crate as kithara_ui;
 
-    include!("../../../tests/common/mod.rs");
+    include!("../../../tests/common/registry.rs");
 }
 
 #[derive(Default)]

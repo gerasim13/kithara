@@ -274,6 +274,8 @@ fn scan_items(
     }
 }
 
+/// Mirrors the autofix safety model: reordering across heterogeneous `#[cfg(...)]` field attributes
+/// changes which fields compile together, so detection refuses these the same way the fix does.
 fn check_field_block(
     cfg: &StructFieldOrderConfig,
     rel: &str,
@@ -286,9 +288,6 @@ fn check_field_block(
     if fields.len() < 2 {
         return;
     }
-    // Mirror the autofix safety model: reordering across heterogeneous
-    // `#[cfg(...)]` field attributes changes which fields compile together,
-    // so the fix refuses these — detection must not flag them either.
     if has_heterogeneous_cfg(fields) {
         return;
     }

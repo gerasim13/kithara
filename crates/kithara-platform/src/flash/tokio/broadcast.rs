@@ -164,9 +164,9 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// Marks the channel closed and signals before the inner sender field drops, so a receiver
+    /// woken during that window still observes `Closed`.
     fn drop(&mut self) {
-        // WHY: The last sender closes the channel. Marking `closed` and signalling happens here (the inner tokio sender field drops just
-        // after), so a woken receiver that re-checks during that window still sees `Closed`.
         if self.shared.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.shared.close();
         }
@@ -196,9 +196,11 @@ impl<T: Clone> Sender<T> {
     ///
     /// # Errors
     /// Returns the value back when there are no live receivers.
+    ///
+    /// Signals after the inner append completes, preserving the lost-wakeup handshake with parked
+    /// receivers.
     pub fn send(&self, value: T) -> Result<usize, SendError<T>> {
         let result = self.inner.send(value);
-        // WHY: Signal AFTER the inner append so the lost-wakeup handshake holds.
         self.shared.signal();
         result.map_err(|e| SendError(e.0))
     }
@@ -248,10 +250,10 @@ pub struct Recv<'a, T> {
 impl<T: Clone> Future for Recv<'_, T> {
     type Output = Result<T, RecvError>;
 
+    /// Holds the gate across the try-receive and the waiter registration, so a concurrent `send` is
+    /// either observed by this `try_recv` or wakes the waiter registered here.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = &mut *self.get_mut().rx;
-        // WHY: Engine wait resolves only when granted; a real wait re-checks the ring below (a spurious wake just re-parks). Clear the
-        // marker either way.
         match rx.pending.as_ref() {
             Some(Parked::Engine(handle)) => {
                 if handle.granted() {
@@ -263,8 +265,6 @@ impl<T: Clone> Future for Recv<'_, T> {
             Some(Parked::Real(_)) => rx.pending = None,
             None => {}
         }
-        // WHY: Hold the gate across the try-op AND the registration so a concurrent `send` (inner append, then signal under the same gate)
-        // is either seen by this `try_recv` or wakes the waiter we register here.
         let mut gate = rx.shared.gate.lock();
         match rx.inner.try_recv() {
             Ok(value) => {
@@ -307,10 +307,10 @@ impl<T: Clone> Future for Recv<'_, T> {
 }
 
 impl<T> Drop for Recv<'_, T> {
+    /// Removes only its own waker on drop, so a send cannot wake an already-dropped future; mirrors
+    /// the same drop-race guard in `mpsc` and `oneshot`.
     fn drop(&mut self) {
         match self.rx.pending.take() {
-            // WHY: Remove EXACTLY our own waker so a send does not wake a dropped future (mirrors `mpsc`/`oneshot`; the granted-then-dropped
-            // edge is the shared deferred wakeup hole, design section 11).
             Some(Parked::Real(waker)) => {
                 self.rx
                     .shared

@@ -353,16 +353,12 @@ impl<T: StreamType> Stream<T> {
     /// afterwards.
     #[kithara::flash(true)]
     fn prime_seek_range(&mut self, range: Range<u64>) {
-        // WHY: Cache-hit fast path: a non-blocking phase probe. A re-seek into already-resident bytes needs no fetch and no wait - skip the
-        // peer wake so a burst of random seeks over a warm cache does not fire one cross-thread `notify_one` (and downloader re-plan) per
-        // seek.
         if matches!(
             self.source.phase_at(range.clone()),
             SourcePhase::Ready | SourcePhase::Eof
         ) {
             return;
         }
-        // WHY: Not resident: wake the peer once so it re-aims its prefetch at the new cursor, then block on the source's event-driven wait.
         if let Some(wake) = self.source.peer_wake() {
             wake.notify_now();
         }
@@ -384,6 +380,10 @@ impl<T: StreamType> Stream<T> {
         self.try_read_with(buf, WaitMode::Probe)
     }
 
+    /// Awaits only the unit holding the read cursor, never a wider range, since segmented readiness
+    /// is all-or-nothing and a slow tail would otherwise block a read the resident head could
+    /// already satisfy. If the resource is evicted between `wait_range` and `read_at`, it
+    /// re-acquires immediately without parking.
     #[kithara::measure]
     #[kithara::hang_watchdog]
     fn try_read_with(
@@ -402,9 +402,6 @@ impl<T: StreamType> Stream<T> {
             let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let requested_end = pos.saturating_add(buf.len() as u64);
-            // WHY: A read never awaits bytes it will not return: `read_len` is this same clamp, so awaiting past the unit holding the cursor
-            // parks on segments the caller is not being handed. Segmented readiness is all-or-nothing over a range, so one wide wait couples the
-            // read to every segment it spans - a slow tail then blocks a read the resident head could already satisfy.
             let unit_end = if self.source.peer_wake().is_some() {
                 self.source.byte_map().and_then(|map| {
                     let init = map.init_segment_range();
@@ -483,8 +480,6 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Pending(PendingReason::Retry));
                 }
                 ReadOutcome::Pending(PendingReason::Retry) => {
-                    // WHY: Resource evicted between `wait_range` (Ready) and `read_at`: re-acquire on the next loop. This is active progress, not a
-                    // wait, so re-loop tightly - the reader stays counted and keeps the virtual clock pinned until it re-acquires.
                     hang_tick!();
                     continue;
                 }
@@ -639,6 +634,9 @@ pub fn format_change_segment_range(vc: Option<&dyn VariantControl>) -> StreamRes
 impl<T: StreamType> Read for Stream<T> {
     /// Blocks off the real-time path until bytes, EOF, a seek, a variant change, or an error.
     /// Timeout and stall policy remain owned by the source.
+    ///
+    /// On an evicted `Retry` range, wakes the peer to trigger a re-fetch and re-loops, so the next
+    /// attempt parks in the event-driven `wait_range`.
     #[kithara::flash(true)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
@@ -648,8 +646,6 @@ impl<T: StreamType> Read for Stream<T> {
                 Ok(StreamReadOutcome::Pending(
                     PendingReason::NotReady(_) | PendingReason::Retry,
                 )) => {
-                    // WHY: Wake the peer (an evicted `Retry` range must be re-fetched), then re-loop - the next `try_read_with` parks in the
-                    // event-driven `wait_range(_, None)`.
                     self.notify_peer_wake();
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
@@ -691,20 +687,18 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Seek for Stream<T> {
+    /// Off the real-time path, discovers the length for an `End`-relative seek by priming, since
+    /// `probe_seek` cannot and errors instead. The cursor is published before priming so the peer,
+    /// which aims from the cursor, targets the new position rather than the stale one.
     #[kithara::measure]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let current = self.source.position();
 
-        // WHY: Off-RT consumer path: discover the length for an End-relative seek by priming (the produce-core `probe_seek` cannot, and
-        // errors instead).
         if matches!(pos, SeekFrom::End(_)) && self.source.len().is_none() {
             self.prime_seek_range(0..1);
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
-        // WHY: Publish the cursor before priming. `prime_seek_range` blocks on the bytes at the new position after waking the peer to re-aim
-        // at it, and the peer aims by reading the cursor - published afterwards it would read the old one and keep the wait waiting on a
-        // fetch that is walking there byte by byte.
         self.source.set_position(new_pos);
 
         let wait_range = match self.format_change_segment_range() {

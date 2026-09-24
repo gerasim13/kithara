@@ -136,9 +136,10 @@ where
     }
 
     /// Advances one frame's worth of animation.
+    ///
+    /// Advances the clock before ticking the app, so what this frame draws reflects the time this
+    /// frame stands at rather than the previous one.
     pub fn frame(&mut self, elapsed: Duration) {
-        // Before the refresh, so what this frame draws is the time this frame
-        // stands at rather than the one before it.
         self.clock = self.clock.advance(elapsed);
         self.app.tick();
         let Self {
@@ -223,6 +224,8 @@ where
         self.settle();
     }
 
+    /// The pointer leaving the window ends every hover beneath it; without this the control it left
+    /// would keep drawing itself lit.
     fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
         let at = self.pointer;
         let scale = self.scale;
@@ -243,8 +246,6 @@ where
                 coalesced: Vec::new(),
                 predicted: Vec::new(),
             })),
-            // The hand leaving the window ends every hover under it; without
-            // this the control it left keeps drawing itself lit.
             PointerPhase::Leave => Some(PointerEvent::Leave(pointer_info())),
             PointerPhase::Cancel
             | PointerPhase::DoubleClick
@@ -358,11 +359,6 @@ where
         if self.turn()? {
             return Ok(());
         }
-        // The flag turned no page, so the screen standing is the one already
-        // compiled. It is mounted again all the same, because what a flag
-        // lights - a group's background, a glyph's colour - is settled where
-        // the tree is built, which is the same reason standing at a page
-        // mounts one.
         self.mount_shown()
     }
 
@@ -442,10 +438,10 @@ where
     Application: App,
 {
     /// Mounts the screen the cache is showing, in place of the tree standing.
+    ///
+    /// Drops state the newly shown screen does not name, rather than keeping it to answer for a
+    /// state this document does not have.
     fn mount_shown(&mut self) -> Result<(), RunError> {
-        // A state belongs to the document that named it. What the screen now
-        // shown does not name is gone rather than kept to answer for a state
-        // this document does not have.
         self.view.retain(self.screens.shown().views().named());
         self.app.turned(&self.view);
         self.root = mount(
@@ -495,9 +491,6 @@ where
         let was_document = self.app.document().to_owned();
         let was_skin = self.app.skin().id().to_owned();
         for event in actions {
-            // A press that turns the screen's own state is answered here, by
-            // the host that owns it. The application is told all the same: what
-            // the document turns for itself is not hidden from it.
             if let UiEvent::Control { path, action } = &event
                 && matches!(action, ControlAction::Activate)
                 && let Some((state, write)) = self.screens.shown().views().at(path)
@@ -511,8 +504,6 @@ where
         }
         if self.app.document() == was_document && self.app.skin().id() == was_skin {
             match self.turn() {
-                // The shape on screen is the one the pages already standing
-                // compile to, so the mounted tree is read again in place.
                 Ok(false) => {
                     let Self {
                         app,

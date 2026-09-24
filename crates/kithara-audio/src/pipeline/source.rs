@@ -189,13 +189,13 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
+    /// A failed node can be removed before another deferred pass, so this keeps a teardown flush
+    /// for cancellation, unregistration, or partial setup that drops the source without a completed
+    /// produce pass.
     fn drop(&mut self) {
-        // WHY: A failed node can be removed before another deferred pass.
         if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
             self.progress_variant_transition();
         }
-        // WHY: The scheduler's post-pass recycle normally publishes lifecycle events before terminal-slot removal. Keep a teardown flush for
-        // cancellation, unregistration, or partial setup that drops the source without a completed produce pass.
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
@@ -323,9 +323,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// A reader starved on the outgoing variant keeps advancing an already-requested transition;
+    /// the transition itself owns whether that source remains part of the promotion proof.
     fn progress_variant_transition(&mut self) {
-        // WHY: A reader starved on the outgoing variant keeps advancing an already requested transition. The transition itself owns whether
-        // that source remains part of the promotion proof.
         match &self.state {
             CurrentFsm::Decoding(_) => {}
             CurrentFsm::WaitingForSource(track) => {
@@ -338,9 +338,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.variant_control.clone(),
                     self.decode.incoming_transition(),
                 ) {
-                    // WHY: This abort also discards the pending variant intent, and no tick source re-derives it afterwards. The fields separate
-                    // "incoming never primed" from "staged span never reached the frontier" from "landing minted behind the frontier" when a switch dies
-                    // against the outgoing EOF.
                     debug!(
                         at_eof = matches!(self.state, CurrentFsm::AtEof(_)),
                         latched_frontier = ?self.decode.incoming_frontier(),
@@ -369,12 +366,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             .map_or(landing_frontier, |transition| {
                 promotion_frontier_for(transition, landing_frontier)
             });
-        // WHY: Priming is bounded per pass and may mint the overlap proof consumed immediately below. A publication lock leaves both
-        // generations intact and the next pass extends the staged range to the newer frontier.
         let prime = self.decode.prime_incoming(observed_frontier);
         if let Some(incoming) = self.decode.incoming_transition() {
-            // WHY: The frontier and the prime outcome together are the only thing that separates "the incoming is still staging" from "the
-            // splice has nothing to land against": both look identical from outside as a switch that simply never commits.
             trace!(
                 ?landing_frontier,
                 ?observed_frontier,
@@ -599,9 +592,9 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         self.resume.commit_source_end(source_end, epoch);
     }
 
+    /// This is the epoch the current decode belongs to, stored when a seek is applied and stamped
+    /// on every chunk it produces.
     fn decode_epoch(&self) -> u64 {
-        // WHY: The epoch the current decode belongs to - stored when a seek is applied (`ApplyingSeek` / `try_apply_seek`), and the same
-        // value stamped on produced chunks (`decode_one_step`).
         self.seek_engine.epoch()
     }
 
@@ -652,9 +645,9 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         track::dispatch(self)
     }
 
+    /// The storage committed-read fast path lazily allocates this thread's `arc_swap` debt node on
+    /// its first load, so this call pays that cost up front instead of on the first real read.
     fn warm_up(&mut self) {
-        // WHY: The storage committed-read fast path (`MemDriver::committed_len` / `read_committed` behind an `arc_swap::ArcSwapOption`)
-        // lazily `Box`-allocates this thread's `arc_swap` debt node on its FIRST load.
         let warm = ArcSwap::from_pointee(());
         let _ = warm.load();
         let _ = self.shared_stream.len();

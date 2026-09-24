@@ -410,6 +410,9 @@ fn read_box_size(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u64> {
 /// The box walk itself belongs to `kithara-mp4`; what stays here is the
 /// projection of its samples onto the buffer-relative view the demuxer
 /// slices frames out of.
+///
+/// The frame vector is presized and filled by hand, since collecting into a `Result<Vec<_>>` would
+/// lose the exact capacity, and a segment must cost exactly one allocation.
 pub(crate) fn parse_segment_frames(
     init: &Fmp4InitInfo,
     segment_bytes: &[u8],
@@ -421,8 +424,6 @@ pub(crate) fn parse_segment_frames(
         .map_err(|error| DecodeError::InvalidData {
             detail: error.detail(),
         })?;
-    // Presized and filled by hand: collecting into a `Result<Vec<_>>`
-    // loses the exact capacity, and a segment must cost one allocation.
     let mut frames: Vec<Fmp4Frame> = Vec::with_capacity(samples.len());
     for sample in &samples {
         frames.push(frame_from_sample(sample)?);

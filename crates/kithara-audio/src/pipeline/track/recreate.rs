@@ -100,15 +100,14 @@ fn apply_recreate_next<T: StreamType>(
     }
 }
 
+/// Rebuild continues from the PCM already admitted to the final producer port, not raw decode
+/// progress or the consumer's lagging position: the resume target applies only until it appears in
+/// that output.
 fn finish_format_boundary_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
 ) -> RecreateOutcome {
-    // WHY: Continue from the decoded-source endpoint represented by PCM admitted to the final producer port, not from raw decode
-    // progress or the consumer's lagging `committed`.
     let committed = src.playhead.position();
     let epoch_now = src.seek_engine.epoch();
-    // WHY: `resume_target` wins only while the target has NOT yet materialized in admitted output (`target > rendered source head`);
-    // comparing against the consumer's lagging `committed` mislabels the warmed-up case and re-emits `[target..rendered source head)`.
     let target_time =
         src.resume
             .resume_position(epoch_now, committed, src.seek_engine.resume_target());

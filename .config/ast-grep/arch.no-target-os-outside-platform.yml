@@ -27,10 +27,6 @@ ignores:
   # Android JNI gates live one level down in `src/native/mod.rs`, alongside
   # the native platform shims. Documented in [kithara-ffi contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi).
   - "crates/kithara-ffi/src/lib.rs"
-  # Legacy session-boundary exemption; this module now exposes the lower
-  # player-to-host protocol. Host execution belongs to `kithara-host`.
-  # See https://github.com/zvuk/kithara/wiki/kithara-host.
-  - "crates/kithara-play/src/session/mod.rs"
   # `kithara-ffi` hosts native-only platform shims one level below the
   # `native`/`web` split in `src/lib.rs` (already exempted above): Android
   # JNI module wiring lives in `src/native/mod.rs` alongside the other

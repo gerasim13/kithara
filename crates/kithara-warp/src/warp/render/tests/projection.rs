@@ -1,4 +1,4 @@
-use kithara_test_fixtures::unit_fixtures::warp_sine;
+use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
 
 use super::*;
 
@@ -1199,4 +1199,43 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
         outputs[0], outputs[1],
         "reset history is independent of seek origin"
     );
+}
+
+#[kithara::test]
+fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
+    let pools = pools();
+    let config = WarpConfig::builder()
+        .stretch(StretchControls::new(1.0))
+        .build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
+    let mut renderer = warp.renderer(spec(), pools.clone());
+    let output = OutputContext::new(
+        SessionFrame::new(1_000)..SessionFrame::new(1_001),
+        spec().sample_rate,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture output range is ordered");
+    let context = RenderContext::new(output, None).expect("fixture context is valid");
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(41)
+            .output(SessionFrame::new(1_000))
+            .build(),
+    );
+    let mut input = chunk(&pools, &warp_pair);
+    input.meta.frame_offset = 41;
+
+    let output = render_serviced(&mut renderer, input).expect("unity render succeeds");
+    let snapshot = renderer
+        .committed
+        .as_ref()
+        .expect("successful render commits a snapshot");
+
+    assert_eq!(output.frames(), 1);
+    assert_eq!(snapshot.context(), &context);
+    assert_eq!(snapshot.frontier().source(), 42);
+    assert_eq!(snapshot.frontier().output(), SessionFrame::new(1_001));
 }

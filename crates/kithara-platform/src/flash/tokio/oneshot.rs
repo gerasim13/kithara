@@ -99,6 +99,9 @@ impl<T> Sender<T> {
     ///
     /// # Errors
     /// Returns `Err(value)` when the receiver has already dropped.
+    ///
+    /// Takes the receiver's waker under the same lock it parks under, so storing the value and
+    /// waking it stay atomic with respect to a receiver poll.
     pub fn send(mut self, value: T) -> Result<(), T> {
         let Some(shared) = self.shared.take() else {
             return Err(value);
@@ -108,8 +111,6 @@ impl<T> Sender<T> {
             return Err(value);
         }
         inner.value = Some(value);
-        // WHY: Take the real waker under the same lock the receiver parks under, so the value store and the wake are atomic w.r.t. a
-        // receiver poll.
         let waker = inner.real_waker.take();
         drop(inner);
         match shared.backend {
@@ -126,13 +127,13 @@ impl<T> Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// Wakes the receiver so its next poll observes the sender as dropped.
     fn drop(&mut self) {
         if let Some(shared) = self.shared.take() {
             let mut inner = shared.inner.lock();
             inner.sender_alive = false;
             let waker = inner.real_waker.take();
             drop(inner);
-            // WHY: Wake the receiver so its next poll observes the closed sender.
             match shared.backend {
                 Backend::Engine(cvid) => system::signal_channel(cvid, false),
                 Backend::Native => {
@@ -155,10 +156,10 @@ pub struct Receiver<T> {
 impl<T> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
+    /// Stores its waker under the lock, after re-checking value and alive state, so a concurrent
+    /// send or sender-drop either observes the waker or has not yet stored what this poll missed.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        // WHY: Re-poll bookkeeping: an engine wait resolves only when granted; a real wait always re-checks the value/alive state below (a
-        // spurious wake just re-parks).
         if let Some(Parked::Engine(handle)) = this.pending.as_ref() {
             if handle.granted() {
                 this.pending = None;
@@ -182,8 +183,6 @@ impl<T> Future for Receiver<T> {
             }
             Backend::Native => {
                 trace_native_from_ambient("oneshot", "recv_park");
-                // WHY: Store the real waker UNDER the lock, after re-checking value/alive, so a `send`/sender-drop that takes this lock either
-                // observes our waker (and wakes it) or has not yet stored the value we just missed.
                 inner.real_waker = Some(cx.waker().clone());
                 this.pending = Some(Parked::Real);
                 drop(inner);
@@ -194,11 +193,11 @@ impl<T> Future for Receiver<T> {
 }
 
 impl<T> Drop for Receiver<T> {
+    /// Drops its stored waker on a real park exit, so a late `send` does not wake an
+    /// already-dropped future; the slot holds at most this receiver's waker.
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock();
         inner.receiver_alive = false;
-        // WHY: Real park: drop our stored waker so a late sender does not wake a dropped future. (The slot holds at most this receiver's
-        // waker.)
         if matches!(self.pending, Some(Parked::Real)) {
             inner.real_waker = None;
         }

@@ -7,8 +7,10 @@ use crate::error::{DecodeError, DecodeResult};
 ///     `dfLa` `FLACSpecificBox` verbatim — `[size:4][b"dfLa"]
 ///     [version+flags:4][metadata block hdr:4][STREAMINFO:34]` — from
 ///     which the body is sliced.
+///
+/// The `dfLa` box header is size (4 bytes) plus `dfLa` (4) plus version and flags (4), followed by a
+/// 4-byte block header, before the STREAMINFO body.
 pub(crate) fn streaminfo_body(extra: &[u8]) -> DecodeResult<&[u8]> {
-    // WHY: box header (size 4 + 'dfLa' 4 + version/flags 4) + block header 4.
     const DFLA_STREAMINFO_OFFSET: usize = 16;
     let body = if extra.get(4..8) == Some(b"dfLa") {
         extra.get(DFLA_STREAMINFO_OFFSET..)

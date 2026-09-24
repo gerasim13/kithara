@@ -31,11 +31,12 @@ static CALLS: LazyLock<Calls> = LazyLock::new(|| Calls {
 });
 
 /// Wrap the Kotlin `transport` and install it into `kithara-net`.
+///
+/// The callback class is found from the installing call, whose class loader can see it.
 pub(super) fn install(
     env: &mut Env<'_>,
     transport: &JObject<'_>,
 ) -> Result<(), AndroidBackendError> {
-    // Found from the installing call, whose class loader sees the callback.
     let callback = env
         .find_class(jni_str!("com/kithara/net/NativeHttpCallback"))
         .map_err(AndroidBackendError::jni("jni-callback-class"))?;
@@ -154,6 +155,8 @@ impl JniTransport {
 }
 
 impl HostTransport for JniTransport {
+    /// From here, the Kotlin call owns the slot: its terminal callback removes it, and the slot
+    /// keeps the lent body until then.
     fn start(
         &self,
         request: HostRequest,
@@ -168,8 +171,6 @@ impl HostTransport for JniTransport {
         let mut started = false;
         let call = with_attached_env(|env| {
             let call = self.start_call(env, request, handle, &slot)?;
-            // From here the Kotlin call owns the slot: its terminal callback
-            // removes it, and the slot keeps the lent body until then.
             started = true;
             JniCall::bind(env, &call, &slot).inspect_err(|_| cancel_unbound(env, &call))
         });
@@ -184,8 +185,9 @@ impl HostTransport for JniTransport {
 }
 
 /// Stop a call Kithara could not bind, so its terminal callback settles the slot.
+///
+/// A failed bind may leave its exception pending, so this clears it before cancelling.
 fn cancel_unbound(env: &mut Env<'_>, call: &JObject<'_>) {
-    // A failed bind may leave its exception pending.
     env.exception_clear();
     if let Err(error) = env.call_method(call, jni_str!("cancel"), JniCall::CANCEL, &[]) {
         env.exception_clear();
@@ -228,12 +230,12 @@ impl JniCall {
         })
     }
 
+    /// The transport may answer before `read` returns, so the buffer is lent first.
     fn lend(&self, env: &mut Env<'_>, buffer: HostBuffer) -> Result<(), AndroidBackendError> {
         let buffer = DirectBuffer::new(env, buffer)?;
         let argument = env
             .new_local_ref(buffer.object())
             .map_err(AndroidBackendError::jni("jni-buffer-local"))?;
-        // The transport may answer before `read` returns, so lend first.
         self.slot.lend_read(buffer);
         self.read.call(env, &[JValue::Object(&argument)])?;
         Ok(())
@@ -272,6 +274,7 @@ fn new_string<'local>(
         .map_err(AndroidBackendError::jni("jni-new-string"))
 }
 
+/// Bounds the local reference frame for any header count.
 fn string_array<'local>(
     env: &mut Env<'local>,
     pairs: &[(String, String)],
@@ -287,7 +290,6 @@ fn string_array<'local>(
         array
             .set_element(env, index, &element)
             .map_err(AndroidBackendError::jni("jni-set-string-array"))?;
-        // Bounds the local reference frame for any header count.
         env.delete_local_ref(element);
     }
     Ok(array)

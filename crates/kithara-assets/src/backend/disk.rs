@@ -322,6 +322,8 @@ impl Assets for DiskAssetStore {
     type IndexRes = StorageResource;
     type ReadyRes = BaseReader;
 
+    /// Unconfirmed leftovers are indistinguishable from a torn write, so they are refetched rather
+    /// than trusted; the path is cleared first so the fresh acquisition can claim its temp file.
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -341,8 +343,6 @@ impl Assets for DiskAssetStore {
             }
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
-        // WHY: Unconfirmed leftovers are indistinguishable from a torn write, so they are refetched rather than trusted. Clear the path so
-        // the fresh acquisition can claim its temp file.
         if path.exists() {
             let _ = fs::remove_file(&path);
         }

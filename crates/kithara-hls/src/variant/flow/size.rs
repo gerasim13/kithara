@@ -28,8 +28,8 @@ where
             .unwrap_or(false)
     }
 
+    /// RT-reachable: a lock-free, alloc-free store of the none sentinel.
     pub(super) fn clear_exact_byte_seek(&self) {
-        // WHY: RT-reachable (via `exact_byte_metadata_phase`): a lock-free, alloc-free store of the none sentinel.
         self.seek.exact_byte_seek.store(None);
     }
 
@@ -37,6 +37,9 @@ where
         self.seek.exact_seek.clear();
     }
 
+    /// Keeps the demand live until the reader moves, since a committed body may revise an
+    /// already-exact prefix size and every metadata poll must be able to refresh this projection
+    /// before the first byte is consumed.
     pub(super) fn complete_exact_seek_if_ready(&self) {
         let Some(entry) = self.seek.exact_seek.load() else {
             return;
@@ -52,8 +55,6 @@ where
         }) else {
             return;
         };
-        // WHY: Keep the demand live until the reader moves. A committed body may revise an already exact prefix size, so every metadata poll
-        // must be able to refresh this projection before the first byte is consumed.
         self.resolve_seek_alias(demand, exact_anchor);
     }
 
@@ -205,12 +206,13 @@ where
         self.request_exact_prefix_for_byte(byte);
     }
 
+    /// Skips registering an exact-size demand when the container resolves ranges by segment index,
+    /// or every served size and the init are already exact, avoiding an unnecessary O(prefix)
+    /// re-scan.
     pub(super) fn set_exact_seek_demand(&self, anchor: u64, segment: u32) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             || self.all_sizes_complete()
         {
-            // WHY: No exact-size demand to register: either the container resolves ranges by segment index, or every served size *and* the init
-            // are already exact, so the O(prefix) re-scan and recompute would be
             self.clear_exact_seek();
             return;
         }

@@ -66,9 +66,9 @@ fn default_net_options() -> NetOptions {
     NetOptions::builder().is_insecure(INSECURE).build()
 }
 
+/// A caller-provided salt remains fixed for legacy FFI compatibility.
 fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
     let processor = rule.processor;
-    // A caller-provided salt remains fixed for legacy FFI compatibility.
     let salt_template = rule.salt.unwrap_or_default();
     let factory: KeyRequestFactory = Arc::new(move || {
         let salt = salt_template.clone();

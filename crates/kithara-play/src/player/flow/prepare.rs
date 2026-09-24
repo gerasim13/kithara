@@ -17,6 +17,8 @@ impl<S> ConfigPrep<'_, S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Before attachment no deadline can be checked without the real output shape, so buffer depths
+    /// sized to the render quantum and response budget overwrite whatever `audio:` configured.
     fn prepare<B>(&self, config: ResourceConfig<S, B>) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,
@@ -32,11 +34,6 @@ where
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let stream_shape = self.player.core.engine.stream_shape()?;
-        // Before attachment the application settings stand; no session deadline
-        // can be checked without the actual output shape.
-        // A resident render quantum turns the two buffer depths into geometry
-        // the response budget admits rather than a preference, so the computed
-        // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
         if let (Some(quantum), Some(shape)) = (warp.render_quantum_frames(), stream_shape) {
             let (preload, ring) =

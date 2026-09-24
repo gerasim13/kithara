@@ -205,6 +205,9 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
+    ///
+    /// MP4 and M4A are container-only formats, so the `stsd` sample-entry tag is sniffed to choose
+    /// the actual codec backend.
     pub fn create_with_probe<R, B, S>(
         source: R,
         hint: Option<&str>,
@@ -222,7 +225,6 @@ impl DecoderFactory {
             ..Default::default()
         };
 
-        // WHY: MP4/M4A is container-only (AAC/ALAC/FLAC all live there); sniff the `stsd` sample-entry tag to pick the right codec backend.
         if matches!(
             probe_hint.container,
             Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
@@ -458,6 +460,8 @@ where
     }
 }
 
+/// A plain CBR MP3's resource length is the only record it keeps of its own duration, and the
+/// handle already carries that length for the streaming open.
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn build_apple_standalone_decoder<B, S>(
     mut source: BoxedSource,
@@ -475,8 +479,6 @@ where
         demuxer::Demuxer,
         gapless::{scoped_probe, scoped_startup_probe},
     };
-    // The resource length is the only record a plain CBR MP3 keeps of its own
-    // duration, and the handle already carries it for the streaming open.
     let total_bytes = config
         .byte_len_handle
         .as_ref()
@@ -580,8 +582,6 @@ fn scale_gapless_for_output_domain(
         });
     }
 
-    // Container probes are born in source-rate frames; the trimmer only sees
-    // decoder-output frames, so Apple fused SRC scales once at this boundary.
     Ok(Some(GaplessInfo {
         leading_frames: round_scaled_frames(info.leading_frames, source_rate, output_rate)?,
         trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, output_rate)?,

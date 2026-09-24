@@ -8,7 +8,7 @@ pub(crate) struct VuStereo;
 mod host {
     use super::VuStereo;
     use crate::{
-        atoms::meter::StereoMeter,
+        atoms::vu::StereoMeter,
         interact::{CursorShape, recognizers::Track},
         render::{
             ReadValue, Skin, StereoLevels,

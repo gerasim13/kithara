@@ -261,6 +261,39 @@ impl GitlabConfig {
         }
         None
     }
+
+    /// Whether a job's rules let a pipeline of `kind` in: the first rule that
+    /// names this kind, or names none and guards on nothing, decides. A rule
+    /// that guards on another variable is a filter that only refuses, so it is
+    /// passed over.
+    fn admits_kind(&self, rules_owner: &str, kind: &str) -> Option<bool> {
+        let rules = self.definition(rules_owner)["rules"]
+            .as_sequence()
+            .unwrap_or_else(|| panic!("`{rules_owner}` rules are not a sequence"));
+        for rule in rules {
+            match rule {
+                Value::Mapping(rule) => {
+                    let decides = match rule.get("if").and_then(Value::as_str) {
+                        None => true,
+                        Some(condition) => declared_kind(condition) == Some(kind),
+                    };
+                    if decides {
+                        return Some(rule.get("when").and_then(Value::as_str) != Some("never"));
+                    }
+                }
+                Value::Tagged(reference) => {
+                    let target = reference.value[0]
+                        .as_str()
+                        .expect("GitLab reference owner is a string");
+                    if let Some(admitted) = self.admits_kind(target, kind) {
+                        return Some(admitted);
+                    }
+                }
+                _ => panic!("`{rules_owner}` has an invalid rule"),
+            }
+        }
+        None
+    }
 }
 
 struct RuleDecision {
@@ -881,33 +914,90 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
     );
 }
 
-/// The same contract on the Mac mini: provisioning runs on a protected kind
-/// and only when the run asks for it. A merge-request or quarantine ref
-/// carries code no one has reviewed, and this writes to the machine every
-/// lane depends on.
+/// The same contract on the Mac mini, followed from the door to the job: a run
+/// started on the default branch with `KITHARA_PROVISION=1` passes the
+/// workflow, one dispatcher turns it into a kind, and that kind carries the
+/// roll-out and nothing else. The rules once named `main`, `nightly` and
+/// `release`, but the workflow admitted no run that could ask, and a variable
+/// the run was started with never reaches the child, so the job could not be
+/// started at all.
 #[test]
-fn the_mac_host_provisions_itself_only_from_a_protected_ref_that_asks() {
-    let config = GitlabConfig::load(workspace_root());
-    let rules = config.definition("host:provision")["rules"]
-        .as_sequence()
-        .expect("job rules");
-    assert_eq!(
-        rules[0]["if"].as_str(),
-        Some("$KITHARA_PROVISION != \"1\""),
-        "the opt-in is what the first rule tests"
-    );
-    assert_eq!(rules[0]["when"].as_str(), Some("never"));
+fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
+    const DOOR: &str = "($CI_PIPELINE_SOURCE == \"web\" || $CI_PIPELINE_SOURCE == \"api\") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_PROVISION == \"1\"";
 
-    let kinds: BTreeSet<&str> = rules[1..]
+    let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
+    let dispatch = mapping(&dispatch, "the dispatch pipeline");
+    let admits_door = |rules: &Value| {
+        rules.as_sequence().is_some_and(|rules| {
+            rules.iter().any(|rule| {
+                rule.get("if").and_then(Value::as_str) == Some(DOOR) && rule.get("when").is_none()
+            })
+        })
+    };
+    assert!(
+        admits_door(&dispatch["workflow"]["rules"]),
+        "the workflow admits the provisioning run"
+    );
+
+    let dispatchers: Vec<&Mapping> = dispatch
         .iter()
-        .filter_map(|rule| rule.get("if").and_then(Value::as_str))
+        .filter(|(name, _)| name.as_str() != Some("workflow"))
+        .filter_map(|(_, job)| job.as_mapping())
+        .filter(|job| job.get("rules").is_some_and(admits_door))
         .collect();
     assert_eq!(
-        kinds,
-        BTreeSet::from([
-            "$KITHARA_PIPELINE_KIND == \"main\"",
-            "$KITHARA_PIPELINE_KIND == \"nightly\"",
-            "$KITHARA_PIPELINE_KIND == \"release\"",
-        ])
+        dispatchers.len(),
+        1,
+        "one dispatcher owns the provisioning run"
+    );
+    let kind = dispatchers[0]["variables"]["KITHARA_PIPELINE_KIND"]
+        .as_str()
+        .expect("the provisioning dispatcher names its kind");
+
+    let config = GitlabConfig::load(workspace_root());
+    assert_eq!(
+        config.admitted_kinds("host:provision"),
+        BTreeSet::from([kind.to_owned()]),
+        "the roll-out runs on the provisioning kind alone"
+    );
+    let mut beside: Vec<&str> = config
+        .job_names()
+        .filter(|job| {
+            !job.starts_with('.')
+                && !matches!(
+                    *job,
+                    "stages" | "variables" | "workflow" | "default" | "include"
+                )
+                && *job != "host:provision"
+        })
+        .filter(|job| match config.rules_owner(job) {
+            // A job with no rules runs in every pipeline.
+            None => true,
+            Some(owner) => config.admits_kind(&owner, kind).unwrap_or(false),
+        })
+        .collect();
+    beside.sort_unstable();
+    assert!(
+        beside.is_empty(),
+        "a provisioning run carries the roll-out alone, found {beside:?}"
+    );
+
+    // A platform request riding the same run would start a second child whose
+    // Linux image job moves the tag underneath the roll-out.
+    let platforms = dispatch["dispatch:platforms"]["rules"]
+        .as_sequence()
+        .expect("platform dispatch rules");
+    let refusal = platforms
+        .iter()
+        .position(|rule| {
+            rule.get("if").and_then(Value::as_str) == Some("$KITHARA_PROVISION == \"1\"")
+        })
+        .expect("the platform dispatcher refuses a provisioning run");
+    assert_eq!(platforms[refusal]["when"].as_str(), Some("never"));
+    assert!(
+        platforms[..refusal]
+            .iter()
+            .all(|rule| rule.get("when").and_then(Value::as_str) == Some("never")),
+        "no admitting rule answers before the refusal"
     );
 }

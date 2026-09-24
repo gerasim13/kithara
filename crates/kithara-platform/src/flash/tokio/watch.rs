@@ -94,9 +94,9 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// The last sender marks the channel closed and signals under the gate, so a receiver
+    /// re-checking during teardown resolves `RecvError` instead of parking forever.
     fn drop(&mut self) {
-        // WHY: The last sender closes the channel: mark `closed` under the gate and signal, so a receiver that re-checks during teardown
-        // still resolves `RecvError` rather than parking forever.
         let mut senders = self.shared.senders.lock();
         *senders -= 1;
         let last = *senders == 0;
@@ -132,9 +132,10 @@ impl<T> Sender<T> {
     /// # Errors
     /// Returns the value back when no receivers remain (matched against
     /// `tokio`'s `send` shape, which the callers map away with `.ok()`/`let _`).
+    ///
+    /// Bumps the version and drains the wakers while holding the gate, so a concurrent `changed`
+    /// either observes the new version or is woken.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
-        // WHY: Bump the version and drain the wakers WHILE holding the gate so a concurrent `changed` either sees the new version or is
-        // woken below.
         let mut state = self.shared.state.lock();
         state.value = value;
         state.version += 1;
@@ -271,10 +272,10 @@ pub struct Changed<'a, T> {
 impl<T> Future for Changed<'_, T> {
     type Output = Result<(), RecvError>;
 
+    /// Holds the gate across the version read and the waiter registration, so a concurrent `send`
+    /// is either observed here or wakes the waiter just registered.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = &mut *self.get_mut().rx;
-        // WHY: Engine wait resolves only when granted; a real wait re-checks the version below (a spurious wake just re-parks). Clear the
-        // marker either
         match rx.pending.as_ref() {
             Some(Parked::Engine(handle)) => {
                 if handle.granted() {
@@ -286,8 +287,6 @@ impl<T> Future for Changed<'_, T> {
             Some(Parked::Real(_)) => rx.pending = None,
             None => {}
         }
-        // WHY: Hold the gate across the version read AND the registration so a concurrent `send` (version bump, then signal under the same
-        // gate) is either seen here or wakes the waiter we register.
         let mut state = rx.shared.state.lock();
         if state.version > rx.seen {
             rx.seen = state.version;
@@ -385,9 +384,10 @@ impl<T> Drop for Changed<'_, T> {
     }
 }
 
+/// Removes only its own waker, so a signal cannot wake an already-dropped future; mirrors the same
+/// guard in `broadcast` and `mpsc`.
 fn cancel_pending<T>(rx: &mut Receiver<T>) {
     match rx.pending.take() {
-        // WHY: Remove EXACTLY our own waker so a signal does not wake a dropped future (mirrors `broadcast`/`mpsc`).
         Some(Parked::Real(waker)) => rx
             .shared
             .state

@@ -289,6 +289,10 @@ impl RawHttp {
     /// (no chunk within `inactivity_timeout`) or transient body error it
     /// re-fetches `bytes=base_start+consumed-end` up to the retry policy, then
     /// surfaces a terminal error. A resume is always a partial (206) request.
+    ///
+    /// On a `206` response the body already starts at the requested offset (skip 0); on `200` the
+    /// server ignored the Range and resent from the start, so the already-consumed prefix is
+    /// dropped.
     fn wrap_resumable(
         &self,
         first: crate::ByteStream,
@@ -314,8 +318,6 @@ impl RawHttp {
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
-                // WHY: `206` -> body already starts at `abs` (skip 0); `200` -> server ignored Range and re-sent from zero, drop the consumed
-                // prefix.
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -575,6 +577,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
+    /// Issues a full GET; a resume re-fetches `bytes=consumed-` from base offset 0.
     #[kithara::measure]
     async fn stream(
         &self,
@@ -584,7 +587,6 @@ impl Net for RawHttp {
         let first = self
             .raw_body(url.clone(), None, headers.clone(), false)
             .await?;
-        // WHY: Full GET; a resume re-fetches `bytes=consumed-` (base 0).
         Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }

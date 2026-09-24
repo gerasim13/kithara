@@ -25,6 +25,8 @@ impl<S> VariantPlaylist<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Reuses the master key when a single-rendition master doubles as the media playlist, so both
+    /// point at one cache entry instead of minting a second.
     pub(crate) fn for_variant(
         cache: &PlaylistCache<S>,
         scope: &AssetScope<S>,
@@ -33,8 +35,6 @@ where
         variant: &VariantStream,
     ) -> HlsResult<Self> {
         let media_url = cache.resolve_url(master_url, &variant.uri)?;
-        // WHY: A single-rendition master can double as the media playlist: Reuse the master key so both point at one cache entry instead of
-        // minting a second.
         let key = if &media_url == master_url {
             master_key.clone()
         } else {

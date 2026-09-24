@@ -152,10 +152,9 @@ impl Stage for Masonry<'_> {
         }
     }
 
+    /// Remounts a fresh host per page rather than turning one in place, so each page opens at a
+    /// clean clock with nothing behind it, whichever page was captured before.
     fn turn(&mut self, page: &Shot) -> Result<(), String> {
-        // Mounted again per page rather than turned in place: this host builds
-        // a page its own, so a page opens here at nothing on the clock and
-        // nothing behind it, whichever page was photographed before.
         let mut ui = Ui::new(
             Gallery::default(),
             self.config,

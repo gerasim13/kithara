@@ -1594,7 +1594,6 @@ fn exact_seek_probe_urls(
     const EXACT_SEEK_SEGMENTS: u32 = 5;
 
     const EXACT_SEEK_SEGMENT_BYTES: u64 = 256;
-
     const EXACT_SEEK_INIT_BYTES: u64 = 64;
 
     let ctx = test_ctx(10);

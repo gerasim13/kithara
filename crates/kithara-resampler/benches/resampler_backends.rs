@@ -38,7 +38,6 @@ fn resampler_backends(c: &mut Criterion) {
     ];
 
     const CHANNELS: &[usize] = &[1, 2];
-
     const BLOCKS: &[usize] = &[1_024, 4_096];
 
     let mut group = c.benchmark_group("resampler_backends");

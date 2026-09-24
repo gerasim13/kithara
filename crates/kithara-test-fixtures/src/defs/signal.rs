@@ -178,10 +178,6 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::FRAMES_60S_44K1,
     None
 )]
-// The mono counterpart of `sine440_60s`: same tone, same rate, one channel.
-// A source narrower than the device's planes is the case where framing the
-// interleaved read by the plane count instead of the stream doubles playback
-// rate.
 #[case::mono_sine440_60s(
     Wave::sine(440.0),
     Consts::RATE_44K1,
@@ -242,10 +238,6 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::FRAMES_162S_48K,
     None
 )]
-// A chirp reads differently at every position, which a steady tone does not.
-// The multi-deck mixing tests place several decks in one body at different
-// offsets and need their stems to stay independent; the two directions give
-// them a second such body that never matches the first.
 #[case::sweep_up_60s(
     Wave::sweep(200.0, 2_000.0, Consts::FRAMES_60S_44K1, SweepMode::Linear),
     Consts::RATE_44K1,
@@ -303,9 +295,6 @@ fn signal_mp3_track(
     Consts::STEREO,
     Consts::FRAMES_1S_44K1
 )]
-// A ramp reads its own direction back out of the decoded audio, and six seconds
-// is long enough for a queue to hand one track to the next inside it. The two
-// directions give a playthrough neighbouring tracks it can tell apart.
 #[case::saw_6s(
     Wave::Sawtooth,
     Consts::RATE_44K1,

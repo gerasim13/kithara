@@ -177,7 +177,6 @@ mod runs {
     }
 
     type WebAnalyzerBuilder = AnalyzerBuilder<PlaybackResamplerBackend, FfiPools>;
-
     type Live = Rc<RefCell<HashMap<TrackId, CancelToken>>>;
 
     /// The engine worker's analysis owner: one shared [`AnalysisWorker`] and the

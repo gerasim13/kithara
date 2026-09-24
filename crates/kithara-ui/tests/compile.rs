@@ -64,7 +64,7 @@ fn compiles_micro_layout_end_to_end() {
     let ui = compile(
         "micro.klayout.ron",
         &resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -94,7 +94,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
                 write: Parameter(id: "mixer.xfade"),
             ))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Parameter,
         "mixer.xfade",
@@ -165,7 +165,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let ui = compile(
         "shader.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -193,7 +193,7 @@ fn malformed_shader_reports_the_resolved_source() {
     let error = compile(
         "shader.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -218,7 +218,7 @@ fn fs_main() -> @location(0) vec4<f32> {
 }
 "#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Telemetry,
         "player.output.levels",
@@ -258,7 +258,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         r#"(schema: "kithara.layout", version: 1, id: "bar",
             root: Module(instance: "bar", source: "bar.kmodule.ron"))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Telemetry,
         "engine.load",
@@ -323,7 +323,7 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
                 write: Parameter(id: "vis.preset"),
             ))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "vis.preset",
@@ -382,7 +382,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
                 write: Parameter(id: "vis.preset"),
             ))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "vis.preset",
@@ -449,7 +449,7 @@ fn table_accepts_arbitrary_text_columns() {
     compile(
         "table.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -465,7 +465,7 @@ fn a_column_list_may_arrive_as_an_include_parameter() {
         &parameterised_table_resolver(
             r#"[(id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true), (id: "note", label: "NOTE", style: Secondary, width: 200.0)]"#,
         ),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -481,7 +481,7 @@ fn a_parameterised_column_list_can_use_non_music_ids() {
         &parameterised_table_resolver(
             r#"[(id: "status", label: "STATUS", style: Badge, width: 80.0)]"#,
         ),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -505,7 +505,7 @@ fn table_compiles_typed_columns_and_optional_state_prefix() {
                 read: Model(id: "library.visible_tracks"),
             ))"##,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.table.columns.name",
@@ -569,7 +569,7 @@ fn a_table_column_label_resolves_through_the_catalog() {
     let ui = compile(
         "table.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -607,7 +607,7 @@ fn a_table_column_label_written_as_plain_text_stays_that_text() {
     let ui = compile(
         "table.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -644,7 +644,7 @@ fn a_table_column_naming_a_missing_key_is_a_compile_error() {
     let error = compile(
         "table.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -673,7 +673,7 @@ fn present_table_column_state_endpoint_must_be_bool() {
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.table.columns.name",
@@ -719,7 +719,7 @@ fn layout_module_size_override_wins_over_computed_size() {
     let ui = compile(
         "override.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -760,7 +760,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     let ui = compile(
         "shell.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -835,7 +835,7 @@ fn module_footer_requires_a_text_read_endpoint() {
     let error = compile(
         "shell.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -865,7 +865,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
     let error = compile(
         "player.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -891,7 +891,7 @@ fn node_limit_is_enforced() {
     let error = compile(
         "micro.klayout.ron",
         &resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -920,7 +920,7 @@ fn layout_parameter_reference_is_unresolved() {
     let error = compile(
         "layout.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -953,7 +953,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
     let ui = compile(
         "literal.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -987,7 +987,7 @@ fn oversized_layout_source_is_rejected() {
     let error = compile(
         "large.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -1024,7 +1024,7 @@ fn fifty_empty_columns_exceed_node_limit() {
     let error = compile(
         "nested.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -1064,7 +1064,7 @@ fn knob_caption_is_document_text_and_optional() {
     let ui = compile(
         "knobs.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -1094,8 +1094,8 @@ fn knob_caption_is_document_text_and_optional() {
     assert_eq!(captions, vec![Some("LOW"), None]);
 }
 
-fn block_registry() -> common::TestRegistry {
-    let mut registry = common::player_registry();
+fn block_registry() -> common::registry::TestRegistry {
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.block.hidden",
@@ -1932,7 +1932,7 @@ fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
     compile(
         "menu.klayout.ron",
         resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2020,7 +2020,7 @@ fn one_template_reads_a_different_endpoint_per_include() {
                 Include(id: "two", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.autogain" }),
             ]))"#,
     );
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     for id in ["ui.prefs.mono", "ui.prefs.autogain"] {
         registry.insert(
             EndpointCategory::Model,
@@ -2495,7 +2495,7 @@ fn a_document_draws_from_the_pools_its_configuration_carries() {
     let ui = compile(
         "micro.klayout.ron",
         &resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &config,
@@ -2516,7 +2516,7 @@ fn a_document_compiled_after_the_first_joins_the_same_family() {
         compile(
             "micro.klayout.ron",
             &resolver(),
-            &common::player_registry(),
+            &common::registry::player_registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             &config,
@@ -2552,7 +2552,7 @@ fn stage_resolver(children: &str) -> MemResolver {
 }
 
 fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "scene.at",
@@ -2672,7 +2672,7 @@ fn a_placement_outside_a_stage_is_rejected() {
     let error = compile(
         "scene.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2730,7 +2730,7 @@ fn tabbed_error(tabs: &str) -> UiDocError {
     compile(
         "tabbed.klayout.ron",
         &tabbed(tabs),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2746,7 +2746,7 @@ fn a_tabs_compiles_the_page_it_stands_at() {
     let ui = compile(
         "tabbed.klayout.ron",
         &tabbed(TABS),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2830,7 +2830,7 @@ fn a_page_binding_reads_whether_its_page_stands() {
     let ui = compile(
         "tabbed.klayout.ron",
         &tabbed(TABS),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2895,7 +2895,7 @@ fn a_page_may_be_a_split_of_modules() {
                 "two": Module(instance: "two", source: "two.kmodule.ron"),
             })"#,
         ),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2930,7 +2930,7 @@ fn two_pages_may_name_the_same_instance() {
                 "two": Module(instance: "body", source: "two.kmodule.ron"),
             })"#,
         ),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

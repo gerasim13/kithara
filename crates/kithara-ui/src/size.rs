@@ -594,14 +594,12 @@ impl Cells {
             .collect()
     }
 
+    /// Each round only adds cells and covers the last, so the climb terminates at the first size
+    /// that asks for no more room than it already occupies — the widest set the container holds.
     pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
         let Some(axis) = measure else {
             return self.need(None);
         };
-        // Room a cell opens on can open the next one, so the answer is the
-        // first size that asks for no more room than it already stands in.
-        // Each round covers the last, and a round only ever adds cells, so the
-        // climb ends on the widest set the container holds.
         let mut size = self.need(Some(0.0));
         loop {
             let covered = covering(size, self.need(Some(axis_min(size, axis))));

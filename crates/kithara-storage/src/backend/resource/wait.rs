@@ -19,6 +19,9 @@ use crate::{
 const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {
+    /// Tracks how far the available prefix of the range reaches; since bytes arrive front-to-back
+    /// for a sequential fetch, its advance signals progress and resets the hang watchdog. Failing a
+    /// fast check, the wait parks until the gate is notified — event-driven, with no timer.
     #[kithara::measure]
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(
@@ -46,8 +49,6 @@ impl<D: DriverIo> ResourceCore<D> {
             cancel.on_cancel(move || inner.wake_waiters())
         });
 
-        // WHY: How far the available prefix of `range` reaches. Bytes arrive front-to-back for a sequential fetch, so this advancing means
-        // the wait is making progress (not deadlocked) and the watchdog resets.
         let mut filled_front = range.start;
 
         loop {
@@ -96,7 +97,6 @@ impl<D: DriverIo> ResourceCore<D> {
                 hang_reset!();
             }
 
-            // WHY: Park until a readiness transition notifies the gate (bytes, commit, fail, reactivate, or cancel) - event-driven, no timer.
             let _state = self.inner.gate.wait(state);
         }
     }

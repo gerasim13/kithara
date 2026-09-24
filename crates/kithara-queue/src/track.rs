@@ -308,7 +308,6 @@ where
             {
                 Some(install(record, &self.next_generation, cancel, true))
             }
-            // Already running: no lane to move it to, but the attempt reads being wanted.
             Some(record) => {
                 if let Some(attempt) = record.load.as_mut() {
                     attempt.selected = true;
@@ -365,7 +364,6 @@ where
     let generation = generations.fetch_add(1, Ordering::Relaxed);
     let mut attempt = AttemptGuard::new(generation, cancel);
     attempt.selected = selected;
-    // WHY: Replacing the guard drops the old one armed, cancelling the
     record.load = Some(attempt);
     Ticket {
         generation,

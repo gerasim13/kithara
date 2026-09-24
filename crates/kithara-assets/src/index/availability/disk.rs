@@ -122,12 +122,12 @@ impl InnerIndex {
         }
     }
 
+    /// Committed files are forced onto the medium before the manifest names them; reversed, a crash
+    /// could leave the manifest vouching for bytes that never landed.
     pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(p) = self.persist.get() else {
             return Ok(());
         };
-        // WHY: Order is the whole point: force the committed files onto the medium first, then name them. Reversed, a crash could leave the
-        // manifest vouching for bytes that never landed.
         let _writing = p.writing.lock();
         self.barrier_pending_files();
         write_aggregate(self, &p.file, durable)?;
@@ -136,6 +136,9 @@ impl InnerIndex {
 }
 
 /// Serialise the aggregate and publish it as `file`.
+///
+/// Only committed availability is serialised, so an uncommitted partial write is invisible after a
+/// rebuild, matching the aggregate probes' verdict.
 fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> AssetsResult<()> {
     let tree = inner.assets.load();
     let assets = tree
@@ -145,8 +148,6 @@ fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> Asset
                 .iter()
                 .filter_map(|(path, entry)| {
                     let avail = entry.load();
-                    // WHY: The crash-recovery snapshot is a COMMITTED-only contract: an uncommitted partial write (whose `.tmp` was never renamed) must
-                    // be invisible after a rebuild, matching the aggregate probes' verdict.
                     if !avail.committed {
                         return None;
                     }

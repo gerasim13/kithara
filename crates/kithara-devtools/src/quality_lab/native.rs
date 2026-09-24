@@ -5,6 +5,8 @@ use serde_json::{Deserializer, Value};
 
 use super::adapter::{InvocationSpec, ReportKind};
 
+/// Renders a report another invocation already judged and carries no verdict of its own, but an
+/// empty render means the render died quietly and the run would publish a blank page.
 pub(super) fn validate_report(path: &Path, invocation: &InvocationSpec) -> Result<bool> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read report: {}", path.display()))?;
@@ -15,9 +17,6 @@ pub(super) fn validate_report(path: &Path, invocation: &InvocationSpec) -> Resul
             Ok(false)
         }
         ReportKind::JsonStream => cargo_dupes_findings(&text),
-        // A rendering of a report another invocation already judged: it carries
-        // no verdict of its own, but an empty one means the render died quietly
-        // and the run would publish a blank page.
         ReportKind::Markdown => {
             ensure!(!text.trim().is_empty(), "markdown report is empty");
             Ok(false)

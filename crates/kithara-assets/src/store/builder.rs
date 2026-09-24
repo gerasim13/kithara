@@ -183,6 +183,10 @@ where
     }
 
     /// Open a ready-to-use asset store.
+    ///
+    /// The pending-resource index, eviction router, and memory-cache invalidation hook are
+    /// consumer-driven siblings of `availability`, wired here without additional observer or
+    /// decorator threading.
     #[must_use]
     pub fn open(config: AssetStoreConfig<S>) -> Self {
         let AssetStoreConfig {
@@ -202,14 +206,8 @@ where
         } = config;
 
         let availability = AvailabilityIndex::new();
-        // The pending-resource index is a consumer-driven sibling of `availability`:
-        // no observer / decorator threading, just a shared field. Each
-        // slot's `writer_cancel` is a child of this store cancel.
         let pending_resources = PendingResourceIndex::new(CancelScope::new(cancel.clone()).token());
         let transactions = ResourceTransactionIndex::default();
-        // The eviction router is the third consumer-driven sibling: the
-        // memory cache's `on_invalidated` hook routes evicted keys into
-        // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
         let layouts = layouts.unwrap_or_default();
 
@@ -297,7 +295,6 @@ where
             processing_chunk_size,
             processing_gate_poll_interval,
         ));
-        // Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
@@ -350,6 +347,9 @@ struct DiskStoreSetup<S> {
 
 /// Assemble the disk decorator chain: evict over the disk store, processing
 /// over that, the memory cache over that, leases on top.
+///
+/// Disk bytes survive LRU displacement, so the disk store needs no invalidation hook, unlike memory
+/// bytes.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_disk_backend<S>(setup: DiskStoreSetup<S>) -> StoreBackendInner<S>
 where
@@ -418,7 +418,6 @@ where
         processing_gate_poll_interval,
     ));
     let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-    // Disk bytes survive LRU displacement, so it needs no invalidation hook.
     let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);

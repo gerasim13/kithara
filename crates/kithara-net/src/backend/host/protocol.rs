@@ -40,12 +40,13 @@ pub(super) fn request_headers(
     pairs
 }
 
+/// Rejects a response whose `Content-Encoding` survived, since that names a coding the host's HTTP
+/// client left undecoded.
 pub(super) fn response_headers(
     pairs: Vec<(String, String)>,
     status: u16,
     url: &Url,
 ) -> Result<Headers, NetError> {
-    // A surviving Content-Encoding names a coding the host's client left undecoded.
     if (200..300).contains(&status)
         && let Some(value) = non_identity_content_encoding(&pairs)
     {

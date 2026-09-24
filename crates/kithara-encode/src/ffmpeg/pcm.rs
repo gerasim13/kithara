@@ -13,7 +13,6 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use crate::{EncodeError, EncodeResult, PcmSource};
 
 pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
-
 const I16_SCALE: f32 = 32_768.0;
 
 fn pump_pcm_bytes<S>(

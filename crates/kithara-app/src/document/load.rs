@@ -220,6 +220,8 @@ impl Config {
         Self::load_with(explicit, beside, &secret)
     }
 
+    /// An explicit `null` for a named key blanks that key, but an empty file at the root is treated
+    /// as one left to fill in later rather than an override that wipes the document.
     fn load_with(
         explicit: Option<&Path>,
         beside: Option<&Path>,
@@ -234,9 +236,6 @@ impl Config {
         let overlay_path = Self::overlay_path(explicit, beside)?;
         if let Some(path) = overlay_path.as_deref() {
             match Self::read(path)? {
-                // A named key's explicit `null` blanks that key; the root has no
-                // key, so an empty file is a file left to fill in later, not an
-                // override that wipes the document.
                 Value::Null => {}
                 over @ Value::Mapping(_) => merge(&mut source, over),
                 _ => {

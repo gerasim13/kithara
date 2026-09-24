@@ -1147,7 +1147,6 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 #[kithara::test(native, flash(false))]
 fn a_starved_backoff_loop_does_not_advance_the_virtual_clock() {
     const STARVED_BACKOFF_STEP_MS: u64 = 1;
-
     const STARVED_BACKOFF_RETRIES: usize = 16;
 
     let _g = guard();

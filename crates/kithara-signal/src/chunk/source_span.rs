@@ -102,10 +102,12 @@ impl SourceSpan {
     ///
     /// # Panics
     /// Panics if the private validated mapping invariant is violated.
+    ///
+    /// Constructors accept `u64` endpoints, slicing stays within them, and joining requires the
+    /// exact boundary of another validated interval — together they uphold the private mapping
+    /// invariant this panics on.
     #[must_use]
     pub fn start(self) -> u64 {
-        // Constructors accept u64 endpoints, slicing stays inside them, and
-        // joining requires the exact boundary of another validated interval.
         u64::try_from(self.numerator / u128::from(self.denominator.get()))
             .expect("validated source mapping starts within u64")
     }

@@ -103,6 +103,9 @@ where
         }
     }
 
+    /// A replacement fetch may only start once the peer is woken: it parks on its own waker while a
+    /// fetch is in flight, so a superseded fetch that does not wake it would leave it parked with
+    /// nothing left to complete it.
     fn build_fetch_cmd(&self, inner: &Arc<FileInner<S>>, plan: FetchPlan<S>) -> FetchCmd {
         let FetchPlan {
             cancel: writer_cancel,
@@ -168,10 +171,6 @@ where
                         },
                     );
                 }
-                // Only now may a replacement fetch start, so the settled epoch
-                // is never raced. The peer parks on its own waker while a fetch
-                // is in flight, so it has to be woken here or a superseded
-                // fetch would leave it parked with nothing left to complete it.
                 *inflight.lock() = None;
                 if let Some(lease) = inner
                     .as_ref()
@@ -217,8 +216,6 @@ where
         let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
         let cursor = steering_cursor(&inner.source.coord);
         let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
-            // A relinquished fetch may have landed everything; its replacement
-            // has nothing to fetch.
             if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
                 return PeerAction::Done;
             }

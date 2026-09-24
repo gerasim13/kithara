@@ -225,13 +225,13 @@ where
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
+    /// Wakes a reader parked on the pre-seek range so it re-probes against the new position and
+    /// flush gate after a seek repositions the active variant.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
         }
-        // A seek repositioned the active variant: wake a reader parked on the
-        // pre-seek range so it re-probes against the new position / flush gate.
         self.signal.fire();
     }
 
@@ -336,18 +336,15 @@ where
         }
     }
 
+    /// On the RT path this is a single wake-free probe that never parks. Off-RT it blocks on the
+    /// readiness gate, event-driven, until the range resolves, a segment fails, or cancel fires.
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         match timeout {
-            // RT / cooperative-yield probe path (`probe_read`): a single
-            // wake-free probe, unchanged — never parks on the gate.
             Some(_) => self.probe_range(range, timeout),
-            // Off-RT consumer (`Stream::read` / `prime_seek_range`): block on
-            // the readiness gate until the range resolves, a segment fails, or
-            // cancel fires. Event-driven — no wall-clock poll.
             None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
                 self.probe_range(range.clone(), Some(Duration::ZERO))
             }),
@@ -369,37 +366,21 @@ where
         cancel: &CancelToken,
         mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
     ) -> StreamResult<WaitOutcome> {
-        // Cancel is the one transition with no producer-side signal; register a
-        // waker that signals the gate so a parked wait observes it. The guard
-        // unregisters when this wait returns (mirror storage `wait.rs`).
         let _cancel_wake = {
             let ready = signal.ready_gate();
             cancel.on_cancel(move || ready.signal())
         };
         loop {
             hang_tick!();
-            // Snapshot the gate BEFORE the probe: a signal landing between the
-            // probe and the park advances the counter, so the park returns at
-            // once and we re-probe — no lost wakeup.
             let since = signal.current();
             match probe() {
                 Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
                 Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    // Not ready: park on the gate until a signal advances it,
-                    // bounded by the re-aim heartbeat.
-                }
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {}
                 Err(e) => return Err(e),
             }
-            // Event-driven park: a write/commit/fence/seek/cancel signal wakes
-            // us at once to re-probe (the fact of a write, never a timer). If
-            // the gate stays quiet for the heartbeat the peer may be mis-aimed
-            // after a seek; yield so the off-RT reader re-asserts its prefetch
-            // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
-            // without the wall-clock data poll).
             if signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                // Woke from a signal — activity, not a wedge: reset the watchdog.
                 hang_reset!();
             } else {
                 return Err(StreamError::Source(SourceError::WaitBudgetExceeded));

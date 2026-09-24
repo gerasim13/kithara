@@ -71,6 +71,9 @@ where
         Ok(())
     }
 
+    /// Serializes the whole select against a concurrent `spawn_apply_after_load` completion so
+    /// marking the prior pending attempt `Cancelled` and a loading track's apply never interleave,
+    /// which would let the superseded track barge in.
     pub(in crate::queue) fn select_with(
         &self,
         id: TrackId,
@@ -92,8 +95,6 @@ where
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let settings = transition.settings(default).validate()?;
-        // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
-        // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
     }
@@ -119,6 +120,9 @@ where
         self.select_with(id, transition, reason, playback)
     }
 
+    /// `is_playing` is a session flag, not a verdict on the current item: the render thread queues
+    /// the natural end but clears the flag only at the next `process`, so a repeat-one advance must
+    /// re-select the item that just ended despite the flag.
     pub(in crate::queue) fn select_with_reason_locked(
         &self,
         id: TrackId,
@@ -148,9 +152,6 @@ where
             )
         {
             self.cancel_stale_pending(id);
-            // WHY: `is_playing` is a session flag, not a verdict on this item. The render thread queues the natural end while rendering a
-            // block and clears the flag only at the top of the next `process`, so the item that just ended still reads as playing. A
-            // repeat-one advance answers that end by re-selecting this very entry, and weighing it against the flag drops the re-select.
             if self.player.is_playing() && reason != AdvanceReason::NaturalEof {
                 return Ok(());
             }

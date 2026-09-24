@@ -126,6 +126,9 @@ impl Node {
 
     /// Register a slot on THIS node. If already fired, the slot fires at once and
     /// no id is stored. Returns `Some(id)` for a parked slot, `None` if it fired.
+    ///
+    /// Fires outside the lock when already fired, avoiding a call back into a slot's waker while
+    /// the node's lock is held.
     pub(super) fn register(&self, slot: Slot) -> Option<u64> {
         let mut w = lock(&self.wakers);
         if !w.fired {
@@ -136,7 +139,6 @@ impl Node {
             return Some(id);
         }
         drop(w);
-        // WHY: Already fired: fire outside the lock.
         slot.fire();
         None
     }

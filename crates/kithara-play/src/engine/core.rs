@@ -279,13 +279,13 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
+    /// A resource crossing to the audio thread leaves its seek handle here, since seeking takes
+    /// locks. Bindings apply only once the command is accepted; the resource releases when it
+    /// returns as trash.
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slots = self.slots.lock();
         let result = match slots.get_mut(slot) {
             Some(handle) => {
-                // A resource crossing to the audio thread leaves its seek handle behind: beginning
-                // a seek takes locks, so it stays on this side. Bind only after the command is
-                // accepted; the exact resource generation is released when it returns as trash.
                 let bindings = match &cmd {
                     PlayerCmd::LoadTrack { resource, item_id } => {
                         Some((*item_id, resource.seek_handle(), resource.render_reader()))

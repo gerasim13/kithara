@@ -50,8 +50,6 @@ impl OfflineStream {
             u32::try_from(position % rate).map_err(|_| OfflineSessionError::TimelineOverflow)?;
         let process_info = BackendProcessInfo {
             frames,
-            // Firewheel stamps a block with its own clock type, so the
-            // platform clock cannot be handed over here.
             process_timestamp: Some(Instant::now()),
             duration_since_stream_start: Duration::from_secs(whole_seconds)
                 + Duration::from_secs_f64(f64::from(remainder) / f64::from(self.sample_rate.get())),

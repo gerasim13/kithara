@@ -55,6 +55,9 @@ impl FlashInner {
 
     /// Mark ONE real I/O operation in flight. The first op anchors the pace to
     /// the current (real, virtual) instant and spawns the pacer thread lazily.
+    ///
+    /// Spawns the pacer with a raw `std::thread`, never `spawn_named`, so the pacer itself stays
+    /// invisible to the engine and does not pin the clock it exists to advance.
     pub(in crate::flash) fn real_io_enter(&self) {
         self.pacer.spawn.call_once(|| {
             let owner = self
@@ -62,8 +65,6 @@ impl FlashInner {
                 .owner
                 .upgrade()
                 .expect("BUG: real_io_enter is reachable only through a live Arc<FlashInner>");
-            // WHY: Raw std thread: the pacer must stay INVISIBLE to the engine (a platform `spawn_named` would count it as a dedicated pacer and
-            // pin the very clock it exists to advance).
             std::thread::Builder::new()
                 .name("kithara-flash-io-pacer".into())
                 .spawn(move || owner.pace_run())

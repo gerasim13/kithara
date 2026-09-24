@@ -48,17 +48,16 @@ fn walk(dir: &Path, declared: &mut HashSet<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// A `#[path]` resolves against the directory of the file carrying it, not against the directory
+/// the module would own. A crate or module root owns its own directory; any other file owns the
+/// directory named after it.
 fn collect(file: &Path, text: &str, declared: &mut HashSet<PathBuf>) {
     let Some(dir) = file.parent() else { return };
     for line in text.lines() {
         let line = line.trim();
         if let Some(target) = path_attribute(line) {
-            // A `#[path]` resolves against the directory of the file carrying
-            // it, not against the directory the module would own.
             declared.insert(normalize(&dir.join(target)));
         } else if let Some(name) = module_declaration(line) {
-            // A crate or module root owns its own directory; any other file
-            // owns the directory named after it.
             let base = if owns_its_directory(file) {
                 dir.to_owned()
             } else {
@@ -105,7 +104,6 @@ fn strip_visibility(line: &str) -> &str {
         return line;
     }
     let rest = rest.trim_start();
-    // `pub(crate)`, `pub(super)`, `pub(in path::to)`.
     rest.strip_prefix('(')
         .and_then(|scope| scope.split_once(')'))
         .map_or(rest, |(_, after)| after.trim_start())

@@ -1,4 +1,3 @@
-// NOTE: deny instead of forbid to allow unsafe in Android FFI modules.
 #![deny(unsafe_code)]
 #![cfg_attr(all(test, rtsan, not(rtsan_standalone)), feature(sanitize))]
 

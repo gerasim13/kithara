@@ -139,6 +139,8 @@ fn encode_track(
     })
 }
 
+/// `FFmpeg` emits one native AAC priming access unit before the source frames, which the total frame
+/// count must subtract.
 fn encode(spec: VariantSpec) -> EncodedVariant {
     let frame_samples = EncoderFactory::frame_samples(spec.codec).unwrap_or_else(|error| {
         panic!(
@@ -157,7 +159,6 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
         * usize::try_from(Consts::TOTAL_MILLIS).expect("invariant: duration fits usize")
         / usize::try_from(GaplessConsts::MILLIS_PER_SECOND)
             .expect("invariant: millisecond scale fits usize");
-    // FFmpeg emits one native AAC priming access unit before the source frames.
     let total_frames = if spec.codec == AudioCodec::AacLc {
         encoded_frames
             .checked_sub(frame_samples)

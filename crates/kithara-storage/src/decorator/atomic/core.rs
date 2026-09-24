@@ -44,6 +44,9 @@ impl<D: DriverIo> Atomic<D> {
     ///
     /// # Errors
     /// Propagates filesystem errors and the inner commit error.
+    ///
+    /// The inner resource still maps the canonical path, and Windows refuses to replace a mapped
+    /// file, so this branch commits and reopens it instead of renaming over it.
     pub fn write_all(&self, data: &[u8]) -> StorageResult<()> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.inner.path() {
@@ -60,7 +63,6 @@ impl<D: DriverIo> Atomic<D> {
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-            // WHY: The inner still maps the canonical path, and Windows refuses to replace a mapped file; the commit below reopens it.
             self.inner.release_backing_in_place()?;
 
             tmp.persist(&path)

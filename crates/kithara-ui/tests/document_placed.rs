@@ -186,8 +186,8 @@ const UNANSWERED: Points = Points {
     two: None,
 };
 
-fn registry() -> common::TestRegistry {
-    let mut registry = common::player_registry();
+fn registry() -> common::registry::TestRegistry {
+    let mut registry = common::registry::player_registry();
     for id in ["scene.one", "scene.two"] {
         registry.insert(
             EndpointCategory::Model,

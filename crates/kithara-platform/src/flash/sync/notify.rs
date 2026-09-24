@@ -60,12 +60,13 @@ impl Notify {
         }
     }
 
+    /// Grants and wakes one parked waiter; with none parked, stores a permit instead (tokio
+    /// semantics).
     pub fn notify_one(&self) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_notify(cvid),
             Backend::Native => {
                 trace_native_from_ambient("notify", "notify_one");
-                // WHY: Grant + wake one parked waiter; if none, store a permit (tokio semantics).
                 let mut real = self.real.lock();
                 let waiter = real.waiters.pop_front();
                 match &waiter {
@@ -102,25 +103,24 @@ pub struct Notified<'a> {
 impl Future for Notified<'_> {
     type Output = ();
 
+    /// Resolution is grant-driven: a waiter resolves only when `notify_one`/`notify_all` sets its
+    /// flag, never from a bare re-check, so a spurious re-poll before that grant stays parked
+    /// instead of resolving early or racing a lost wakeup.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         match &self.state {
             NotifiedState::Done => return Poll::Ready(()),
             NotifiedState::Engine(handle) => {
                 if handle.granted() {
-                    // WHY: The firer (notify_*) selected us; resolve. The task's `active_async` count is owned by the spawn poll-wrapper, so
                     self.state = NotifiedState::Done;
                     return Poll::Ready(());
                 }
-                // WHY: Spurious re-poll before a signal: stay parked (engine never wakes an untimed waiter on a clock jump).
                 return Poll::Pending;
             }
             NotifiedState::Real(granted) => {
                 if granted.load(Ordering::Acquire) {
-                    // WHY: A notify_one selected us; resolve (grant-driven, never a bare permit re-check, so a spurious re-poll cannot lose it).
                     self.state = NotifiedState::Done;
                     return Poll::Ready(());
                 }
-                // WHY: Spurious re-poll before a grant: stay parked.
                 return Poll::Pending;
             }
             NotifiedState::Init => {}
@@ -130,7 +130,6 @@ impl Future for Notified<'_> {
                 let (handle, adv) = system::register_notify_async(cvid, cx.waker().clone());
                 match handle {
                     None => {
-                        // WHY: A notify_one had landed with no waiter: consume the permit and resolve at once, without parking (no slot was granted).
                         self.state = NotifiedState::Done;
                         Poll::Ready(())
                     }
@@ -143,8 +142,6 @@ impl Future for Notified<'_> {
             }
             Backend::Native => {
                 trace_native_from_ambient("notify", "notified");
-                // WHY: Consume a permit, else enqueue our (grant, waker) UNDER the lock so a concurrent notify_one (same lock, then grant+wake)
-                // cannot slip between this permit-check and our park.
                 let mut real = self.notify.real.lock();
                 if real.permit {
                     real.permit = false;
@@ -164,18 +161,18 @@ impl Future for Notified<'_> {
 }
 
 impl Drop for Notified<'_> {
+    /// Removes only this future's own entry by grant-flag identity, so `notify_one` cannot steal a
+    /// wake from a still-parked peer via an already-dropped future; a grant observed only after
+    /// drop is handed to the next waiter or stored as a permit.
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {
             NotifiedState::Engine(handle) => system::cancel_async_wait(&handle),
             NotifiedState::Real(granted) => {
-                // WHY: Remove EXACTLY our own entry (by grant-flag identity) so a notify_one does not select a dropped future (which would steal it
-                // from a still-parked peer).
                 let mut real = self.notify.real.lock();
                 let before = real.waiters.len();
                 real.waiters.retain(|(g, _)| !Arc::ptr_eq(g, &granted));
                 let still_queued = real.waiters.len() != before;
                 if !still_queued && granted.load(Ordering::Acquire) {
-                    // WHY: We were granted then dropped before observing it: hand the notify on to the next waiter, or store a permit.
                     if let Some((g, w)) = real.waiters.pop_front() {
                         g.store(true, Ordering::Release);
                         drop(real);

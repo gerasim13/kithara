@@ -141,6 +141,10 @@ impl PlayerNodeProcessor {
     }
 
     /// Clean up finished tracks, dropping `playing` once none is audible.
+    ///
+    /// When cleanup would empty the slot set after the queue plays out, keeps the track that
+    /// reached natural EOF resident so an in-range seek can later revive it; `is_playing()` stays
+    /// false until then.
     pub fn cleanup_finished_tracks(&mut self) {
         let finished: SmallVec<[(TrackSlot, bool); Self::MAX_TRACKS]> = self
             .tracks
@@ -149,9 +153,6 @@ impl PlayerNodeProcessor {
             .map(|(slot, track)| (slot, track.ended_at_eof()))
             .collect();
 
-        // WHY: Superpowered-style end-of-queue resume: if removing the finished tracks would empty the slot set (the queue has played out)
-        // and one of them reached *natural* EOF, keep that single track resident (warm) so a later in-range seek can revive it
-        // (`apply_seek`).
         let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
             finished
                 .iter()
@@ -171,7 +172,6 @@ impl PlayerNodeProcessor {
             }
         }
 
-        // WHY: The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }
@@ -318,9 +318,10 @@ impl PlayerNodeProcessor {
     /// leading track produced an outcome this cycle (cold start before
     /// the first render block, or every active track was a non-leading
     /// fade-in).
+    ///
+    /// Both published windows come from the leading track's lock-free snapshots: the decoded
+    /// frontier, which is always `>=` position, and the cached span the download side published.
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        // WHY: Both windows come from the leading track's lock-free snapshots: the decoded frontier (always `>=` position) and the cached
-        // span the download side published.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.playback

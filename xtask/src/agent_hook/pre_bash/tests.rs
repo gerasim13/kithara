@@ -1,4 +1,4 @@
-use super::{deny_reason_for_bash, shell::shell_tokens};
+use super::{decision::deny_reason_for_bash, shell::shell_tokens};
 
 const OVERRIDE_ENV: &str = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT";
 

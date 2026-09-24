@@ -29,6 +29,8 @@ pub(crate) fn check_layout_instances(
     )
 }
 
+/// Two pages never stand at once, so each claims its instances against what stood before the tabs
+/// rather than against its sibling pages.
 pub(super) fn walk_layout(
     node: &LayoutNode,
     path: &NodePath,
@@ -122,9 +124,6 @@ pub(super) fn walk_layout(
                     path: here.render(),
                 });
             }
-            // Two pages never stand at once, so each claims its instances
-            // against what stood before the tabs rather than against its
-            // neighbours.
             let taken = seen.clone();
             for (page, node) in pages {
                 let mut claimed = taken.clone();

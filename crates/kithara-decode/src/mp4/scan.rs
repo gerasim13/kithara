@@ -43,7 +43,6 @@ impl Consts {
     const FREEFORM_MAX_BYTES: usize = 64 * 1024;
 
     const ITUNES_MEAN: &str = "com.apple.iTunes";
-
     const ITUNSMPB_NAME: &str = "iTunSMPB";
 }
 

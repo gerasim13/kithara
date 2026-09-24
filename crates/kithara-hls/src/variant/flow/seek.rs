@@ -97,9 +97,9 @@ where
         self.reset_layout_to_full_range();
     }
 
+    /// Off-RT, lock-free store of the resolved exact anchor onto the matching base, tagged with the
+    /// base generation so a stale resolver cannot attach to a newer alias.
     pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        // WHY: Off-RT (exact-prefix settle): a lock-free, alloc-free store of the resolved exact anchor onto the matching base, tagged with
-        // the base generation so a stale resolver cannot attach to a newer alias.
         self.seek
             .alias
             .resolve(demand.segment, demand.anchor, exact_anchor);
@@ -145,9 +145,9 @@ where
         }
     }
 
+    /// RT-reachable lock-free clear: safe because the base is single-writer (on-core), so the `Some
+    /// -> None` store never races a concurrent base writer.
     pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
-        // WHY: RT-reachable (via `advance`): a lock-free, alloc-free load + atomic clear. The base is single-writer (on-core), so the `Some
-        // -> None` store never races a concurrent base writer.
         if self
             .seek
             .alias

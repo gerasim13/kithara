@@ -632,6 +632,9 @@ fn read_mpeg_frame_inner(
 }
 
 /// Reads an MPEG frame and checks if the next frame begins after the packet.
+///
+/// Resumes scanning one byte into the rejected candidate, so the same position is not selected
+/// again.
 fn read_mpeg_frame_strict_into(
     reader: &mut MediaSourceStream<'_>,
     packet: &mut [u8],
@@ -648,7 +651,6 @@ fn read_mpeg_frame_strict_into(
         {
             warn!("skipping junk at {} bytes", pos - packet_len as u64);
 
-            // WHY: Resume one byte into the rejected candidate to avoid selecting it again.
             reader.seek_buffered_rev(packet_len + MPEG_HEADER_LEN - 1);
             continue;
         }

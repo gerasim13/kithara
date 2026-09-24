@@ -39,12 +39,12 @@ struct ResourceTransaction {
 }
 
 impl Drop for ResourceTransaction {
+    /// A cancelled waiter may have already consumed the only unlock notification.
     fn drop(&mut self) {
         let should_notify = if self.held {
             self.cell.held.store(false, Ordering::Release);
             true
         } else {
-            // WHY: A cancelled waiter may have consumed the only unlock notification.
             !self.cell.held.load(Ordering::Acquire)
         };
         if should_notify {

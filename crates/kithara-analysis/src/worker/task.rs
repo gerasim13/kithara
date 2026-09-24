@@ -200,7 +200,6 @@ where
                 TickResult::Progress
             }
             Err(error) => {
-                // The reader failed; the ranges it delivered did not.
                 warn!(?error, "analysis: decode error; pass ended");
                 self.finish(false);
                 TickResult::Progress
@@ -331,6 +330,8 @@ where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    /// The source cannot deliver the position the schedule planned against, so it bounds where the
+    /// run ends however long it claims to be.
     fn reschedule(&mut self, window: Option<u64>) -> TickResult {
         self.retire();
         let Some(at) = self.choose(window) else {
@@ -350,7 +351,6 @@ where
             return TickResult::Progress;
         };
         match self.reader.seek(position) {
-            // `landed_at` only echoes the target here; the first chunk says where.
             Ok(SeekOutcome::Landed { .. }) => {
                 debug!(at, "analysis: run scheduled");
                 self.frontier = at;
@@ -362,8 +362,6 @@ where
                     deferred: false,
                 });
             }
-            // The source cannot deliver the position the schedule planned
-            // against, which bounds where it ends however long it says it is.
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 debug!(at, ?duration, "analysis: scheduled position past the end");
                 self.extent.prove_end(at);
@@ -376,18 +374,21 @@ where
         TickResult::Progress
     }
 
+    /// Retirement follows what the run itself decoded, not what the pass covered while it ran: a
+    /// producer folds ranges from anywhere and would otherwise keep the run alive forever.
     fn retire(&mut self) {
         let Some(run) = self.run.take() else {
             return;
         };
-        // What the run itself decoded, not what the pass covered while it ran:
-        // a producer folds ranges from anywhere and would keep this alive.
         if !run.grew && !run.deferred {
             debug!(at = run.chosen, "analysis: position added nothing; retired");
             self.schedule.barren(run.chosen);
         }
     }
 
+    /// Covered audio ends a run only once it reaches its own gap, since ending earlier would retire
+    /// the gap unread. Overshooting the target with nothing gained means this source cannot reach
+    /// the schedule's gap.
     fn run_over(&self, run_frames: Option<u64>) -> bool {
         let Some(run) = &self.run else {
             return true;
@@ -399,14 +400,9 @@ where
         {
             return true;
         }
-        // Covered audio ends a run that already reached its gap. Before that
-        // it is the lead-in a seek snapping back off the gap's start left in
-        // front, and ending there would retire the gap unread.
         if run.grew && self.is_covered(self.frontier..self.frontier + 1) {
             return true;
         }
-        // Read past what it was aimed at with nothing gained: the gap the
-        // schedule saw there is not where this source can put the reader.
         if !run.grew && self.frontier > run.chosen {
             return true;
         }
@@ -435,6 +431,8 @@ where
         self.decode(builder, detector)
     }
 
+    /// The decode path refines the duration upward as it goes, so re-reading it on each tick lets a
+    /// later, more accurate value replace the earlier estimate.
     pub(crate) fn tick(
         &mut self,
         builder: &AnalyzerBuilder<B, S>,
@@ -453,7 +451,6 @@ where
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
                 };
-                // Re-read: the decode path refines a duration upward as it goes.
                 self.extent.claim(self.reader.duration(), self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
                 if self.is_ending() || self.due() || self.beat_dirty {

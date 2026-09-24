@@ -60,6 +60,9 @@ struct Fields<'a> {
     done: &'a mut bool,
 }
 
+/// Registers first, since cancel may have fired between the earlier `is_cancelled` check and
+/// registration; `register` returns `None` when already fired, which this resolves immediately
+/// rather than leaving parked.
 fn poll_cancelled(f: &mut Fields<'_>, cx: &mut Context<'_>) -> Poll<()> {
     if *f.done {
         return Poll::Ready(());
@@ -75,8 +78,6 @@ fn poll_cancelled(f: &mut Fields<'_>, cx: &mut Context<'_>) -> Poll<()> {
         f.node.refresh_task(id, cx.waker());
         return Poll::Pending;
     }
-    // WHY: Register, then handle the race: cancel may have fired between the is_cancelled() above and the registration. register()
-    // returns None if the node already fired (born/late) - resolve at once.
     if let Some(id) = f.node.register(Slot::Task(cx.waker().clone())) {
         *f.slot = Some(id);
         Poll::Pending

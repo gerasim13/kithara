@@ -198,13 +198,13 @@ where
         self.discard_incoming(&mut state, false);
     }
 
+    /// Logging here is the only witness that a variant switch ended via `abort_intent` without ever
+    /// committing, since no tick source re-derives that pending decision afterward.
     #[kithara::probe(abort_intent)]
     pub(super) fn discard_incoming(&self, state: &mut TransitionState<S>, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
             return;
         };
-        // WHY: With `abort_intent` the pending decision dies with the slot and no tick source re-derives it - this line is the only witness
-        // of a switch that ends without ever committing.
         debug!(
             transition = ?slot.transition,
             abort_intent,
@@ -471,6 +471,8 @@ where
         self.active_session().take_prefetch_resume()
     }
 
+    /// Defers the peer wake until this lock is released: `wake_peer` needs the peer's state lock,
+    /// which the peer holds across `prepare_for_seek` while blocked on this transition lock.
     pub(in crate::stream) fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
@@ -504,8 +506,6 @@ where
                     }
                     PendingAbrClaim::Ready(_) => match slot.session.is_ready() {
                         Ok(false) => {
-                            // WHY: Owed a wake, but not from here: `wake_peer` takes the peer's state lock, and the peer holds that across `prepare_for_seek`,
-                            // which takes the transition lock this arm is standing on.
                             wake_when_unlocked = Some(Arc::clone(&slot.session));
                             Ok(VariantReaderTake::Preparing)
                         }

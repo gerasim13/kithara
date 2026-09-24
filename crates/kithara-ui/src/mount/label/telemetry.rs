@@ -15,7 +15,7 @@ pub(crate) struct Telemetry {
 mod host {
     use super::Telemetry;
     use crate::{
-        atoms::label::telemetry::Telemetry as Face,
+        atoms::label::Telemetry as Face,
         render::{
             ReadValue, Skin,
             controls::{Draws, Reading},

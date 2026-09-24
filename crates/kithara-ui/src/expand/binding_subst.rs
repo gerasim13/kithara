@@ -252,14 +252,14 @@ fn intern_binding_parts(
     })
 }
 
+/// A state with no scope map has no identity beyond the name given under its module instance, so
+/// its key is its own id.
 pub(crate) fn intern_binding(
     interner: &mut Interner,
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
     if let BindingRef::View { id, set } = binding {
-        // A state has no scope map: the name it was given under its module
-        // instance is already the whole of its identity, so its key is its id.
         let id = interner.intern(&id.0, origin)?;
         return Ok(Binding {
             with: BTreeMap::new(),

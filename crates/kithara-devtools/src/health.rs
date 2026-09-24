@@ -270,31 +270,7 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         Stage::new("quality-report", "cargo", &["xtask", "quality", "report"]),
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
         Stage::new("deny", "cargo", &["deny", "check"]),
-        // The powerset owns which crates refuse a combination and holds them
-        // out of the workspace pass, so this is one command rather than a shape
-        // repeated here and in the deps recipe. `--no-dev-deps` is deliberately
-        // absent: a crate whose tests need a feature its library does not
-        // declare still has the wrong feature set, and the health run is where
-        // that should show.
         Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
-        // No workspace crate is published to crates.io (the workspace is an
-        // application, not a crate release train), so the registry baseline
-        // `check-release` looks up by default can never resolve. Comparing
-        // against the tip of `main` instead makes this a real check: it
-        // reports nothing on `main` itself (current == baseline) and flags
-        // an actual public-API break on a branch that has drifted from it.
-        // Which packages carry a contract worth comparing is project policy
-        // and lives in `[health].semver_packages`; the workspace form is not
-        // an option here, because cargo-semver-checks builds every package in
-        // its own target directory and rebuilds that package's whole
-        // dependency tree in it, twice.
-        //
-        // `--release-type minor` is what makes the comparison happen at all.
-        // Left to derive the release type from the version numbers, the tool
-        // reads the same version on both sides, assumes a major release — where
-        // breaking is allowed — and skips every lint: 0 checks run and the
-        // summary says no update is required, whatever the branch did to the
-        // API. Stating minor asks the question worth asking: did this break?
         Stage::new(
             "semver-checks",
             "cargo",
@@ -308,10 +284,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
             ],
         )
         .packages(semver_packages),
-        // cargo-geiger counts `unsafe` across a dependency tree, and a tree has
-        // a root: pointed at the workspace it says only that the root manifest
-        // is virtual. The census that means something here is the one rooted at
-        // the facade, whose closure is what a consumer of this workspace links.
         Stage::new(
             "geiger",
             "cargo",
@@ -326,14 +298,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
             ],
         )
         .advisory(),
-        // A rustc driver rather than a crates.io package: it links
-        // `rustc_driver` against one nightly and only reads a workspace that
-        // same nightly compiled, which is why the toolchain is selected here
-        // rather than left to whatever the caller defaults to. `.strict()`
-        // because a driver that cannot load is a missing verdict, not a clean
-        // one, and `.own_crates()` because lockbud exits zero on a deadlock it
-        // found — it writes the bug to its log and lets the build succeed —
-        // while reporting on the dependencies it compiled as well.
         Stage::new(
             "lockbud-deadlock",
             "cargo",

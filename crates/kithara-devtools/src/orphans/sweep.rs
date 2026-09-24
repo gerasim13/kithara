@@ -226,8 +226,6 @@ fn merge(reports: Vec<Report>) -> BTreeMap<String, Merged> {
             }
         }
     }
-    // A module some other target of the same package loads is not an orphan of
-    // the package, whichever target reported it.
     for entry in merged.values_mut() {
         entry
             .orphans
@@ -236,6 +234,8 @@ fn merge(reports: Vec<Report>) -> BTreeMap<String, Merged> {
     merged
 }
 
+/// The filter is stated rather than dropped: it is the reason this sweep can be green, so what it
+/// removed has to stay visible.
 fn verdict(reports: &BTreeMap<String, Merged>, root: &Path, deny: bool) -> Result<()> {
     let mut broken = Vec::new();
     let mut orphaned = Vec::new();
@@ -246,8 +246,6 @@ fn verdict(reports: &BTreeMap<String, Merged>, root: &Path, deny: bool) -> Resul
         if !report.failures.is_empty() {
             broken.push(package.clone());
         }
-        // Stated rather than dropped: the filter is the reason this sweep can
-        // be green, so what it removed has to stay visible.
         if !report.declared.is_empty() {
             println!(
                 "orphans: {package}: {} module(s) the source declares behind a `cfg` \
@@ -352,8 +350,6 @@ fn finding(line: &str, root: &Path) -> Option<Finding> {
     let (_, rest) = line.split_once(Consts::MARKER)?;
     let (module, rest) = rest.split_once('`')?;
     let (_, path) = rest.split_once(" at ")?;
-    // Colour codes survive a piped run on some terminals; the escape is never
-    // part of a module name or a path.
     let path = Path::new(path.split('\u{1b}').next().unwrap_or(path).trim());
     let path = if path.is_absolute() {
         path.to_owned()

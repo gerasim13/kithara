@@ -165,7 +165,7 @@ fn document(root: &str) -> CompiledUi {
     compile(
         "frame.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

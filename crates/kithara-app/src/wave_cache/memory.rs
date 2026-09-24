@@ -94,13 +94,13 @@ impl TrackAnalysisCache {
         Some(progress)
     }
 
+    /// The probe is side-effect-free and runs first, since opening a missing key would create it.
     fn load_disk(
         &mut self,
         target: &AnalysisTarget,
         source_sample_rate: NonZeroU32,
     ) -> Option<AnalysisProgress> {
         let resource = &target.key;
-        // Side-effect-free probe first: opening a missing key would create it.
         match target.store.resource_state(resource).ok()? {
             AssetResourceState::Committed { .. } => {}
             _ => return None,
@@ -126,10 +126,10 @@ impl TrackAnalysisCache {
         progress
     }
 
+    /// An analysis with no meaningful slots would otherwise be served as emptiness forever on later
+    /// hits, so it is skipped rather than memoized in either tier.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
-        // An analysis with no meaningful slots would be served forever as
-        // emptiness on later hits; skip memoizing it in either tier.
         if analysis.waveform().is_none() && analysis.beat().is_none() && !progress.is_resumable() {
             return;
         }

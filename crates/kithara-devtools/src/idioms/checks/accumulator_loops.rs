@@ -189,7 +189,6 @@ fn classify_method_call(e: &Expr, loop_vars: &[String]) -> Option<Pattern> {
     if args.len() != 1 {
         return None;
     }
-    // `sample.push(..)` mutates the iterated element, not an external Vec.
     if assign_target_is_loop_var(receiver, loop_vars) {
         return None;
     }
@@ -212,8 +211,6 @@ fn classify_compound_assign(e: &Expr, loop_vars: &[String]) -> Option<Pattern> {
     ) {
         return None;
     }
-    // In-place mutation of the iterated element (`*sample *= gain`) is a
-    // map/scale, not a reduction into a loop-external accumulator.
     if assign_target_is_loop_var(left, loop_vars) {
         return None;
     }

@@ -5,7 +5,6 @@ pub use crate::common::thread_id::active_named_thread_count;
 use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
 
 pub type Thread = std::thread::Thread;
-
 pub type ThreadId = std::thread::ThreadId;
 
 fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static

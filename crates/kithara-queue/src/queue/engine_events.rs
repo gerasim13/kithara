@@ -59,6 +59,8 @@ where
         }
     }
 
+    /// `CurrentItemChanged` is edge-triggered and de-duplicated by
+    /// `ItemQueue::announce_current_item`, so a dropped event cannot be recovered by waiting again.
     pub(super) fn drain_player_events(&self) {
         let mut lagged = false;
         {
@@ -75,8 +77,6 @@ where
             }
         }
         if lagged {
-            // WHY: `CurrentItemChanged` is edge-triggered and de-duplicated by `ItemQueue::announce_current_item`, so waiting cannot recover a
-            // drop.
             self.handle_current_item_changed();
         }
     }

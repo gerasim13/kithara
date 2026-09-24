@@ -26,6 +26,10 @@ impl RunEnvironment {
     ///
     /// Returns an error when a raw path is absolute, or when the build
     /// directory is not one the run can hand a child.
+    ///
+    /// The build directory is set last, so no lane can override this key; it must be absolute,
+    /// since an inherited value points at a directory shared with the whole host and a stress run
+    /// lasts hours.
     pub(super) fn new(
         raw_dir: &Path,
         build_dir: &Path,
@@ -50,12 +54,6 @@ impl RunEnvironment {
             );
             set.insert(OsString::from(key), raw_dir.join(relative).into_os_string());
         }
-        // The run builds where it says, not where the machine says. An
-        // inherited value points at a directory shared with everything else on
-        // the host, and a stress run lasts hours: when those binaries went
-        // away mid-run, every test of every remaining repeat failed to exec in
-        // milliseconds and the lane reported nothing about the code it was
-        // asked about. Set last, so no lane can name this key away.
         ensure!(
             build_dir.is_absolute(),
             "stress build directory must be absolute: {}",

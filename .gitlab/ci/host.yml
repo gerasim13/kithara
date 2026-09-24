@@ -18,21 +18,29 @@
 # ones that most need the image — left this job pending until it was dropped.
 # The macOS runner is the same `kithara-ci` account on the same host and
 # already runs the change's code, so it grants the change nothing new.
+#
+# A provisioning run leaves it out: the roll-out builds the image itself, and
+# a tag moved underneath it fails the digest check its runner step makes.
 linux:image:
   extends: .macos-job
   stage: linux
   timeout: 90 minutes
   needs: []
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "provision"
+      when: never
+    - when: on_success
   script:
     - just ci host mac build-linux-image docker/ci.Dockerfile
     - just ci host mac smoke-linux
 
-# The same roll-out on the Mac mini, and the same opt-in: set `KITHARA_PROVISION`
-# to `1` when starting the pipeline. It reinstalls the services from this
-# commit, rewrites the runner configuration, makes sure the pinned Linux image
-# is there and reloads the agents.
+# The same roll-out on the Mac mini, opted into by starting a pipeline on the
+# default branch with `KITHARA_PROVISION` set to `1`, from "Run pipeline" or the
+# API. That run is the `provision` kind and carries this job alone. It
+# reinstalls the services from this commit, rewrites the runner configuration,
+# makes sure the pinned Linux image is there and reloads the agents.
 #
-# Protected kinds only. Provisioning writes to the machine that serves every
+# The default branch only. Provisioning writes to the machine that serves every
 # lane, and a merge-request or quarantine ref carries code no one has reviewed
 # yet; `linux:image` above is what those refs get, and it only ever builds an
 # image from pins the ref already ran under.
@@ -42,10 +50,6 @@ host:provision:
   timeout: 180 minutes
   needs: []
   rules:
-    - if: $KITHARA_PROVISION != "1"
-      when: never
-    - if: $KITHARA_PIPELINE_KIND == "main"
-    - if: $KITHARA_PIPELINE_KIND == "nightly"
-    - if: $KITHARA_PIPELINE_KIND == "release"
+    - if: $KITHARA_PIPELINE_KIND == "provision"
   script:
     - just ci host provision

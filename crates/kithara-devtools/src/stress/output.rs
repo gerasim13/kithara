@@ -323,8 +323,8 @@ fn fail_after_spawn<T>(child: &mut Child, error: Error) -> Result<T> {
     Err(error)
 }
 
+/// `Child::wait` closes stdin, which can release the child before the kill takes effect.
 fn terminate_child(child: &mut Child) -> Result<()> {
-    // Child::wait closes stdin, which can release the child before the kill takes effect.
     let _stdin = child.stdin.take();
     let kill_error = child.kill().err();
     match child.wait() {

@@ -71,6 +71,10 @@ where
     /// the owed window (the playing segment and the next) ride
     /// `tokens.lookahead`, which a variant transition retires to free
     /// downloader capacity without touching what playback waits on.
+    ///
+    /// A construction bound is a hard debt: fetches up to it must land for the build to finish, so
+    /// look-ahead-only caps step aside within that window; a popped entry already requeued by a
+    /// concurrent claim's drop is never double-planned.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -97,9 +101,6 @@ where
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
-        // A construction bound names a debt: everything up to it must land for
-        // the splice or build to finish. Look-ahead trims optional prefetch
-        // only, so inside a bounded window the caps step aside.
         let prefetch_byte_cap = construction_segment_end
             .is_none()
             .then(|| {
@@ -177,7 +178,6 @@ where
                         }
                         continue;
                     };
-                    // WHY: A decoder cannot start until its init fetch completes.
                     cmd.set_priority(RequestPriority::High);
                     out.push(cmd);
                 }
@@ -191,7 +191,6 @@ where
                         Arc::downgrade(self),
                         ctx.signal.clone(),
                     ) else {
-                        // WHY: An orphaned download may return to `Missing` and need another claim.
                         if !entry.state().is_loaded() && !entry.state().is_failed() {
                             deferred.push((planned, plan_revision));
                         }
@@ -208,7 +207,6 @@ where
                         cancel.clone()
                     };
                     let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
-                        // WHY: A reverted claim must remain queued for another acquisition attempt.
                         deferred.push((planned, plan_revision));
                         continue;
                     };
@@ -223,9 +221,6 @@ where
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
             for (planned, revision) in deferred {
-                // A concurrent claim's Drop may have requeued this entry
-                // between the pop above and this write-back (a downloader
-                // teardown racing the dispatch) — never double-plan it.
                 queue.requeue_if_current(planned, revision);
             }
         }

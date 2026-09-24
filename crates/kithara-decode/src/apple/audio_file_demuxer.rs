@@ -125,6 +125,9 @@ impl AppleAudioFileDemuxer {
         })
     }
 
+    /// Streaming opens skip the packet-count scan MP3 and FLAC would need, taking duration and
+    /// buffer size from header metadata instead; FLAC also needs the real file size for correct EOF
+    /// and seek behavior.
     fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
@@ -136,18 +139,6 @@ impl AppleAudioFileDemuxer {
     where
         S: HasPool<u8>,
     {
-        // MP3 and FLAC are VBR with no on-disk packet index, so a complete
-        // open would query `packet_count()` — forcing `AudioFileServices` to
-        // scan the WHOLE file to build a packet table before the first frame
-        // (3–37 s on device for large lossless tracks, and a full download
-        // wait on a streamed source). The streaming opens skip that scan;
-        // duration and the read-buffer size come from cheap header metadata
-        // instead (Xing for MP3, STREAMINFO for FLAC).
-        // FLAC additionally needs the real file size handed to AudioFile
-        // (`open_sized_streaming`): without it a not-ready read past the
-        // download boundary is mistaken for EOF (track ends mid-stream) and
-        // seeks degrade to an O(N) forward frame-scan. MP3 stays size-less —
-        // it must not probe tail bytes at open (`open_mp3_demuxer_*`).
         let file = match (open_mode, codec) {
             (SourceOpenMode::Streaming, AudioCodec::Flac) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
@@ -170,9 +161,6 @@ impl AppleAudioFileDemuxer {
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
-        // FLAC's magic cookie carries STREAMINFO: `total_samples` yields the
-        // exact duration and `max_frame_size` bounds the VBR read buffer when
-        // the streaming open leaves `max_packet_size()` at 0.
         let flac_info = (codec == AudioCodec::Flac)
             .then(|| StreamInfo::parse(&extra_data).ok())
             .flatten();
@@ -216,9 +204,6 @@ impl AppleAudioFileDemuxer {
         };
 
         let (cbr_batch_packets, buf_cap) = if asbd.bytes_per_packet == 0 {
-            // VBR. A streaming open reports no max packet size, so fall back
-            // to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
-            // KiB, far past the 4 KiB floor) when AudioFile can't supply one.
             let reported = usize::try_from(file.max_packet_size).map_err(DecodeError::backend)?;
             let flac_bound = flac_info.map_or(0, StreamInfo::max_frame_bytes);
             (None, reported.max(flac_bound).max(4096))
@@ -349,6 +334,9 @@ impl Demuxer for AppleAudioFileDemuxer {
         Ok(())
     }
 
+    /// Apple's own packet-to-byte mapping is preferred so `landed_byte` matches the offset its
+    /// packet read seeks to; a size-less open rejects it, so the streamed MP3 path falls back to a
+    /// linear estimate.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
         let spec = self.audio_spec()?;
@@ -382,14 +370,6 @@ impl Demuxer for AppleAudioFileDemuxer {
             .duration_for(landed_frame)
             .unwrap_or(Duration::from_nanos(u64::MAX));
 
-        // Prefer Apple's own packet→byte mapping so `landed_byte` matches the
-        // offset its packet read seeks to; fall back to a linear estimate from
-        // the live total when the property is unavailable.
-        // Apple's own packet→byte mapping is exact and is the offset its packet
-        // read seeks to, but a size-less open rejects it outright
-        // (`kAudioFileInvalidPacketOffsetError`). That degraded mode — the
-        // streamed MP3 path — falls back to the linear estimate; see
-        // `estimate_landed_byte`.
         let landed_byte = self
             .file
             .packet_to_byte(landed_packet)
@@ -408,6 +388,9 @@ impl Demuxer for AppleAudioFileDemuxer {
 }
 
 impl AppleAudioFileDemuxer {
+    /// Data not ready surfaces as `Pending`, never `Err`, since an `Err` is classified as
+    /// `Interrupted` upstream and retried hot instead of parking the worker; the packet cursor is
+    /// left unadvanced.
     fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         if self
             .total_packets
@@ -434,10 +417,6 @@ impl AppleAudioFileDemuxer {
             } else {
                 batch_packets
             };
-            // Contract: "data not ready" surfaces as `Pending`, never `Err` —
-            // an `Err` classifies as `Interrupted` upstream and the decode
-            // loop retries it hot instead of parking the worker. The packet
-            // cursor was not advanced, so the next call re-reads the same
             let (bytes, packets_read) =
                 match self
                     .file

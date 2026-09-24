@@ -15,7 +15,7 @@ pub(crate) use self::native::{
 };
 
 #[cfg(target_arch = "wasm32")]
-#[path = "wasm/mod.rs"]
+#[path = "wasm.rs"]
 mod wasm;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use self::wasm::{
@@ -24,11 +24,12 @@ pub(crate) use self::wasm::{
 };
 
 impl From<BackendError> for NetError {
+    /// Non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream
+    /// close can resume; a fatal `Decode` here is reserved for a local sink write failure.
     fn from(e: BackendError) -> Self {
         if e.is_timeout() {
             return Self::Timeout;
         }
-        // WHY: non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream close can resume; fatal Decode is for a local sink write (dl/response.rs).
         e.status()
             .and_then(|s| NonZeroU16::new(s.as_u16()))
             .map_or_else(

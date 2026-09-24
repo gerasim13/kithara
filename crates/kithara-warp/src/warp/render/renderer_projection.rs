@@ -252,6 +252,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
+    /// A decoder suffix may be shorter than one mapped output frame; the worker retains it and
+    /// assembles the exact request across chunks.
     pub(super) fn projected_span(
         &self,
         plan: &WarpPlan,
@@ -330,8 +332,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             );
             Ok(end)
         };
-        // A decoder suffix may be shorter than one mapped output frame.
-        // The worker retains it and assembles the exact request across chunks.
         let available_end = source_start
             .checked_add(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?)
             .ok_or(ElasticError::SampleCountOverflow)?;

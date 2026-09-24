@@ -98,6 +98,9 @@ pub(crate) fn run(
     validate_primary_evidence(&args.inventory, &args.junit, args.count, &args.render)
 }
 
+/// Whether the subject's `JUnit` path is clear is the whole run's business, not one lane's, since
+/// several lanes write that one path in sequence; the run requires an untouched path before
+/// starting and clears the previous lane's file before each run.
 pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
     validate_stress_count(args.count, args.max_count)?;
     ensure!(!args.filter.trim().is_empty(), "stress filter is empty");
@@ -109,12 +112,6 @@ pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
         "stress JUnit path must be absolute: {}",
         args.junit.display()
     );
-    // Whether the subject's JUnit path is clear is the whole run's business,
-    // not one lane's: a run of several lanes writes that one path once per
-    // lane, and a rule enforced here would stop its second lane before a
-    // single test ran. The run demands an untouched path before it starts
-    // and clears the previous lane's file before each run, which is also what
-    // makes staging honest — a file found afterwards can only be this run's.
     ensure!(
         args.config_file.is_file(),
         "nextest config does not exist: {}",

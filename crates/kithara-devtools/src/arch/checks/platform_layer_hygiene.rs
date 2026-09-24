@@ -280,8 +280,6 @@ fn cfg_test_ranges(content: &str) -> Vec<(usize, usize)> {
                 loop {
                     let (opens, closes) = brace_counts(lines[k]);
                     depth = depth.saturating_add(opens);
-                    // The mod's opening brace puts depth at >=1; once closes
-                    // bring it back to 0 the block is done.
                     if closes >= depth {
                         break;
                     }

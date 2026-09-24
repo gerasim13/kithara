@@ -194,16 +194,15 @@ fn append_streams(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
     truncated
 }
 
+/// A Rust panic puts the same header in both `message` and the body's first line; keeping both
+/// would spend the retained signature on repeating the header instead of the assertion's own
+/// values.
 fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
     let kind = node
         .attribute("type")
         .unwrap_or_else(|| node.tag_name().name());
     let message = node.attribute("message").unwrap_or_default().trim();
     let body = node.text().unwrap_or_default().trim();
-    // A Rust panic puts the same header in both: nextest lifts the first line
-    // of the body into `message`. Keeping both spent the retained output — and
-    // every signature derived from it — on saying the header twice, which
-    // pushed the assertion's own values past the width a report row has.
     let message = if body.starts_with(message) {
         ""
     } else {

@@ -59,6 +59,9 @@ fn audio_start(data: &[u8]) -> usize {
 
 /// On-disk length of the MPEG-1 Layer III frame at `offset`, and the offset of
 /// its Xing/Info identifier.
+///
+/// The Xing/Info tag sits right after the header and the side-info block, whose size depends only
+/// on the channel mode.
 fn frame_len_and_tag(data: &[u8], offset: usize) -> (usize, usize) {
     let header: [u8; 4] = data
         .get(offset..offset + 4)
@@ -80,8 +83,6 @@ fn frame_len_and_tag(data: &[u8], offset: usize) -> (usize, usize) {
     let len =
         usize::try_from(144 * bitrate / sample_rate).expect("frame length fits usize") + padding;
 
-    // Xing/Info sits right after the header and the side-info block, whose size
-    // depends only on the channel mode.
     let side_info = if (word >> 6) & 0x3 == 0b11 { 17 } else { 32 };
     (len, offset + 4 + side_info)
 }

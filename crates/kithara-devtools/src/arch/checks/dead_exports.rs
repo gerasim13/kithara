@@ -726,8 +726,6 @@ fn cfg_marks_test(tokens: TokenStream) -> bool {
     while let Some(tree) = trees.next() {
         match tree {
             TokenTree::Ident(ident) if ident == "test" => return true,
-            // Whatever `not` negates holds in the other build, so the whole
-            // group it takes says nothing about this one.
             TokenTree::Ident(ident) if ident == "not" => {
                 if matches!(trees.peek(), Some(TokenTree::Group(_))) {
                     trees.next();
@@ -879,11 +877,10 @@ impl RefCollector<'_> {
         })
     }
 
+    /// A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the generated mock keeps
+    /// the trait alive even though the names differ, so the stripped base name is counted too.
+    /// Over-counting only suppresses a flag, never causes a false deletion.
     fn record(&mut self, name: String) {
-        // A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the
-        // generated mock keeps the trait alive even though the names differ.
-        // Count the stripped base too (over-counting only ever suppresses a
-        // flag, never causes a false deletion).
         if let Some(base) = name.strip_suffix("Mock")
             && !base.is_empty()
         {

@@ -60,6 +60,8 @@ impl<F: Future> Future for PermitPoll<F> {
 impl<F: Future> Future for Watched<F> {
     type Output = F::Output;
 
+    /// The CPU snapshot can be up to 1 ms stale, which is safe given the 25 ms strict and 3000 ms
+    /// blanket budgets it is checked against.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         if mode::is_off() {
@@ -69,7 +71,6 @@ impl<F: Future> Future for Watched<F> {
         let paused_before = ctx::paused_nanos();
         let paused_cpu_before = ctx::paused_cpu_nanos();
         let wall_start = Instant::now();
-        // WHY: Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
         let cpu_start = clock::snapshot(wall_start);
         let res = {
             let _scope = PollScope::enter((this.name, this.loc));

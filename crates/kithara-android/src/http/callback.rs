@@ -98,6 +98,7 @@ fn header_pairs(
         .collect()
 }
 
+/// Bounds the local reference frame for any header count.
 fn string_at(
     env: &mut Env<'_>,
     array: &JObjectArray<'_, JString<'_>>,
@@ -105,7 +106,6 @@ fn string_at(
 ) -> Result<String, Error> {
     let element = array.get_element(env, index)?;
     let value = element.try_to_string(env)?;
-    // Bounds the local reference frame for any header count.
     env.delete_local_ref(element);
     Ok(value)
 }

@@ -226,7 +226,7 @@ mod tests {
     use super::*;
     use crate::viz::{
         graph::EdgeKind,
-        metrics::{Relation, normalized_propagation},
+        metrics::{Relation, analyzer::normalized_propagation},
     };
 
     fn id(name: &str) -> NodeId {

@@ -41,6 +41,9 @@ impl BeatPredictor {
     /// Predict beats from a full mel spectrogram `[1, T, 128]`.
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.
+    ///
+    /// Sentinel initialization lets every frame be overwritten by some chunk, and chunks are
+    /// processed in reverse order so earlier ones are written last and win in overlapping regions.
     pub(crate) fn predict<S>(
         &self,
         mel: &Tensor,
@@ -58,14 +61,11 @@ impl BeatPredictor {
         let full_time = mel.shape[1];
         let border = as_usize(Consts::BORDER_SIZE);
 
-        // Sentinel init; every frame is overwritten by some chunk.
         let mut beat_logits = pools.get_with_len::<f32>(full_time)?;
         beat_logits.fill(-1000.0);
         let mut downbeat_logits = pools.get_with_len::<f32>(full_time)?;
         downbeat_logits.fill(-1000.0);
 
-        // Reverse order implements keep_first: earlier chunks are written
-        // last and overwrite later chunks in overlapping regions.
         for start in generate_starts(full_time).rev() {
             let chunk = extract_chunk(mel, start, pools)?;
             let chunk_time = chunk.shape[1];
@@ -78,7 +78,6 @@ impl BeatPredictor {
             let valid_beat = &beat.data[border..chunk_time - border];
             let valid_downbeat = &downbeat.data[border..chunk_time - border];
 
-            // start >= -BORDER_SIZE, so this is non-negative.
             let write_start = as_usize(start + Consts::BORDER_SIZE);
             for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
                 let dest = write_start + i;

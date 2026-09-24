@@ -21,6 +21,8 @@ impl<S> HlsCoord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Retires the outgoing look-ahead before returning, since it holds the downloader capacity
+    /// this slot's construction needs and its bytes lie past the transition's cut.
     pub(in crate::stream) fn prepare_planned_variant_reader(
         &self,
         plan: VariantReaderPlan,
@@ -167,8 +169,6 @@ where
             reader: Some(reader),
         });
         drop(state);
-        // WHY: The outgoing look-ahead holds the downloader capacity this slot's construction needs, and its bytes lie past the cut the
-        // transition latches.
         outgoing.retire_lookahead();
         self.signal().wake_peer();
         Ok(Some(transition))

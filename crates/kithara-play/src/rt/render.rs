@@ -48,9 +48,7 @@ pub(crate) struct RenderPass {
 
 impl RenderPass {
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
-
     const MIN_STEREO: usize = 2;
-
     const SCRATCH_BUF_COUNT: usize = 4;
 
     pub(crate) fn new<S>(
@@ -77,6 +75,9 @@ impl RenderPass {
     }
 
     /// Render audio for all active tracks into the output buffers.
+    ///
+    /// Frames are clamped rather than grown, since growing a pooled buffer here would allocate on
+    /// the audio thread; frames past the clamp are already silence-filled.
     pub(crate) fn render_audio(
         &mut self,
         context: Option<&RenderContext>,
@@ -96,8 +97,6 @@ impl RenderPass {
             ch_buffer[..frames].fill(0.0);
         }
 
-        // WHY: Growing a pooled buffer here would allocate on the audio thread. The fill above already covered the frames past the clamp
-        // with silence.
         let frames = frames.min(self.capacity);
 
         self.gate.set_mix(
@@ -112,7 +111,6 @@ impl RenderPass {
             self.priming = false;
             self.gate.reset_to_target();
         }
-        // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, None);
         }

@@ -48,7 +48,6 @@ where
         }
     }
 
-    // Stable address order: two batches sharing players cannot deadlock.
     let mut ordered: Vec<&EngineImpl<S>> = inputs.iter().map(|&(engine, _)| engine).collect();
     ordered.sort_by_key(|engine| std::ptr::from_ref(*engine).addr());
     let _guards: Vec<_> = ordered

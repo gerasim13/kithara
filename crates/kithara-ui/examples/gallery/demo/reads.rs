@@ -533,9 +533,10 @@ impl DemoReads {
 }
 
 impl Reads for DemoReads {
+    /// Answers scope-specific fields (menu, context, quality, clock) before generic ones, since
+    /// those axes are genuinely per-window, per-module, or per-row. The gallery hosts a single
+    /// virtual deck, so every `@scope` suffix resolves to the same state and is dropped.
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        // The menu axes are genuinely per-window, per-module and per-row, so
-        // they answer the scoped key before it is dropped below.
         if let Some(value) = self
             .menu
             .get(endpoint)
@@ -547,8 +548,6 @@ impl Reads for DemoReads {
         {
             return Some(value);
         }
-        // The gallery hosts one virtual deck: every scope suffix resolves to
-        // the same state, so the canonical `@scope` qualifier is dropped here.
         let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         if let Some(value) = self.mixer.get(endpoint) {
             return Some(value);
@@ -565,8 +564,6 @@ impl Reads for DemoReads {
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
         }
-        // One second apart over an eight second pass, so the row shows the
-        // sheet frame by frame in the order it was cut.
         if let Some(index) = endpoint
             .strip_prefix("gallery.sprite.frame.")
             .and_then(|index| index.parse::<u8>().ok())
@@ -596,9 +593,6 @@ impl Reads for DemoReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
-            // Held still: a value that moved between the two captures would make
-            // the comparison measure the clock instead of the two hosts. That
-            // the uniforms reach the shader at all is proved by the frame tests.
             "shader.energy" => ReadValue::Scalar(0.62),
             "shader.level" => ReadValue::Scalar(0.28),
             "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
@@ -711,7 +705,6 @@ fn waveform() -> Vec<WaveBucket> {
                 .iter()
                 .any(|hole| phase >= hole[0] && phase < hole[1])
             {
-                // Nothing decoded a hole, so its buckets carry no level.
                 return WaveBucket::default();
             }
             WaveBucket {

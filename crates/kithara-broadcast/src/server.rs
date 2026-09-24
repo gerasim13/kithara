@@ -57,15 +57,10 @@ struct Consts;
 
 impl Consts {
     const BANDWIDTH_MARGIN: u64 = 20;
-
     const MEDIA_PLAYLIST: &'static str = "v/0/live.m3u8";
-
     const PLAYLIST_TYPE: &'static str = "application/vnd.apple.mpegurl";
-
     const SEGMENT_SUFFIX: &'static str = ".aac";
-
     const SEGMENT_TYPE: &'static str = "audio/aac";
-
     const THREAD: &'static str = "kithara-broadcast-origin";
 }
 

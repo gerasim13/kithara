@@ -69,6 +69,8 @@ impl fmt::Debug for MemDriver {
 impl Driver for MemDriver {
     type Options = MemOptions;
 
+    /// Zero-length committed data publishes no snapshot, matching the mmap `Empty` contract where
+    /// `committed_len()` returns `None`.
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
         let MemOptions {
             initial_data,
@@ -93,7 +95,6 @@ impl Driver for MemDriver {
             if len > 0 {
                 available.insert(0..len);
             }
-            // WHY: Zero-length committed data publishes no snapshot, matching the mmap `Empty` contract (`committed_len()` -> `None`).
             let committed = if data.is_empty() {
                 ArcSwapOption::empty()
             } else {

@@ -170,6 +170,9 @@ impl DrawListBuilder {
     /// axes stay put, a corner radius and a circle while lengths scale
     /// equally. Anything else becomes an outline, which is the one shape that
     /// can hold the result.
+    ///
+    /// An arc names the direction it sweeps in, so only a transform that leaves its angles
+    /// unchanged can keep it an arc; anything else becomes an outline.
     fn placed(&self, geom: Geom) -> Geom {
         let by = self.transform;
         if by.is_identity() {
@@ -203,9 +206,6 @@ impl DrawListBuilder {
                 start,
                 end,
             } => match by.similarity() {
-                // An arc names the direction it sweeps in, so a turn or a
-                // mirror would have to rewrite its angles. Only the transform
-                // that leaves those angles alone keeps it an arc.
                 Some(scale) if upright => Geom::Arc {
                     start,
                     end,

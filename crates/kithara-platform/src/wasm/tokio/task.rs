@@ -83,13 +83,14 @@ where
 ///
 /// On a Web Worker, spawns via `crate::thread::spawn`.
 /// On main thread, delegates to `tokio_with_wasm`'s worker pool.
+///
+/// The returned abort handle stays inert, since blocking work has no yield point to cancel at.
 pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    // Blocking work has no yield point, so its abort handle stays inert.
     let (abort_handle, _registration) = futures::future::AbortHandle::new_pair();
 
     if crate::thread::is_worker_thread() {

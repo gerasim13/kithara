@@ -13,8 +13,6 @@ pub(crate) fn lanes(test: &TestCommandConfig, scope: &[String]) -> Result<Vec<St
     if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
         bail!("test lane `{unknown}` is not configured");
     }
-    // Best effort: a CI checkout carries only the pushed ref, and a workstation
-    // may have no network. What has to hold is that `origin/main` resolves.
     let _ = Command::new("git")
         .args(["fetch", "--no-tags", "--quiet", "origin", "main"])
         .status();

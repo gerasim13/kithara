@@ -92,13 +92,12 @@ fn suppress_macos_system_logs() {
 #[cfg(not(target_os = "macos"))]
 fn suppress_macos_system_logs() {}
 
+/// Early startup failures are printed with `eprintln!`, not `tracing::error!` or a returned error:
+/// tracing is not yet configured, and `Debug` formatting would drop the readable message.
 fn main() -> AppResult {
     suppress_macos_system_logs();
 
     let args = Args::parse();
-    // Reported through `Display` and not returned: `main`'s error is printed
-    // with `Debug`, which drops the readable list of unset `$KITHARA_...`
-    // names. Tracing is not up yet either, so this goes to stderr directly.
     let document = match Config::load(args.config.as_deref(), config_beside_binary().as_deref()) {
         Ok(document) => document,
         Err(error) => {
@@ -166,10 +165,6 @@ fn main() -> AppResult {
         .into_config();
     store_config.apply(document.assets_store());
     let store = AppStore::open(store_config);
-    // `eprintln!`, not `tracing::error!`: tracing is up by now, but
-    // `init_tracing` points the subscriber at `KITHARA_LOG_FILE`, so a startup
-    // refusal logged through it lands in `app.log` and the terminal that ran
-    // the binary shows nothing before the exit code.
     let drm_policy = match document.drm_policy() {
         Ok(policy) => policy,
         Err(error) => {
@@ -200,9 +195,6 @@ fn main() -> AppResult {
         .hls(document.hls())
         .file(document.file())
         .ui(document.ui()?)
-        // The same value tracing is running on, so a document that names no
-        // directives still leaves the built configuration agreeing with the
-        // process; one that names them has `apply` put back exactly this.
         .log_directives(directives)
         .tracks(if args.tracks.is_empty() {
             document.tracks().to_vec()

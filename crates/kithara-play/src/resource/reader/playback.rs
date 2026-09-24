@@ -286,6 +286,8 @@ impl Resource {
         Self::open(config, Some(observer)).await
     }
 
+    /// Captures the per-track cancel token before `build_*_config` consumes `config`; the same
+    /// token is cloned by identity into both the inner stream and the audio path.
     async fn open<S, B>(
         config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
@@ -302,8 +304,6 @@ impl Resource {
         })?;
         let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
-        // Capture the per-track cancel before `build_*_config` consumes `config`
-        // (it is cloned by identity into both the inner stream and the Audio).
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {

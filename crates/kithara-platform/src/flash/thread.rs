@@ -23,13 +23,14 @@ impl Default for GateBackend {
 }
 
 impl GateBackend {
+    /// A gate park is a backstop under the gate's edge: the signal releases it, while the timeout
+    /// only guards a missed edge from wedging the waiter, at the cost of one clock hop per poll
+    /// interval.
     #[inline]
     pub(crate) fn park_timeout(&self, duration: Duration) {
         match self {
             Self::Engine => {
                 let key = ThreadKey::of(current().id());
-                // WHY: A gate park is a BACKSTOP under the gate's edge - the signal is what releases it, and the timeout only keeps a missed
-                // edge from wedging the waiter. Pricing it as a deadline costs the clock one hop per poll interval.
                 crate::flash::system::park_timed_unparkable(
                     duration,
                     key,
@@ -187,6 +188,8 @@ pub fn paced_backoff(duration: Duration) {
 /// that deadline OR a peer [`unpark`]s this thread. The wait consumes no real
 /// wall-clock: when every participant is parked the engine jumps the virtual clock to
 /// the earliest deadline.
+///
+/// Outside `flash`, this is a true wall-clock park, invisible to the quiescence engine.
 #[inline]
 #[track_caller]
 pub fn park_timeout(duration: Duration) {
@@ -197,7 +200,6 @@ pub fn park_timeout(duration: Duration) {
             crate::flash::system::ParkRole::Deadline,
         );
     } else {
-        // WHY: Real-time scope: a true wall-clock park, invisible to the engine.
         crate::backend::thread::park_timeout(duration);
     }
 }
