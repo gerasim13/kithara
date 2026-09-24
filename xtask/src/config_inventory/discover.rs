@@ -3,7 +3,7 @@ use quote::ToTokens;
 use serde::Serialize;
 use syn::{
     Attribute, Field, FnArg, ImplItemFn, ImplItemType, ItemEnum, ItemFn, ItemImpl, ItemMod,
-    ItemStruct, ItemType, LitStr, Signature,
+    ItemStruct, ItemType, LitStr, Signature, parenthesized,
     visit::{self, Visit},
 };
 
@@ -160,6 +160,13 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
         } else if meta.path.is_ident("skip") {
             role = Some("skip");
             exclusion_reason = Some(meta.value()?.parse::<LitStr>()?.value());
+        } else if meta.path.is_ident("builder")
+            || meta.path.is_ident("field")
+            || meta.path.is_ident("patch")
+        {
+            let content;
+            parenthesized!(content in meta.input);
+            let _: proc_macro2::TokenStream = content.parse()?;
         }
         Ok(())
     })?;

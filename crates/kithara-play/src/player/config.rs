@@ -26,6 +26,14 @@ pub const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
 /// here for the same reason as [`DEFAULT_CROSSFADE_DURATION`].
 pub const DEFAULT_PLAYING_RATE: f32 = 1.0;
 
+struct Consts;
+
+impl Consts {
+    const DEFAULT_EQ_BAND_COUNT: usize = 10;
+    const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
+    const DEFAULT_MAX_SLOTS: usize = 4;
+}
+
 fn default_event_bus_capacity() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_EVENT_BUS_CAPACITY).unwrap_or_else(|| unreachable!())
 }
@@ -46,31 +54,29 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 #[derive(derive_more::Debug)]
 pub struct PlayerConfig<S> {
     /// How resources created for this player trim leading/trailing audio.
-    #[builder(default)]
-    #[config(value)]
+    #[config(value, builder(default))]
     pub gapless_mode: GaplessMode,
     /// Initial output sample rate supplied by the owning session, handed on
     /// to the engine this player builds and to the player's own sync
     /// identity. Not a document key: `HostConfig` owns the rate, a Host
     /// rejects a player whose rate disagrees with its own, and the document
     /// names it once under `host`.
-    #[patch(skip)]
-    #[config(value)]
+    #[config(value, patch(skip))]
     pub sample_rate: NonZeroU32,
     /// EQ band layout handed to the engine this player builds. Not a document
     /// key: every construction site derives it from a generator, and a custom
     /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
-    #[builder(default = generate_log_spaced_bands(10))]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "layout moves to the live equalizer owner")]
+    #[config(
+        skip = "layout moves to the live equalizer owner",
+        builder(default = generate_log_spaced_bands(Consts::DEFAULT_EQ_BAND_COUNT)),
+        patch(skip)
+    )]
     pub eq_layout: Vec<EqBandConfig>,
     /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
     /// player at construction, so it is not a document key.
-    #[builder(default = true)]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(value)]
+    #[config(value, builder(default = true), patch(skip))]
     pub auto_advance_enabled: bool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
@@ -79,86 +85,83 @@ pub struct PlayerConfig<S> {
     /// (`false`): the audio callback can never block. Not a document key:
     /// the shipped binary is a real-time host, and only the offline test
     /// harness sets this, from Rust.
-    #[builder(default)]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "offline-only blocking policy is not a product control")]
+    #[config(
+        skip = "offline-only blocking policy is not a product control",
+        builder(default),
+        patch(skip)
+    )]
     pub block_on_underrun: bool,
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
-    #[builder(default = DEFAULT_CROSSFADE_DURATION)]
-    #[config(value)]
+    #[config(value, builder(default = DEFAULT_CROSSFADE_DURATION))]
     pub crossfade_duration: f32,
     /// Default playback-rate target (1.0 = normal). Default:
     /// [`DEFAULT_PLAYING_RATE`].
-    #[builder(default = DEFAULT_PLAYING_RATE)]
-    #[config(value)]
+    #[config(value, builder(default = DEFAULT_PLAYING_RATE))]
     pub default_rate: f32,
     /// Capacity of each event topic when this player creates its root bus.
     /// An injected [`EventBus`] keeps its own capacity and identity.
-    #[builder(default = default_event_bus_capacity())]
-    #[config(value)]
+    #[config(value, builder(default = default_event_bus_capacity()))]
     pub event_bus_capacity: NonZeroUsize,
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
-    #[builder(default = 3.5)]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(value)]
+    #[config(value, builder(default = Consts::DEFAULT_PREFETCH_DURATION), patch(skip))]
     pub prefetch_duration: f32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
-    #[builder(default = 4)]
-    #[config(value)]
+    #[config(value, builder(default = Consts::DEFAULT_MAX_SLOTS))]
     pub max_slots: usize,
     /// Stable synchronization-group identity owned by this player.
-    #[builder(default = allocate_grid_id())]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "player-owned synchronization identity")]
+    #[config(
+        skip = "player-owned synchronization identity",
+        builder(default = allocate_grid_id()),
+        patch(skip)
+    )]
     pub(crate) grid_id: BeatGridId,
     /// Stable identity of the track grid this player publishes as its own
     /// member. Distinct from [`Self::grid_id`]: the group and the geometry it
     /// holds are two grids, and a member is found by an identity of its own.
-    #[builder(default = allocate_grid_id())]
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "player-owned track-grid identity")]
+    #[config(
+        skip = "player-owned track-grid identity",
+        builder(default = allocate_grid_id()),
+        patch(skip)
+    )]
     pub(crate) track_grid_id: BeatGridId,
     /// Optional application deadline for control-to-presented-audio response, in output frames.
     /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
-    #[field(get, copy)]
-    #[config(value)]
+    #[config(value, field(get, copy))]
     pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Root event bus for this player.
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "injected event bus")]
+    #[config(skip = "injected event bus", patch(skip))]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "injected cancellation resource")]
+    #[config(skip = "injected cancellation resource", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
-    #[patch(skip)]
     #[debug(skip)]
-    #[config(skip = "injected session binding")]
+    #[config(skip = "injected session binding", patch(skip))]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
-    #[patch(skip)]
-    #[config(skip = "injected playback worker")]
+    #[config(skip = "injected playback worker", patch(skip))]
     pub(crate) worker: PlayWorker<S>,
     /// Per-deck Warp resources and live temporal controls. A document reaches
     /// them under `player.warp:`; the live [`StretchControls`] handle inside
     /// is shared with the deck and the UI and is not a document key.
     ///
     /// [`StretchControls`]: kithara_warp::StretchControls
-    #[builder(default = WarpConfig::builder().build())]
-    #[patch(nested)]
-    #[config(nested)]
+    #[config(
+        nested,
+        builder(default = WarpConfig::builder().build()),
+        patch(nested)
+    )]
     pub(crate) warp: WarpConfig,
 }
 

@@ -45,6 +45,29 @@ fn registrations_separate_retained_values_from_delegated_operations() {
 }
 
 #[test]
+fn manifest_reads_composed_builder_field_and_patch_groups() {
+    let entries = registrations(
+        "crates/kithara-play/src/player/config.rs",
+        r#"
+        #[kithara_config::config(builder = false)]
+        struct PlayerConfig {
+            #[config(value, builder(default = 1), field(get, copy))]
+            rate: u32,
+            #[config(skip = "injected resource", builder(default), patch(skip))]
+            resource: Option<u32>,
+        }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(entries[0].fields[0].role, "value");
+    assert_eq!(entries[0].fields[1].role, "skip");
+    assert_eq!(
+        entries[0].fields[1].exclusion_reason.as_deref(),
+        Some("injected resource")
+    );
+}
+
+#[test]
 fn schema_modules_and_patch_derives_do_not_require_config_suffixes() {
     let source = "struct Ordinary; mod config { struct Limits; } #[derive(Patch)] struct Recipe; mod other { struct Hidden; }";
     let entries = discover("src/lib.rs", source).unwrap();
