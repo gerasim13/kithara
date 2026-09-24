@@ -1,252 +1,257 @@
-use kithara_warp::{BeatGridId, BeatGridSnapshot};
+use kithara_warp::{BeatGridId, MapAxis};
 
-use super::mutation::{
-    apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
-    preview_topology, routed_group, validate_topology_candidate,
+use super::{
+    mutation::{
+        apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
+        preview_topology, routed_group, validate_topology_candidate,
+    },
+    preparation::PrepareRequest,
+    state::GroupState,
 };
 use crate::{
-    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
-    SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision,
-    TopologyStamp,
+    ParentFact, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMember,
+    SyncOperation, SyncOperationId, SyncRejected, SyncStaged, TopologyOperation, TopologyStamp,
 };
 
-pub(super) fn status(
-    topology: TopologyStamp,
-    unavailable: Option<(SyncOperationId, SyncCapability)>,
-) -> SyncStatusSnapshot {
-    unavailable.map_or(
-        SyncStatusSnapshot::Off { topology },
-        |(operation, capability)| SyncStatusSnapshot::Unavailable {
-            operation,
-            topology,
-            capability,
-        },
-    )
-}
+impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
+    /// Routes one operation to this group, one of its direct grids, or the
+    /// nested group that owns its target.
+    pub(super) fn route(
+        &mut self,
+        operation: SyncOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        let target = operation.target();
+        let topology_operation = matches!(&operation, SyncOperation::Topology { .. });
+        if target == self.grid.id() {
+            return self.transact_local(operation);
+        }
+        if !topology_operation && owns_direct_grid(&self.members, target) {
+            return self.transact_member(operation);
+        }
 
-pub(super) fn transact<G: SyncGroup<NestedGroup = G>>(
-    grid: &BeatGridSnapshot,
-    topology_revision: &mut TopologyRevision,
-    members: &mut Vec<SyncMember<G>>,
-    next_operation: &mut Option<SyncOperationId>,
-    unavailable: &mut Option<(SyncOperationId, SyncCapability)>,
-    member_kind: SyncMemberKind,
-    operation: SyncOperation<G>,
-) -> Result<SyncAdmission, SyncRejected<G>> {
-    let target = operation.target();
-    let topology_operation = matches!(&operation, SyncOperation::Topology { .. });
-    if target == grid.id() || (!topology_operation && owns_direct_grid(members, target)) {
-        return transact_local(
-            grid,
-            topology_revision,
-            members,
-            next_operation,
-            unavailable,
-            member_kind,
-            operation,
+        let topology_change = matches!(
+            &operation,
+            SyncOperation::Topology { operations, .. } if !operations.is_empty()
         );
-    }
-
-    let topology_change = matches!(
-        &operation,
-        SyncOperation::Topology { operations, .. } if !operations.is_empty()
-    );
-    if let SyncOperation::Topology { base, operations } = &operation {
-        let root = match materialize_topology(grid, *topology_revision, members) {
-            Ok(root) => root,
+        if let SyncOperation::Topology { base, operations } = &operation {
+            let root = match materialize_topology(&self.grid, self.topology_revision, &self.members)
+            {
+                Ok(root) => root,
+                Err(error) => return Err(SyncRejected::new(error, operation)),
+            };
+            if let Err(error) = preview_topology(&root, *base, operations, self.member_kind) {
+                return Err(SyncRejected::new(error, operation));
+            }
+        }
+        let parent_revision = match topology_change
+            .then(|| next_topology_revision(self.grid.id(), self.topology_revision))
+            .transpose()
+        {
+            Ok(revision) => revision,
             Err(error) => return Err(SyncRejected::new(error, operation)),
         };
-        if let Err(error) = preview_topology(&root, *base, operations, member_kind) {
-            return Err(SyncRejected::new(error, operation));
+        let group = match routed_group(&mut self.members, target) {
+            Ok(Some(group)) => group,
+            Ok(None) => {
+                return Err(SyncRejected::new(
+                    SyncError::GroupNotFound { group_id: target },
+                    operation,
+                ));
+            }
+            Err(error) => return Err(SyncRejected::new(error, operation)),
+        };
+        let admission = group.transact(operation)?;
+        if matches!(admission, SyncAdmission::TopologyChanged { .. })
+            && let Some(revision) = parent_revision
+        {
+            self.topology_revision = revision;
         }
+        Ok(admission)
     }
-    let parent_revision = match topology_change
-        .then(|| next_topology_revision(grid.id(), *topology_revision))
-        .transpose()
-    {
-        Ok(revision) => revision,
-        Err(error) => return Err(SyncRejected::new(error, operation)),
-    };
-    let group = match routed_group(members, target) {
-        Ok(Some(group)) => group,
-        Ok(None) => {
-            return Err(SyncRejected::new(
-                SyncError::GroupNotFound { group_id: target },
-                operation,
-            ));
-        }
-        Err(error) => return Err(SyncRejected::new(error, operation)),
-    };
-    let admission = group.transact(operation)?;
-    if matches!(admission, SyncAdmission::TopologyChanged { .. })
-        && let Some(revision) = parent_revision
-    {
-        *topology_revision = revision;
-    }
-    Ok(admission)
-}
 
-fn transact_local<G: SyncGroup<NestedGroup = G>>(
-    grid: &BeatGridSnapshot,
-    topology_revision: &mut TopologyRevision,
-    members: &mut Vec<SyncMember<G>>,
-    next_operation: &mut Option<SyncOperationId>,
-    unavailable: &mut Option<(SyncOperationId, SyncCapability)>,
-    member_kind: SyncMemberKind,
-    operation: SyncOperation<G>,
-) -> Result<SyncAdmission, SyncRejected<G>> {
-    match &operation {
-        SyncOperation::Topology { .. } => transact_topology(
-            grid,
-            topology_revision,
-            members,
-            next_operation,
-            member_kind,
-            operation,
-        ),
-        SyncOperation::Sync {
-            intent: SyncIntent::Disable,
-            ..
-        } => {
-            let operation_id = match take_operation(grid.id(), next_operation) {
-                Ok(operation_id) => operation_id,
-                Err(error) => return Err(SyncRejected::new(error, operation)),
-            };
-            *unavailable = None;
-            Ok(SyncAdmission::Unchanged {
-                operation: operation_id,
-                topology: TopologyStamp::new(grid.id(), *topology_revision),
-            })
-        }
-        SyncOperation::Transport {
-            load, transport, ..
-        } => {
-            let load = *load;
-            let transport = *transport;
-            let operation_id = match take_operation(grid.id(), next_operation) {
-                Ok(operation_id) => operation_id,
-                Err(error) => return Err(SyncRejected::new(error, operation)),
-            };
-            *unavailable = None;
-            Ok(SyncAdmission::Accepted {
+    fn transact_local(
+        &mut self,
+        operation: SyncOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        let result = match &operation {
+            SyncOperation::Topology { .. } => return self.transact_topology(operation),
+            SyncOperation::Sync {
+                intent,
+                activation,
+                transport,
+                ..
+            } => self.transact_intent(*intent, *activation, *transport),
+            SyncOperation::Tempo {
+                tempo,
+                commit,
+                smoothing,
+                ..
+            } => self.transact_tempo(*tempo, *commit, *smoothing),
+            SyncOperation::Transport { .. } | SyncOperation::Prepare { .. } => {
+                return self.transact_member(operation);
+            }
+        };
+        result.map_err(|error| SyncRejected::new(error, operation))
+    }
+
+    /// Admits an operation addressed to one direct grid, which has no mode or
+    /// timeline of its own.
+    fn transact_member(
+        &mut self,
+        operation: SyncOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        let result = match &operation {
+            SyncOperation::Transport {
+                load, transport, ..
+            } => {
+                let (load, transport) = (*load, *transport);
+                take_operation(self.grid.id(), &mut self.next_operation).map(|operation| {
+                    self.blocked = None;
+                    SyncAdmission::Accepted {
+                        load,
+                        transport,
+                        operation,
+                        topology: self.topology_stamp(),
+                    }
+                })
+            }
+            SyncOperation::Prepare {
+                target,
                 load,
                 transport,
-                operation: operation_id,
-                topology: TopologyStamp::new(grid.id(), *topology_revision),
-            })
-        }
-        SyncOperation::Sync { .. } => preserve_rejected(
-            unavailable_admission(
-                grid.id(),
-                *topology_revision,
-                next_operation,
-                unavailable,
-                SyncCapability::Alignment,
-            ),
-            operation,
-        ),
-        SyncOperation::Reconcile { .. } => preserve_rejected(
-            unavailable_admission(
-                grid.id(),
-                *topology_revision,
-                next_operation,
-                unavailable,
-                SyncCapability::Reconciliation,
-            ),
-            operation,
-        ),
+                source,
+                window,
+            } => self.transact_prepare(PrepareRequest {
+                target: *target,
+                load: *load,
+                transport: *transport,
+                source: *source,
+                window: window.clone(),
+            }),
+            SyncOperation::Topology { .. }
+            | SyncOperation::Sync { .. }
+            | SyncOperation::Tempo { .. } => Err(SyncError::CapabilityUnavailable {
+                capability: SyncCapability::Alignment,
+            }),
+        };
+        result.map_err(|error| SyncRejected::new(error, operation))
     }
-}
 
-fn preserve_rejected<G: SyncGroup<NestedGroup = G>>(
-    result: Result<SyncAdmission, SyncError>,
-    operation: SyncOperation<G>,
-) -> Result<SyncAdmission, SyncRejected<G>> {
-    result.map_err(|error| SyncRejected::new(error, operation))
-}
-
-fn unavailable_admission(
-    group_id: BeatGridId,
-    topology_revision: TopologyRevision,
-    next_operation: &mut Option<SyncOperationId>,
-    unavailable: &mut Option<(SyncOperationId, SyncCapability)>,
-    capability: SyncCapability,
-) -> Result<SyncAdmission, SyncError> {
-    let operation = take_operation(group_id, next_operation)?;
-    let topology = TopologyStamp::new(group_id, topology_revision);
-    *unavailable = Some((operation, capability));
-    Ok(SyncAdmission::Unavailable {
-        operation,
-        topology,
-        capability,
-    })
-}
-
-fn transact_topology<G: SyncGroup<NestedGroup = G>>(
-    grid: &BeatGridSnapshot,
-    topology_revision: &mut TopologyRevision,
-    members: &mut Vec<SyncMember<G>>,
-    next_operation: &mut Option<SyncOperationId>,
-    member_kind: SyncMemberKind,
-    operation: SyncOperation<G>,
-) -> Result<SyncAdmission, SyncRejected<G>> {
-    let (base, operations) = match operation {
-        SyncOperation::Topology { base, operations } => (base, operations),
-        operation => {
-            return Err(SyncRejected::new(
-                SyncError::CapabilityUnavailable {
-                    capability: SyncCapability::Topology,
+    fn transact_topology(
+        &mut self,
+        operation: SyncOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        let (base, operations) = match operation {
+            SyncOperation::Topology { base, operations } => (base, operations),
+            operation => {
+                return Err(SyncRejected::new(
+                    SyncError::CapabilityUnavailable {
+                        capability: SyncCapability::Topology,
+                    },
+                    operation,
+                ));
+            }
+        };
+        let reject = |error, operations| {
+            SyncRejected::new(error, SyncOperation::Topology { base, operations })
+        };
+        let expected = self.topology_stamp();
+        if base != expected {
+            return Err(reject(
+                SyncError::StaleTopology {
+                    expected,
+                    given: base,
                 },
-                operation,
+                operations,
             ));
         }
-    };
-    let reject =
-        |error, operations| SyncRejected::new(error, SyncOperation::Topology { base, operations });
-    let expected = TopologyStamp::new(grid.id(), *topology_revision);
-    if base != expected {
-        return Err(reject(
-            SyncError::StaleTopology {
-                expected,
-                given: base,
-            },
-            operations,
-        ));
-    }
 
-    let operation_id = match (*next_operation).ok_or_else(|| SyncError::OperationIdExhausted {
-        group_id: grid.id(),
-    }) {
-        Ok(operation_id) => operation_id,
-        Err(error) => return Err(reject(error, operations)),
-    };
-    if operations.is_empty() {
-        advance_operation(next_operation);
-        return Ok(SyncAdmission::Unchanged {
+        let operation_id =
+            match self
+                .next_operation
+                .ok_or_else(|| SyncError::OperationIdExhausted {
+                    group_id: self.grid.id(),
+                }) {
+                Ok(operation_id) => operation_id,
+                Err(error) => return Err(reject(error, operations)),
+            };
+        if operations.is_empty() {
+            advance_operation(&mut self.next_operation);
+            return Ok(SyncAdmission::Unchanged {
+                operation: operation_id,
+                topology: expected,
+            });
+        }
+
+        let revision = match next_topology_revision(self.grid.id(), self.topology_revision) {
+            Ok(revision) => revision,
+            Err(error) => return Err(reject(error, operations)),
+        };
+        if let Err(error) = validate_topology_candidate(
+            &self.grid,
+            revision,
+            &self.members,
+            &operations,
+            self.member_kind,
+        ) {
+            return Err(reject(error, operations));
+        }
+        let joins = match self.stage_joins(&operations) {
+            Ok(joins) => joins,
+            Err(error) => return Err(reject(error, operations)),
+        };
+        apply_topology_operations(&mut self.members, operations);
+        let mut transition = self.retain_current_pending();
+        for (id, staged) in joins {
+            if let Some(SyncMember::Group { group, .. }) = self
+                .members
+                .iter_mut()
+                .find(|member| BeatGridId::from(&**member) == id)
+            {
+                transition.append(group.apply_staged(staged));
+            }
+        }
+        self.topology_revision = revision;
+        advance_operation(&mut self.next_operation);
+        Ok(SyncAdmission::TopologyChanged {
             operation: operation_id,
-            topology: expected,
-        });
+            topology: TopologyStamp::new(self.grid.id(), revision),
+            transition,
+        })
     }
 
-    let revision = match next_topology_revision(grid.id(), *topology_revision) {
-        Ok(revision) => revision,
-        Err(error) => return Err(reject(error, operations)),
-    };
-    if let Err(error) =
-        validate_topology_candidate(grid, revision, members, &operations, member_kind)
-    {
-        return Err(reject(error, operations));
+    /// Stages every group a topology change brings in onto this group's
+    /// session axis, before any of them joins.
+    fn stage_joins(
+        &self,
+        operations: &[TopologyOperation<G>],
+    ) -> Result<Vec<(BeatGridId, SyncStaged)>, SyncError> {
+        let MapAxis::Session(axis) = self.grid.axis() else {
+            return Ok(Vec::new());
+        };
+        operations
+            .iter()
+            .filter_map(|operation| match operation {
+                TopologyOperation::Attach { member }
+                | TopologyOperation::Replace {
+                    replacement: member,
+                    ..
+                } => match member {
+                    SyncMember::Group { group, .. } => Some(group),
+                    SyncMember::Grid { .. } => None,
+                },
+                TopologyOperation::Detach { .. } => None,
+            })
+            .map(|group| {
+                group
+                    .stage_fact(ParentFact::Joined(SessionAxisUpdate::new(axis)))
+                    .map(|staged| (group.id(), staged))
+            })
+            .collect()
     }
-    apply_topology_operations(members, operations);
-    *topology_revision = revision;
-    advance_operation(next_operation);
-    Ok(SyncAdmission::TopologyChanged {
-        operation: operation_id,
-        topology: TopologyStamp::new(grid.id(), revision),
-    })
 }
 
-fn take_operation(
+pub(super) fn take_operation(
     group_id: BeatGridId,
     next: &mut Option<SyncOperationId>,
 ) -> Result<SyncOperationId, SyncError> {

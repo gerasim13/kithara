@@ -8,9 +8,15 @@ use kithara_warp::{
 };
 
 use crate::{
-    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
+    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
+
+mod lifecycle;
+mod modes;
+mod preparation;
+mod refresh;
 
 /// Test-only recursive group that delegates to the real owner state.
 ///
@@ -25,12 +31,52 @@ impl TestGroup {
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
     ) -> Self {
-        Self(GroupState::unavailable(id, sample_rate, epoch, member_kind))
+        Self(GroupState::unavailable(
+            id,
+            sample_rate,
+            epoch,
+            member_kind,
+            SyncMode::Off,
+        ))
     }
 
     delegate::delegate! {
         to self.0 {
-            fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError>;
+            fn publish_grid(
+                &mut self,
+                candidate: BeatGridSnapshot,
+            ) -> Result<SyncTransition, SyncError>;
+        }
+    }
+}
+
+/// Stages one parent fact on a group and commits it, as its parent does.
+trait Accept: SyncGroup {
+    fn accept(&mut self, fact: ParentFact) -> Result<SyncTransition, SyncError> {
+        let staged = self.stage_fact(fact)?;
+        Ok(self.apply_staged(staged))
+    }
+
+    fn accept_parent(&mut self, update: ParentGridUpdate) -> Result<SyncTransition, SyncError> {
+        self.accept(ParentFact::Segment(update))
+    }
+
+    fn accept_axis(&mut self, update: SessionAxisUpdate) -> Result<SyncTransition, SyncError> {
+        self.accept(ParentFact::Axis(update))
+    }
+}
+
+impl<T: SyncGroup> Accept for T {}
+
+/// A plain live grid owned by a group as its direct member.
+struct TestGrid(BeatGridSnapshot);
+
+impl BeatGrid for TestGrid {
+    delegate::delegate! {
+        to self.0 {
+            fn id(&self) -> BeatGridId;
+            #[call(clone)]
+            fn snapshot(&self) -> BeatGridSnapshot;
         }
     }
 }
@@ -49,7 +95,9 @@ impl SyncGroup for TestGroup {
 
     delegate::delegate! {
         to self.0 {
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(

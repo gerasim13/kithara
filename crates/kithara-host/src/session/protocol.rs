@@ -7,7 +7,7 @@ pub(crate) use kithara_play::{
 };
 use kithara_play::{PlayError, player::PlayerMember};
 use kithara_sync::{
-    SyncAdmission, SyncApplied, SyncError, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    SyncAdmission, SyncError, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
 
@@ -30,7 +30,7 @@ pub(crate) enum HostCmd<S> {
 pub(crate) enum SyncCmd {
     Transact(SyncOperation<PlayerMember>),
     TransactCurrent(Box<[TopologyOperation<PlayerMember>]>),
-    Acknowledge(SyncApplied),
+    Acknowledge(SyncReceipt),
 }
 
 pub(crate) enum HostReply {
@@ -80,8 +80,8 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
 }
 
 pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
-    fn acknowledge(&self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(applied))) {
+    fn acknowledge(&self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
+        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(receipt))) {
             Ok(HostReply::Acknowledged(result)) => result,
             Err(error) => {
                 let (reason, command) = error.into();

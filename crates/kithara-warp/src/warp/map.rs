@@ -5,7 +5,7 @@ use crate::{
 };
 
 /// One immutable session-output-to-source map revision.
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpMap {
@@ -15,7 +15,7 @@ pub struct WarpMap {
     revision: WarpMapRevision,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct ProjectedMap {
     grid: BeatGridSnapshot,
     source: BeatGridSnapshot,

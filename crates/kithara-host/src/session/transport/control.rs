@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
+use kithara_sync::ParentGridUpdate;
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
@@ -427,7 +428,12 @@ fn refresh_observation<T, S>(
     if let Some(snapshot) = observation.snapshot()
         && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
     {
-        state.root.publish_grid(snapshot.session_grid())?;
+        state.root.publish_session(ParentGridUpdate::new(
+            snapshot.session_grid_stamp(),
+            snapshot.session_epoch(),
+            snapshot.anchor(),
+            None,
+        ))?;
         state.publish_root();
     }
     if let Some(completion) = observation.completion() {
