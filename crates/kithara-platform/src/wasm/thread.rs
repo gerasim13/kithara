@@ -50,7 +50,6 @@ pub fn keep_worker_alive() {
 }
 
 pub type Thread = wasm_safe_thread::Thread;
-
 pub type ThreadId = wasm_safe_thread::ThreadId;
 
 fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static

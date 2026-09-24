@@ -2,26 +2,18 @@ pub(crate) struct TimestampTag;
 
 impl TimestampTag {
     const FRAME_HEADER_LEN: usize = 10;
-
     const FRAME_SIZE: [u8; 4] = [0, 0, 0, 53];
 
     pub(crate) const LEN: usize =
         Self::TAG_HEADER_LEN + Self::FRAME_HEADER_LEN + Self::OWNER.len() + Self::TIMESTAMP_LEN;
 
     const MPEG_TIMESCALE: u64 = 90_000;
-
     const OWNER: &'static [u8] = b"com.apple.streaming.transportStreamTimestamp\0";
-
     const ROUND_TO_NEAREST: u128 = 2;
-
     const TAG_HEADER_LEN: usize = 10;
-
     const TAG_SIZE: [u8; 4] = [0, 0, 0, 63];
-
     const TIMESTAMP_BITS: u32 = 33;
-
     const TIMESTAMP_LEN: usize = 8;
-
     const VERSION: [u8; 3] = [4, 0, 0];
 
     pub(crate) fn mpeg_timestamp(media_ts: u64, timescale: u32) -> u64 {

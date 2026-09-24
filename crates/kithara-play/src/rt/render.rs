@@ -48,9 +48,7 @@ pub(crate) struct RenderPass {
 
 impl RenderPass {
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
-
     const MIN_STEREO: usize = 2;
-
     const SCRATCH_BUF_COUNT: usize = 4;
 
     pub(crate) fn new<S>(

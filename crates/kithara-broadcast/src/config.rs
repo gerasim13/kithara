@@ -165,7 +165,6 @@ impl<S> fmt::Debug for BroadcastConfig<S> {
 
 impl<S> BroadcastConfig<S> {
     const MILLIS_PER_SECOND: u64 = 1_000;
-
     const MIN_TARGETS: u64 = 3;
 
     pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {

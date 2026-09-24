@@ -338,9 +338,7 @@ fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop(
 
 fn terminal_markers_are_ordered(samples: &[f32]) -> bool {
     const TERMINAL_HIGH_HZ: f64 = 6_000.0;
-
     const TERMINAL_LOW_HZ: f64 = 1_500.0;
-
     const MINIMUM_MAGNITUDE: f64 = 0.05;
 
     let Some((low_position, low_magnitude)) = strongest_tone_window(samples, TERMINAL_LOW_HZ)

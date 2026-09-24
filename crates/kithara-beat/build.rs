@@ -15,7 +15,6 @@ fn main() {
         "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx";
 
     const FULL_SHA256: &str = "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02";
-
     const INT8_FILE: &str = "beat_this_full_int8.onnx";
 
     println!("cargo::rerun-if-changed=models");
