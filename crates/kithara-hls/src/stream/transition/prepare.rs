@@ -8,7 +8,10 @@ use kithara_stream::{
     StreamResult, VariantReaderPlan, VariantTransition,
 };
 
-use super::{HlsCoord, IncomingSlot, transition_for_claim, unsupported_pending_claim};
+use super::{
+    super::coord::HlsCoord,
+    slots::{IncomingSlot, transition_for_claim, unsupported_pending_claim},
+};
 use crate::{
     reader::HlsReaderEventSink,
     stream::session::{HlsSession, HlsSessionReader},

@@ -11,13 +11,13 @@ mod common;
 #[path = "backend/system.rs"]
 mod backend;
 #[cfg(all(not(target_arch = "wasm32"), feature = "loom", not(feature = "flash")))]
-#[path = "backend/loom.rs"]
+#[path = "backend/loom/mod.rs"]
 mod backend;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash", not(feature = "loom")))]
-#[path = "backend/flash_system.rs"]
+#[path = "backend/flash_system/mod.rs"]
 mod backend;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash", feature = "loom"))]
-#[path = "backend/flash_loom.rs"]
+#[path = "backend/flash_loom/mod.rs"]
 mod backend;
 #[cfg(all(not(target_arch = "wasm32"), feature = "loom"))]
 mod loom;

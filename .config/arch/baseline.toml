@@ -2,7 +2,7 @@ schema_version = 1
 
 [arc_clone_hotspots]
 "crates/kithara-ffi/src/native/bridge/event_bridge.rs::EventBridge::spawn" = 1
-"crates/kithara-file/src/session/peer.rs::FilePeer::build_fetch_cmd" = 1
+"crates/kithara-file/src/session/peer/downloader.rs::FilePeer::build_fetch_cmd" = 1
 "crates/kithara-hls/src/stream/hls.rs::Hls::create" = 1
 "crates/kithara-download/src/downloader.rs::Downloader::register" = 1
 
@@ -147,7 +147,7 @@ schema_version = 1
 "crates/kithara-decode/src/codec.rs::CodecPriming" = 1
 "crates/kithara-decode/src/factory/inner.rs::DecoderConfig" = 1
 "crates/kithara-decode/src/gapless/heuristic.rs::SilenceTrimParams" = 1
-"crates/kithara-signal/src/chunk.rs::AudioChunkInfo" = 1
+"crates/kithara-signal/src/chunk/audio.rs::AudioChunkInfo" = 1
 "crates/kithara-decode/src/types.rs::TrackMetadata" = 1
 "crates/kithara-encode/src/types.rs::BytesEncodeRequest" = 1
 "crates/kithara-encode/src/types.rs::EncodedAccessUnit" = 1

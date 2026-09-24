@@ -1265,7 +1265,7 @@ prefix_args = [
 ]
 default_features = ["kithara-play/usdt"]
 default_flash = false
-suffix_args = ["-E", "test(/worker::node::scheduler_tests::probed::/)"]
+suffix_args = ["-E", "test(/worker::node::decoder::scheduler_tests::probed::/)"]
 owns = ["crates/kithara-play/src/worker/node/scheduler_tests.rs"]
 
 [test.lanes.usdt-hls]
@@ -3244,6 +3244,10 @@ install_hint = "cargo install cargo-ndk"
 [tools.cargo-sort]
 pin = "cargo-sort"
 install_hint = "cargo install --locked cargo-sort"
+
+[tools.git-cliff]
+pin = "git-cliff"
+install_hint = "cargo install --locked git-cliff"
 
 [tools.just]
 pin = "just"

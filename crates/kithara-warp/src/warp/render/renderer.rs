@@ -25,7 +25,7 @@ use crate::{
 
 #[cfg(test)]
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[path = "renderer/tests.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
 
 /// Span the speed smoother measures its settle threshold against: the range

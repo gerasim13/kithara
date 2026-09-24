@@ -102,9 +102,9 @@ timeout_seconds = 120
 name = "waveform-analyzer"
 group = "analysis"
 package = "kithara-waveform"
-files = ["crates/kithara-waveform/src/analyzer.rs"]
+files = ["crates/kithara-waveform/src/analyzer/waveform.rs"]
 features = ["dsp"]
-test_filters = ["test(/analyzer::tests::/)"]
+test_filters = ["test(/analyzer::waveform::tests::/)"]
 timeout_seconds = 180
 
 # Layout arithmetic. A constraint solved one pixel wrong lays out, renders, and

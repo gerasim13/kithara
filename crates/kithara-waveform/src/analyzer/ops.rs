@@ -7,7 +7,10 @@ use rangemap::RangeSet;
 use realfft::num_complex::Complex;
 use tracing::debug;
 
-use super::{Consts, Partial, WaveformAnalyzer};
+use super::{
+    WaveformAnalyzer,
+    waveform::{Consts, Partial},
+};
 use crate::Band;
 
 impl WaveformAnalyzer {

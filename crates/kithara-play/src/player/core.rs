@@ -1,6 +1,3 @@
-mod lifecycle;
-mod player;
-
 use std::num::NonZeroU32;
 
 use delegate::delegate;
@@ -11,10 +8,9 @@ use kithara_platform::{
 };
 use tracing::{debug, warn};
 
-use self::lifecycle::{CloseAdmission, PlayerLifecycle};
-pub use self::player::PlayerImpl;
 use super::{
     PlayerConfig,
+    lifecycle::{CloseAdmission, PlayerLifecycle},
     state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
 };
 use crate::{
@@ -85,8 +81,8 @@ pub(crate) struct PlayerCore<S> {
 pub struct PlayerRuntime<S> {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,
-    operations: Mutex<()>,
-    lifecycle: PlayerLifecycle,
+    pub(super) operations: Mutex<()>,
+    pub(super) lifecycle: PlayerLifecycle,
 }
 
 impl<S> PlayerRuntime<S> {
@@ -154,7 +150,7 @@ impl<S> PlayerRuntime<S> {
     /// atomic and cancelling fires a token, and a cancel exists to interrupt
     /// an admitted operation rather than to queue behind one. `close` still
     /// takes the gate, so the orderly path keeps its ordering.
-    fn invalidate(&self) {
+    pub(super) fn invalidate(&self) {
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -298,7 +294,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGridState, MapAxis};
 
-    use super::*;
+    use super::{super::PlayerImpl, *};
     use crate::{
         PlayWorker, PlayWorkerConfig,
         bridge::PlayerCmd,

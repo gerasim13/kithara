@@ -8,7 +8,7 @@ use kithara_stream::{
 };
 use tracing::debug;
 
-use super::{HlsSession, pending};
+use super::{HlsSession, hls::pending};
 
 pub(in crate::stream) struct HlsSessionReader<S>
 where

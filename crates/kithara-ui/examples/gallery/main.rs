@@ -1,7 +1,7 @@
 //! The gallery: one program that reads its pages from disk and shows them.
 //!
 //! What the pages are made of is the toolkit's; what checks them is
-//! `tests/gallery.rs`, which mounts these same modules. This file is only the
+//! `tests/gallery/main.rs`, which mounts these same modules. This file is only the
 //! window and the harnesses that stand in front of it, each named by a flag of
 //! its own — `--help` lists them.
 

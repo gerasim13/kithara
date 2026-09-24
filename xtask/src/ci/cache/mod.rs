@@ -16,8 +16,9 @@ mod provision;
 pub(crate) mod snapshot;
 mod verify;
 
-const CLIENT_KEYS: [&str; 7] = [
+const CLIENT_KEYS: [&str; 8] = [
     "SCCACHE_BUCKET",
+    "SCCACHE_S3_KEY_PREFIX",
     "SCCACHE_ENDPOINT",
     "SCCACHE_REGION",
     "SCCACHE_S3_USE_SSL",

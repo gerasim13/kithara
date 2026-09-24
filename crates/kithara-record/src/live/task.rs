@@ -8,7 +8,10 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-use super::{Consts, Control, FormatChange, LiveRecordingReport};
+use super::{
+    FormatChange, LiveRecordingReport,
+    recorder::{Consts, Control},
+};
 use crate::{
     LiveRecordingConfig, LiveRecordingError, PartSinkFactory, RecordingConfig, RecordingCore,
 };

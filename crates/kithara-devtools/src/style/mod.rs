@@ -81,6 +81,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
     let fix_scan = Scan::new(&workspace_root);
     let ctx = Context {
         workspace_root: &workspace_root,
+        metadata: &metadata,
         config: &config,
         scope: &scope,
         scan: &fix_scan,
@@ -285,17 +286,29 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("crates/demo/src");
         fs::create_dir_all(&src).expect("mkdir");
+        let manifest = dir.path().join("crates/demo/Cargo.toml");
+        fs::write(
+            &manifest,
+            "[package]\nname = \"demo\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .expect("write manifest");
         let path = src.join("lib.rs");
         fs::write(
             &path,
             "pub struct S {\n    b: u8,\n    a: u8,\n}\n\nimpl S {\n    fn b(&self) {}\n\n    fn a(&self) {}\n}\n",
         )
         .expect("write");
+        let metadata = MetadataCommand::new()
+            .manifest_path(&manifest)
+            .no_deps()
+            .exec()
+            .expect("metadata");
         let config = StyleConfig::default();
         let scan = Scan::new(dir.path());
         let scope = Scope::default();
         let ctx = Context {
             workspace_root: dir.path(),
+            metadata: &metadata,
             scan: &scan,
             scope: &scope,
             config: &config,

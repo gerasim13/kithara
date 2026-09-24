@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use cargo_metadata::Metadata;
 
 use super::config::StyleConfig;
 use crate::common::{fix::FixOutcome, scan::Scan, scope::Scope, violation::Violation};
@@ -20,12 +21,14 @@ pub(crate) mod doc_staleness;
 pub(crate) mod non_english_text;
 pub(crate) mod qualified_path_depth;
 pub(crate) mod readme_shape;
+pub(crate) mod split_module;
 pub(crate) mod struct_field_order;
 pub(crate) mod struct_init_order;
 pub(crate) mod trait_item_order;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
+    pub(crate) metadata: &'a Metadata,
     pub(crate) scan: &'a Scan,
     pub(crate) scope: &'a Scope,
     pub(crate) config: &'a StyleConfig,
@@ -61,6 +64,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(non_english_text::NonEnglishText),
         Box::new(qualified_path_depth::QualifiedPathDepth),
         Box::new(readme_shape::ReadmeShape),
+        Box::new(split_module::SplitModule),
         Box::new(struct_field_order::StructFieldOrder),
         Box::new(trait_item_order::TraitItemOrder),
         Box::new(struct_init_order::StructInitOrder),

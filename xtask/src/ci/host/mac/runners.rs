@@ -996,7 +996,7 @@ mod tests {
         let env_file = directory.path().join("cache.env");
         fs::write(
             &env_file,
-            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://127.0.0.1:19000\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+            "SCCACHE_BUCKET=cache\nSCCACHE_S3_KEY_PREFIX=sccache\nSCCACHE_ENDPOINT=http://127.0.0.1:19000\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write cache environment");
         fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600))

@@ -4,7 +4,7 @@ use kithara_platform::sync::{Mutex, mpsc};
 use kithara_play::{PlayError, SessionDispatcher, SessionSampleRate, StreamShape};
 use kithara_worker::TaskControl;
 
-use super::{OfflineMsg, OfflineSessionError};
+use super::{OfflineSessionError, task::OfflineMsg};
 use crate::session::{
     Cmd, HostCmd, HostDispatcher, HostReply, Reply,
     protocol::{HostCmdMsg, HostDispatchError},
