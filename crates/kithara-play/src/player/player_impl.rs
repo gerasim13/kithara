@@ -94,12 +94,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             Some(Arc::new(engine.session().clone()));
         #[cfg(target_arch = "wasm32")]
         let owner = None;
-        let staging = SyncStaging::new(
-            config.track_grid_id,
-            owner,
-            cancel.clone(),
-            config.response_budget_frames.map_or(1, NonZeroUsize::get),
-        );
+        let staging = SyncStaging::new(config.track_grid_id, owner, cancel.clone());
         if config.abr.is_none() {
             let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
             config.abr = Some(AbrController::new(abr_settings));

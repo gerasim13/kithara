@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 #[cfg(not(target_os = "android"))]
 use std::{env, io};
 
@@ -15,6 +15,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara::{
+    beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
     host::{HostConfig, HostOwned},
     platform::{
@@ -22,7 +23,8 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
+        ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
@@ -55,6 +57,38 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const START_BPM: f64 = 120.0;
+/// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
+/// at the bounded render quantum.
+const LOOSE_RESPONSE_BUDGET: usize = 4_096;
+/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, first beat on
+/// frame 0.
+const SYNTHETIC_BEATS: u32 = 24;
+const SECONDS_PER_MINUTE: f64 = 60.0;
+
+/// The beat grid every synthetic rhythm fixture was rendered on.
+fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
+    let spacing = SECONDS_PER_MINUTE / START_BPM;
+    let beats = (0..SYNTHETIC_BEATS)
+        .map(|ordinal| GridBeat {
+            at: f64::from(ordinal) * spacing,
+            ordinal: i64::from(ordinal),
+            confidence: Some(1.0),
+        })
+        .collect();
+    let model = BeatGridModel::try_from(RawBeatGrid {
+        schema_version: SCHEMA_VERSION,
+        model_id: "synthetic-rhythm".to_owned(),
+        revision: 1,
+        state: BeatGridState::Final,
+        duration: None,
+        bpm: START_BPM,
+        beats,
+        downbeats: Vec::new(),
+        meter: None,
+    })
+    .expect("synthetic rhythm beats form a valid grid");
+    ArtifactSource::Value(Arc::new(model))
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -133,6 +167,12 @@ pub(super) struct SyncCase {
     paused: bool,
     ride: TempoRide,
     updates_hz: u32,
+    /// Lanes the shared playback worker admits; `None` keeps its default.
+    capacity: Option<NonZeroUsize>,
+    /// Each deck's track carries its beat grid, so a group can prepare it.
+    gridded: bool,
+    /// Each player's control-to-audio deadline; `None` keeps it unbounded.
+    response_budget: Option<NonZeroUsize>,
 }
 
 impl SyncCase {
@@ -150,7 +190,25 @@ impl SyncCase {
             paused: false,
             ride: TempoRide::Triangle,
             updates_hz: 60,
+            capacity: None,
+            gridded: false,
+            response_budget: None,
         }
+    }
+
+    const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
+        self.response_budget = Some(frames);
+        self
+    }
+
+    const fn gridded(mut self) -> Self {
+        self.gridded = true;
+        self
+    }
+
+    const fn capacity(mut self, lanes: NonZeroUsize) -> Self {
+        self.capacity = Some(lanes);
+        self
     }
 
     const fn paused(mut self) -> Self {
@@ -181,7 +239,7 @@ impl SyncCase {
 
     delegate::delegate! {
         to self.ride {
-            const fn start_bpm(self) -> f64;
+            pub(super) const fn start_bpm(self) -> f64;
             pub(super) const fn final_bpm(self) -> f64;
         }
     }
@@ -227,6 +285,42 @@ const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+/// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
+pub(super) const STAGED_CUE: SyncCase =
+    SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)
+        .paused()
+        .hold(120.0)
+        .gridded();
+/// A staged cue under a response deadline far looser than the lane's ring.
+pub(super) const STAGED_UNDER_LOOSE_DEADLINE: SyncCase = SyncCase::running(
+    "staged-under-loose-deadline",
+    1,
+    44_100,
+    OperationOrder::SyncPlaySeek,
+)
+.paused()
+.hold(120.0)
+.gridded()
+.response_budget(NonZeroUsize::new(LOOSE_RESPONSE_BUDGET).expect("loose budget is not zero"));
+/// A deck that keeps sounding while a lane is staged beside it.
+pub(super) const STAGED_BESIDE_PLAYBACK: SyncCase = SyncCase::running(
+    "staged-beside-playback",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.gridded();
+/// A sounding deck whose worker has no slot left for a staged lane.
+pub(super) const STAGED_WITHOUT_CAPACITY: SyncCase = SyncCase::running(
+    "staged-without-capacity",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.capacity(NonZeroUsize::MIN)
+.gridded();
 pub(super) const SHARED_DEADLINE: SyncCase = SyncCase::running(
     "shared-worker-deadline",
     4,
@@ -453,7 +547,11 @@ impl ProductHarness {
             .cloned()
             .collect();
         let pools = pools();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone())
+                .maybe_capacity(case.capacity)
+                .build(),
+        );
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
         let render_block_frames = NonZeroU32::new(
             u32::try_from(block_frames).expect("offline render block count fits u32"),
@@ -475,6 +573,7 @@ impl ProductHarness {
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
                     .crossfade_duration(0.0)
+                    .maybe_response_budget_frames(case.response_budget)
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());
@@ -490,6 +589,7 @@ impl ProductHarness {
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
+            .maybe_beat_grid(case.gridded.then(synthetic_grid))
             .build();
             let control = deck.control().clone();
             let id = host
