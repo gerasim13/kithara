@@ -38,7 +38,7 @@ fn repo_parts(repo: &str) -> Result<(&str, &str)> {
 
 /// Lay the site out in `out`: the player at the root and every documentation
 /// set under its own path, unpacked from the release artifacts, with the
-/// release section `latest` added to the player's page.
+/// release section `latest` added beside the player on its page.
 pub(super) fn assemble(
     cfg: &ReleaseConfig,
     tools: &ToolsConfig,
@@ -102,11 +102,11 @@ fn move_entries(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The player's page with the release section at its end and the section's
-/// style in its head.
+/// The player's page with the release section beside the player in its main
+/// layout and the section's style in its head.
 fn with_latest(player: &str, latest: &str) -> Result<String> {
     let page = insert_before(player, "</head>", &format!("<style>{STYLE}</style>\n"))?;
-    insert_before(&page, "</body>", latest)
+    insert_before(&page, "</main>", latest)
 }
 
 fn insert_before(page: &str, tag: &str, content: &str) -> Result<String> {
@@ -148,7 +148,7 @@ pub(super) fn deploy(cfg: &ReleaseConfig, out: &Path, version: &str) -> Result<(
 
 /// The release section added to the player's page: the documentation of every
 /// platform, the release archives with their checksums, and every crate on
-/// crates.io and docs.rs.
+/// crates.io and docs.rs, each behind its own tab.
 pub(super) fn section(
     cfg: &ReleaseConfig,
     version: &str,
@@ -164,13 +164,16 @@ pub(super) fn section(
 
     let _ = write!(
         html,
-        r#"<section id="latest" class="latest">
-<div class="latest-head"><h2>Latest release <span>{version}</span></h2>
-<nav><a href="{release}">Release notes</a><a href="{changelog}">Changelog</a><a href="{repo}">GitHub</a></nav></div>
-<div class="card">
-<h3>Documentation</h3>
-<div class="latest-docs">
-"#
+        r#"<section id="latest" class="panel release">
+<div class="panel-head"><h2>Release</h2><span class="release-version">{version}</span>
+<nav class="release-nav"><a href="{release}">Notes</a><a href="{changelog}">Changelog</a><a href="{repo}">GitHub</a></nav></div>
+<div class="tabs">
+<input type="radio" name="release-view" id="release-docs" checked><label for="release-docs">Docs</label>
+<input type="radio" name="release-view" id="release-downloads"><label for="release-downloads">Downloads</label>
+<input type="radio" name="release-view" id="release-crates"><label for="release-crates">Crates<span class="release-count">{}</span></label>
+<div class="tab-panel"><div class="release-docs">
+"#,
+        crates.len()
     );
     for docs in cfg.docs.values() {
         let _ = writeln!(
@@ -181,26 +184,17 @@ pub(super) fn section(
             escape(&docs.label),
         );
     }
-    html.push_str(
-        "</div>\n</div>\n<div class=\"card\">\n<h3>Downloads</h3>\n\
-         <div class=\"latest-table\"><table>\n\
-         <thead><tr><th>Archive</th><th>Contents</th><th>SHA-256</th></tr></thead>\n<tbody>\n",
-    );
+    html.push_str("</div></div>\n<div class=\"tab-panel\"><ul class=\"release-files\">\n");
     for (name, checksum) in artifacts {
         let _ = writeln!(
             html,
-            r#"<tr><td><a href="{repo}/releases/download/{tag}/{name}">{name}</a></td><td>{}</td><td><code title="{checksum}">{checksum}</code></td></tr>"#,
+            r#"<li><a href="{repo}/releases/download/{tag}/{name}">{name}</a><code title="SHA-256 {checksum}">{checksum}</code><span>{}</span></li>"#,
             escape(&contents(cfg, name)),
             name = escape(name),
             checksum = escape(checksum),
         );
     }
-    let _ = write!(
-        html,
-        "</tbody>\n</table></div>\n</div>\n<div class=\"card\">\n\
-         <h3>Crates <span class=\"latest-count\">{}</span></h3>\n<ul class=\"latest-crates\">\n",
-        crates.len()
-    );
+    html.push_str("</ul></div>\n<div class=\"tab-panel\"><ul class=\"release-crates\">\n");
     for name in crates {
         let _ = writeln!(
             html,
@@ -210,8 +204,8 @@ pub(super) fn section(
     }
     let _ = write!(
         html,
-        "</ul>\n</div>\n<p class=\"latest-foot\">Built from \
-         <a href=\"{repo}/tree/{tag}\">{tag}</a>.</p>\n</section>\n",
+        "</ul></div>\n</div>\n<p class=\"release-foot\">Built from \
+         <a href=\"{repo}/tree/{tag}\">{tag}</a></p>\n</section>\n",
         tag = escape(&tag),
     );
     html
@@ -252,34 +246,29 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// Painted with the player page's own palette and cards, so the section reads
-/// as part of the page it is added to.
+/// The section's own layout; the panel, tabs, and palette are the player
+/// page's, so the section reads as part of the page it is added to.
 const STYLE: &str = "
-.latest{margin-top:28px}
-.latest-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;margin-bottom:12px}
-.latest h2{color:var(--accent);font-size:22px}
-.latest h2 span{color:var(--text-muted);font-weight:500}
-.latest nav{display:flex;flex-wrap:wrap;gap:16px;font-size:13px}
-.latest h3{margin-bottom:10px;color:var(--text-main);font-size:13px}
-.latest a{color:var(--accent-strong);text-decoration:none}
-.latest a:hover{text-decoration:underline}
-.latest-docs{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
-.latest-docs a{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg-dark);color:var(--text-main);font-weight:600}
-.latest-docs a:hover{border-color:var(--accent);text-decoration:none}
-.latest-docs span{color:var(--text-muted);font-size:12px;font-weight:400}
-.latest-table{overflow-x:auto}
-.latest table{width:100%;border-collapse:collapse;font-size:13px}
-.latest th,.latest td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.latest tr:last-child td{border-bottom:0}
-.latest th{color:var(--text-muted);font-size:12px}
-.latest td:first-child{white-space:nowrap}
-.latest td:nth-child(2){color:var(--text-muted)}
-.latest code{display:inline-block;max-width:18ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;color:var(--text-muted);font:12px/1.6 monospace}
-.latest-count{padding:1px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent-strong);font-size:12px}
-.latest-crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px;list-style:none}
-.latest-crates li{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg-dark);font-size:12px}
-.latest-crates span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-main);font:13px/1.6 monospace}
-.latest-foot{margin-top:4px;color:var(--text-muted);font-size:12px}
+.release{flex:1 1 460px;min-width:0}
+.release a{color:var(--accent-strong);text-decoration:none}
+.release a:hover{text-decoration:underline}
+.release-version{color:var(--accent-strong);font:600 12px var(--font-mono)}
+.release-nav{display:flex;gap:14px;margin-left:auto;font-size:12px}
+.release-count{margin-left:6px;padding:0 5px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent-strong)}
+.release-docs{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
+.release-docs a{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);background:var(--bg-dark);color:var(--text-main);font-weight:600}
+.release-docs a:hover{border-color:var(--accent);color:var(--accent-strong);text-decoration:none}
+.release-docs span{color:var(--text-muted);font-size:11px;font-weight:400}
+.release-files,.release-crates{list-style:none}
+.release-files li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 16px;padding:8px 0}
+.release-files li+li{border-top:1px solid var(--line)}
+.release-files a{overflow-wrap:anywhere;font:12px var(--font-mono)}
+.release-files code{grid-row:span 2;max-width:12ch;overflow:hidden;color:var(--text-muted);font:11px var(--font-mono);text-overflow:ellipsis;white-space:nowrap;user-select:all}
+.release-files span{color:var(--text-muted);font-size:12px}
+.release-crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0 16px}
+.release-crates li{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
+.release-crates span{flex:1;min-width:0;overflow:hidden;color:var(--text-main);font:12px var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
+.release-foot{padding:8px 12px;border-top:1px solid var(--line);color:var(--text-muted);font-size:11px}
 ";
 
 #[cfg(test)]
@@ -341,25 +330,58 @@ mod tests {
             assert!(section.contains(link), "{link} missing from the section");
         }
         assert!(section.contains("Swift Package binary target"));
-        assert!(section.contains(r#"<span class="latest-count">2</span>"#));
+        assert!(section.contains(r#"<span class="release-count">2</span>"#));
         assert!(!section.contains("gitlab.internal"));
     }
 
-    /// The section lands inside the player's own page and paints with the
-    /// palette that page declares.
+    /// The section lands beside the player in its page, every class it uses is
+    /// styled by the section or by that page, every tab it opens has a panel
+    /// the page shows, and it paints with the palette the page declares.
     #[test]
     fn the_release_section_joins_the_player_page() {
         let player = fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/kithara-ffi/index.html"),
         )
         .expect("the player page");
+        let latest = section(
+            &config(),
+            "0.0.2",
+            &["kithara".into()],
+            &[("KitharaFFIInternal.xcframework.zip".into(), "abc".into())],
+        );
 
-        let page = with_latest(&player, "<section id=\"latest\"></section>\n").unwrap();
-        let style = page.find("<style>\n.latest{").expect("section style");
-        let section = page.find("<section id=\"latest\">").expect("section");
+        let page = with_latest(&player, &latest).unwrap();
+        let style = page.find("<style>\n.release{").expect("section style");
+        let at = page.find(r#"<section id="latest""#).expect("section");
         assert!(style < page.find("</head>").unwrap());
-        assert!(section < page.find("</body>").unwrap());
-        assert!(page.contains(r#"id="playlist""#));
+        assert!(page.find(r#"id="playlist""#).unwrap() < at);
+        assert!(at < page.find("</main>").unwrap());
+
+        let styled = |class: &str| {
+            [STYLE, player.as_str()].into_iter().any(|css| {
+                css.match_indices(&format!(".{class}")).any(|(at, found)| {
+                    !css[at + found.len()..]
+                        .starts_with(|next: char| next.is_ascii_alphanumeric() || next == '-')
+                })
+            })
+        };
+        for class in latest
+            .split(r#"class=""#)
+            .skip(1)
+            .filter_map(|rest| rest.split_once('"'))
+            .flat_map(|(names, _)| names.split_whitespace())
+        {
+            assert!(styled(class), "nothing styles .{class}");
+        }
+
+        let tabs = latest.matches(r#"type="radio""#).count();
+        assert_eq!(latest.matches(r#"class="tab-panel""#).count(), tabs);
+        for tab in 1..=tabs {
+            assert!(
+                player.contains(&format!(".tab-panel:nth-of-type({tab})")),
+                "the player page never shows tab panel {tab}"
+            );
+        }
 
         for name in STYLE
             .split("var(--")
@@ -372,7 +394,7 @@ mod tests {
                 "the player page declares no --{name}"
             );
         }
-        assert!(with_latest("<html><body></body></html>", "").is_err());
+        assert!(with_latest("<html><head></head><body></body></html>", "").is_err());
     }
 
     #[test]
