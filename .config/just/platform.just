@@ -215,7 +215,7 @@ apple MODE="xcframework" *ARGS:
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
-            --target Kithara --target KitharaRx \
+            --target Kithara --target KitharaRx --target KitharaFFI \
             --enable-experimental-combined-documentation \
             --output-path ./docs-build/Kithara.doccarchive
         ;;
