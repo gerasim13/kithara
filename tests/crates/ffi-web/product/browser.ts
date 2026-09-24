@@ -112,7 +112,7 @@ async function main() {
       }
     };
   });
-  const item = new AudioPlayerItem({ url, abrMode: undefined, audioId: undefined, headers: undefined, uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 });
+  const item = new AudioPlayerItem({ url, abrMode: undefined, audioId: undefined, headers: new Map([["X-Kithara-Config-Probe", "item"]]), uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 });
   generatedPlayer.append(item);
   await loadedTrack;
   generatedPlayer.play();

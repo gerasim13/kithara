@@ -118,13 +118,9 @@ where
     /// document key.
     #[builder(default)]
     pub(crate) block_on_underrun: bool,
-    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
-    /// reader that does not exist yet. `resource/build.rs` forwards this to
-    /// neither branch, so no value here changes variant selection today, and
-    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
-    /// asserting the value survives `Loader::build_config`. Not a document key
-    /// for exactly that reason: a document knob the binary ignores is worse
-    /// than no knob. Make it one when the ABR wiring lands.
+    /// Initial HLS ABR bitrate ceiling in bits per second; zero means no cap.
+    /// Passed to the per-stream ABR handle before variant selection. The
+    /// file branch ignores it. This per-call input is not a document key.
     #[builder(default = 0.0)]
     pub(crate) preferred_peak_bitrate: f64,
 }

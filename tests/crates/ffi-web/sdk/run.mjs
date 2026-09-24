@@ -33,6 +33,11 @@ const server = createServer(async (request, response) => {
   try {
     const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
     if (pathname === "/tone.wav") {
+      if (request.headers["x-kithara-config-probe"] !== "item") {
+        response.writeHead(403);
+        response.end("item headers did not reach the HTTP owner");
+        return;
+      }
       const match = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
       const start = match ? Number(match[1]) : 0;
       const end = match && match[2] ? Math.min(Number(match[2]), tone.length - 1) : tone.length - 1;

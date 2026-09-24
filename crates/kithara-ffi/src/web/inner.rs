@@ -118,7 +118,7 @@ impl WasmInner {
         let id = item.track_id();
         self.try_send(WorkerCmd::Append {
             id,
-            url: item.url(),
+            config: item.config.clone(),
         })?;
         *item.inserted.lock() = true;
         self.queue_view.lock().push((id, Arc::clone(item)));
@@ -172,7 +172,7 @@ impl WasmInner {
         self.send(WorkerCmd::Insert {
             id,
             request_id,
-            url: item.url(),
+            config: item.config.clone(),
             after: after_id,
         });
 
@@ -292,7 +292,7 @@ impl WasmInner {
             index,
             request_id,
             id: new_id,
-            url: item.url(),
+            config: item.config.clone(),
         });
         if let Some((_, old)) = view.get(idx) {
             *old.inserted.lock() = false;

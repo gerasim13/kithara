@@ -183,7 +183,7 @@ pub struct AudioPlayerItem {
     /// [`Self::load`] can tell "still detached" from "loaded enough to
     /// answer playable". Pre-insert / post-remove value is `false`.
     pub(crate) inserted: Mutex<bool>,
-    config: FfiItemConfig,
+    pub(crate) config: FfiItemConfig,
     /// Per-item event bridge translating resource events into
     /// [`ItemObserver`] callbacks. Native-only: the wasm worker routes
     /// item events through the main-thread event router instead (Wave 5).

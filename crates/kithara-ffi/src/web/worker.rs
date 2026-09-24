@@ -25,6 +25,7 @@ use crate::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
+    types::{FfiAbrMode, FfiItemConfig},
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
@@ -196,19 +197,19 @@ fn dispatch_cmd(
         WorkerCmd::ResetEq => {
             let _ = queue.reset_eq();
         }
-        WorkerCmd::Append { id, url } => {
-            let source = build_source(&build_state.borrow(), url);
+        WorkerCmd::Append { id, config } => {
+            let source = build_source(&build_state.borrow(), config);
             if let Err(error) = queue.append_with_id(id, source) {
                 clog!("[WORKER] append rejected for {id:?}: {error}");
             }
         }
         WorkerCmd::Insert {
             id,
-            url,
+            config,
             after,
             request_id,
         } => {
-            let source = build_source(&build_state.borrow(), url);
+            let source = build_source(&build_state.borrow(), config);
             let result = queue
                 .insert_with_id(id, source, after)
                 .map(|_| ())
@@ -219,7 +220,9 @@ fn dispatch_cmd(
             let state = build_state.borrow();
             if let Err(error) = analysis
                 .borrow_mut()
-                .start_queued(queue, id, request_id, |url| build_config(&state, url))
+                .start_queued(queue, id, request_id, |url| {
+                    build_config(&state, url, None, None, 0.0)
+                })
             {
                 crate::web::interop::send_reply(request_id, Err(error));
             }
@@ -232,13 +235,13 @@ fn dispatch_cmd(
         WorkerCmd::Replace {
             index,
             id,
-            url,
+            config,
             request_id,
         } => {
             let result = replace_track(
                 queue,
                 &build_state.borrow(),
-                ReplaceTrackArgs { url, id, index },
+                ReplaceTrackArgs { config, id, index },
             )
             .map(|dropped| analysis.borrow_mut().cancel(dropped));
             crate::web::interop::send_reply(request_id, result);
@@ -385,30 +388,54 @@ fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
     state.keys = KeyOptions::builder().key_registry(registry).build();
 }
 
-/// Build an [`FfiTrackSource`] for `url`, snapshotting the player-wide DRM keys
-/// and headers from `state` (mirrors native `build_source_for_item`). Falls
-/// back to a bare [`FfiTrackSource::Uri`] when no keys or headers are set so
-/// the common non-DRM path stays allocation-light.
-fn build_source(state: &BuildState, url: String) -> FfiTrackSource {
-    if state.keys.key_registry.is_none() && state.headers.is_empty() {
+/// Build a worker source from the item's immutable configuration. Keep the
+/// common no-policy URI path allocation-light.
+fn build_source(state: &BuildState, item: FfiItemConfig) -> FfiTrackSource {
+    let url = item.url.clone();
+    if state.keys.key_registry.is_none()
+        && state.headers.is_empty()
+        && item.headers.as_ref().is_none_or(HashMap::is_empty)
+        && item.abr_mode.is_none()
+        && !(item.preferred_peak_bitrate.is_finite() && item.preferred_peak_bitrate > 0.0)
+    {
         return FfiTrackSource::Uri(url);
     }
-    build_config(state, &url).map_or(FfiTrackSource::Uri(url), |config| {
+    build_config(
+        state,
+        &url,
+        item.headers,
+        item.abr_mode,
+        item.preferred_peak_bitrate,
+    )
+    .map_or(FfiTrackSource::Uri(url), |config| {
         FfiTrackSource::Config(Box::new(config))
     })
 }
 
-fn build_config(state: &BuildState, url: &str) -> Option<FfiResourceConfig> {
+fn build_config(
+    state: &BuildState,
+    url: &str,
+    item_headers: Option<HashMap<String, String>>,
+    abr_mode: Option<FfiAbrMode>,
+    preferred_peak_bitrate: f64,
+) -> Option<FfiResourceConfig> {
     let src = ResourceSrc::parse(url)
         .inspect_err(|err| {
             clog!("[WORKER] build_config: invalid url {url}: {err}");
         })
         .ok()?;
-    let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
+    let mut headers = state.headers.clone();
+    headers.extend(item_headers.unwrap_or_default());
+    let abr_mode = abr_mode.map(|mode| match mode {
+        FfiAbrMode::Auto => AbrMode::Auto(None),
+        FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
+    });
     Some(
         FfiResourceConfig::for_src(src)
             .keys(state.keys.clone())
-            .maybe_headers(headers.map(Into::into))
+            .maybe_headers((!headers.is_empty()).then(|| headers.into()))
+            .initial_abr_mode(abr_mode.unwrap_or_default())
+            .preferred_peak_bitrate(preferred_peak_bitrate)
             .store(state.store.clone())
             .worker(state.worker.clone())
             .build(),
@@ -416,7 +443,7 @@ fn build_config(state: &BuildState, url: &str) -> Option<FfiResourceConfig> {
 }
 
 struct ReplaceTrackArgs {
-    url: String,
+    config: FfiItemConfig,
     id: TrackId,
     index: u32,
 }
@@ -429,7 +456,7 @@ fn replace_track(
     state: &BuildState,
     args: ReplaceTrackArgs,
 ) -> Result<TrackId, String> {
-    let ReplaceTrackArgs { index, id, url } = args;
+    let ReplaceTrackArgs { index, id, config } = args;
 
     let idx = index as usize;
     let tracks = queue.tracks();
@@ -443,7 +470,7 @@ fn replace_track(
         tracks.get(idx - 1).map(|e| e.id)
     };
     queue
-        .insert_with_id(id, build_source(state, url), after)
+        .insert_with_id(id, build_source(state, config), after)
         .map_err(|e| e.to_string())?;
     queue.remove(old_id).map_err(|e| e.to_string())?;
     Ok(old_id)

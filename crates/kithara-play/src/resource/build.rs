@@ -6,6 +6,7 @@ use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
+use num_traits::ToPrimitive;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -106,6 +107,10 @@ where
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)
+            .maybe_initial_max_bandwidth_bps(
+                (self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate > 0.0)
+                    .then(|| self.preferred_peak_bitrate.to_u64().unwrap_or(u64::MAX)),
+            )
             .maybe_headers(self.headers)
             .maybe_discriminator(self.discriminator)
             .maybe_base_url(self.hls_base_url)
@@ -167,6 +172,26 @@ mod tests {
             .expect("valid HLS config");
 
         assert_eq!(built.stream().download_batch_size, 6);
+    }
+
+    #[kithara::test]
+    fn item_bitrate_limit_reaches_hls_policy() {
+        for (input, expected) in [
+            (256_000.0, Some(256_000)),
+            (0.0, None),
+            (-1.0, None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+            (f64::MAX, Some(u64::MAX)),
+        ] {
+            let mut item = config("https://example.com/live.m3u8");
+            item.preferred_peak_bitrate = input;
+            let built = item
+                .build_hls_config(&worker(), None)
+                .expect("valid HLS config");
+
+            assert_eq!(built.stream().initial_max_bandwidth_bps, expected);
+        }
     }
 
     /// The same for the file branch: `reader_event_capacity` is a

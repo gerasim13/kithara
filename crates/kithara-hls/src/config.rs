@@ -81,6 +81,10 @@ where
     #[builder(default)]
     #[patch(skip)]
     pub initial_abr_mode: AbrMode,
+    /// Initial per-stream ABR ceiling. A later update through the stream's
+    /// `AbrHandle` takes precedence. `None` keeps the downloader default.
+    #[patch(skip)]
+    pub initial_max_bandwidth_bps: Option<u64>,
     /// Shared asset store.
     #[patch(skip)]
     pub store: AssetStore<S>,
