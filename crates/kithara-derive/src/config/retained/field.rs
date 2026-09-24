@@ -5,6 +5,8 @@ use syn::{
     parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
+use super::implementation::attributes;
+
 enum Role {
     Value,
     Projection(Box<(Type, Expr)>),
@@ -146,8 +148,8 @@ pub(super) fn expand(
             "snapshot types cannot depend on resource generics; use value(OwnedType, expression)",
         ));
     }
-    let gates = super::attributes(&field.attrs, false)?;
-    let surface = super::attributes(&field.attrs, true)?;
+    let gates = attributes(&field.attrs, false)?;
+    let surface = attributes(&field.attrs, true)?;
     let update = update
         .then(|| update_tokens(field, owner, name, original_type, &surface, &gates))
         .transpose()?;
