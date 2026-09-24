@@ -104,6 +104,27 @@ fn construction_input_is_registered_without_claiming_retained_values() {
 }
 
 #[test]
+fn live_recorder_registers_consumed_inputs_without_exposing_resources() {
+    let source = include_str!("../../../../crates/kithara-record/src/config.rs");
+    let entries = registrations("crates/kithara-record/src/config.rs", source).unwrap();
+    let live = entries
+        .iter()
+        .find(|entry| entry.owner == "LiveRecordingConfig")
+        .unwrap();
+    assert_eq!(live.kind, "construction");
+    assert!(!live.sdk);
+    assert_eq!(live.fields.len(), 16);
+    assert!(live.fields.iter().all(|field| field.value_type.is_none()));
+    assert_eq!(live.fields[0].role, "skip");
+    assert_eq!(live.fields[1].role, "skip");
+    assert_eq!(live.fields[2].role, "skip");
+    assert_eq!(live.fields[10].name, "generation_capacity");
+    assert_eq!(live.fields[10].role, "value");
+    assert_eq!(live.fields[15].name, "recording");
+    assert_eq!(live.fields[15].role, "nested");
+}
+
+#[test]
 fn manifest_reads_composed_builder_field_and_patch_groups() {
     let entries = registrations(
         "crates/kithara-play/src/player/config.rs",
