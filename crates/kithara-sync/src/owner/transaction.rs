@@ -1,4 +1,4 @@
-use kithara_warp::BeatGridId;
+use kithara_warp::{BeatGridId, MapAxis};
 
 use super::{
     mutation::{
@@ -9,8 +9,8 @@ use super::{
     state::GroupState,
 };
 use crate::{
-    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncOperation, SyncOperationId,
-    SyncRejected, TopologyStamp,
+    ParentFact, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMember,
+    SyncOperation, SyncOperationId, SyncRejected, SyncStaged, TopologyOperation, TopologyStamp,
 };
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -196,8 +196,21 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ) {
             return Err(reject(error, operations));
         }
+        let joins = match self.stage_joins(&operations) {
+            Ok(joins) => joins,
+            Err(error) => return Err(reject(error, operations)),
+        };
         apply_topology_operations(&mut self.members, operations);
-        let transition = self.retain_current_pending();
+        let mut transition = self.retain_current_pending();
+        for (id, staged) in joins {
+            if let Some(SyncMember::Group { group, .. }) = self
+                .members
+                .iter_mut()
+                .find(|member| BeatGridId::from(&**member) == id)
+            {
+                transition.append(group.apply_staged(staged));
+            }
+        }
         self.topology_revision = revision;
         advance_operation(&mut self.next_operation);
         Ok(SyncAdmission::TopologyChanged {
@@ -205,6 +218,36 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             topology: TopologyStamp::new(self.grid.id(), revision),
             transition,
         })
+    }
+
+    /// Stages every group a topology change brings in onto this group's
+    /// session axis, before any of them joins.
+    fn stage_joins(
+        &self,
+        operations: &[TopologyOperation<G>],
+    ) -> Result<Vec<(BeatGridId, SyncStaged)>, SyncError> {
+        let MapAxis::Session(axis) = self.grid.axis() else {
+            return Ok(Vec::new());
+        };
+        operations
+            .iter()
+            .filter_map(|operation| match operation {
+                TopologyOperation::Attach { member }
+                | TopologyOperation::Replace {
+                    replacement: member,
+                    ..
+                } => match member {
+                    SyncMember::Group { group, .. } => Some(group),
+                    SyncMember::Grid { .. } => None,
+                },
+                TopologyOperation::Detach { .. } => None,
+            })
+            .map(|group| {
+                group
+                    .stage_fact(ParentFact::Joined(SessionAxisUpdate::new(axis)))
+                    .map(|staged| (group.id(), staged))
+            })
+            .collect()
     }
 }
 

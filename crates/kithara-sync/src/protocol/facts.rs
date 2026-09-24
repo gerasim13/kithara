@@ -11,6 +11,11 @@ pub enum ParentFact {
     Withdrawn(ParentWithdrawal),
     /// The physical session axis changed.
     Axis(SessionAxisUpdate),
+    /// The group became a direct child of a parent on this session axis.
+    ///
+    /// The group missed every route boundary its new parent crossed before,
+    /// so it drops its own axis instead of stepping through a successor.
+    Joined(SessionAxisUpdate),
 }
 
 /// A parent's accepted tempo and phase segment, offered to one direct child.

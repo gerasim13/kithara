@@ -78,6 +78,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             ParentFact::Segment(update) => self.stage_segment(update)?,
             ParentFact::Withdrawn(withdrawal) => self.stage_withdrawal(withdrawal)?,
             ParentFact::Axis(update) => self.stage_axis(update)?,
+            ParentFact::Joined(update) => self.stage_join(update)?,
         };
         Ok(SyncStaged(staged.map(Box::new)))
     }
@@ -172,6 +173,27 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             self.timeline.on_new_axis(),
             None,
             Some(ParentFact::Axis(update)),
+            Takeover {
+                commit: None,
+                next_operation: self.next_operation,
+            },
+        )
+        .map(Some)
+    }
+
+    /// Moves a joining group and its subtree onto the new parent's axis
+    /// without an unavailable step in every epoch the parent already passed.
+    fn stage_join(&self, update: SessionAxisUpdate) -> Result<Option<Staged>, SyncError> {
+        let axis = MapAxis::Session(update.axis());
+        if axis == self.grid.axis() {
+            return Ok(None);
+        }
+        let grid = BeatGridSnapshot::unavailable(self.grid.id(), self.next_revision()?, axis);
+        self.stage(
+            grid,
+            self.timeline.on_new_axis(),
+            None,
+            Some(ParentFact::Joined(update)),
             Takeover {
                 commit: None,
                 next_operation: self.next_operation,

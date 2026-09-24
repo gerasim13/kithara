@@ -1445,6 +1445,29 @@ mod tests {
     }
 
     #[kithara::test]
+    fn a_player_attached_after_an_idle_teardown_stops_through_the_next_one() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let first = register_player(&mut state);
+        start_player_cmd(&mut state, first);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: first }),
+            Reply::Ok
+        ));
+
+        let second = register_player(&mut state);
+        start_player_cmd(&mut state, second);
+        match run_cmd(&mut state, Cmd::StopPlayer { player_id: second }) {
+            Reply::Ok => {}
+            Reply::Err(error) => {
+                panic!("a player that joined after a route boundary must follow the next: {error}")
+            }
+            _ => panic!("stop returned an unexpected reply"),
+        }
+    }
+
+    #[kithara::test]
     fn session_output_has_exactly_one_limiter_rebuilt_on_route_recreate() {
         route_loss(RouteLossProbe::reset);
 

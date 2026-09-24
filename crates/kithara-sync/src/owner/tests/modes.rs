@@ -823,3 +823,41 @@ fn a_new_session_axis_reaches_every_descendant_in_every_mode() {
         assert_eq!(tempo, None, "{mode:?} lost every frame it had");
     }
 }
+
+#[kithara::test]
+fn a_group_joins_its_parent_on_the_parent_axis_after_epochs_it_never_saw() {
+    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
+    for (revision, epoch) in [(2, 1), (3, 2)] {
+        root.publish_unavailable_grid(
+            parent_stamp(root.id(), revision),
+            rate(48_000),
+            SessionEpoch::new(epoch),
+        )
+        .expect("a route restart before the child joins");
+    }
+    let mut middle = group_in(SyncMode::HostSync, SyncMemberKind::Group);
+    let leaf = synced_deck();
+    let (middle_id, leaf_id) = (middle.id(), leaf.id());
+    attach_group(&mut middle, leaf);
+    attach_group(&mut root, middle);
+
+    let paths = [&[middle_id][..], &[middle_id, leaf_id][..]];
+    for path in paths {
+        assert_eq!(
+            nested(&root, path, |group| group.snapshot().axis()),
+            root.snapshot().axis(),
+            "level {} joins on the parent's axis",
+            path.len()
+        );
+    }
+
+    let next = SessionAxis::new(rate(48_000), SessionEpoch::new(3));
+    root.publish_unavailable_grid(parent_stamp(root.id(), 4), next.sample_rate(), next.epoch())
+        .expect("the next route restart reaches the joined subtree");
+    for path in paths {
+        assert_eq!(
+            nested(&root, path, |group| group.snapshot().axis()),
+            MapAxis::Session(next)
+        );
+    }
+}
