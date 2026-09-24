@@ -33,8 +33,8 @@ pub use core::host::tick_host;
 pub(crate) use core::registry;
 pub use core::{
     FfiEqBandConfig, FfiEqFilterKind, FfiFileSourceSettings, FfiHlsSourceSettings, FfiHostConfig,
-    FfiLimiterConfig, FfiSourceSettings, analysis, default_host_config, host::initialize_host,
-    item, layout, observer, types,
+    FfiLimiterConfig, FfiQueueSettings, FfiSourceSettings, analysis, default_host_config,
+    host::initialize_host, item, layout, observer, types,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

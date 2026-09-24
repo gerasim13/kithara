@@ -8,7 +8,7 @@ use kithara::{
 };
 
 use crate::{
-    FfiEqBandConfig,
+    FfiEqBandConfig, FfiQueueSettings,
     item::{AudioPlayerItem, ItemBuildConfig},
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
@@ -62,17 +62,31 @@ pub(crate) struct WasmInner {
 
 impl Default for WasmInner {
     fn default() -> Self {
+        Self::new(FfiQueueSettings::default())
+    }
+}
+
+impl WasmInner {
+    pub(crate) fn new(queue_settings: FfiQueueSettings) -> Self {
         let queue_view: Arc<Mutex<QueueView>> = Arc::new(Mutex::default());
         Self {
-            bridge: WorkerBridge::default(),
+            bridge: WorkerBridge::new(queue_settings),
             routes: Routes::new(Arc::clone(&queue_view)),
             queue_view,
             volume: AtomicU32::new(DEFAULT_VOLUME.to_bits()),
-            crossfade_settings: Mutex::new(FfiCrossfadeSettings::default()),
+            crossfade_settings: Mutex::new(queue_settings.crossfade_settings.unwrap_or_default()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
-            playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
-            action_at_item_end: Mutex::new(FfiActionAtItemEnd::Advance),
+            playback_order: Mutex::new(
+                queue_settings
+                    .playback_order
+                    .unwrap_or(FfiPlaybackOrder::Sequential),
+            ),
+            action_at_item_end: Mutex::new(
+                queue_settings
+                    .action_at_item_end
+                    .unwrap_or(FfiActionAtItemEnd::Advance),
+            ),
             muted: Mutex::default(),
             eq_gains: Mutex::new(Box::new([0.0; EQ_BANDS])),
         }

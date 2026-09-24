@@ -49,7 +49,22 @@ async function main() {
     repeated = FfiError.AlreadyInitialized.instanceOf(error);
   }
   if (!repeated) throw new Error("repeated host initialization was accepted");
-  const generatedPlayer = UniAudioPlayer.newWeb();
+  let invalidQueueSettings = false;
+  try {
+    UniAudioPlayer.newWebWithQueueSettings({ maxConcurrentLoads: 0 });
+  } catch (error) {
+    invalidQueueSettings = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidQueueSettings) throw new Error("invalid queue load cap was accepted");
+  const initialCrossfade = { duration: 1.5, curve: FfiCrossfadeCurve.Linear, depth: 0.5, position: 0.3 };
+  const generatedPlayer = UniAudioPlayer.newWebWithQueueSettings({
+    maxConcurrentLoads: 4,
+    prefetchDuration: 2,
+    crossfadeSettings: initialCrossfade,
+  });
+  if (JSON.stringify(generatedPlayer.crossfadeSettings()) !== JSON.stringify({ ...initialCrossfade, position: Math.fround(initialCrossfade.position) })) {
+    throw new Error("generated queue settings did not reach player readback");
+  }
   generatedPlayer.setEqLayout([{ kind: FfiEqFilterKind.Peaking, gainDb: 3, frequency: 1000, qFactor: 0.7 }]);
   if (generatedPlayer.eqBandCount() !== 1 || generatedPlayer.eqGain(0) !== 3) {
     throw new Error("generated player EQ layout did not reach owner readback");

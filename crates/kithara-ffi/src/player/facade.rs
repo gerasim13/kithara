@@ -2,6 +2,8 @@ use kithara::platform::sync::Arc;
 
 use super::eq::validate_eq_band_count;
 #[cfg(not(target_arch = "wasm32"))]
+use crate::FfiQueueSettings;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::config::FfiPlayerConfig;
 use crate::{
     FfiEqBandConfig, Inner,
@@ -38,6 +40,21 @@ impl AudioPlayer {
     pub fn new(config: FfiPlayerConfig) -> Result<Arc<Self>, FfiError> {
         Ok(Arc::new(Self {
             inner: Inner::new(config)?,
+        }))
+    }
+
+    /// Create a native player with optional queue settings.
+    ///
+    /// # Errors
+    /// Returns an error when the player or queue settings are invalid.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_queue_settings(
+        config: FfiPlayerConfig,
+        queue_settings: FfiQueueSettings,
+    ) -> Result<Arc<Self>, FfiError> {
+        Ok(Arc::new(Self {
+            inner: Inner::new_with_queue_settings(config, queue_settings)?,
         }))
     }
 

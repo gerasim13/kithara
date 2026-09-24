@@ -29,9 +29,10 @@ pub(crate) struct Registration {
 pub(crate) struct RegisteredField {
     pub(crate) name: String,
     pub(crate) rust_type: String,
-    value_type: Option<String>,
+    pub(crate) value_type: Option<String>,
     pub(crate) role: String,
     update: bool,
+    pub(crate) sdk: bool,
     pub(crate) sdk_max: Option<u32>,
     builder_default: Option<String>,
     exclusion_reason: Option<String>,
@@ -164,6 +165,7 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
     let mut role = None;
     let mut projected_type = None;
     let mut update = false;
+    let mut sdk = false;
     let mut sdk_max = None;
     let mut default = None;
     let mut exclusion_reason = None;
@@ -171,8 +173,12 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
         if meta.path.is_ident("update") {
             update = true;
         } else if meta.path.is_ident("sdk") {
-            if sdk_max.is_some() {
+            if sdk {
                 return Err(meta.error("duplicate SDK field option"));
+            }
+            sdk = true;
+            if !meta.input.peek(syn::token::Paren) {
+                return Ok(());
             }
             meta.parse_nested_meta(|option| {
                 if !option.path.is_ident("max") {
@@ -239,6 +245,7 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
         value_type,
         role: role.unwrap_or("unknown").to_owned(),
         update,
+        sdk,
         sdk_max,
         builder_default: default,
         exclusion_reason,
@@ -424,6 +431,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                     value_type: Some(tokens(&input.ty)),
                     role: "delegate_input".to_owned(),
                     update: true,
+                    sdk: false,
                     sdk_max: None,
                     builder_default: None,
                     exclusion_reason: None,

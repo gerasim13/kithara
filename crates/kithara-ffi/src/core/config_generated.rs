@@ -140,6 +140,87 @@ impl TryFrom<FfiCrossfadeSettings> for kithara::play::CrossfadeSettings {
     }
 }
 
+/// Optional queue settings applied before the player joins its host.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
+pub struct FfiQueueSettings {
+    /// Max concurrent background prefetch loads. Default: 3.
+    pub max_concurrent_loads: Option<u32>,
+    /// Lead time in seconds before EOF at which the next queued track is
+    /// preloaded into the audio processor. Default: 3.5.
+    pub prefetch_duration: Option<f32>,
+    /// Whether the queue starts playback by itself once the first track
+    /// appended to a queue with nothing selected finishes loading. Off by
+    /// default: the embedding decides when playback starts. A document cannot
+    /// name it, because starting playback is the embedding's choice.
+    pub should_autoplay: Option<bool>,
+    /// Entries the navigation history keeps. Only explicit selections and
+    /// auto-advances land there, so the default is a listening session's
+    /// worth of back-steps; the queue's own track list is unbounded.
+    pub max_history_size: Option<u32>,
+    /// Initial queue traversal order; subsequent changes belong to navigation.
+    pub playback_order: Option<crate::types::FfiPlaybackOrder>,
+    /// Initial action when the current item ends.
+    pub action_at_item_end: Option<crate::types::FfiActionAtItemEnd>,
+    /// Initial transition settings for the next item.
+    pub crossfade_settings: Option<FfiCrossfadeSettings>,
+}
+
+impl FfiQueueSettings {
+    pub(crate) fn validated_patch(
+        self,
+    ) -> Result<kithara::queue::QueueConfigPatch, crate::types::FfiError> {
+        let mut patch = kithara::queue::QueueConfigPatch::default();
+        if let Some(value) = self.max_concurrent_loads {
+            patch.max_concurrent_loads =
+                Some(std::num::NonZeroUsize::new(value as usize).ok_or_else(|| {
+                    crate::types::FfiError::InvalidArgument {
+                        reason: "max_concurrent_loads must be greater than zero".into(),
+                    }
+                })?);
+        }
+        if let Some(value) = self.prefetch_duration {
+            if !value.is_finite() || value < 0.0 {
+                return Err(crate::types::FfiError::InvalidArgument {
+                    reason: "prefetch_duration must be a finite nonnegative number".into(),
+                });
+            }
+            patch.prefetch_duration = Some(value);
+        }
+        if let Some(value) = self.max_history_size {
+            patch.max_history_size = Some(value as usize);
+        }
+        if let Some(value) = self.playback_order {
+            patch.playback_order = Some(value.try_into()?);
+        }
+        if let Some(value) = self.action_at_item_end {
+            patch.action_at_item_end = Some(value.try_into()?);
+        }
+        if let Some(value) = self.crossfade_settings {
+            patch.crossfade_settings = Some(value.try_into()?);
+        }
+        Ok(patch)
+    }
+
+    pub(crate) fn apply_to<S>(
+        self,
+        config: &mut kithara::queue::QueueConfig<S>,
+    ) -> Result<(), crate::types::FfiError>
+    where
+        S: kithara::bufpool::HasPool<u8> + kithara::bufpool::HasPool<f32> + Send + Sync + 'static,
+    {
+        let patch = self.validated_patch()?;
+        config.apply(patch);
+        if let Some(value) = self.should_autoplay {
+            config.should_autoplay = value;
+        }
+        Ok(())
+    }
+}
+
 /// Optional File stream settings for one item.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(

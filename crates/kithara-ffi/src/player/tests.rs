@@ -1,8 +1,40 @@
-use crate::{FfiEqBandConfig, FfiEqFilterKind, config::FfiPlayerConfig, player::AudioPlayer};
+use crate::{
+    FfiEqBandConfig, FfiEqFilterKind, FfiQueueSettings, config::FfiPlayerConfig,
+    player::AudioPlayer, types::FfiPlaybackOrder,
+};
 
 #[kithara::test]
 fn create_player() {
     let _player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+}
+
+#[kithara::test]
+fn queue_settings_reach_the_native_owner() {
+    let player = AudioPlayer::new_with_queue_settings(
+        FfiPlayerConfig::for_test(),
+        FfiQueueSettings {
+            playback_order: Some(FfiPlaybackOrder::Shuffle),
+            max_concurrent_loads: Some(4),
+            ..FfiQueueSettings::default()
+        },
+    )
+    .expect("create player with queue settings");
+    assert_eq!(player.playback_order(), FfiPlaybackOrder::Shuffle);
+}
+
+#[kithara::test]
+fn invalid_queue_settings_reject_player_construction() {
+    let result = AudioPlayer::new_with_queue_settings(
+        FfiPlayerConfig::for_test(),
+        FfiQueueSettings {
+            max_concurrent_loads: Some(0),
+            ..FfiQueueSettings::default()
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
 }
 
 #[kithara::test]

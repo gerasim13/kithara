@@ -74,6 +74,9 @@ pub(super) fn expand(
                     return Err(meta.error("duplicate config field option"));
                 }
                 sdk = true;
+                if !meta.input.peek(syn::token::Paren) {
+                    return Ok(());
+                }
                 let content;
                 parenthesized!(content in meta.input);
                 let maximum: Meta = content.parse()?;
@@ -188,10 +191,10 @@ fn validate_role(
     snapshot: bool,
     preserved: &[syn::Attribute],
 ) -> Result<()> {
-    if sdk && !matches!(role, Role::Value) {
+    if sdk && !matches!(role, Role::Value | Role::Projection(_)) {
         return Err(syn::Error::new_spanned(
             field,
-            "SDK exposure requires a value field",
+            "SDK exposure requires a value or projected value field",
         ));
     }
     if update && !matches!(role, Role::Value) {

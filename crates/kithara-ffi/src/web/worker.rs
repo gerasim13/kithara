@@ -20,6 +20,7 @@ use kithara::{
 };
 
 use crate::{
+    FfiQueueSettings,
     item::{ItemBuildConfig, SourcePatches},
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
     pools::{
@@ -93,6 +94,7 @@ pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
+    queue_settings: FfiQueueSettings,
 ) {
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     keep_worker_alive();
@@ -108,12 +110,15 @@ pub(crate) fn worker_main(
                 .build(),
         );
         player.set_volume(DEFAULT_VOLUME);
-        let queue = FfiQueue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(queue_store)
-                .build(),
-        );
+        let mut queue_config = QueueConfig::builder()
+            .player(player)
+            .store(queue_store)
+            .build();
+        if let Err(error) = queue_settings.apply_to(&mut queue_config) {
+            clog!("[WORKER] invalid queue settings: {error}");
+            return;
+        }
+        let queue = FfiQueue::new(queue_config);
         let owner = match host.insert(queue) {
             Ok(owner) => owner,
             Err(error) => {

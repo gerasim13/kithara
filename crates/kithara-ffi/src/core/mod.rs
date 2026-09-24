@@ -13,7 +13,7 @@ pub mod types;
 
 pub use config_generated::{
     FfiEqBandConfig, FfiEqFilterKind, FfiFileSourceSettings, FfiHlsSourceSettings,
-    FfiLimiterConfig, FfiSourceSettings,
+    FfiLimiterConfig, FfiQueueSettings, FfiSourceSettings,
 };
 pub use host::{FfiHostConfig, default_host_config};
 

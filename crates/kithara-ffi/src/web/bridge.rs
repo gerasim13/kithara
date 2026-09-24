@@ -15,7 +15,7 @@ use kithara::{
 use wasm_bindgen::JsValue;
 
 use crate::{
-    FfiHostConfig,
+    FfiHostConfig, FfiQueueSettings,
     core::host::lifecycle::Lifecycle,
     pools::{FfiHost, FfiPools, Pools, build as build_pools},
     web::commands::WorkerCmd,
@@ -98,13 +98,20 @@ pub(crate) fn set_current_track_id(id: Option<TrackId>) {
 ///
 /// The worker itself owns the canonical Host member; this bridge only forwards
 /// [`WorkerCmd`]s and boots the worker once.
-#[derive(Default)]
 pub(crate) struct WorkerBridge {
     cmd_tx: Mutex<Option<mpsc::Sender<WorkerCmd>>>,
     start_lock: Mutex<()>,
+    queue_settings: FfiQueueSettings,
 }
 
 impl WorkerBridge {
+    pub(crate) fn new(queue_settings: FfiQueueSettings) -> Self {
+        Self {
+            cmd_tx: Mutex::default(),
+            start_lock: Mutex::default(),
+            queue_settings,
+        }
+    }
     /// Sentinel stored in [`CURRENT_TRACK_ID`] when no track is current.
     const NO_CURRENT_TRACK: i64 = -1;
 
@@ -143,8 +150,9 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
+        let queue_settings = self.queue_settings;
         let worker = thread::spawn(move || {
-            crate::web::worker::worker_main(cmd_rx, host_sender, pools);
+            crate::web::worker::worker_main(cmd_rx, host_sender, pools, queue_settings);
         });
         std::mem::forget(worker);
         Ok(())

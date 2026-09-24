@@ -44,7 +44,7 @@ where
     pub(crate) navigation: Option<Arc<Mutex<NavigationState>>>,
 
     /// Max concurrent background prefetch loads. Default: 3.
-    #[config(value, builder(default = DEFAULT_MAX_CONCURRENT_LOADS))]
+    #[config(value, sdk, builder(default = DEFAULT_MAX_CONCURRENT_LOADS))]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
@@ -73,40 +73,41 @@ where
     #[debug(skip)]
     pub(crate) player: Option<PlayerImpl<S>>,
 
-    /// Lead time in seconds before EOF at which the next queued track
-    /// is preloaded into the audio processor. Default: 3.5. Stays `f32`
-    /// seconds rather than the campaign's `humantime` duration convention:
-    /// the value already reaches 10 setter and 14 read call sites as a bare
-    /// `f32`, and converting the type would only churn those for a
-    /// formatting preference.
-    #[config(value, builder(default = DEFAULT_PREFETCH_DURATION))]
+    /// Lead time in seconds before EOF at which the next queued track is
+    /// preloaded into the audio processor. Default: 3.5.
+    #[config(value, sdk, builder(default = DEFAULT_PREFETCH_DURATION))]
     pub prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
-    #[config(value, builder(default = false), patch(skip))]
+    #[config(value, sdk, builder(default = false), patch(skip))]
     pub should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
-    #[config(value, builder(default = 100))]
+    #[config(value, sdk, builder(default = 100))]
     pub max_history_size: usize,
 
-    #[config(value(PlaybackOrder, self.live_playback_order()), builder(default))]
+    /// Initial queue traversal order; subsequent changes belong to navigation.
+    #[config(value(PlaybackOrder, self.live_playback_order()), sdk, builder(default))]
     pub playback_order: PlaybackOrder,
 
+    /// Initial action when the current item ends.
     #[config(
         value(ActionAtItemEnd, self.action_at_item_end()),
+        sdk,
         builder(default = Mutex::new(ActionAtItemEnd::default()), with = |value: ActionAtItemEnd| Mutex::new(value)),
         patch(wire = ActionAtItemEnd, from = Mutex::new)
     )]
     pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
 
+    /// Initial transition settings for the next item.
     #[config(
         value(CrossfadeSettings, self.crossfade_settings()),
+        sdk,
         builder(default = Mutex::new(CrossfadeSettings::default()), with = |value: CrossfadeSettings| Mutex::new(value)),
         patch(wire = CrossfadeSettings, from = Mutex::new)
     )]

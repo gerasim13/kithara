@@ -25,7 +25,7 @@ use kithara::{
 
 use super::salt;
 use crate::{
-    FfiEqBandConfig,
+    FfiEqBandConfig, FfiQueueSettings,
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
     event_bridge::EventBridge,
@@ -197,6 +197,13 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Result<Self, FfiError> {
+        Self::new_with_queue_settings(config, FfiQueueSettings::default())
+    }
+
+    pub(crate) fn new_with_queue_settings(
+        config: FfiPlayerConfig,
+        queue_settings: FfiQueueSettings,
+    ) -> Result<Self, FfiError> {
         crate::player::validate_eq_band_count(config.eq_band_count as usize)?;
         let FfiPlayerConfig {
             key_options,
@@ -226,7 +233,7 @@ impl NativeInner {
             .worker(worker)
             .build();
         let player = PlayerImpl::new(player_config);
-        let queue_config = QueueConfig::builder()
+        let mut queue_config = QueueConfig::builder()
             .player(player)
             .runtime(crate::FFI_RUNTIME.clone())
             .store(queue_store)
@@ -234,6 +241,7 @@ impl NativeInner {
             .action_at_item_end(action_at_item_end.try_into()?)
             .crossfade_settings(crossfade_settings.try_into()?)
             .build();
+        queue_settings.apply_to(&mut queue_config)?;
         let queue_owner = super::session::insert(FfiQueue::new(queue_config))?;
         let queue = queue_owner.control().clone();
         let net = default_net_options();

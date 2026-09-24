@@ -57,8 +57,99 @@ pub(super) fn render(registrations: &[Registration]) -> Result<String> {
     {
         render_sdk_record(&mut output, retained)?;
     }
+    render_queue_settings(&mut output, registrations)?;
     render_source_settings(&mut output, registrations)?;
     Ok(output)
+}
+
+fn render_queue_settings(output: &mut String, registrations: &[Registration]) -> Result<()> {
+    let Some(queue) = registrations.iter().find(|registration| {
+        registration.package == "kithara-queue" && registration.owner == "QueueConfig"
+    }) else {
+        return Ok(());
+    };
+    let fields: Vec<_> = queue.fields.iter().filter(|field| field.sdk).collect();
+    ensure!(!fields.is_empty(), "QueueConfig has no SDK fields");
+    output.push_str("\n/// Optional queue settings applied before the player joins its host.\n");
+    output.push_str("#[derive(Clone, Copy, Debug, Default, PartialEq)]\n");
+    output.push_str("#[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n");
+    output.push_str("pub struct FfiQueueSettings {\n");
+    for field in &fields {
+        ensure!(
+            field.role == "value" && !field.docs.is_empty(),
+            "QueueConfig SDK field {} needs a documented value",
+            field.name
+        );
+        for line in &field.docs {
+            writeln!(output, "    /// {}", ffi_doc_line(line))?;
+        }
+        writeln!(
+            output,
+            "    pub {}: Option<{}>,",
+            field.name,
+            queue_wire_type(field)?
+        )?;
+    }
+    output.push_str("}\n\nimpl FfiQueueSettings {\n");
+    output.push_str("    pub(crate) fn validated_patch(\n        self,\n    ) -> Result<kithara::queue::QueueConfigPatch, crate::types::FfiError> {\n        let mut patch = kithara::queue::QueueConfigPatch::default();\n");
+    for field in &fields {
+        let name = &field.name;
+        if name == "should_autoplay" {
+            continue;
+        }
+        writeln!(output, "        if let Some(value) = self.{name} {{")?;
+        match queue_value_type(field)?.as_str() {
+            "NonZeroUsize" => {
+                writeln!(
+                    output,
+                    "            patch.{name} =\n                Some(std::num::NonZeroUsize::new(value as usize).ok_or_else(|| {{\n                    crate::types::FfiError::InvalidArgument {{\n                        reason: \"{name} must be greater than zero\".into(),\n                    }}\n                }})?);"
+                )?;
+            }
+            "usize" => writeln!(output, "            patch.{name} = Some(value as usize);")?,
+            "f32" => {
+                writeln!(
+                    output,
+                    "            if !value.is_finite() || value < 0.0 {{\n                return Err(crate::types::FfiError::InvalidArgument {{\n                    reason: \"{name} must be a finite nonnegative number\".into(),\n                }});\n            }}"
+                )?;
+                writeln!(output, "            patch.{name} = Some(value);")?;
+            }
+            "bool" => writeln!(output, "            patch.{name} = Some(value);")?,
+            "PlaybackOrder" | "ActionAtItemEnd" | "CrossfadeSettings" => {
+                writeln!(
+                    output,
+                    "            patch.{name} = Some(value.try_into()?);"
+                )?;
+            }
+            other => bail!("unsupported QueueConfig SDK conversion {name}: {other}"),
+        }
+        output.push_str("        }\n");
+    }
+    output.push_str("        Ok(patch)\n    }\n\n    pub(crate) fn apply_to<S>(\n        self,\n        config: &mut kithara::queue::QueueConfig<S>,\n    ) -> Result<(), crate::types::FfiError>\n    where\n        S: kithara::bufpool::HasPool<u8> + kithara::bufpool::HasPool<f32> + Send + Sync + 'static,\n    {\n        let patch = self.validated_patch()?;\n        config.apply(patch);\n");
+    if fields.iter().any(|field| field.name == "should_autoplay") {
+        output.push_str("        if let Some(value) = self.should_autoplay {\n            config.should_autoplay = value;\n        }\n");
+    }
+    output.push_str("        Ok(())\n    }\n}\n");
+    Ok(())
+}
+
+fn queue_value_type(field: &RegisteredField) -> Result<String> {
+    field
+        .value_type
+        .as_deref()
+        .map(compact)
+        .ok_or_else(|| anyhow::anyhow!("QueueConfig SDK field {} has no value type", field.name))
+}
+
+fn queue_wire_type(field: &RegisteredField) -> Result<&'static str> {
+    match queue_value_type(field)?.as_str() {
+        "NonZeroUsize" | "usize" => Ok("u32"),
+        "f32" => Ok("f32"),
+        "bool" => Ok("bool"),
+        "PlaybackOrder" => Ok("crate::types::FfiPlaybackOrder"),
+        "ActionAtItemEnd" => Ok("crate::types::FfiActionAtItemEnd"),
+        "CrossfadeSettings" => Ok("FfiCrossfadeSettings"),
+        other => bail!("unsupported QueueConfig SDK field {}: {other}", field.name),
+    }
 }
 
 pub(super) fn render_host(registrations: &[Registration]) -> Result<String> {
@@ -438,6 +529,33 @@ fn compact(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::config_inventory::discover::registrations;
+
+    #[test]
+    fn queue_settings_follow_owner_fields_and_reject_unmapped_types() {
+        let source = include_str!("../../../crates/kithara-queue/src/config.rs");
+        let registered = registrations("crates/kithara-queue/src/config.rs", source).unwrap();
+        let mut generated = String::new();
+        render_queue_settings(&mut generated, &registered).unwrap();
+        assert!(generated.contains("pub struct FfiQueueSettings"));
+        assert!(generated.contains("pub max_concurrent_loads: Option<u32>"));
+        assert!(
+            generated.contains("pub action_at_item_end: Option<crate::types::FfiActionAtItemEnd>")
+        );
+        assert!(generated.contains("config.should_autoplay = value"));
+        assert!(generated.contains("config.apply(patch)"));
+
+        let unsupported = source.replace(
+            "pub max_history_size: usize,",
+            "pub max_history_size: Mystery,",
+        );
+        let registered = registrations("crates/kithara-queue/src/config.rs", &unsupported).unwrap();
+        assert!(
+            render_queue_settings(&mut String::new(), &registered)
+                .unwrap_err()
+                .to_string()
+                .contains("Mystery")
+        );
+    }
 
     #[test]
     fn host_record_follows_realtime_registration_and_rejects_unknown_fields() {

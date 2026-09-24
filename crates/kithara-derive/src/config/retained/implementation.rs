@@ -618,6 +618,19 @@ mod tests {
         .to_string();
         assert!(!accepted.contains("sdk"));
 
+        let projected = expand(
+            quote!(builder = false),
+            quote! {
+                struct Source {
+                    #[config(value(u32, self.capacity.load()), sdk)]
+                    capacity: LiveU32,
+                }
+            },
+        )
+        .expect("an SDK projected value does not need a numeric maximum")
+        .to_string();
+        assert!(!projected.contains("sdk"));
+
         for field in [
             quote!(#[config(value, sdk(max = 0))] capacity: usize),
             quote!(#[config(value, sdk(max = 64), sdk(max = 128))] capacity: usize),
