@@ -1846,6 +1846,22 @@ public convenience init(config: FfiItemConfig) {
     }
 
 
+    /**
+     * Create an item with source settings applied before the stream opens.
+     * Invalid limits reject construction without changing any player state.
+     *
+     * # Errors
+     * Returns `InvalidArgument` when a setting is outside its documented range.
+     */
+public static func newWithSourceSettings(config: FfiItemConfig, settings: FfiSourceSettings)throws  -> AudioPlayerItem  {
+    return try  FfiConverterTypeAudioPlayerItem_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_constructor_audioplayeritem_new_with_source_settings(
+        FfiConverterTypeFfiItemConfig_lower(config),
+        FfiConverterTypeFfiSourceSettings_lower(settings),$0
+    )
+})
+}
+
 
 
     /**
@@ -3984,19 +4000,151 @@ public func FfiConverterTypeFfiEqBandConfig_lower(_ value: FfiEqBandConfig) -> R
 
 
 /**
+ * Optional File stream settings for one item.
+ */
+public struct FfiFileSourceSettings: Equatable, Hashable {
+    /**
+     * Ring depth for the decode-core to shell reader-event hand-off. A decode
+     * pass emits at most one progress event per decoded chunk, so the default
+     * bounds the worst-case post-seek skip burst without blocking the decode
+     * core.
+     * Accepted range: 1..=4096.
+     */
+    public let readerEventCapacity: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Ring depth for the decode-core to shell reader-event hand-off. A decode
+         * pass emits at most one progress event per decoded chunk, so the default
+         * bounds the worst-case post-seek skip burst without blocking the decode
+         * core.
+         * Accepted range: 1..=4096.
+         */readerEventCapacity: UInt32?) {
+        self.readerEventCapacity = readerEventCapacity
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiFileSourceSettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFileSourceSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFileSourceSettings {
+        return
+            try FfiFileSourceSettings(
+                readerEventCapacity: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiFileSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt32.write(value.readerEventCapacity, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFileSourceSettings_lift(_ buf: RustBuffer) throws -> FfiFileSourceSettings {
+    return try FfiConverterTypeFfiFileSourceSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFileSourceSettings_lower(_ value: FfiFileSourceSettings) -> RustBuffer {
+    return FfiConverterTypeFfiFileSourceSettings.lower(value)
+}
+
+
+/**
+ * Optional Hls stream settings for one item.
+ */
+public struct FfiHlsSourceSettings: Equatable, Hashable {
+    /**
+     * Max segments to download per step. Three keep the fetcher busy across
+     * one round-trip without planning further ahead than a look-ahead cap
+     * would allow anyway.
+     * Accepted range: 1..=64.
+     */
+    public let downloadBatchSize: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Max segments to download per step. Three keep the fetcher busy across
+         * one round-trip without planning further ahead than a look-ahead cap
+         * would allow anyway.
+         * Accepted range: 1..=64.
+         */downloadBatchSize: UInt32?) {
+        self.downloadBatchSize = downloadBatchSize
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiHlsSourceSettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiHlsSourceSettings {
+        return
+            try FfiHlsSourceSettings(
+                downloadBatchSize: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiHlsSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt32.write(value.downloadBatchSize, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHlsSourceSettings_lift(_ buf: RustBuffer) throws -> FfiHlsSourceSettings {
+    return try FfiConverterTypeFfiHlsSourceSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiHlsSourceSettings_lower(_ value: FfiHlsSourceSettings) -> RustBuffer {
+    return FfiConverterTypeFfiHlsSourceSettings.lower(value)
+}
+
+
+/**
  * Settings fixed for the lifetime of the process-wide audio host.
  */
 public struct FfiHostConfig: Equatable, Hashable {
     /**
-     * Initial device sample-rate hint in hertz.
+     * Initial device sample-rate hint in hertz; `Host::set_sample_rate` moves it later.
      */
     public let sampleRateHint: UInt32
     /**
-     * Optional native output callback size in frames.
+     * Optional native output callback size in frames. `None` preserves the backend default.
      */
     public let outputBlockFrames: UInt32?
     /**
-     * Output limiter policy prepared when the host starts.
+     * Session output limiter policy prepared when the host starts.
      */
     public let limiter: FfiLimiterConfig
 
@@ -4004,13 +4152,13 @@ public struct FfiHostConfig: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * Initial device sample-rate hint in hertz.
+         * Initial device sample-rate hint in hertz; `Host::set_sample_rate` moves it later.
          */sampleRateHint: UInt32,
         /**
-         * Optional native output callback size in frames.
+         * Optional native output callback size in frames. `None` preserves the backend default.
          */outputBlockFrames: UInt32?,
         /**
-         * Output limiter policy prepared when the host starts.
+         * Session output limiter policy prepared when the host starts.
          */limiter: FfiLimiterConfig) {
         self.sampleRateHint = sampleRateHint
         self.outputBlockFrames = outputBlockFrames
@@ -4760,6 +4908,75 @@ public func FfiConverterTypeFfiPlayerSnapshot_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) -> RustBuffer {
     return FfiConverterTypeFfiPlayerSnapshot.lower(value)
+}
+
+
+/**
+ * Per-item source settings, applied before opening the file or HLS stream.
+ */
+public struct FfiSourceSettings: Equatable, Hashable {
+    /**
+     * File-stream settings, when supplied.
+     */
+    public let file: FfiFileSourceSettings?
+    /**
+     * HLS-stream settings, when supplied.
+     */
+    public let hls: FfiHlsSourceSettings?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * File-stream settings, when supplied.
+         */file: FfiFileSourceSettings?,
+        /**
+         * HLS-stream settings, when supplied.
+         */hls: FfiHlsSourceSettings?) {
+        self.file = file
+        self.hls = hls
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiSourceSettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSourceSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSourceSettings {
+        return
+            try FfiSourceSettings(
+                file: FfiConverterOptionTypeFfiFileSourceSettings.read(from: &buf),
+                hls: FfiConverterOptionTypeFfiHlsSourceSettings.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionTypeFfiFileSourceSettings.write(value.file, into: &buf)
+        FfiConverterOptionTypeFfiHlsSourceSettings.write(value.hls, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSourceSettings_lift(_ buf: RustBuffer) throws -> FfiSourceSettings {
+    return try FfiConverterTypeFfiSourceSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSourceSettings_lower(_ value: FfiSourceSettings) -> RustBuffer {
+    return FfiConverterTypeFfiSourceSettings.lower(value)
 }
 
 
@@ -9268,6 +9485,54 @@ fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiFileSourceSettings: FfiConverterRustBuffer {
+    typealias SwiftType = FfiFileSourceSettings?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiFileSourceSettings.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiFileSourceSettings.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
+    typealias SwiftType = FfiHlsSourceSettings?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiHlsSourceSettings.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiHlsSourceSettings.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
     typealias SwiftType = FfiAbrMode?
 
@@ -9714,13 +9979,13 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 64921) {
+    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 35270) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_ensure_default_host() != 9526) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 32440) {
+    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 59381) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
@@ -9943,6 +10208,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new_with_source_settings() != 54340) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {

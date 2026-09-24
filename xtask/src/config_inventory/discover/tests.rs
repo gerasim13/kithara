@@ -7,6 +7,7 @@ fn construction_enum_records_each_variant_without_claiming_retained_values() {
         r#"
         #[kithara_config::config(construction, builder = false)]
         pub enum HostConfig<S> {
+            #[config(sdk)]
             Realtime {
                 #[config(value)] rate: u32,
                 #[config(skip = "type marker")] marker: S,
@@ -22,9 +23,11 @@ fn construction_enum_records_each_variant_without_claiming_retained_values() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].owner, "HostConfig::Realtime");
     assert_eq!(entries[0].kind, "construction");
+    assert!(entries[0].sdk);
     assert_eq!(entries[0].fields[0].role, "value");
     assert!(entries[0].fields[0].value_type.is_none());
     assert_eq!(entries[1].owner, "HostConfig::Offline");
+    assert!(!entries[1].sdk);
     assert_eq!(entries[1].fields[0].role, "nested");
     assert_eq!(entries[1].conditions, ["# [cfg (feature = \"offline\")]"]);
 }

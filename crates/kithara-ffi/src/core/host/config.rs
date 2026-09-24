@@ -1,24 +1,5 @@
-use std::num::NonZeroU32;
-
-use kithara::host::HostConfig;
-
+use super::FfiHostConfig;
 use crate::{FfiLimiterConfig, types::FfiError};
-
-/// Settings fixed for the lifetime of the process-wide audio host.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    any(feature = "uniffi", feature = "uniffi-web"),
-    derive(uniffi::Record)
-)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
-pub struct FfiHostConfig {
-    /// Initial device sample-rate hint in hertz.
-    pub sample_rate_hint: u32,
-    /// Optional native output callback size in frames.
-    pub output_block_frames: Option<u32>,
-    /// Output limiter policy prepared when the host starts.
-    pub limiter: FfiLimiterConfig,
-}
 
 impl Default for FfiHostConfig {
     fn default() -> Self {
@@ -27,28 +8,6 @@ impl Default for FfiHostConfig {
             output_block_frames: None,
             limiter: FfiLimiterConfig::default(),
         }
-    }
-}
-
-impl FfiHostConfig {
-    pub(crate) fn into_domain<S>(self) -> Result<HostConfig<S>, FfiError> {
-        let sample_rate_hint =
-            NonZeroU32::new(self.sample_rate_hint).ok_or_else(|| FfiError::InvalidArgument {
-                reason: "host sample rate must be greater than zero".to_owned(),
-            })?;
-        let output_block_frames = self
-            .output_block_frames
-            .map(|frames| {
-                NonZeroU32::new(frames).ok_or_else(|| FfiError::InvalidArgument {
-                    reason: "host output block size must be greater than zero".to_owned(),
-                })
-            })
-            .transpose()?;
-        Ok(HostConfig::builder()
-            .sample_rate_hint(sample_rate_hint)
-            .maybe_output_block_frames(output_block_frames)
-            .limiter(self.limiter.try_into()?)
-            .build())
     }
 }
 
@@ -91,7 +50,7 @@ pub fn ensure_default_host() -> Result<(), FfiError> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::effects::LimiterConfig;
+    use ::kithara::{effects::LimiterConfig, host::HostConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -132,6 +91,8 @@ mod tests {
     #[kithara::test]
     fn host_configuration_carries_validated_limiter_settings() {
         let defaults = FfiHostConfig::default();
+        let host_defaults = HostConfig::<FfiPools>::builder().build();
+        assert_eq!(defaults.sample_rate_hint, host_defaults.sample_rate().get());
         let domain_defaults = LimiterConfig::default();
         assert_eq!(defaults.limiter.ceiling, domain_defaults.ceiling());
         assert_eq!(defaults.limiter.release_ms, domain_defaults.release_ms());

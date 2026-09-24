@@ -1,5 +1,6 @@
 pub mod analysis;
 mod config_generated;
+mod config_host_generated;
 pub(crate) mod convert;
 pub(crate) mod host;
 pub mod item;

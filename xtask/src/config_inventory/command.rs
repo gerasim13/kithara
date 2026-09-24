@@ -40,6 +40,12 @@ pub(crate) enum ConfigCommand {
             default_value = "crates/kithara-ffi/src/core/config_generated.rs"
         )]
         output: PathBuf,
+        /// Generated host record source, relative to the workspace unless absolute.
+        #[arg(
+            long,
+            default_value = "crates/kithara-ffi/src/core/config_host_generated.rs"
+        )]
+        host_output: PathBuf,
         /// Verify the existing projection instead of writing it.
         #[arg(long)]
         check: bool,
@@ -72,19 +78,25 @@ struct Manifest {
 }
 
 pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
-    if let ConfigCommand::Project { output, check } = &command {
+    if let ConfigCommand::Project {
+        output,
+        host_output,
+        check,
+    } = &command
+    {
         let manifest = manifest(&ctx.root, TargetProfile::Native)?;
         let generated = project::render(&manifest.registrations)?;
+        let generated_host = project::render_host(&manifest.registrations)?;
         let output = ctx.root.join(output);
+        let host_output = ctx.root.join(host_output);
         if *check {
             verify_projection(&output, &generated)?;
+            verify_projection(&host_output, &generated_host)?;
             info!(path = %output.display(), "configuration FFI projection is current");
             return Ok(());
         }
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-        }
-        fs::write(&output, generated).with_context(|| format!("write {}", output.display()))?;
+        write_projection(&output, generated)?;
+        write_projection(&host_output, generated_host)?;
         info!(path = %output.display(), "configuration FFI projection complete");
         return Ok(());
     }
@@ -127,6 +139,13 @@ pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
     fs::write(&output, json).with_context(|| format!("write {}", output.display()))?;
     info!(files, entries, path = %output.display(), message);
     Ok(())
+}
+
+fn write_projection(output: &Path, generated: String) -> Result<()> {
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(output, generated).with_context(|| format!("write {}", output.display()))
 }
 
 fn verify_projection(output: &Path, generated: &str) -> Result<()> {

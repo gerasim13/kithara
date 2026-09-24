@@ -19,15 +19,16 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 #[non_exhaustive]
 pub enum HostConfig<S> {
     /// Device-backed platform session.
+    #[config(sdk)]
     #[non_exhaustive]
     Realtime {
-        /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
+        /// Initial device sample-rate hint in hertz; `Host::set_sample_rate` moves it later.
         #[config(value)]
         sample_rate_hint: NonZeroU32,
-        /// Optional native output callback-size override. `None` preserves the backend default.
+        /// Optional native output callback size in frames. `None` preserves the backend default.
         #[config(value)]
         output_block_frames: Option<NonZeroU32>,
-        /// Session output limiter policy.
+        /// Session output limiter policy prepared when the host starts.
         #[config(nested)]
         limiter: LimiterConfig,
         #[config(skip = "type marker")]

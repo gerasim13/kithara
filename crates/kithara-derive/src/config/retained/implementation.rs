@@ -50,6 +50,20 @@ fn construction_enum(options: TokenStream, mut item: ItemEnum) -> Result<TokenSt
         ));
     }
     for variant in &mut item.variants {
+        if let Some(position) = variant
+            .attrs
+            .iter()
+            .position(|attr| attr.path().is_ident("config"))
+        {
+            let attr = variant.attrs.remove(position);
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("sdk") {
+                    Ok(())
+                } else {
+                    Err(meta.error("construction enum variant supports only sdk"))
+                }
+            })?;
+        }
         let Fields::Named(fields) = &mut variant.fields else {
             return Err(syn::Error::new_spanned(
                 variant,

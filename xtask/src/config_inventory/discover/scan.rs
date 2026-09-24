@@ -272,6 +272,20 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                 return;
             }
             for variant in &item.variants {
+                let mut sdk = false;
+                if let Some(attr) = config_attribute(&variant.attrs)
+                    && let Err(error) = attr.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("sdk") {
+                            sdk = true;
+                            Ok(())
+                        } else {
+                            Err(meta.error("construction enum variant supports only sdk"))
+                        }
+                    })
+                {
+                    self.error = Some(error.into());
+                    return;
+                }
                 match variant
                     .fields
                     .iter()
@@ -287,7 +301,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                         property: None,
                         hook: None,
                         kind: "construction",
-                        sdk: false,
+                        sdk,
                         docs: docs(&variant.attrs),
                         conditions: self
                             .conditions
