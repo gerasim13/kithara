@@ -10,13 +10,17 @@ dep-format-version = "4"
 # Workspace resolver v2 (edition 2021+).
 resolver = "2"
 
-# Target platforms for feature unification. wasm32 is included so non-wasm
-# dependencies are target-gated instead of landing in base dependencies.
+# Target platforms for feature unification. wasm32 and the Android device
+# targets are included so dependencies they do not build (and the jni/ndk
+# stack only they build) are target-gated instead of landing in base
+# dependencies, which every target compiles.
 platforms = [
   "x86_64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
   "aarch64-apple-ios",
+  "aarch64-linux-android",
+  "x86_64-linux-android",
   "wasm32-unknown-unknown",
 ]
 
@@ -31,12 +35,16 @@ platforms = [
 # env-filter) stays regex-free. kithara-app itself stays TRAVERSED so the
 # wreq/boring2 feature unification it needs is preserved (excluding it de-unifies
 # boring-sys2's cert-compression features and breaks the boring2 build).
+# kithara-ui is the desktop/UI surface that no device closure (FFI for iOS,
+# Android, wasm) builds; traversed, its winit/iced/wgpu/vello stack landed in
+# the base dependencies and Android compiled android-activity with no backend.
 [traversal-excludes]
 workspace-members = [
   "kithara-devtools",
   "kithara-integration-tests",
   "kithara-ffi",
   "kithara-test-utils",
+  "kithara-ui",
   "xtask",
 ]
 third-party = [
