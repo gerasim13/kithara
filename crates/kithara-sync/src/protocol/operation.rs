@@ -1,16 +1,34 @@
-use kithara_signal::{SessionFrame, TransportRevision};
-use kithara_warp::{BeatGridId, MapRegion, PresentationFrontier, WarpMapRevision};
+use std::ops::Range;
 
-use crate::{LoadGeneration, SyncGroup, SyncMember, SyncOperationId, TopologyStamp};
+use kithara_signal::{SessionFrame, TransportRevision};
+use kithara_warp::{
+    AssetFrame, BeatGridId, BeatGridStamp, BeatsPerMinute, MapRegion, PresentationFrontier,
+};
+
+use crate::{
+    LoadGeneration, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
+    TopologyStamp,
+};
 
 /// Playback state from which synchronization is requested.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AlignmentSource {
-    /// Decoded audio has not become audible and may be positioned before playback.
-    Prepared,
+    /// Decoded audio has not become audible and waits at this recording
+    /// frame, from which it may be positioned before playback.
+    Prepared(AssetFrame),
+    /// Decoded audio has not become audible and must start exactly at this
+    /// recording frame, such as a pickup before the first downbeat, so its
+    /// beat and bar phase are kept.
+    Cued(AssetFrame),
     /// Decoded audio is already audible at the stated exact presentation frontier.
-    Audible(PresentationFrontier),
+    Audible {
+        /// Source/output boundary the audio callback consumed.
+        frontier: PresentationFrontier,
+        /// Recording seconds the unsynchronized stream advances per session
+        /// second, such as a manual playback speed.
+        speed: f64,
+    },
 }
 
 /// One operation routed through the live synchronization-group owner.
@@ -49,18 +67,33 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Requested synchronization state transition.
         intent: SyncIntent,
     },
-    /// Re-evaluates an active warp map after one material control-plane change.
-    Reconcile {
-        /// Stable Deck grid whose active warp map is being re-evaluated.
+    /// Prepares one direct grid member to enter its group's beat timeline
+    /// inside an exact launch window.
+    Prepare {
+        /// Stable member grid being prepared.
         target: BeatGridId,
-        /// Exact Track load whose active warp map is being re-evaluated.
+        /// Exact Track load being prepared.
         load: LoadGeneration,
         /// Exact committed session transport state.
         transport: TransportRevision,
-        /// Change that requires reconciliation.
-        cause: ReconcileCause,
-        /// Last source/output boundary consumed by the callback.
-        frontier: PresentationFrontier,
+        /// Where the member's recording stands when the preparation is asked
+        /// for.
+        source: AlignmentSource,
+        /// Session frames the activation may land on: from the first one the
+        /// caller can still reach up to the first one it can no longer use.
+        window: Range<SessionFrame>,
+    },
+    /// Commits a new tempo on a group that owns its own beat timeline.
+    Tempo {
+        /// Stable group grid receiving the tempo.
+        target: BeatGridId,
+        /// Tempo the group approaches from the tempo already playing.
+        tempo: BeatsPerMinute,
+        /// Session frame at which the approach starts; the beat playing there
+        /// does not move.
+        commit: SessionFrame,
+        /// Time constant of the approach, in seconds; zero steps at `commit`.
+        smoothing: f64,
     },
 }
 
@@ -72,7 +105,8 @@ impl<G: SyncGroup> SyncOperation<G> {
             Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
-            | Self::Reconcile { target, .. } => *target,
+            | Self::Prepare { target, .. }
+            | Self::Tempo { target, .. } => *target,
         }
     }
 }
@@ -141,20 +175,20 @@ pub enum SyncIntent {
     Disable,
     /// Snap immediately to the parent group's tempo and phase.
     AlignNow,
+    /// Leave the beat timeline: continue the audible source unsynchronized.
+    Free,
 }
 
-/// Material change that requires an active warp map to be reconsidered.
+/// Relation between a group's beat timeline and its parent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum ReconcileCause {
-    /// A previously unavailable grid became usable.
-    GridAvailable,
-    /// A newer grid revision materially changed the active relation.
-    GridRefined,
-    /// The authoritative session transport changed.
-    TransportChanged,
-    /// The recursive ownership tree changed.
-    TopologyChanged,
+pub enum SyncMode {
+    /// The group claims no musical timeline of its own or of its parent.
+    Off,
+    /// The group owns its tempo and phase; parent tempo does not reach it.
+    LocalSync,
+    /// The group follows the parent's accepted tempo and phase.
+    HostSync,
 }
 
 /// A synchronization capability that may be unavailable in one implementation.
@@ -167,12 +201,10 @@ pub enum SyncCapability {
     Transport,
     /// Grid-to-grid tempo and phase alignment.
     Alignment,
-    /// Continuity-preserving replacement of an active warp map.
-    Reconciliation,
 }
 
 /// Result of validating and admitting one operation on the control plane.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[must_use]
 #[non_exhaustive]
 pub enum SyncAdmission {
@@ -182,6 +214,8 @@ pub enum SyncAdmission {
         operation: SyncOperationId,
         /// Exact topology published by the transaction.
         topology: TopologyStamp,
+        /// Preparations the new topology fence withdrew.
+        transition: SyncTransition,
     },
     /// A validated SYNC-off transport command may enter the existing sample path.
     Accepted {
@@ -194,16 +228,20 @@ pub enum SyncAdmission {
         /// Exact committed session transport state authorized for dispatch.
         transport: TransportRevision,
     },
-    /// A stamped warp map is prepared for one exact render boundary.
-    Prepared {
+    /// One member's decision is prepared for one exact render boundary.
+    Prepared(SyncPreparation),
+    /// The group's mode or beat timeline changed.
+    StateChanged {
         /// Identity of the admitted operation.
         operation: SyncOperationId,
         /// Topology against which the operation was admitted.
         topology: TopologyStamp,
-        /// Immutable warp map prepared by the group.
-        warp_map: WarpMapRevision,
-        /// Exact output boundary at which the warp map takes effect.
-        activation: SessionFrame,
+        /// Mode the group holds after the operation.
+        mode: SyncMode,
+        /// Group grid published by the operation.
+        grid: BeatGridStamp,
+        /// Preparations the change issued and withdrew across the subtree.
+        transition: SyncTransition,
     },
     /// The requested operation already matches committed state.
     Unchanged {
@@ -220,14 +258,5 @@ pub enum SyncAdmission {
         topology: TopologyStamp,
         /// Grid coverage required before the operation can be prepared.
         required: MapRegion,
-    },
-    /// The current implementation cannot perform this operation.
-    Unavailable {
-        /// Identity of the rejected operation.
-        operation: SyncOperationId,
-        /// Topology against which the operation was evaluated.
-        topology: TopologyStamp,
-        /// Missing synchronization capability.
-        capability: SyncCapability,
     },
 }

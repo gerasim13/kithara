@@ -146,6 +146,9 @@ impl BeatGridSnapshot {
             pub fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion>;
             /// Resolves a stamped native position to a stamped beat.
             pub fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
+            /// Resolves the beat at a stamped native position, or the first
+            /// charted beat after it where a finished grid has a gap.
+            pub fn beat_at_or_next(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             /// Resolves a stamped beat to a stamped native position.
             pub fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             /// Resolves local tempo at a stamped native position.
@@ -169,6 +172,7 @@ impl BeatGridView for BeatGridSnapshot {
             fn axis(&self) -> MapAxis;
             fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion>;
             fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
+            fn beat_at_or_next(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
             fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;

@@ -13,7 +13,7 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
+    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
     TopologyOperation,
 };
 #[cfg(test)]
@@ -118,6 +118,7 @@ where
         sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
+        SyncMode::Off,
     );
     let root_view = RootView::new(&root, sample_rate);
     SessionState::new(

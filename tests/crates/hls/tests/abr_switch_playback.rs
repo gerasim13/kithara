@@ -886,6 +886,11 @@ fn lowest_pending_estimate(events: &mut EventReceiver<TestEvent>) -> Option<u64>
     }
 }
 
+/// ABR is locked while a seek is pending, so the seek lands on the variant that
+/// played before it even after the estimate fell below that variant. The lock
+/// ends with the seek and a switch splices at the decode head, so the first
+/// tick after the landing may already move the rest of the landing segment;
+/// ABR must then leave the top variant within a bounded number of boundaries.
 #[kithara::test(
     tokio,
     native,
@@ -1043,35 +1048,32 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         Some(SEEK_SEGMENT as u32),
         "the seek must land on its target segment"
     );
+    assert_eq!(
+        landing.meta.variant_index,
+        Some(TOP_VARIANT),
+        "the seek must land on the variant that played before it, although the \
+         estimate fell below it while the seek was pending"
+    );
     let mut previous_segment = SEEK_SEGMENT as u32;
     let mut boundaries_after_seek = 0;
-    let mut chunk = landing;
     loop {
-        let segment = chunk.meta.segment_index.expect("HLS chunk has a segment");
-        let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
-        if segment == SEEK_SEGMENT as u32 {
-            assert_eq!(
-                variant, TOP_VARIANT,
-                "the landing segment must play on the variant that played before the seek, \
-                 although the estimate fell below it while the seek was pending"
-            );
-        } else {
-            if segment != previous_segment {
-                boundaries_after_seek += 1;
-                previous_segment = segment;
-            }
-            assert!(
-                boundaries_after_seek <= MOVE_WITHIN_BOUNDARIES,
-                "ABR stayed on the top variant for {boundaries_after_seek} boundaries after the seek; limit is {MOVE_WITHIN_BOUNDARIES}"
-            );
-            if variant != TOP_VARIANT {
-                assert!(variant < TOP_VARIANT, "ABR must switch down");
-                break;
-            }
-        }
-        chunk = next_chunk(&mut audio)
+        let chunk = next_chunk(&mut audio)
             .await
             .expect("ABR must move off the top variant before the track ends");
+        let segment = chunk.meta.segment_index.expect("HLS chunk has a segment");
+        let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
+        if segment != previous_segment {
+            boundaries_after_seek += 1;
+            previous_segment = segment;
+        }
+        assert!(
+            boundaries_after_seek <= MOVE_WITHIN_BOUNDARIES,
+            "ABR stayed on the top variant for {boundaries_after_seek} boundaries after the seek; limit is {MOVE_WITHIN_BOUNDARIES}"
+        );
+        if variant != TOP_VARIANT {
+            assert!(variant < TOP_VARIANT, "ABR must switch down");
+            break;
+        }
     }
 }
 
