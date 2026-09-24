@@ -9,7 +9,7 @@ use kithara::{
 
 use crate::{
     FfiEqBandConfig,
-    item::AudioPlayerItem,
+    item::{AudioPlayerItem, ItemBuildConfig},
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
         FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
@@ -118,7 +118,7 @@ impl WasmInner {
         let id = item.track_id();
         self.try_send(WorkerCmd::Append {
             id,
-            config: item.config.clone(),
+            config: ItemBuildConfig::from(item.as_ref()),
         })?;
         *item.inserted.lock() = true;
         self.queue_view.lock().push((id, Arc::clone(item)));
@@ -172,7 +172,7 @@ impl WasmInner {
         self.send(WorkerCmd::Insert {
             id,
             request_id,
-            config: item.config.clone(),
+            config: ItemBuildConfig::from(item.as_ref()),
             after: after_id,
         });
 
@@ -292,7 +292,7 @@ impl WasmInner {
             index,
             request_id,
             id: new_id,
-            config: item.config.clone(),
+            config: ItemBuildConfig::from(item.as_ref()),
         });
         if let Some((_, old)) = view.get(idx) {
             *old.inserted.lock() = false;

@@ -32,6 +32,7 @@ pub(crate) struct RegisteredField {
     value_type: Option<String>,
     pub(crate) role: String,
     update: bool,
+    pub(crate) sdk_max: Option<u32>,
     builder_default: Option<String>,
     exclusion_reason: Option<String>,
     conditions: Vec<String>,
@@ -163,11 +164,31 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
     let mut role = None;
     let mut projected_type = None;
     let mut update = false;
+    let mut sdk_max = None;
     let mut default = None;
     let mut exclusion_reason = None;
     attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("update") {
             update = true;
+        } else if meta.path.is_ident("sdk") {
+            if sdk_max.is_some() {
+                return Err(meta.error("duplicate SDK field option"));
+            }
+            meta.parse_nested_meta(|option| {
+                if !option.path.is_ident("max") {
+                    return Err(option.error("expected sdk(max = positive integer)"));
+                }
+                let value: syn::LitInt = option.value()?.parse()?;
+                let maximum = value.base10_parse::<u32>()?;
+                if maximum == 0 {
+                    return Err(option.error("SDK maximum must be positive"));
+                }
+                sdk_max = Some(maximum);
+                Ok(())
+            })?;
+            if sdk_max.is_none() {
+                return Err(meta.error("SDK maximum is required"));
+            }
         } else if meta.path.is_ident("value") {
             role = Some("value");
             if meta.input.peek(syn::token::Paren) {
@@ -218,6 +239,7 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
         value_type,
         role: role.unwrap_or("unknown").to_owned(),
         update,
+        sdk_max,
         builder_default: default,
         exclusion_reason,
         conditions: conditions(&field.attrs).collect(),
@@ -331,6 +353,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                     value_type: Some(tokens(&input.ty)),
                     role: "delegate_input".to_owned(),
                     update: true,
+                    sdk_max: None,
                     builder_default: None,
                     exclusion_reason: None,
                     conditions: conditions(&input.attrs).collect(),

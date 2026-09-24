@@ -677,6 +677,16 @@ fn build_source_for_item(
         .store(inner.store.handle().clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
+        .file(
+            item.source
+                .as_ref()
+                .map_or_else(Default::default, |source| source.file.clone()),
+        )
+        .hls(
+            item.source
+                .as_ref()
+                .map_or_else(Default::default, |source| source.hls.clone()),
+        )
         .build();
     *item.bus.lock() = Some(scoped);
 

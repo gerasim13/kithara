@@ -176,7 +176,7 @@ where
     /// one round-trip without planning further ahead than a look-ahead cap
     /// would allow anyway.
     #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
-    #[config(value)]
+    #[config(value, sdk(max = 64))]
     pub download_batch_size: usize,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than

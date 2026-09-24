@@ -112,7 +112,22 @@ async function main() {
       }
     };
   });
-  const item = new AudioPlayerItem({ url, abrMode: undefined, audioId: undefined, headers: new Map([["X-Kithara-Config-Probe", "item"]]), uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 });
+  const itemConfig = { url, abrMode: undefined, audioId: undefined, headers: new Map([["X-Kithara-Config-Probe", "item"]]), uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 };
+  const legacyItem = new AudioPlayerItem(itemConfig);
+  legacyItem.uniffiDestroy();
+  let invalidSource = false;
+  try {
+    AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { readerEventCapacity: 4097 }, hls: undefined });
+  } catch (error) {
+    invalidSource = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidSource) throw new Error("unbounded file reader capacity was accepted");
+  const hlsItem = AudioPlayerItem.newWithSourceSettings(
+    { ...itemConfig, url: `${location.origin}/live.m3u8` },
+    { file: undefined, hls: { downloadBatchSize: 6 } },
+  ) as AudioPlayerItem;
+  hlsItem.uniffiDestroy();
+  const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;
   generatedPlayer.append(item);
   await loadedTrack;
   // firewheel-web-audio resumes its warmed-up AudioContext on a user gesture.
@@ -155,7 +170,7 @@ async function main() {
   if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
   player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and applied playback rate; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ source settings and applied playback rate; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });

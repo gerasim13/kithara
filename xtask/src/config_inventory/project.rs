@@ -57,7 +57,135 @@ pub(super) fn render(registrations: &[Registration]) -> Result<String> {
     {
         render_sdk_record(&mut output, retained)?;
     }
+    render_source_settings(&mut output, registrations)?;
     Ok(output)
+}
+
+fn render_source_settings(output: &mut String, registrations: &[Registration]) -> Result<()> {
+    let exposed: Vec<_> = registrations
+        .iter()
+        .filter(|registration| {
+            registration
+                .fields
+                .iter()
+                .any(|field| field.sdk_max.is_some())
+        })
+        .collect();
+    if exposed.is_empty() {
+        return Ok(());
+    }
+    let owners = [
+        ("kithara-file", "FileConfig", "File"),
+        ("kithara-hls", "HlsConfig", "Hls"),
+    ];
+    for (package, owner, prefix) in owners {
+        let registration = exposed
+            .iter()
+            .find(|registration| registration.package == package && registration.owner == owner)
+            .ok_or_else(|| {
+                anyhow::anyhow!("missing SDK source settings owner {package}::{owner}")
+            })?;
+        ensure!(
+            registration.kind == "construction",
+            "SDK source settings owner {package}::{owner} must be a construction input"
+        );
+        render_source_record(output, registration, prefix)?;
+    }
+    ensure!(
+        exposed.len() == owners.len(),
+        "unsupported SDK source settings owner"
+    );
+    output.push_str(
+        r#"
+/// Per-item source settings, applied before opening the file or HLS stream.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
+pub struct FfiSourceSettings {
+    /// File-stream settings, when supplied.
+    pub file: Option<FfiFileSourceSettings>,
+    /// HLS-stream settings, when supplied.
+    pub hls: Option<FfiHlsSourceSettings>,
+}
+"#,
+    );
+    Ok(())
+}
+
+fn render_source_record(
+    output: &mut String,
+    registration: &Registration,
+    prefix: &str,
+) -> Result<()> {
+    let fields: Vec<_> = registration
+        .fields
+        .iter()
+        .filter(|field| field.sdk_max.is_some())
+        .collect();
+    let record = format!("Ffi{prefix}SourceSettings");
+    writeln!(
+        output,
+        "\n/// Optional {prefix} stream settings for one item."
+    )?;
+    output.push_str("#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\n");
+    output.push_str("#[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n");
+    writeln!(output, "pub struct {record} {{")?;
+    for field in &fields {
+        ensure!(
+            field.role == "value" && compact(&field.rust_type) == "usize" && !field.docs.is_empty(),
+            "SDK source field {}.{} needs a documented usize value",
+            registration.owner,
+            field.name
+        );
+        for line in &field.docs {
+            writeln!(output, "    /// {}", ffi_doc_line(line))?;
+        }
+        writeln!(
+            output,
+            "    /// Accepted range: 1..={}.",
+            field.sdk_max.unwrap_or_default()
+        )?;
+        writeln!(output, "    pub {}: Option<u32>,", field.name)?;
+    }
+    output.push_str("}\n");
+    writeln!(
+        output,
+        "\nimpl TryFrom<{record}> for kithara_{}::{}Patch {{",
+        if prefix == "File" { "file" } else { "hls" },
+        registration.owner
+    )?;
+    output.push_str("    type Error = crate::types::FfiError;\n\n");
+    writeln!(
+        output,
+        "    fn try_from(value: {record}) -> Result<Self, Self::Error> {{"
+    )?;
+    output.push_str("        let mut patch = Self::default();\n");
+    for field in fields {
+        let maximum = field.sdk_max.unwrap_or_default();
+        writeln!(
+            output,
+            "        if let Some(input) = value.{} {{",
+            field.name
+        )?;
+        writeln!(output, "            if input == 0 || input > {maximum} {{")?;
+        output.push_str("                return Err(crate::types::FfiError::InvalidArgument {\n");
+        writeln!(
+            output,
+            "                    reason: \"{}.{} must be in 1..={maximum}\".into(),",
+            registration.owner, field.name
+        )?;
+        output.push_str("                });\n            }\n");
+        writeln!(
+            output,
+            "            patch.{} = Some(input as usize);",
+            field.name
+        )?;
+        output.push_str("        }\n");
+    }
+    output.push_str("        Ok(patch)\n    }\n}\n");
+    Ok(())
 }
 
 fn render_sdk_record(output: &mut String, registration: &Registration) -> Result<()> {
@@ -329,5 +457,59 @@ mod tests {
                 .to_string()
                 .contains("CrossfadeSettings SDK conversion requires")
         );
+    }
+
+    #[test]
+    fn source_projection_follows_owner_fields_and_limits() {
+        let mut registered = registrations(
+            "crates/kithara-effects/src/eq/band.rs",
+            "#[kithara_config::config] struct EqBandConfig { #[config(value)] frequency: f32 }",
+        )
+        .unwrap();
+        registered.extend(
+            registrations(
+                "crates/kithara-play/src/player.rs",
+                "impl PlayerControl { #[kithara_config::config(delegate = \"eq_layout\", sdk)] fn set_eq_layout(&self, layout: Vec<EqBandConfig>) {} }",
+            )
+            .unwrap(),
+        );
+        for (path, owner, field, max) in [
+            (
+                "crates/kithara-file/src/config.rs",
+                "FileConfig",
+                "reader_event_capacity",
+                4096,
+            ),
+            (
+                "crates/kithara-hls/src/config.rs",
+                "HlsConfig",
+                "download_batch_size",
+                64,
+            ),
+        ] {
+            registered.extend(
+                registrations(
+                    path,
+                    &format!(
+                        "#[kithara_config::config(construction)] struct {owner} {{ /// Capacity.\n #[config(value, sdk(max = {max}))] {field}: usize }}"
+                    ),
+                )
+                .unwrap(),
+            );
+        }
+        let generated = render(&registered).unwrap();
+        assert!(generated.contains("pub reader_event_capacity: Option<u32>"));
+        assert!(generated.contains("pub download_batch_size: Option<u32>"));
+        assert!(generated.contains("input > 4096"));
+        assert!(generated.contains("input > 64"));
+        assert!(generated.contains("patch.reader_event_capacity = Some(input as usize)"));
+        assert!(generated.contains("patch.download_batch_size = Some(input as usize)"));
+
+        let unsupported = registered
+            .iter_mut()
+            .find(|registration| registration.owner == "FileConfig")
+            .unwrap();
+        unsupported.fields[0].rust_type = "String".into();
+        assert!(render(&registered).is_err());
     }
 }

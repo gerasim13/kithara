@@ -91,7 +91,7 @@ where
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
     #[builder(default = 256)]
-    #[config(value)]
+    #[config(value, sdk(max = 4096))]
     pub reader_event_capacity: usize,
 }
 

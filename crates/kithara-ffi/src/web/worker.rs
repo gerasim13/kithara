@@ -20,12 +20,13 @@ use kithara::{
 };
 
 use crate::{
+    item::{ItemBuildConfig, SourcePatches},
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
     pools::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
-    types::{FfiAbrMode, FfiItemConfig},
+    types::FfiAbrMode,
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
@@ -221,7 +222,7 @@ fn dispatch_cmd(
             if let Err(error) = analysis
                 .borrow_mut()
                 .start_queued(queue, id, request_id, |url| {
-                    build_config(&state, url, None, None, 0.0)
+                    build_config(&state, url, None, None, 0.0, None)
                 })
             {
                 crate::web::interop::send_reply(request_id, Err(error));
@@ -390,13 +391,18 @@ fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
 
 /// Build a worker source from the item's immutable configuration. Keep the
 /// common no-policy URI path allocation-light.
-fn build_source(state: &BuildState, item: FfiItemConfig) -> FfiTrackSource {
+fn build_source(state: &BuildState, item: ItemBuildConfig) -> FfiTrackSource {
+    let ItemBuildConfig {
+        config: item,
+        source,
+    } = item;
     let url = item.url.clone();
     if state.keys.key_registry.is_none()
         && state.headers.is_empty()
         && item.headers.as_ref().is_none_or(HashMap::is_empty)
         && item.abr_mode.is_none()
         && !(item.preferred_peak_bitrate.is_finite() && item.preferred_peak_bitrate > 0.0)
+        && source.is_none()
     {
         return FfiTrackSource::Uri(url);
     }
@@ -406,6 +412,7 @@ fn build_source(state: &BuildState, item: FfiItemConfig) -> FfiTrackSource {
         item.headers,
         item.abr_mode,
         item.preferred_peak_bitrate,
+        source,
     )
     .map_or(FfiTrackSource::Uri(url), |config| {
         FfiTrackSource::Config(Box::new(config))
@@ -418,6 +425,7 @@ fn build_config(
     item_headers: Option<HashMap<String, String>>,
     abr_mode: Option<FfiAbrMode>,
     preferred_peak_bitrate: f64,
+    source: Option<SourcePatches>,
 ) -> Option<FfiResourceConfig> {
     let src = ResourceSrc::parse(url)
         .inspect_err(|err| {
@@ -436,6 +444,16 @@ fn build_config(
             .maybe_headers((!headers.is_empty()).then(|| headers.into()))
             .initial_abr_mode(abr_mode.unwrap_or_default())
             .preferred_peak_bitrate(preferred_peak_bitrate)
+            .file(
+                source
+                    .as_ref()
+                    .map_or_else(Default::default, |source| source.file.clone()),
+            )
+            .hls(
+                source
+                    .as_ref()
+                    .map_or_else(Default::default, |source| source.hls.clone()),
+            )
             .store(state.store.clone())
             .worker(state.worker.clone())
             .build(),
@@ -443,7 +461,7 @@ fn build_config(
 }
 
 struct ReplaceTrackArgs {
-    config: FfiItemConfig,
+    config: ItemBuildConfig,
     id: TrackId,
     index: u32,
 }

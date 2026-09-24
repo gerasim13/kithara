@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Expr, Field, GenericParam, Generics, LitStr, Meta, Result, Token, Type, parenthesized,
+    Expr, Field, GenericParam, Generics, Lit, LitStr, Meta, Result, Token, Type, parenthesized,
     parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
@@ -34,6 +34,7 @@ pub(super) fn expand(
 ) -> Result<Option<Expanded>> {
     let mut role = None;
     let mut update = false;
+    let mut sdk = false;
     let mut preserved: Vec<syn::Attribute> = Vec::new();
     let mut forwarded: Vec<syn::Path> = Vec::new();
     for attr in &field.attrs {
@@ -66,6 +67,25 @@ pub(super) fn expand(
                     return Err(meta.error("duplicate config field option"));
                 }
                 update = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("sdk") {
+                if sdk {
+                    return Err(meta.error("duplicate config field option"));
+                }
+                sdk = true;
+                let content;
+                parenthesized!(content in meta.input);
+                let maximum: Meta = content.parse()?;
+                let Meta::NameValue(maximum) = maximum else {
+                    return Err(content.error("expected sdk(max = positive integer)"));
+                };
+                if !maximum.path.is_ident("max")
+                    || !content.is_empty()
+                    || !matches!(&maximum.value, Expr::Lit(expr) if matches!(&expr.lit, Lit::Int(value) if value.base10_parse::<u32>().is_ok_and(|value| value > 0)))
+                {
+                    return Err(content.error("expected sdk(max = positive integer)"));
+                }
                 return Ok(());
             }
             if role.is_some() {
@@ -115,7 +135,7 @@ pub(super) fn expand(
             "classify each config field as value, nested, or skip = reason",
         )
     })?;
-    validate_role(field, &role, update, snapshot, &preserved)?;
+    validate_role(field, &role, update, sdk, snapshot, &preserved)?;
     field.attrs = preserved;
     if !snapshot {
         return Ok(None);
@@ -164,9 +184,16 @@ fn validate_role(
     field: &Field,
     role: &Role,
     update: bool,
+    sdk: bool,
     snapshot: bool,
     preserved: &[syn::Attribute],
 ) -> Result<()> {
+    if sdk && !matches!(role, Role::Value) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "SDK exposure requires a value field",
+        ));
+    }
     if update && !matches!(role, Role::Value) {
         return Err(syn::Error::new_spanned(
             field,

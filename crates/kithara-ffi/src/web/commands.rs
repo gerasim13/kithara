@@ -5,7 +5,7 @@ use kithara::{
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
 
-use crate::types::FfiItemConfig;
+use crate::item::ItemBuildConfig;
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///
@@ -37,14 +37,14 @@ pub(crate) enum WorkerCmd {
     /// background; playback does not begin until a matching `SelectQueue`.
     Append {
         id: TrackId,
-        config: FfiItemConfig,
+        config: ItemBuildConfig,
     },
     /// Insert a track after `after` (or at the head when `after` is
     /// `None`). Replies via `request_id` so the caller can observe the
     /// `UnknownTrackId` rejection.
     Insert {
         id: TrackId,
-        config: FfiItemConfig,
+        config: ItemBuildConfig,
         after: Option<TrackId>,
         request_id: u32,
     },
@@ -57,7 +57,7 @@ pub(crate) enum WorkerCmd {
     Replace {
         index: u32,
         id: TrackId,
-        config: FfiItemConfig,
+        config: ItemBuildConfig,
         request_id: u32,
     },
     /// Select (start playing) a queued track. Replies via `request_id`.

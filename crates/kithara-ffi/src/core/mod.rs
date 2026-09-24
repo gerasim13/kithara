@@ -10,7 +10,10 @@ pub(crate) mod observer_set;
 pub(crate) mod registry;
 pub mod types;
 
-pub use config_generated::{FfiEqBandConfig, FfiEqFilterKind, FfiLimiterConfig};
+pub use config_generated::{
+    FfiEqBandConfig, FfiEqFilterKind, FfiFileSourceSettings, FfiHlsSourceSettings,
+    FfiLimiterConfig, FfiSourceSettings,
+};
 pub use host::{FfiHostConfig, default_host_config};
 
 pub(crate) mod event_set;

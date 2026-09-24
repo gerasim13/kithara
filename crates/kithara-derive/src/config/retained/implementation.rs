@@ -517,6 +517,37 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn sdk_field_limit_requires_positive_value_role() {
+        let accepted = expand(
+            quote!(construction, builder = false),
+            quote! {
+                struct Source {
+                    #[config(value, sdk(max = 64))]
+                    capacity: usize,
+                }
+            },
+        )
+        .expect("bounded SDK value is accepted")
+        .to_string();
+        assert!(!accepted.contains("sdk"));
+
+        for field in [
+            quote!(#[config(value, sdk(max = 0))] capacity: usize),
+            quote!(#[config(value, sdk(max = 64), sdk(max = 128))] capacity: usize),
+            quote!(#[config(skip = "resource", sdk(max = 64))] capacity: usize),
+        ] {
+            assert!(
+                expand(
+                    quote!(construction, builder = false),
+                    quote!(struct Source { #field })
+                )
+                .is_err(),
+                "invalid SDK field declaration was accepted: {field}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
     fn runtime_update_cannot_lower_through_a_skipped_patch_field() {
         for declaration in [
             quote!(#[config(value, update, patch(skip))]),
