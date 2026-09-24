@@ -125,6 +125,30 @@ fn live_recorder_registers_consumed_inputs_without_exposing_resources() {
 }
 
 #[test]
+fn analysis_worker_registers_prepared_inputs_without_claiming_live_values() {
+    let source = include_str!("../../../../crates/kithara-analysis/src/worker/config.rs");
+    let entries = registrations("crates/kithara-analysis/src/worker/config.rs", source).unwrap();
+    let worker = entries
+        .iter()
+        .find(|entry| entry.owner == "AnalysisWorkerConfig")
+        .unwrap();
+    assert_eq!(worker.kind, "construction");
+    assert!(!worker.sdk);
+    assert_eq!(worker.fields.len(), 14);
+    assert!(worker.fields.iter().all(|field| field.value_type.is_none()));
+    let roles: Vec<_> = worker
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.role.as_str()))
+        .collect();
+    assert_eq!(roles[0], ("builder", "skip"));
+    assert_eq!(roles[4], ("chunk_seconds", "value"));
+    assert_eq!(roles[11], ("cancel", "skip"));
+    assert_eq!(roles[12], ("worker", "skip"));
+    assert_eq!(roles[13], ("priority", "value"));
+}
+
+#[test]
 fn manifest_reads_composed_builder_field_and_patch_groups() {
     let entries = registrations(
         "crates/kithara-play/src/player/config.rs",
