@@ -149,6 +149,29 @@ fn analysis_worker_registers_prepared_inputs_without_claiming_live_values() {
 }
 
 #[test]
+fn playback_worker_registers_dispatcher_inputs_without_exposing_resources() {
+    let source = include_str!("../../../../crates/kithara-play/src/worker/config.rs");
+    let entries = registrations("crates/kithara-play/src/worker/config.rs", source).unwrap();
+    let worker = entries
+        .iter()
+        .find(|entry| entry.owner == "PlayWorkerConfig")
+        .unwrap();
+    assert_eq!(worker.kind, "construction");
+    assert!(!worker.sdk);
+    assert_eq!(worker.fields.len(), 10);
+    assert!(worker.fields.iter().all(|field| field.value_type.is_none()));
+    let roles: Vec<_> = worker
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.role.as_str()))
+        .collect();
+    assert_eq!(roles[0], ("pools", "skip"));
+    assert!(roles[1..8].iter().all(|(_, role)| *role == "value"));
+    assert_eq!(roles[8], ("cancel", "skip"));
+    assert_eq!(roles[9], ("worker", "skip"));
+}
+
+#[test]
 fn manifest_reads_composed_builder_field_and_patch_groups() {
     let entries = registrations(
         "crates/kithara-play/src/player/config.rs",
