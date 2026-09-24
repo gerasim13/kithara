@@ -115,7 +115,25 @@ async function main() {
   const item = new AudioPlayerItem({ url, abrMode: undefined, audioId: undefined, headers: new Map([["X-Kithara-Config-Probe", "item"]]), uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 });
   generatedPlayer.append(item);
   await loadedTrack;
+  // firewheel-web-audio resumes its warmed-up AudioContext on a user gesture.
+  document.body.click();
+  const appliedRate = new Promise<void>((resolve, reject) => {
+    const observed: string[] = [];
+    const timeout = setTimeout(() => reject(new Error(`audio output did not apply the requested rate; events=${observed.join(",")}`)), 10_000);
+    events.onmessage = ({ data }) => {
+      observed.push(data.kind);
+      if (data.kind !== "RateChanged") return;
+      if (data.rate !== 0.75) {
+        clearTimeout(timeout);
+        reject(new Error(`audio output reported the wrong rate: ${data.rate}`));
+      } else {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+  });
   generatedPlayer.play();
+  await appliedRate;
   if (generatedPlayer.playingRate() !== 0.75) throw new Error("loaded player lost the requested rate");
   generatedPlayer.pause();
   item.uniffiDestroy();
@@ -137,7 +155,7 @@ async function main() {
   if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
   player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and HTTP track loading; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and applied playback rate; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });

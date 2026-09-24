@@ -76,7 +76,8 @@ try {
   await once(server, "listening");
   browser = spawn(executable, [
     "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-    "--disable-gpu", "--no-first-run", "--js-flags=--max-old-space-size=128", "about:blank",
+    "--disable-gpu", "--no-first-run", "--autoplay-policy=no-user-gesture-required",
+    "--js-flags=--max-old-space-size=128", "about:blank",
   ], { stdio: ["ignore", "ignore", "inherit"] });
   let browserError;
   browser.on("error", error => { browserError = error; });

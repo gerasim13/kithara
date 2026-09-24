@@ -1,12 +1,16 @@
-#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
+#[cfg(not(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+)))]
 compile_error!(
     "kithara-stretch requires at least one backend feature: \
-     enable stretch-signalsmith (default) or stretch-bungee. \
+     enable stretch-signalsmith (default), stretch-bungee, or stretch-glide. \
      A build with no stretch backend should not depend on this crate."
 );
 
 mod kind;
-pub use kind::StretchKind;
+pub use kind::{BackendCapabilities, StretchKind};
 
 mod factory;
 pub use factory::{build_engine, build_varispeed_engine};

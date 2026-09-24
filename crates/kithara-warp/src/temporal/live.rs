@@ -272,18 +272,20 @@ pub struct RenderSnapshot {
 }
 
 impl RenderSnapshot {
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
     ))]
     pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
         self.frontier = self.frontier.with_warp_map(revision);
         self
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
     ))]
     pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
         Self {

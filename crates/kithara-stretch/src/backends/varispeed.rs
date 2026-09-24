@@ -8,8 +8,8 @@ use kithara_resampler::{
 use smallvec::SmallVec;
 
 use crate::{
-    ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticRequest,
+    BackendCapabilities, ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine,
+    ElasticError, ElasticLatency, ElasticRequest,
 };
 
 pub(crate) struct VarispeedElastic {
@@ -72,7 +72,11 @@ impl ElasticEngine for VarispeedElastic {
             output.push(target);
         }
         Ok(Self {
-            capabilities: ElasticCapabilities::new(config.shape(), ElasticLatency::new(0, 0)),
+            capabilities: ElasticCapabilities::new(
+                config.shape(),
+                ElasticLatency::new(0, 0),
+                BackendCapabilities::RATE,
+            ),
             input,
             output,
             resampler,
@@ -187,6 +191,7 @@ mod tests {
             drop(engine);
         }
         let mut engine = prepare();
+        assert_eq!(engine.capabilities().functions(), BackendCapabilities::RATE);
         let mut source = [0.0; CHANNELS * FRAMES];
         for (index, sample) in source.iter_mut().enumerate() {
             *sample = f32::from(u8::try_from(index % CHANNELS).expect("channel fits u8")) / 16.0;
