@@ -1050,6 +1050,21 @@ fn audio_variants_4tier() -> Vec<VariantInfo> {
 }
 
 #[kithara::test(tokio)]
+async fn cap_downswitches_a_current_variant_filtered_from_candidates() {
+    let settings = AbrSettings::builder()
+        .max_bandwidth_bps(270_000)
+        .min_switch_interval(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(3)))));
+    let peer = abr_peer(&state, audio_variants_4tier());
+    let handle = controller.register(&peer);
+
+    controller.run_tick(handle.peer_id(), Instant::now());
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test(tokio)]
 async fn controller_settings_seed_the_peer_cap_until_the_handle_changes_it() {
     let settings = AbrSettings::builder()
         .max_bandwidth_bps(270_000)
