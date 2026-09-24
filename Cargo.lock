@@ -4803,6 +4803,7 @@ dependencies = [
  "bon",
  "fieldwork",
  "kithara-derive",
+ "portable-atomic",
 ]
 
 [[package]]

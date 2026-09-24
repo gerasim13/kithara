@@ -120,7 +120,7 @@ impl<S> PlayerRuntime<S> {
             #[field(&engine)]
             pub const fn engine(&self) -> &EngineImpl<S>;
         }
-        to self.core.params {
+        to self.core.config {
             /// Whether the built-in linear auto-advance handler is enabled.
             #[must_use]
             pub fn auto_advance_enabled(&self) -> bool;

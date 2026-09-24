@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
-    state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
+    state::{ItemQueue, PlayerPhase, TrackGrid},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
@@ -56,7 +56,6 @@ pub(crate) struct PlayerCore<S> {
     /// Construction recipe and injected resources. Its worker drops after
     /// the engine and undelivered items.
     pub(crate) config: PlayerConfig<S>,
-    pub(crate) params: PlayerParams,
     /// Where the current item must start when it reaches a processor.
     /// Set by a seek that arrives before the player holds a slot, consumed
     /// by the load that starts playback.
@@ -328,7 +327,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn player_retains_construction_config_while_live_controls_change() {
+    fn player_config_values_follow_live_controls() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
@@ -346,7 +345,19 @@ mod tests {
 
         player.set_crossfade_duration(3.0);
         assert_eq!(player.crossfade_duration(), 3.0);
-        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+        assert_eq!(player.core.config.values().crossfade_duration, 3.0);
+
+        player.set_auto_advance_enabled(false);
+        player.set_default_rate(0.75);
+        player.set_prefetch_duration(4.0);
+        player.set_volume(0.4);
+        player.set_muted(true);
+        let values = player.core.config.values();
+        assert!(!values.auto_advance_enabled);
+        assert_eq!(values.default_rate, 0.75);
+        assert_eq!(values.prefetch_duration, 4.0);
+        assert_eq!(values.volume, 0.4);
+        assert!(values.muted);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

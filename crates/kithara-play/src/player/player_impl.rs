@@ -21,7 +21,7 @@ use crate::{
     player::{
         PlayerConfig, PlayerControl,
         protocol::PlayerSync,
-        state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
+        state::{ItemQueue, PlayerPhase, TrackGrid},
     },
     worker::EngineLoad,
 };
@@ -44,6 +44,7 @@ impl<S> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
+        config.normalize_live_values();
         if config.response_budget_frames.is_some() && config.warp.render_quantum_frames().is_none()
         {
             let mut patch = WarpConfigPatch::default();
@@ -89,11 +90,9 @@ impl<S> PlayerImpl<S> {
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         // Seed the single speed source with the configured default rate.
-        config.warp.stretch().set_speed(config.default_rate);
-        let params = PlayerParams::from(&config);
+        config.warp.stretch().set_speed(config.default_rate());
         let core = PlayerCore {
             engine,
-            params,
             config,
             engine_load: Arc::new(EngineLoad::default()),
             status: Mutex::default(),

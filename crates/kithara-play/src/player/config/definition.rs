@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
+use kithara_config::{LiveBool, LiveF32};
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
@@ -53,6 +54,12 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 #[derive_where::derive_where(Clone)]
 #[derive(derive_more::Debug)]
 pub struct PlayerConfig<S> {
+    /// Live mute state, initially off.
+    #[config(value(bool, self.muted.load()), builder(field = LiveBool::new(false)), patch(skip))]
+    pub(super) muted: LiveBool,
+    /// Live output volume in `0.0..=1.0`, initially one.
+    #[config(value(f32, self.volume.load()), builder(field = LiveF32::new(1.0)), patch(skip))]
+    pub(super) volume: LiveF32,
     /// How resources created for this player trim leading/trailing audio.
     #[config(value, builder(default))]
     pub gapless_mode: GaplessMode,
@@ -76,8 +83,12 @@ pub struct PlayerConfig<S> {
     /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
     /// player at construction, so it is not a document key.
     #[debug(skip)]
-    #[config(value, builder(default = true), patch(skip))]
-    pub auto_advance_enabled: bool,
+    #[config(
+        value(bool, self.auto_advance_enabled.load()),
+        builder(default = LiveBool::new(true), with = |value: bool| LiveBool::new(value)),
+        patch(skip)
+    )]
+    pub auto_advance_enabled: LiveBool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
     /// in so rendered output never stretches with inserted silence while the
@@ -93,12 +104,20 @@ pub struct PlayerConfig<S> {
     )]
     pub block_on_underrun: bool,
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
-    #[config(value, builder(default = DEFAULT_CROSSFADE_DURATION))]
-    pub crossfade_duration: f32,
+    #[config(
+        value(f32, self.crossfade_duration.load()),
+        builder(default = LiveF32::new(DEFAULT_CROSSFADE_DURATION), with = |value: f32| LiveF32::new(value)),
+        patch(wire = f32, from = LiveF32::new)
+    )]
+    pub crossfade_duration: LiveF32,
     /// Default playback-rate target (1.0 = normal). Default:
     /// [`DEFAULT_PLAYING_RATE`].
-    #[config(value, builder(default = DEFAULT_PLAYING_RATE))]
-    pub default_rate: f32,
+    #[config(
+        value(f32, self.default_rate.load()),
+        builder(default = LiveF32::new(DEFAULT_PLAYING_RATE), with = |value: f32| LiveF32::new(value)),
+        patch(wire = f32, from = LiveF32::new)
+    )]
+    pub default_rate: LiveF32,
     /// Capacity of each event topic when this player creates its root bus.
     /// An injected [`EventBus`] keeps its own capacity and identity.
     #[config(value, builder(default = default_event_bus_capacity()))]
@@ -107,8 +126,12 @@ pub struct PlayerConfig<S> {
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
     #[debug(skip)]
-    #[config(value, builder(default = Consts::DEFAULT_PREFETCH_DURATION), patch(skip))]
-    pub prefetch_duration: f32,
+    #[config(
+        value(f32, self.prefetch_duration.load()),
+        builder(default = LiveF32::new(Consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| LiveF32::new(value)),
+        patch(skip)
+    )]
+    pub prefetch_duration: LiveF32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
     #[config(value, builder(default = Consts::DEFAULT_MAX_SLOTS))]
@@ -187,11 +210,11 @@ mod tests {
         let config = config();
 
         assert!(!config.block_on_underrun);
-        assert!(config.auto_advance_enabled);
-        assert!((config.crossfade_duration - 1.0).abs() < f32::EPSILON);
-        assert!((config.default_rate - 1.0).abs() < f32::EPSILON);
+        assert!(config.auto_advance_enabled.load());
+        assert!((config.crossfade_duration.load() - 1.0).abs() < f32::EPSILON);
+        assert!((config.default_rate.load() - 1.0).abs() < f32::EPSILON);
         assert_eq!(config.event_bus_capacity.get(), 1024);
-        assert!((config.prefetch_duration - 3.5).abs() < f32::EPSILON);
+        assert!((config.prefetch_duration.load() - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
     }
 
@@ -262,13 +285,13 @@ mod document_tests {
         // Seeded off the default (1.0) so a whole-struct `apply` that resets
         // every unnamed field to `Default::default()` cannot pass this
         // assertion by coincidence.
-        config.default_rate = 2.5;
+        config.default_rate.store(2.5);
 
         config.apply(patch);
 
-        assert!((config.crossfade_duration - 2.0).abs() < f32::EPSILON);
+        assert!((config.crossfade_duration.load() - 2.0).abs() < f32::EPSILON);
         assert!(
-            (config.default_rate - 2.5).abs() < f32::EPSILON,
+            (config.default_rate.load() - 2.5).abs() < f32::EPSILON,
             "a silent field must keep its seeded value, not reset to default"
         );
     }
@@ -298,13 +321,13 @@ mod document_tests {
         // `disabled` differs from the `MediaOnly` default, so only the patch
         // can produce it. The sibling is seeded off its own default (1.0) so a
         // whole-struct reset would go red here rather than pass by coincidence.
-        config.crossfade_duration = 2.5;
+        config.crossfade_duration.store(2.5);
 
         config.apply(patch);
 
         assert_eq!(config.gapless_mode, GaplessMode::Disabled);
         assert!(
-            (config.crossfade_duration - 2.5).abs() < f32::EPSILON,
+            (config.crossfade_duration.load() - 2.5).abs() < f32::EPSILON,
             "a sibling field must survive the patch"
         );
     }

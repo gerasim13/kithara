@@ -73,13 +73,13 @@ impl<S> PlayerRuntime<S> {
 
     /// Enable or disable the built-in linear auto-advance handler.
     pub fn set_auto_advance_enabled(&self, enabled: bool) {
-        self.core.params.set_auto_advance_enabled(enabled);
+        self.core.config.set_auto_advance_enabled(enabled);
     }
 
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
         self.core
-            .params
+            .config
             .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
@@ -89,7 +89,7 @@ impl<S> PlayerRuntime<S> {
     /// While paused the live rate is 0.0 and must stay there — a rate change is
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
-        let target = self.core.params.set_default_rate(rate);
+        let target = self.core.config.set_default_rate(rate);
         self.core.config.warp.stretch().set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
@@ -107,7 +107,7 @@ impl<S> PlayerRuntime<S> {
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
         let slot = self.slot();
-        self.core.params.set_muted(
+        self.core.config.set_muted(
             muted,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
@@ -123,7 +123,7 @@ impl<S> PlayerRuntime<S> {
     /// before EOF. Independent of crossfade activation.
     pub fn set_prefetch_duration(&self, seconds: f32) {
         self.core
-            .params
+            .config
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
@@ -155,7 +155,7 @@ impl<S> PlayerRuntime<S> {
     /// Set volume, clamped to `0.0..=1.0`.
     pub fn set_volume(&self, volume: f32) {
         let slot = self.slot();
-        self.core.params.set_volume(
+        self.core.config.set_volume(
             volume,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
