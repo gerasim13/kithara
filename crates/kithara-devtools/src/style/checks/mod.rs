@@ -8,6 +8,7 @@
 pub(crate) mod comment_hygiene;
 pub(crate) mod const_locality;
 pub(crate) mod dead_doc_refs;
+pub(crate) mod declaration_spacing;
 pub(crate) mod doc_size;
 pub(crate) mod doc_staleness;
 pub(crate) mod non_english_text;
