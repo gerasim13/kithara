@@ -20,11 +20,11 @@
 //! platform crate leaves real on both lanes. `Instant` beside it is the virtual
 //! one under flash, and a virtual clock reports a frame that took no time.
 
-#[path = "../examples/gallery/demo/mod.rs"]
+#[path = "../../examples/gallery/demo/mod.rs"]
 mod demo;
-#[path = "../examples/gallery/fixture.rs"]
+#[path = "../../examples/gallery/fixture.rs"]
 mod fixture;
-#[path = "../examples/gallery/sections.rs"]
+#[path = "../../examples/gallery/sections.rs"]
 mod sections;
 
 use std::{

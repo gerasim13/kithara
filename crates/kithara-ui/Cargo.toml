@@ -163,12 +163,12 @@ required-features = ["capture", "masonry"]
 
 [[test]]
 name = "frame_perf"
-path = "tests/frame_perf.rs"
+path = "tests/perf/frame.rs"
 required-features = ["perf", "iced", "masonry"]
 
 [[test]]
 name = "page_perf"
-path = "tests/page_perf.rs"
+path = "tests/perf/page.rs"
 required-features = ["perf", "iced", "masonry"]
 
 [[bench]]
