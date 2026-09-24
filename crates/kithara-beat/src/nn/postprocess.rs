@@ -63,7 +63,10 @@ fn candidates<'a>(
 ) -> impl Iterator<Item = (usize, f32)> + 'a {
     (0..logits.len()).filter_map(|index| {
         let start = index.saturating_sub(config.peak_half_width);
-        let end = (index + config.peak_half_width + 1).min(logits.len());
+        let end = index
+            .saturating_add(config.peak_half_width)
+            .saturating_add(1)
+            .min(logits.len());
         (logits[index] > config.peak_threshold
             && !logits[start..end]
                 .iter()
@@ -249,6 +252,12 @@ mod tests {
             vec![2.0, 6.0]
         );
         assert_eq!(at(&find_peaks(&logits, &wide)), vec![2.0]);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn maximum_window_width_uses_the_available_logits() {
+        let config = BeatConfig::builder().peak_half_width(usize::MAX).build();
+        assert_eq!(at(&find_peaks(&[1.0, 2.0, 1.0], &config)), vec![1.0]);
     }
 
     #[kithara::test(native, flash(false))]
