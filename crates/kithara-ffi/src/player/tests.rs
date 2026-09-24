@@ -14,6 +14,17 @@ fn playing_rate_roundtrip() {
 }
 
 #[kithara::test]
+fn initial_playing_rate_reaches_player_config() {
+    let player = AudioPlayer::new(FfiPlayerConfig {
+        playing_rate: 0.75,
+        ..FfiPlayerConfig::for_test()
+    })
+    .expect("create player");
+
+    assert_eq!(player.playing_rate(), 0.75);
+}
+
+#[kithara::test]
 fn items_initially_empty() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!(player.items().is_empty());

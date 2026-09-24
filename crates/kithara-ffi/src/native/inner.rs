@@ -219,6 +219,7 @@ impl NativeInner {
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+            .default_rate(playing_rate)
             .warp(WarpConfig::builder().stretch(player_timestretch()).build())
             .cancel(player_cancel.child())
             .sample_rate(super::session::requested_sample_rate()?)
@@ -257,7 +258,6 @@ impl NativeInner {
             items: Arc::new(Mutex::default()),
         };
         inner.setup_network(auth_token);
-        inner.set_playing_rate(playing_rate);
         Ok(inner)
     }
 
