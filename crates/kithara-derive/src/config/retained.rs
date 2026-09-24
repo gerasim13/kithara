@@ -131,6 +131,10 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
             }
         }
     }
+    let has_fieldwork_field = fields
+        .named
+        .iter()
+        .any(|field| field.attrs.iter().any(|attr| attr.path().is_ident("field")));
     if !runtime_update && !update_fields.is_empty() {
         return Err(syn::Error::new_spanned(
             name,
@@ -197,20 +201,38 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
             parse_quote!(#[derive(::kithara_config::__private::BuiltDefault)]),
         );
     }
-    if !item
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("fieldwork"))
-    {
-        item.attrs.push(parse_quote!(#[fieldwork(opt_in, get)]));
-    }
-    if !has_derive(&item.attrs, "Fieldwork")? {
-        item.attrs.insert(
-            0,
-            parse_quote!(#[derive(::kithara_config::__private::Fieldwork)]),
-        );
-    }
+    compose_fieldwork(&mut item, construction, has_fieldwork_field)?;
     Ok(quote! { #item #snapshot #runtime })
+}
+
+fn compose_fieldwork(
+    item: &mut ItemStruct,
+    construction: bool,
+    has_fieldwork_field: bool,
+) -> Result<()> {
+    let fieldwork = !construction
+        || has_derive(&item.attrs, "Fieldwork")?
+        || item
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("fieldwork"))
+        || has_fieldwork_field;
+    if fieldwork {
+        if !item
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("fieldwork"))
+        {
+            item.attrs.push(parse_quote!(#[fieldwork(opt_in, get)]));
+        }
+        if !has_derive(&item.attrs, "Fieldwork")? {
+            item.attrs.insert(
+                0,
+                parse_quote!(#[derive(::kithara_config::__private::Fieldwork)]),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn has_derive(attributes: &[Attribute], expected: &str) -> Result<bool> {
@@ -421,6 +443,26 @@ mod tests {
                 "construction accepted retained-only options: {options}"
             );
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn construction_without_accessor_fields_does_not_add_fieldwork() {
+        let expanded = expand(
+            quote!(construction, builder = false),
+            quote! {
+                #[derive(Builder, Patch)]
+                struct Input<T> {
+                    #[config(skip = "injected resource", builder(start_fn), patch(skip))]
+                    resource: T,
+                    #[config(value)]
+                    capacity: usize,
+                }
+            },
+        )
+        .expect("a consumed input needs no generated accessors")
+        .to_string();
+        assert!(!expanded.contains("Fieldwork"));
+        assert!(!expanded.contains("fieldwork"));
     }
 
     #[kithara::test(native, flash(false))]
