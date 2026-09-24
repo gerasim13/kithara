@@ -51,19 +51,43 @@ fn manifest_reads_composed_builder_field_and_patch_groups() {
         r#"
         #[kithara_config::config(builder = false)]
         struct PlayerConfig {
-            #[config(value, builder(default = 1), field(get, copy))]
+            #[config(value, builder(default = Consts::MAX_BAR_RATIO), field(get, copy))]
             rate: u32,
             #[config(skip = "injected resource", builder(default), patch(skip))]
             resource: Option<u32>,
+            #[cfg(feature = "web")]
+            #[config(value)]
+            #[builder(default = 4)]
+            count: u32,
+            #[config(value(Option<u32>, self.optional), builder(default))]
+            optional: Option<u32>,
         }
         "#,
     )
     .unwrap();
     assert_eq!(entries[0].fields[0].role, "value");
+    assert_eq!(
+        entries[0].fields[0].builder_default.as_deref(),
+        Some("Consts :: MAX_BAR_RATIO")
+    );
     assert_eq!(entries[0].fields[1].role, "skip");
+    assert_eq!(
+        entries[0].fields[1].builder_default.as_deref(),
+        Some("default")
+    );
     assert_eq!(
         entries[0].fields[1].exclusion_reason.as_deref(),
         Some("injected resource")
+    );
+    assert_eq!(entries[0].fields[2].builder_default.as_deref(), Some("4"));
+    assert_eq!(
+        entries[0].fields[2].conditions,
+        ["# [cfg (feature = \"web\")]"]
+    );
+    assert_eq!(entries[0].fields[3].role, "value");
+    assert_eq!(
+        entries[0].fields[3].builder_default.as_deref(),
+        Some("default")
     );
 }
 

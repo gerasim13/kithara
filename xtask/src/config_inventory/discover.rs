@@ -3,7 +3,9 @@ use quote::ToTokens;
 use serde::Serialize;
 use syn::{
     Attribute, Field, FnArg, ImplItemFn, ImplItemType, ItemEnum, ItemFn, ItemImpl, ItemMod,
-    ItemStruct, ItemType, LitStr, Signature, parenthesized,
+    ItemStruct, ItemType, LitStr, Meta, Signature, Token, parenthesized,
+    parse::Parser as _,
+    punctuated::Punctuated,
     visit::{self, Visit},
 };
 
@@ -29,7 +31,9 @@ pub(super) struct RegisteredField {
     pub(super) rust_type: String,
     pub(super) role: String,
     update: bool,
+    builder_default: Option<String>,
     exclusion_reason: Option<String>,
+    conditions: Vec<String>,
     pub(super) docs: Vec<String>,
 }
 
@@ -126,7 +130,7 @@ fn docs(attrs: &[Attribute]) -> Vec<String> {
         .iter()
         .filter(|attr| attr.path().is_ident("doc"))
         .filter_map(|attr| match &attr.meta {
-            syn::Meta::NameValue(value) => match &value.value {
+            Meta::NameValue(value) => match &value.value {
                 syn::Expr::Lit(expr) => match &expr.lit {
                     syn::Lit::Str(text) => Some(text.value().trim().to_owned()),
                     _ => None,
@@ -139,6 +143,15 @@ fn docs(attrs: &[Attribute]) -> Vec<String> {
         .collect()
 }
 
+fn builder_default(stream: proc_macro2::TokenStream) -> syn::Result<Option<String>> {
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(stream)?;
+    Ok(metas.into_iter().find_map(|meta| match meta {
+        Meta::Path(path) if path.is_ident("default") => Some("default".to_owned()),
+        Meta::NameValue(value) if value.path.is_ident("default") => Some(tokens(&value.value)),
+        _ => None,
+    }))
+}
+
 fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
     let name = field
         .ident
@@ -148,34 +161,47 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
         .ok_or_else(|| syn::Error::new_spanned(field, "registered config field is unclassified"))?;
     let mut role = None;
     let mut update = false;
+    let mut default = None;
     let mut exclusion_reason = None;
     attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("update") {
             update = true;
         } else if meta.path.is_ident("value") {
             role = Some("value");
-            let _: proc_macro2::TokenStream = meta.input.parse()?;
+            if meta.input.peek(syn::token::Paren) {
+                let content;
+                parenthesized!(content in meta.input);
+                let _: proc_macro2::TokenStream = content.parse()?;
+            }
         } else if meta.path.is_ident("nested") {
             role = Some("nested");
         } else if meta.path.is_ident("skip") {
             role = Some("skip");
             exclusion_reason = Some(meta.value()?.parse::<LitStr>()?.value());
-        } else if meta.path.is_ident("builder")
-            || meta.path.is_ident("field")
-            || meta.path.is_ident("patch")
-        {
+        } else if meta.path.is_ident("builder") {
+            let content;
+            parenthesized!(content in meta.input);
+            default = builder_default(content.parse()?)?;
+        } else if meta.path.is_ident("field") || meta.path.is_ident("patch") {
             let content;
             parenthesized!(content in meta.input);
             let _: proc_macro2::TokenStream = content.parse()?;
         }
         Ok(())
     })?;
+    for attr in &field.attrs {
+        if attr.path().is_ident("builder") {
+            default = builder_default(attr.meta.require_list()?.tokens.clone())?.or(default);
+        }
+    }
     Ok(RegisteredField {
         name: name.to_string(),
         rust_type: tokens(&field.ty),
         role: role.unwrap_or("unknown").to_owned(),
         update,
+        builder_default: default,
         exclusion_reason,
+        conditions: conditions(&field.attrs).collect(),
         docs: docs(&field.attrs),
     })
 }
@@ -193,7 +219,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
     fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
         if let Some(attribute) = config_attribute(&item.attrs) {
             let mut sdk = false;
-            if matches!(attribute.meta, syn::Meta::List(_))
+            if matches!(attribute.meta, Meta::List(_))
                 && let Err(error) = attribute.parse_nested_meta(|meta| {
                     if meta.path.is_ident("sdk") {
                         sdk = true;
@@ -273,7 +299,9 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                     rust_type: tokens(&input.ty),
                     role: "delegate_input".to_owned(),
                     update: true,
+                    builder_default: None,
                     exclusion_reason: None,
+                    conditions: conditions(&input.attrs).collect(),
                     docs: Vec::new(),
                 }),
                 FnArg::Receiver(_) => None,
