@@ -5799,6 +5799,7 @@ dependencies = [
 name = "kithara-sync"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "delegate",
  "derive_more",
  "fieldwork",
@@ -5807,6 +5808,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
+ "num-traits",
  "thiserror 2.0.18",
 ]
 

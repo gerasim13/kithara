@@ -20,7 +20,7 @@ pub enum WarpPlanError {
 }
 
 /// One immutable projected map and its exact pending activation boundary.
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct WarpPlan {

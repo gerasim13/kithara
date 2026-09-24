@@ -108,6 +108,29 @@ impl BeatGridView for SegmentGridView {
         ))
     }
 
+    fn beat_at_or_next(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        let answer = self.beat_at(position);
+        if !matches!(answer, BeatGridQuery::OutsideDomain)
+            || self.state != BeatGridState::Complete
+            || self.outside_asset_extent(*position.value())
+        {
+            return answer;
+        }
+        let Some((beat, evidence, uncertainty)) = self.segments.next_start(*position.value())
+        else {
+            return answer;
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            MapPoint::new(self.stamp(), beat),
+            evidence,
+            uncertainty,
+            self.stamp(),
+        ))
+    }
+
     fn id(&self) -> BeatGridId {
         self.id
     }
@@ -231,12 +254,12 @@ mod tests {
 
     use super::SegmentGridView;
     use crate::{
-        AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery,
-        BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-        BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
-        MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment, Meter, MeterFacts,
-        SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionEpoch,
-        SessionFrame, beat_grid::session::SessionGridView,
+        AssetAxis, AssetExtent, AssetFrame, Beat, BeatEstimate, BeatEvidence, BeatGridId,
+        BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
+        BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
+        FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
+        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
+        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
     };
 
     struct Consts;
@@ -538,6 +561,64 @@ mod tests {
             complete.tempo_at(MapPoint::new(complete.stamp(), eof)),
             BeatGridQuery::OutsideDomain
         ));
+    }
+
+    #[kithara::test]
+    fn a_finished_gap_answers_the_next_charted_beat_while_a_building_gap_waits() {
+        let axis = MapAxis::Asset(AssetAxis::new(
+            sample_rate(),
+            AssetExtent::Bounded(Consts::FRAME_COUNT),
+        ));
+        let segment = MapSegment::new(
+            asset_marker(24_000.0, 3),
+            asset_marker(Consts::EOF_FRAME, 5),
+            SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let grid = |state| {
+            BeatGridSnapshot::segments(
+                BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
+                BeatGridRevision::first(),
+                state,
+                SegmentSet::new(axis, vec![segment.clone()])
+                    .expect("invariant: one segment inside the extent is valid"),
+            )
+            .expect("invariant: a bounded asset grid accepts both lifecycles")
+        };
+        let head = MapPosition::Asset(asset_frame(6_000.0));
+        let inside = MapPosition::Asset(asset_frame(36_000.0));
+        let beat = |query: BeatGridQuery<BeatEstimate<MapPoint<Beat>>>| match query {
+            BeatGridQuery::Resolved(estimate) => Some(f64::from(*estimate.value().value())),
+            _ => None,
+        };
+
+        let complete = grid(BeatGridState::Complete);
+        assert_eq!(
+            beat(complete.beat_at_or_next(MapPoint::new(complete.stamp(), head))),
+            Some(3.0),
+            "a finished grid proves its head is empty, so the next charted beat is the answer"
+        );
+        assert_eq!(
+            beat(complete.beat_at_or_next(MapPoint::new(complete.stamp(), inside))),
+            beat(complete.beat_at(MapPoint::new(complete.stamp(), inside))),
+            "a covered position answers exactly its own beat"
+        );
+        assert!(matches!(
+            complete.beat_at_or_next(MapPoint::new(
+                complete.stamp(),
+                MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME))
+            )),
+            BeatGridQuery::OutsideDomain
+        ));
+
+        let building = grid(BeatGridState::Building);
+        assert!(
+            matches!(
+                building.beat_at_or_next(MapPoint::new(building.stamp(), head)),
+                BeatGridQuery::Uncovered { .. }
+            ),
+            "a building grid may still chart beats in its head"
+        );
     }
 
     #[kithara::test]

@@ -1,12 +1,13 @@
 use kithara_signal::SessionFrame;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
-    WarpMapRevision,
+    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, CoordinateError,
+    GridProjectionError, MapAxis, MapRegion, PresentationFrontier, WarpMapRevision,
 };
 
 use crate::{
-    SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp,
+    ParentFact, SyncAdmission, SyncApplied, SyncCapability, SyncExecutionStamp, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
+    SyncRejected, SyncStaged, SyncTransition, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -22,18 +23,13 @@ pub enum SyncStatusSnapshot {
         topology: TopologyStamp,
         required: MapRegion,
     },
-    /// A warp map is admitted but its activation has not been acknowledged.
+    /// A preparation is issued but its activation has not been presented;
+    /// a free handoff carries no map.
     Prepared {
         operation: SyncOperationId,
         topology: TopologyStamp,
-        warp_map: WarpMapRevision,
+        warp_map: Option<WarpMapRevision>,
         activation: SessionFrame,
-    },
-    /// The requested behavior is not implemented by the current group.
-    Unavailable {
-        operation: SyncOperationId,
-        topology: TopologyStamp,
-        capability: SyncCapability,
     },
     /// The renderer has applied a continuity-preserving correction.
     Converging {
@@ -90,6 +86,21 @@ pub enum SyncError {
         from: BeatGridState,
         to: BeatGridState,
     },
+    /// A group owner cannot mint another grid revision.
+    #[error("grid revision space is exhausted for group {group_id}")]
+    GridRevisionExhausted { group_id: BeatGridId },
+    /// An external grid publication reached a group that derives its own grid.
+    #[error("group grid is derived by {mode:?} and cannot be published externally")]
+    GridOwnedByMode { mode: SyncMode },
+    /// A parent fact reached a session root, which owns its axis and tempo.
+    #[error("group {group_id} is a session root and follows no parent")]
+    SessionRoot { group_id: BeatGridId },
+    /// A tempo was addressed to a group that follows its parent's tempo.
+    #[error("group {owner} inherits its tempo from its parent")]
+    TempoInherited { owner: BeatGridId },
+    /// A tempo or phase relation cannot be represented on the session axis.
+    #[error(transparent)]
+    Coordinate(#[from] CoordinateError),
     /// A grid owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
     BeatGridSnapshot(#[from] BeatGridSnapshotError),
@@ -113,44 +124,112 @@ pub enum SyncError {
     /// A group owner cannot mint another operation identity.
     #[error("synchronization operation identity space is exhausted for group {group_id}")]
     OperationIdExhausted { group_id: BeatGridId },
-    /// No prepared renderer operation can accept an acknowledgement.
+    /// The member a receipt names holds no preparation.
     #[error("synchronization group has no prepared operation")]
     NoPreparedOperation,
-    /// The renderer repeated an acknowledgement that was already committed.
+    /// The executor repeated a receipt the group already recorded.
     #[error("synchronization operation {operation} was already acknowledged")]
     DuplicateAcknowledgement { operation: SyncOperationId },
-    /// The renderer acknowledged another operation than the prepared one.
+    /// The executor reported another operation than the one the member holds.
     #[error("renderer acknowledged operation {given}, expected {expected}")]
     StaleAcknowledgement {
         expected: SyncOperationId,
         given: SyncOperationId,
     },
-    /// One or more renderer acknowledgement stamps do not match the prepared warp map.
-    #[error("renderer acknowledgement {given:?} does not match {expected:?}")]
-    AppliedMismatch {
-        expected: Box<SyncApplied>,
-        given: Box<SyncApplied>,
+    /// A receipt names the member's operation under other facts than the
+    /// preparation the member holds.
+    #[error("receipt {given:?} does not match the held preparation {expected:?}")]
+    ReceiptMismatch {
+        expected: Box<SyncExecutionStamp>,
+        given: Box<SyncExecutionStamp>,
+    },
+    /// A receipt skips or reverses a phase: armed before installed, presented
+    /// before armed, or rejected once armed.
+    #[error("receipt for operation {operation} does not follow its current phase")]
+    ReceiptOutOfOrder { operation: SyncOperationId },
+    /// A presented frontier does not lie on the preparation's map.
+    #[error(
+        "presented frontier {given:?} does not lie on map {expected:?} of operation {operation}"
+    )]
+    PresentationMismatch {
+        operation: SyncOperationId,
+        expected: Option<WarpMapRevision>,
+        given: PresentationFrontier,
     },
     /// The candidate ownership tree violates a topology invariant.
     #[error(transparent)]
     Topology(#[from] SyncGroupTopologyError),
+    /// No admissible beat boundary lies inside the launch window.
+    #[error("member {member_id} can first enter at {first:?}, not before the window end {end:?}")]
+    NoAdmissibleBoundary {
+        member_id: BeatGridId,
+        first: SessionFrame,
+        end: SessionFrame,
+    },
+    /// A finished grid proves the requested position or beat lies outside it.
+    #[error("grid {grid_id} places nothing at the requested coordinate")]
+    OutsideGrid { grid_id: BeatGridId },
+    /// A member grid cannot be projected onto its group grid.
+    #[error(transparent)]
+    Projection(Box<GridProjectionError>),
+    /// An audible member names another warp map than the one this group
+    /// applied to it.
+    #[error("member {member_id} sounds through map {given:?}, not the applied {expected:?}")]
+    AudibleMapMismatch {
+        member_id: BeatGridId,
+        expected: Option<WarpMapRevision>,
+        given: Option<WarpMapRevision>,
+    },
+    /// A member that already sounds through an applied map was asked to
+    /// start again; only an audible retarget can move it.
+    #[error("member {member_id} already sounds")]
+    MemberAudible { member_id: BeatGridId },
+    /// A member's armed preparation is committed to the output until it is
+    /// presented.
+    #[error("member {member_id} is committed to operation {operation}")]
+    ArmedOperation {
+        member_id: BeatGridId,
+        operation: SyncOperationId,
+    },
+    /// A group owner cannot mint another warp-map revision.
+    #[error("warp-map revision space is exhausted for group {group_id}")]
+    WarpMapRevisionExhausted { group_id: BeatGridId },
 }
 
 /// Live owner protocol for a recursive group of beat grids.
 ///
-/// The topology's group-grid stamp must equal `snapshot().stamp()`, and its
-/// group identity must equal `id()`.
+/// Every group is both a parent and a member of its own parent: operations
+/// are routed down through `transact`, the parent's timeline facts arrive
+/// through `stage_fact` and `apply_staged`, and `status` and `topology`
+/// report upwards. The topology's group-grid stamp must equal
+/// `snapshot().stamp()`, and its group identity must equal `id()`.
 pub trait SyncGroup: BeatGrid {
     /// Concrete synchronization-group type accepted as a direct child.
     type NestedGroup: SyncGroup;
 
-    /// Commits an operation as audibly applied and returns the resulting sync state.
+    /// Computes, without mutation, everything a parent fact changes across
+    /// this subtree, so a parent can refuse the fact before any member
+    /// changes.
     ///
     /// # Errors
     ///
-    /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
-    /// does not match the currently prepared operation.
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+    /// Returns [`SyncError`] when this group or any nested group refuses the
+    /// fact.
+    fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+
+    /// Commits a change [`Self::stage_fact`] computed on this unchanged
+    /// subtree, and returns every preparation it issued and withdrew.
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
+
+    /// Records an executor's receipt for one preparation in this subtree and
+    /// returns the resulting state of the group that issued it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when the receipt is stale, duplicate, out of
+    /// order, or does not match the preparation its member holds; nothing
+    /// changes then.
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
 
     /// Returns the canonical control-plane view of this group's sync state.
     fn status(&self) -> SyncStatusSnapshot;

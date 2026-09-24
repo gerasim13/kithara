@@ -373,6 +373,19 @@ impl SegmentSet {
             .filter(|segment| segment.contains_position(position))
     }
 
+    /// Returns the opening beat of the first segment that starts after
+    /// `position`.
+    pub(crate) fn next_start(
+        &self,
+        position: MapPosition,
+    ) -> Option<(Beat, BeatEvidence, FrameUncertainty)> {
+        let next = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.start_position() <= position),
+        )?;
+        Some((next.start_beat, next.start_evidence, next.start_uncertainty))
+    }
+
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {
         let upper = self
             .segments

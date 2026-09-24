@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
-    SyncOperation, SyncRejected, SyncStatusSnapshot,
+    GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
@@ -54,11 +54,27 @@ impl BeatGrid for PlayerSync {
 impl SyncGroup for PlayerSync {
     type NestedGroup = PlayerMember;
 
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+    /// A staged fact reaches only the owner that staged it; once the owner
+    /// is taken there is nothing left to apply it to.
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition {
+        self.owned
+            .as_mut()
+            .map_or_else(SyncTransition::default, |owned| owned.apply_staged(staged))
+    }
+
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
         self.owned
             .as_mut()
             .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.acknowledge(applied)
+                owned.acknowledge(receipt)
+            })
+    }
+
+    fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError> {
+        self.owned
+            .as_ref()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.stage_fact(fact)
             })
     }
 
@@ -123,13 +139,15 @@ impl SyncGroup for PlayerMember {
 
     delegate::delegate! {
         to self.sync {
+            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
+            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(
                 &mut self,
                 operation: SyncOperation<Self>,
             ) -> Result<SyncAdmission, SyncRejected<Self>>;
             fn status(&self) -> SyncStatusSnapshot;
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
 }

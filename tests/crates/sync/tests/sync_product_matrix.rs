@@ -26,8 +26,8 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
-    sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
-    warp::PresentationFrontier,
+    sync::{AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation},
+    warp::{AssetFrame, PresentationFrontier},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
@@ -694,21 +694,27 @@ impl ProductHarness {
                 let playback = deck.playback_view();
                 let position = playback.position.unwrap_or(0.0);
                 let source = if playback.playing {
-                    AlignmentSource::Audible(
-                        PresentationFrontier::builder()
+                    AlignmentSource::Audible {
+                        frontier: PresentationFrontier::builder()
                             .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
                             .output(SessionFrame::new(
                                 i64::try_from(self.output_frames).unwrap_or(i64::MAX),
                             ))
                             .build(),
-                    )
+                        speed: f64::from(deck.rate()),
+                    }
                 } else {
-                    AlignmentSource::Prepared
+                    AlignmentSource::Prepared(
+                        AssetFrame::new((position * f64::from(case.sample_rate)).max(0.0))
+                            .unwrap_or_else(|error| {
+                                panic!("{}: cue deck {index}: {error:?}", case.id)
+                            }),
+                    )
                 };
                 let target = deck.id();
                 let activation =
                     SessionFrame::new(i64::try_from(self.output_frames).unwrap_or(i64::MAX));
-                let admission = self
+                let _ = self
                     .host
                     .with(move |host| {
                         host.transact(SyncOperation::Sync {
@@ -724,11 +730,6 @@ impl ProductHarness {
                     .unwrap_or_else(|rejected| {
                         panic!("{}: sync deck {index}: {rejected}", case.id)
                     });
-                if let SyncAdmission::Unavailable { capability, .. } = admission {
-                    self.failures.push(format!(
-                        "sync deck {index} admitted unavailable capability {capability:?}"
-                    ));
-                }
             }
             if matches!(case.order, OperationOrder::SequentialSync) {
                 let _ = self.render(case, self.block_frames).await;
