@@ -170,7 +170,10 @@ fn source_paths(root: &Path) -> Result<Vec<String>> {
 }
 
 fn manifest(root: &Path, target_profile: TargetProfile) -> Result<Manifest> {
-    let paths = source_paths(root)?;
+    let paths: Vec<_> = source_paths(root)?
+        .into_iter()
+        .filter(|path| !path.starts_with("tests/"))
+        .collect();
     let mut manifest = Manifest {
         schema_version: 1,
         target_profile,
@@ -265,7 +268,14 @@ mod tests {
             "#[kithara_config::config] struct Registered { #[config(value)] value: u64 } struct IgnoredConfig { value: u64 }",
         )
         .unwrap();
+        fs::create_dir(root.path().join("tests")).unwrap();
+        fs::write(
+            root.path().join("tests/fixture.rs"),
+            "#[kithara_config::config] struct Fixture { #[config(value)] value: u64 }",
+        )
+        .unwrap();
         let first = manifest(root.path(), TargetProfile::Native).unwrap();
+        assert_eq!(first.rust_files, 1);
         assert_eq!(first.registrations.len(), 1);
         assert_eq!(first.registrations[0].owner, "Registered");
         assert_eq!(
