@@ -4574,6 +4574,7 @@ dependencies = [
  "humantime-serde",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-drm",
  "kithara-events",
