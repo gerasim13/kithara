@@ -1,5 +1,9 @@
 use std::ops::Range;
 
+use kithara_ui_draw::{
+    DrawListBuilder, FillRule, LineCap, LineJoin, Paint, Pen, Pt, Rgba, Stop, Stops, Transform,
+    Verb,
+};
 use num_traits::cast::AsPrimitive;
 use velato::{
     Composition,
@@ -13,11 +17,7 @@ use velato::{
     },
 };
 
-use super::error::LottieError;
-use crate::draw::{
-    DrawListBuilder, FillRule, LineCap, LineJoin, Paint, Pen, Pt, Rgba, Stop, Stops, Transform,
-    Verb,
-};
+use crate::LottieError;
 
 /// Draws one frame of an artwork into a list, in the neutral vocabulary.
 ///
@@ -27,7 +27,7 @@ use crate::draw::{
 ///
 /// # Errors
 /// Returns what the artwork asks for that this vocabulary has no word for.
-pub(crate) fn emit(
+pub fn emit(
     composition: &Composition,
     frame: f64,
     into: &mut DrawListBuilder,
@@ -398,184 +398,5 @@ fn point(point: Point) -> Pt {
     Pt {
         x: point.x.as_(),
         y: point.y.as_(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-    use velato::Composition;
-
-    use super::emit;
-    use crate::draw::{DrawCmd, DrawListBuilder, Geom, Paint};
-
-    /// One square, filled, under one group transform: the smallest artwork that
-    /// exercises the whole walk — layer, group, contour, draw.
-    const PROBE: &str = include_str!("../../assets/lottie/probe.json");
-
-    fn read() -> Composition {
-        Composition::from_slice(PROBE.as_bytes())
-            .unwrap_or_else(|error| panic!("the probe artwork must read: {error}"))
-    }
-
-    fn drawn() -> Vec<DrawCmd> {
-        let mut list = DrawListBuilder::default();
-        emit(&read(), 0.0, &mut list)
-            .unwrap_or_else(|error| panic!("the probe artwork must draw: {error}"));
-        list.finish().commands().to_vec()
-    }
-
-    /// Three layers, each one draw: the plate, the rule and the ramp.
-    #[kithara::test]
-    fn every_layer_of_the_probe_is_drawn() {
-        assert_eq!(drawn().len(), 3);
-    }
-
-    /// The rectangle and the disc share a transform with no draw between them,
-    /// so they merge into one contour that a single fill claims — the merge
-    /// rule is what decides how many shapes one draw covers.
-    #[kithara::test]
-    fn two_shapes_under_one_fill_become_one_contour() {
-        assert_eq!(
-            drawn()
-                .iter()
-                .filter(|command| matches!(command, DrawCmd::Fill { .. }))
-                .count(),
-            2
-        );
-    }
-
-    #[kithara::test]
-    fn a_contour_reaches_the_list_as_an_outline_rather_than_a_named_shape() {
-        assert!(drawn().iter().all(|command| matches!(
-            command,
-            DrawCmd::Fill {
-                geom: Geom::Path(_),
-                ..
-            } | DrawCmd::Stroke {
-                geom: Geom::Path(_),
-                ..
-            }
-        )));
-    }
-
-    /// The plate layer is drawn at four fifths, and its own fill at full, so
-    /// the colour that reaches the list carries the layer's opacity — velato
-    /// folds it into the brush rather than opening a layer for it. The plate is
-    /// the artwork's last layer, and a Lottie is drawn back to front, so it is
-    /// the first thing this list says.
-    #[kithara::test]
-    fn a_layers_opacity_is_folded_into_the_colour_it_paints_with() {
-        let drawn = drawn();
-        let Some(DrawCmd::Fill {
-            paint: Paint::Solid(color),
-            ..
-        }) = drawn.first()
-        else {
-            panic!("the plate is the first thing drawn, and it is one colour");
-        };
-
-        assert!((color.a - 0.8).abs() < 1e-3, "alpha was {}", color.a);
-    }
-
-    #[kithara::test]
-    fn a_ramp_the_artwork_names_reaches_the_list_as_a_ramp() {
-        assert!(drawn().iter().any(|command| matches!(
-            command,
-            DrawCmd::Fill {
-                paint: Paint::Linear { .. },
-                ..
-            }
-        )));
-    }
-
-    /// The artwork the gallery shows. Three layers keyframed over two seconds:
-    /// two turning opposite ways and one breathing. Nothing here reads a clock,
-    /// so a frame drawn twice is drawn the same, and two frames apart are only
-    /// the same if the artwork does not move — which is what this asks.
-    #[kithara::test]
-    fn the_shipped_artwork_draws_a_different_picture_at_a_different_frame() {
-        let artwork =
-            Composition::from_slice(include_str!("../../assets/lottie/pulse.json").as_bytes())
-                .unwrap_or_else(|error| panic!("the shipped artwork must read: {error}"));
-        let at = |frame: f64| {
-            let mut list = DrawListBuilder::default();
-            emit(&artwork, frame, &mut list)
-                .unwrap_or_else(|error| panic!("the shipped artwork must draw: {error}"));
-            list.finish().commands().to_vec()
-        };
-
-        assert_ne!(at(0.0), at(30.0));
-    }
-
-    #[kithara::test]
-    fn a_stroked_contour_reaches_the_list_as_a_stroke() {
-        assert!(
-            drawn()
-                .iter()
-                .any(|command| matches!(command, DrawCmd::Stroke { .. }))
-        );
-    }
-}
-
-/// What an artwork asks for that this vocabulary has no word for.
-#[cfg(test)]
-mod refusals {
-    use kithara_test_utils::kithara;
-    use velato::Composition;
-
-    use super::{LottieError, emit};
-    use crate::draw::DrawListBuilder;
-
-    /// One square with half its contour trimmed away, which is the shape the
-    /// emitter does not cut. Everything else about it is drawable, so what is
-    /// refused is the one thing named.
-    ///
-    /// A trim rather than a repeater because velato imports only the first of
-    /// the two: its repeater arm is commented out, so no document can put a
-    /// `Shape::Repeater` in front of this emitter.
-    fn refused() -> (Result<(), LottieError>, usize) {
-        const TRIMMED: &str = r#"{
-        "v": "5.7.0", "fr": 60, "ip": 0, "op": 60, "w": 100, "h": 100, "nm": "trimmed",
-        "ddd": 0, "assets": [],
-        "layers": [{
-            "ddd": 0, "ind": 1, "ty": 4, "nm": "cut", "sr": 1, "ao": 0,
-            "ip": 0, "op": 60, "st": 0, "bm": 0,
-            "ks": {
-                "o": {"a": 0, "k": 100}, "r": {"a": 0, "k": 0},
-                "p": {"a": 0, "k": [50, 50, 0]}, "a": {"a": 0, "k": [0, 0, 0]},
-                "s": {"a": 0, "k": [100, 100, 100]}
-            },
-            "shapes": [{"ty": "gr", "nm": "group", "it": [
-                {"ty": "rc", "nm": "square", "d": 1,
-                 "s": {"a": 0, "k": [20, 20]}, "p": {"a": 0, "k": [0, 0]}, "r": {"a": 0, "k": 0}},
-                {"ty": "fl", "nm": "fill", "r": 1,
-                 "c": {"a": 0, "k": [1, 1, 1, 1]}, "o": {"a": 0, "k": 100}},
-                {"ty": "tm", "nm": "trim", "m": 1,
-                 "s": {"a": 0, "k": 0}, "e": {"a": 0, "k": 50}, "o": {"a": 0, "k": 0}},
-                {"ty": "tr", "p": {"a": 0, "k": [0, 0]}, "a": {"a": 0, "k": [0, 0]},
-                 "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}, "o": {"a": 0, "k": 100}}
-            ]}]
-        }]
-        }"#;
-
-        let artwork = Composition::from_slice(TRIMMED.as_bytes())
-            .unwrap_or_else(|error| panic!("the trimmed artwork must read: {error}"));
-        let mut list = DrawListBuilder::default();
-        let refusal = emit(&artwork, 0.0, &mut list);
-
-        (refusal, list.finish().commands().len())
-    }
-
-    #[kithara::test]
-    fn what_the_emitter_cannot_cut_is_refused_by_name() {
-        assert!(matches!(refused().0, Err(LottieError::Modifier { .. })));
-    }
-
-    /// The whole artwork, not the shape it stumbled on: a picture that half
-    /// draws is one nobody authored.
-    #[kithara::test]
-    fn a_refused_artwork_leaves_the_list_empty() {
-        assert_eq!(refused().1, 0);
     }
 }

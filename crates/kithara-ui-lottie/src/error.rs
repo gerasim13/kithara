@@ -32,7 +32,7 @@ pub enum LottieError {
     #[error("layer {layer:?} has a ramp this list refuses: {source}")]
     Ramp {
         layer: String,
-        source: crate::draw::StopsError,
+        source: kithara_ui_draw::StopsError,
     },
     #[error("layer {layer:?} limits its miter, which this list's pen leaves to the backend")]
     MiteredStroke { layer: String },

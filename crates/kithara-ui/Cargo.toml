@@ -38,6 +38,7 @@ no-block = ["kithara-platform/no-block"]
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
 render = [
+    "dep:kithara-ui-lottie",
     "dep:lucide-icons",
     "dep:naga",
     "dep:num-traits",
@@ -45,7 +46,6 @@ render = [
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
-    "dep:velato",
     "kithara-ui-draw/list",
     "kithara-ui-shaping/shape",
 ]
@@ -58,6 +58,7 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-ui-capture = { workspace = true, optional = true }
 kithara-ui-draw = { workspace = true }
+kithara-ui-lottie = { workspace = true, optional = true }
 kithara-ui-shaping = { workspace = true }
 
 bon = { workspace = true }
@@ -84,7 +85,6 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
-velato = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
@@ -122,6 +122,8 @@ iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
+# The emitter is measured against the renderer it was written from.
+velato = { workspace = true }
 # The budget guard reads the renderer's bump allocators back, which vello only
 # does when this is on. A dev-dependency so a shipped build keeps the fast path
 # rather than a readback on every frame.
