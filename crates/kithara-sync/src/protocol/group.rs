@@ -5,9 +5,9 @@ use kithara_warp::{
 };
 
 use crate::{
-    ParentFact, SyncAdmission, SyncApplied, SyncCapability, SyncExecutionStamp, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
-    SyncRejected, SyncStaged, SyncTransition, TopologyStamp,
+    LoadGeneration, ParentFact, SyncAdmission, SyncApplied, SyncCapability, SyncExecutionStamp,
+    SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncReceipt, SyncRejected, SyncStaged, SyncTransition, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -184,6 +184,26 @@ pub enum SyncError {
     /// start again; only an audible retarget can move it.
     #[error("member {member_id} already sounds")]
     MemberAudible { member_id: BeatGridId },
+    /// A relocation reached a member that sounds through no applied map;
+    /// only a launch can start it.
+    #[error("member {member_id} sounds through no applied map")]
+    MemberSilent { member_id: BeatGridId },
+    /// A destructive transport reached a member that sounds through an
+    /// applied map; only a relocation moves it without leaving the beats.
+    #[error("member {member_id} sounds through an applied map and must be relocated")]
+    RelocationRequired { member_id: BeatGridId },
+    /// A relocation named another Track load than the one sounding through
+    /// the member's applied map.
+    #[error("member {member_id} sounds load {expected:?}, not {given:?}")]
+    LoadMismatch {
+        member_id: BeatGridId,
+        expected: LoadGeneration,
+        given: LoadGeneration,
+    },
+    /// The member grid does not cover a relocation cue yet; a relocation is
+    /// refused rather than left waiting, since its cue ages with the frontier.
+    #[error("member {member_id} grid does not cover the relocation cue yet")]
+    RelocationUncovered { member_id: BeatGridId },
     /// A member's armed preparation is committed to the output until it is
     /// presented.
     #[error("member {member_id} is committed to operation {operation}")]
