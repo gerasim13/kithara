@@ -65,7 +65,9 @@ fn delegated(options: TokenStream, item: &syn::ItemFn) -> Result<TokenStream> {
 fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
     let mut built_default = false;
     let mut builder = true;
+    let mut construction = false;
     let mut runtime_update = false;
+    let mut sdk = false;
     let mut values_vis = None;
     let mut seen: Vec<syn::Path> = Vec::new();
     syn::meta::parser(|meta| {
@@ -75,17 +77,21 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
         seen.push(meta.path.clone());
         if meta.path.is_ident("default") {
             built_default = true;
+        } else if meta.path.is_ident("construction") {
+            construction = true;
         } else if meta.path.is_ident("update") {
             runtime_update = true;
         } else if meta.path.is_ident("sdk") {
-            // The source registration drives SDK projection.
+            sdk = true;
         } else if meta.path.is_ident("builder") {
             builder = meta.value()?.parse::<syn::LitBool>()?.value;
         } else if meta.path.is_ident("values_vis") {
             let visibility: syn::LitStr = meta.value()?.parse()?;
             values_vis = Some(syn::parse_str::<syn::Visibility>(&visibility.value())?);
         } else {
-            return Err(meta.error("expected default, update, sdk, builder = false, or values_vis"));
+            return Err(meta.error(
+                "expected construction, default, update, sdk, builder = false, or values_vis",
+            ));
         }
         Ok(())
     })
@@ -94,6 +100,12 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
         return Err(syn::Error::new_spanned(
             &item.ident,
             "default requires the struct builder",
+        ));
+    }
+    if construction && (built_default || runtime_update || sdk || values_vis.is_some()) {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "construction inputs cannot declare retained defaults, updates, SDK records, or values visibility",
         ));
     }
     let Fields::Named(fields) = &mut item.fields else {
@@ -109,7 +121,7 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
     let mut update_lowers: Vec<TokenStream> = Vec::new();
     let name = &item.ident;
     for member in &mut fields.named {
-        if let Some(expanded) = field::expand(member, &item.generics, name)? {
+        if let Some(expanded) = field::expand(member, &item.generics, name, !construction)? {
             value_fields.push(expanded.declaration);
             reads.push(expanded.read);
             if let Some(update) = expanded.update {
@@ -141,18 +153,22 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
     let visibility = values_vis.as_ref().unwrap_or(&item.vis);
     let gates = attributes(&item.attrs, false)?;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let snapshot = quote! {
-        #(#gates)*
-        #[doc = concat!("Owned readable values of `", stringify!(#name), "`. Resource inputs are excluded.")]
-        #visibility struct #values {
-            #(#value_fields,)*
-        }
-        #(#gates)*
-        #[automatically_derived]
-        impl #impl_generics ::kithara_config::Config for #name #ty_generics #where_clause {
-            type Values = #values;
-            fn values(&self) -> Self::Values {
-                #values { #(#reads,)* }
+    let snapshot = if construction {
+        TokenStream::new()
+    } else {
+        quote! {
+            #(#gates)*
+            #[doc = concat!("Owned readable values of `", stringify!(#name), "`. Resource inputs are excluded.")]
+            #visibility struct #values {
+                #(#value_fields,)*
+            }
+            #(#gates)*
+            #[automatically_derived]
+            impl #impl_generics ::kithara_config::Config for #name #ty_generics #where_clause {
+                type Values = #values;
+                fn values(&self) -> Self::Values {
+                    #values { #(#reads,)* }
+                }
             }
         }
     };
@@ -358,6 +374,53 @@ mod tests {
         assert!(expanded.contains("field (get , copy)"));
         assert!(expanded.contains("patch (skip)"));
         assert!(expanded.contains("pub ratio : f64"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn construction_inputs_keep_field_attributes_without_a_retained_snapshot() {
+        let expanded = expand(
+            quote!(construction, builder = false),
+            quote! {
+                struct Input<T> {
+                    #[config(skip = "injected resource", builder(start_fn), patch(skip))]
+                    resource: T,
+                    #[config(value, builder(default), field(get, copy))]
+                    capacity: usize,
+                }
+            },
+        )
+        .expect("construction inputs are classified without retaining resources")
+        .to_string();
+
+        assert!(expanded.contains("builder (start_fn)"));
+        assert!(expanded.contains("patch (skip)"));
+        assert!(expanded.contains("field (get , copy)"));
+        assert!(!expanded.contains("InputValues"));
+        assert!(!expanded.contains("kithara_config :: Config for Input"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn construction_inputs_reject_retained_only_options() {
+        for options in [
+            quote!(construction, default),
+            quote!(construction, update),
+            quote!(construction, sdk),
+            quote!(construction, values_vis = "pub"),
+        ] {
+            assert!(
+                expand(
+                    options.clone(),
+                    quote! {
+                        struct Input {
+                            #[config(value)]
+                            capacity: usize,
+                        }
+                    },
+                )
+                .is_err(),
+                "construction accepted retained-only options: {options}"
+            );
+        }
     }
 
     #[kithara::test(native, flash(false))]

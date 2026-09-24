@@ -45,6 +45,33 @@ fn registrations_separate_retained_values_from_delegated_operations() {
 }
 
 #[test]
+fn construction_input_is_registered_without_claiming_retained_values() {
+    let entries = registrations(
+        "crates/kithara-audio/src/pipeline/config/audio.rs",
+        r#"
+        #[kithara_config::config(construction, builder = false)]
+        struct AudioConfig<T> {
+            #[config(nested, builder(start_fn))] stream: T,
+            #[config(value, builder(default = 10))] chunks: usize,
+            #[config(skip = "injected observer", patch(skip))] observer: Option<Observer>,
+        }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, "construction");
+    assert_eq!(entries[0].fields.len(), 3);
+    assert_eq!(entries[0].fields[0].role, "nested");
+    assert!(entries[0].fields[0].value_type.is_none());
+    assert_eq!(entries[0].fields[1].builder_default.as_deref(), Some("10"));
+    assert!(entries[0].fields[1].value_type.is_none());
+    assert_eq!(
+        entries[0].fields[2].exclusion_reason.as_deref(),
+        Some("injected observer")
+    );
+}
+
+#[test]
 fn manifest_reads_composed_builder_field_and_patch_groups() {
     let entries = registrations(
         "crates/kithara-play/src/player/config.rs",

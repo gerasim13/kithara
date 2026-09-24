@@ -153,7 +153,7 @@ fn builder_default(stream: proc_macro2::TokenStream) -> syn::Result<Option<Strin
     }))
 }
 
-fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
+fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredField> {
     let name = field
         .ident
         .as_ref()
@@ -203,10 +203,14 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
         }
     }
     let rust_type = tokens(&field.ty);
-    let value_type = match role {
-        Some("value") => Some(projected_type.unwrap_or_else(|| rust_type.clone())),
-        Some("nested") => Some(format!("<{rust_type} as kithara_config::Config>::Values")),
-        _ => None,
+    let value_type = if snapshot {
+        match role {
+            Some("value") => Some(projected_type.unwrap_or_else(|| rust_type.clone())),
+            Some("nested") => Some(format!("<{rust_type} as kithara_config::Config>::Values")),
+            _ => None,
+        }
+    } else {
+        None
     };
     Ok(RegisteredField {
         name: name.to_string(),
@@ -234,10 +238,13 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
     fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
         if let Some(attribute) = config_attribute(&item.attrs) {
             let mut sdk = false;
+            let mut construction = false;
             if matches!(attribute.meta, Meta::List(_))
                 && let Err(error) = attribute.parse_nested_meta(|meta| {
                     if meta.path.is_ident("sdk") {
                         sdk = true;
+                    } else if meta.path.is_ident("construction") {
+                        construction = true;
                     } else if meta.input.peek(syn::Token![=]) {
                         let _: syn::Expr = meta.value()?.parse()?;
                     }
@@ -247,7 +254,12 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                 self.error = Some(error.into());
                 return;
             }
-            match item.fields.iter().map(registered_field).collect() {
+            match item
+                .fields
+                .iter()
+                .map(|field| registered_field(field, !construction))
+                .collect()
+            {
                 Ok(fields) => self.registrations.push(Registration {
                     source: self.source.to_owned(),
                     package: self.package.clone(),
@@ -256,7 +268,11 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                     owner: item.ident.to_string(),
                     property: None,
                     hook: None,
-                    kind: "retained",
+                    kind: if construction {
+                        "construction"
+                    } else {
+                        "retained"
+                    },
                     sdk,
                     docs: docs(&item.attrs),
                     conditions: self

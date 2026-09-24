@@ -28,6 +28,7 @@ pub(super) fn expand(
     field: &mut Field,
     generics: &Generics,
     owner: &syn::Ident,
+    snapshot: bool,
 ) -> Result<Option<Expanded>> {
     let mut role = None;
     let mut update = false;
@@ -112,23 +113,11 @@ pub(super) fn expand(
             "classify each config field as value, nested, or skip = reason",
         )
     })?;
-    if update && !matches!(role, Role::Value) {
-        return Err(syn::Error::new_spanned(
-            &*field,
-            "runtime update currently requires a retained value field",
-        ));
-    }
-    if update {
-        for attribute in &preserved {
-            if patch_skips(attribute)? {
-                return Err(syn::Error::new_spanned(
-                    &*field,
-                    "runtime update cannot use patch(skip): the generated Patch field is absent",
-                ));
-            }
-        }
-    }
+    validate_role(field, &role, update, snapshot, &preserved)?;
     field.attrs = preserved;
+    if !snapshot {
+        return Ok(None);
+    }
     let name = field
         .ident
         .as_ref()
@@ -167,6 +156,44 @@ pub(super) fn expand(
         read: quote! { #(#gates)* #name: #expression },
         update,
     }))
+}
+
+fn validate_role(
+    field: &Field,
+    role: &Role,
+    update: bool,
+    snapshot: bool,
+    preserved: &[syn::Attribute],
+) -> Result<()> {
+    if update && !matches!(role, Role::Value) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "runtime update currently requires a retained value field",
+        ));
+    }
+    if update && !snapshot {
+        return Err(syn::Error::new_spanned(
+            field,
+            "construction inputs cannot declare retained runtime updates",
+        ));
+    }
+    if !snapshot && matches!(role, Role::Projection(_)) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "construction inputs do not produce projected values",
+        ));
+    }
+    if update {
+        for attribute in preserved {
+            if patch_skips(attribute)? {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "runtime update cannot use patch(skip): the generated Patch field is absent",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn patch_skips(attribute: &syn::Attribute) -> Result<bool> {
