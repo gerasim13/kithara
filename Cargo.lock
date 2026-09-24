@@ -4503,6 +4503,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-assets",
+ "kithara-config",
  "kithara-derive",
  "kithara-encode",
  "kithara-events",
