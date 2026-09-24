@@ -1,8 +1,9 @@
+use kithara_ui_shaping::GlyphRun;
+
 use super::{
     DrawBuffers, DrawCmd, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
     Transform, Verb, place, pool::Buffer,
 };
-use crate::shaping::GlyphRun;
 
 /// An ordered retained list of drawing commands.
 #[derive(Clone, Debug, Default, PartialEq)]

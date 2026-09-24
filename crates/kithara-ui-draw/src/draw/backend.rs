@@ -1,5 +1,6 @@
+use kithara_ui_shaping::GlyphRun;
+
 use super::{Caps, DrawCmd, DrawList, Geom, Image, Needs, Paint, Pen, Rect, Rgba, Transform};
-use crate::shaping::GlyphRun;
 
 /// Consumes toolkit-neutral retained drawing commands.
 pub trait Backend {
@@ -57,14 +58,12 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_shaping::GlyphRun;
 
     use super::{
         Backend, Caps, DrawCmd, DrawList, Geom, Image, Paint, Pen, Rect, Rgba, Transform, replay,
     };
-    use crate::{
-        draw::{DrawListBuilder, FillRule, ImageId, Path, Pt, Verb},
-        shaping::GlyphRun,
-    };
+    use crate::draw::{DrawListBuilder, FillRule, ImageId, Path, Pt, Verb};
 
     /// A backend that records what it was asked to draw and nothing else.
     #[derive(Default)]

@@ -8,7 +8,6 @@ pub const MAX_STOPS: usize = 4;
 
 /// One colour at one position along a ramp.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct Stop {
     pub color: Rgba,
     pub offset: f32,
@@ -16,7 +15,6 @@ pub struct Stop {
 
 /// Why a ramp was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[non_exhaustive]
 pub enum StopsError {
     #[error("a ramp needs at least two stops, got {count}")]
     TooFew { count: usize },
@@ -85,7 +83,6 @@ impl Stops {
 /// backend resolves the same colour at the same place without applying a
 /// transform of its own.
 #[derive(Clone, Copy, Debug, PartialEq, derive_more::From)]
-#[non_exhaustive]
 pub enum Paint {
     /// One colour across the whole shape.
     #[from]

@@ -19,29 +19,6 @@ pub struct Limits {
     pub max_nodes: usize,
 }
 
-/// Memory retained by the draw pools between frames.
-#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
-pub struct DrawPoolLimits {
-    /// Command slots retained by one returned draw-list buffer.
-    #[builder(default = 512)]
-    pub command_capacity: usize,
-    /// Maximum reusable buffers kept by each pool. Zero is treated as one.
-    #[builder(default = 64)]
-    pub max_buffers: usize,
-    /// Hard byte limit shared by every draw buffer kind.
-    #[builder(default = 64 * 1024 * 1024)]
-    pub max_bytes: usize,
-    /// Vector verbs retained by one returned path buffer.
-    #[builder(default = 128)]
-    pub path_capacity: usize,
-    /// UTF-8 bytes retained by one returned text buffer.
-    #[builder(default = 128)]
-    pub text_capacity: usize,
-}
-
 /// Compiled screens the retained host keeps while a document turns between
 /// its pages. The immediate host compiles both deck layouts up front and
 /// keeps no screen cache of its own, so it never reads this.
@@ -112,8 +89,9 @@ pub struct UiConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::{DrawPoolLimits, DrawPoolLimitsPatch};
 
-    use super::{DrawPoolLimits, DrawPoolLimitsPatch, LimitsPatch, UiConfig, UiConfigPatch};
+    use super::{LimitsPatch, UiConfig, UiConfigPatch};
     #[cfg(any(feature = "render", feature = "vello"))]
     use crate::draw::DrawBuffers;
 

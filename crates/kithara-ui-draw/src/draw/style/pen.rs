@@ -1,6 +1,5 @@
 /// How a stroke's free ends are shaped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum LineCap {
     /// Cut flush with the endpoint.
     Butt,
@@ -12,7 +11,6 @@ pub enum LineCap {
 
 /// How a stroke's corners are shaped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum LineJoin {
     /// Flattened across the corner.
     Bevel,
@@ -24,7 +22,6 @@ pub enum LineJoin {
 
 /// How a line is drawn: how wide it is, and what its ends and corners look like.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct Pen {
     pub cap: LineCap,
     pub join: LineJoin,

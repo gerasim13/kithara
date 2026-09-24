@@ -1,11 +1,11 @@
 use super::{
-    ir::{Pt, Rect},
+    ir::Rect,
     pool::{Buffer, VecGuard},
 };
+use crate::geom::Pt;
 
 /// One move a vector outline is made of, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum Verb {
     /// Closes the current subpath back to where it started.
     Close,
@@ -26,8 +26,7 @@ pub enum Verb {
 }
 
 /// How the inside of an outline that crosses itself is decided.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FillRule {
     /// Inside where the winding number is not zero.
     #[default]

@@ -46,6 +46,7 @@ workspace-members = [
   "kithara-test-utils",
   "kithara-ui",
   "kithara-ui-capture",
+  "kithara-ui-draw",
   "kithara-ui-shaping",
   "xtask",
 ]

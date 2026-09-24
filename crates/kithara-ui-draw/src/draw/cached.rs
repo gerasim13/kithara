@@ -6,8 +6,8 @@
 #[derive(fieldwork::Fieldwork)]
 #[derive_where::derive_where(Default)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct CachedValue<K: PartialEq + Default, V> {
-    #[field(get, vis = "pub(crate)")]
+pub struct CachedValue<K: PartialEq + Default, V> {
+    #[field(get, vis = "pub")]
     key: K,
     value: Option<V>,
 }
@@ -16,14 +16,14 @@ impl<K: PartialEq + Default, V> CachedValue<K, V> {
     /// Takes the new pair when the old one no longer answers. A key that still
     /// holds keeps the value it was paired with, so a caller that re-derived
     /// the same key cannot replace a good value with a stale one.
-    pub(crate) fn update(&mut self, key: K, value: Option<V>) {
+    pub fn update(&mut self, key: K, value: Option<V>) {
         if self.value.is_none() || self.key != key {
             self.key = key;
             self.value = value;
         }
     }
 
-    pub(crate) fn value(&self) -> Option<&V> {
+    pub fn value(&self) -> Option<&V> {
         self.value.as_ref()
     }
 }

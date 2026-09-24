@@ -4,6 +4,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     app,
     app::{Config, Ui},
+    backends::paint_color,
     builtin,
     capture::{Film, Geometry, Locate, Offscreen, Stage, shoot_part, shoot_set},
 };
@@ -147,7 +148,7 @@ impl Stage for Masonry<'_> {
             .as_mut()
             .ok_or_else(|| "no page is open: turn to one before photographing".to_owned())?;
         let drawn = page.render().map_err(|error| format!("draw: {error}"))?;
-        let background = page.background().into();
+        let background = paint_color(page.background());
         self.off
             .rasterise(&drawn, self.frame.scale, background, &mut self.pixels)?;
         Ok(&self.pixels)

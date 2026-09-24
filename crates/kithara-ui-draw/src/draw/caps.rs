@@ -6,7 +6,6 @@ use super::{ir::DrawCmd, list::DrawList, style::Paint};
 /// something does not approximate it and does not skip it: the list that asks
 /// is refused whole, before anything reaches the screen.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub struct Caps {
     /// Draws externally owned images.
     pub can_draw_images: bool,
@@ -98,7 +97,6 @@ impl From<&DrawList> for Needs {
 
 /// What a list asked for that its backend cannot draw.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[non_exhaustive]
 pub enum Unsupported {
     #[error("this backend cannot scope drawing to a clip")]
     Clip,

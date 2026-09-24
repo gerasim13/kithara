@@ -4,8 +4,8 @@ use kithara_platform::sync;
 use vello::{
     Glyph, Scene,
     kurbo::{
-        Affine, Arc, BezPath, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect,
-        Shape, Stroke as KurboStroke, Vec2,
+        Affine, Arc, BezPath, Cap, Circle, Join, Line, Rect as KurboRect, RoundedRect, Shape,
+        Stroke as KurboStroke, Vec2,
     },
     peniko::{
         Blob, Brush, Color, ColorStop, Fill, FontData, Gradient, ImageAlphaType, ImageBrush,
@@ -16,7 +16,7 @@ use vello::{
 use crate::{
     draw::{
         Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, LineCap, LineJoin, Paint, Path,
-        Pen, Pt, Rect, Rgba, Stops, Transform, Verb, replay,
+        Pen, Rect, Rgba, Stops, Transform, Verb, replay,
     },
     shaping::{GlyphFace, GlyphRun},
 };
@@ -45,7 +45,7 @@ impl<'scene> VelloBackend<'scene> {
         self.scene.stroke(
             &stroke(pen),
             Affine::IDENTITY,
-            Color::from(color),
+            paint_color(color),
             None,
             shape,
         );
@@ -247,7 +247,7 @@ impl Backend for VelloBackend<'_> {
                 ]))
                 .font_size(run.size())
                 .normalized_coords(segment.normalized_coords())
-                .brush(Color::from(color))
+                .brush(paint_color(color))
                 .draw(Fill::NonZero, glyphs);
         }
     }
@@ -265,7 +265,7 @@ fn brush(paint: Paint) -> Brush {
             radius,
             stops,
         } => ramp(Gradient::new_radial((center.x, center.y), radius), stops),
-        Paint::Solid(color) => Brush::Solid(Color::from(color)),
+        Paint::Solid(color) => Brush::Solid(paint_color(color)),
     }
 }
 
@@ -275,7 +275,7 @@ fn ramp(gradient: Gradient, stops: Stops) -> Brush {
             stops
                 .as_slice()
                 .iter()
-                .map(|stop| ColorStop::from((stop.offset, Color::from(stop.color))))
+                .map(|stop| ColorStop::from((stop.offset, paint_color(stop.color))))
                 .collect::<Vec<ColorStop>>()
                 .as_slice(),
         ),
@@ -311,16 +311,10 @@ fn stroke(pen: Pen) -> KurboStroke {
         })
 }
 
-impl From<Rgba> for Color {
-    fn from(color: Rgba) -> Self {
-        Self::new([color.r, color.g, color.b, color.a])
-    }
-}
-
-impl From<Pt> for Point {
-    fn from(point: Pt) -> Self {
-        Self::new(f64::from(point.x), f64::from(point.y))
-    }
+/// The colour vello paints for a toolkit-neutral one.
+#[must_use]
+pub const fn paint_color(color: Rgba) -> Color {
+    Color::new([color.r, color.g, color.b, color.a])
 }
 
 #[cfg(test)]
@@ -329,7 +323,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        draw::{DrawCmd, DrawListBuilder, Rect},
+        draw::{DrawCmd, DrawListBuilder, Pt, Rect},
         shaping::{FontPolicy, GlyphRun, TextContext, TextResources},
         skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
     };

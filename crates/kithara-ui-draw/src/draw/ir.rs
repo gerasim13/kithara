@@ -1,4 +1,4 @@
-#[cfg(feature = "render")]
+use kithara_ui_shaping::GlyphRun;
 use num_traits::ToPrimitive;
 
 use super::{
@@ -8,8 +8,7 @@ use super::{
     pool::PoolText,
     style::{Paint, Pen},
 };
-pub use crate::geom::{Pt, Transform};
-use crate::shaping::GlyphRun;
+use crate::geom::{Pt, Transform};
 
 /// A toolkit-neutral RGBA colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,7 +22,7 @@ pub struct Rgba {
 }
 
 /// Paints nothing: what a control draws where its skin names no colour.
-pub(crate) const TRANSPARENT: Rgba = Rgba {
+pub const TRANSPARENT: Rgba = Rgba {
     a: 0.0,
     b: 0.0,
     g: 0.0,
@@ -44,16 +43,16 @@ pub struct Rect {
 }
 
 impl Rect {
-    #[cfg(feature = "render")]
-    pub(crate) fn contains(self, point: Pt) -> bool {
+    #[must_use]
+    pub fn contains(self, point: Pt) -> bool {
         self.x <= point.x
             && point.x < self.x + self.w
             && self.y <= point.y
             && point.y < self.y + self.h
     }
 
-    #[cfg(feature = "render")]
-    pub(crate) fn uniform_horizontal_index(self, point: Pt, count: usize) -> Option<usize> {
+    #[must_use]
+    pub fn uniform_horizontal_index(self, point: Pt, count: usize) -> Option<usize> {
         let last = count.checked_sub(1)?;
         let count = count.to_f32()?;
         let cell_width = (self.contains(point) && self.w > 0.0).then_some(self.w / count)?;
@@ -66,7 +65,6 @@ impl Rect {
 
 /// Native geometry retained by a draw list.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum Geom {
     /// A circular arc whose angles are expressed in radians.
     Arc {
@@ -103,7 +101,6 @@ impl Geom {
 
 /// A retained drawing command.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum DrawCmd {
     /// A nested list scoped to a rectangular clip region.
     Clip {

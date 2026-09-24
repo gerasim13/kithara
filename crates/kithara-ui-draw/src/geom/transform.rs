@@ -26,7 +26,6 @@ impl Transform {
     /// a similarity. Loose enough to survive `sin_cos` on a degree that has no
     /// exact float, tight enough that a deliberate squash is never mistaken
     /// for one.
-    #[cfg(any(feature = "render", feature = "vello"))]
     const SQUARE: f32 = 1.0e-4;
 
     /// Sends a point through this transform.
@@ -40,8 +39,8 @@ impl Transform {
 
     /// Whether this keeps the axes where they are, so an axis-aligned
     /// rectangle stays one.
-    #[cfg(any(feature = "render", feature = "vello"))]
-    pub(crate) fn is_axis_aligned(self) -> bool {
+    #[must_use]
+    pub fn is_axis_aligned(self) -> bool {
         self.xy == 0.0 && self.yx == 0.0
     }
 
@@ -57,8 +56,8 @@ impl Transform {
     /// Equal to the single factor of a similarity, and the honest stand-in for
     /// a pen width where the two axes disagree — a stroke has one width and
     /// nowhere to put a second.
-    #[cfg(any(feature = "render", feature = "vello"))]
-    pub(crate) fn length_scale(self) -> f32 {
+    #[must_use]
+    pub fn length_scale(self) -> f32 {
         self.xx.mul_add(self.yy, -(self.xy * self.yx)).abs().sqrt()
     }
 
@@ -93,8 +92,8 @@ impl Transform {
     ///
     /// A circle stays a circle and a corner radius stays one radius only under
     /// such a transform; anything else has to become an outline.
-    #[cfg(any(feature = "render", feature = "vello"))]
-    pub(crate) fn similarity(self) -> Option<f32> {
+    #[must_use]
+    pub fn similarity(self) -> Option<f32> {
         let scale = self.xx.hypot(self.yx);
         let square = (self.xy.hypot(self.yy) - scale).abs() <= scale * Self::SQUARE
             && self.xx.mul_add(self.xy, self.yx * self.yy).abs() <= scale * scale * Self::SQUARE;

@@ -38,7 +38,6 @@ no-block = ["kithara-platform/no-block"]
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
 render = [
-    "dep:kithara-bufpool",
     "dep:lucide-icons",
     "dep:naga",
     "dep:num-traits",
@@ -47,17 +46,18 @@ render = [
     "dep:tracing",
     "dep:unicode-segmentation",
     "dep:velato",
+    "kithara-ui-draw/list",
     "kithara-ui-shaping/shape",
 ]
-iced = ["render", "dep:iced", "iced/advanced"]
+iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced"]
 vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
-kithara-bufpool = { workspace = true, optional = true }
 kithara-derive = { workspace = true, features = ["built-default", "control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-ui-capture = { workspace = true, optional = true }
+kithara-ui-draw = { workspace = true }
 kithara-ui-shaping = { workspace = true }
 
 bon = { workspace = true }
@@ -78,7 +78,6 @@ num-traits = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 ron = { workspace = true }
-roxmltree = { workspace = true }
 serde = { workspace = true }
 skrifa = { workspace = true, optional = true }
 tempfile = { workspace = true }

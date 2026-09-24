@@ -2,10 +2,11 @@ use kurbo::{Arc, Circle, PathEl, Point, RoundedRect, Shape};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    ir::{DrawCmd, Geom, Pt, Rect, Transform},
+    ir::{DrawCmd, Geom, Rect},
     list::DrawList,
     path::{Path, Verb},
 };
+use crate::geom::{Pt, Transform};
 
 /// The upright rectangle that holds this one after the transform.
 ///
@@ -99,7 +100,7 @@ pub(super) fn turned_ink(rect: Rect, turn: f32) -> Rect {
 /// answer for a control nobody moved. It stops being the answer the moment a
 /// pose carries the drawing somewhere else, which is the one case a caller
 /// needs it for: a host that clipped to the box would drop what left it.
-pub(crate) fn ink(list: &DrawList) -> Option<Rect> {
+pub fn ink(list: &DrawList) -> Option<Rect> {
     list.commands().iter().filter_map(command_ink).reduce(union)
 }
 
@@ -178,7 +179,8 @@ fn grown(rect: Rect, by: f32) -> Rect {
     }
 }
 
-pub(crate) fn union(first: Rect, second: Rect) -> Rect {
+#[must_use]
+pub fn union(first: Rect, second: Rect) -> Rect {
     let left = first.x.min(second.x);
     let top = first.y.min(second.y);
     let right = (first.x + first.w).max(second.x + second.w);

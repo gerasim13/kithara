@@ -2,14 +2,11 @@ use kurbo::{BezPath, PathEl, Point};
 use num_traits::ToPrimitive;
 use roxmltree::{Document, Node};
 
-use super::{
-    ir::Pt,
-    path::{FillRule, Outline, Path, Verb},
-};
+use super::path::{FillRule, Outline, Path, Verb};
+use crate::geom::Pt;
 
 /// Why a document could not be read as an outline.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
-#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SvgError {
     #[error("the document is not well-formed XML: {0}")]
     Malformed(String),

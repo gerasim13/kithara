@@ -947,7 +947,7 @@ fn photograph_scenario(
     let Some(dir) = dir else {
         return;
     };
-    let background = scenario.background().into();
+    let background = crate::backends::paint_color(scenario.background());
     let scene = scenario.scene();
     let rgba = crate::backends::conformance::rasterise_at(&scene, size, background)
         .unwrap_or_else(|error| panic!("rasterise scenario {name}: {error}"));

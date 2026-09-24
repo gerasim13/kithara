@@ -407,12 +407,6 @@ impl OutlinePen for IcedOutline<'_> {
     }
 }
 
-impl From<Pt> for Point {
-    fn from(point: Pt) -> Self {
-        Self::new(point.x, point.y)
-    }
-}
-
 fn stroke(color: Rgba, pen: Pen) -> IcedStroke<'static> {
     IcedStroke::default()
         .with_color(Color::from(color))

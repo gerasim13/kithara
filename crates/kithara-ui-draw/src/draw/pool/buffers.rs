@@ -6,7 +6,7 @@ use super::{
     super::{DrawCmd, DrawListBuilder, FillRule, PoolPath, Verb},
     Buffer, PoolText,
 };
-use crate::source::DrawPoolLimits;
+use crate::DrawPoolLimits;
 
 const SHARDS: usize = 1;
 
@@ -28,7 +28,6 @@ pool_schema! {
 
 /// Aggregate reuse statistics for every draw buffer kind.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct PoolStats {
     /// Acquisitions that had to create a fresh empty buffer.
     pub alloc_misses: u64,

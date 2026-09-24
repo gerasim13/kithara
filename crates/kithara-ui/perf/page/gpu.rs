@@ -17,12 +17,13 @@ use iced_wgpu::{
 };
 use kithara_ui::{
     app::Frame,
+    backends::paint_color,
     builtin,
     render::{shader::ShaderPass, vis::VisPass},
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions,
-    peniko::Color as VelloColor, wgpu as vello_wgpu,
+    wgpu as vello_wgpu,
 };
 use num_traits::cast::AsPrimitive as _;
 
@@ -196,7 +197,7 @@ impl RetainedGpu {
     }
 
     fn scene(&mut self, frame: &Frame, view: &vello_wgpu::TextureView) {
-        let background: VelloColor = builtin::skin().palette.bg.into();
+        let background = paint_color(builtin::skin().palette.bg);
         self.vello
             .render_to_texture(
                 &self.device,

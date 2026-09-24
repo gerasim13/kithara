@@ -25,6 +25,7 @@ crates = [
   "kithara-ring",
   "kithara-signal",
   "kithara-ui-capture",
+  "kithara-ui-draw",
   "kithara-ui-shaping",
 ]
 

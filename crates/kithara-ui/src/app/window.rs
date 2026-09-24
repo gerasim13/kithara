@@ -31,6 +31,7 @@ use super::{
     target,
 };
 use crate::{
+    backends::paint_color,
     draw::{Pt, TRANSPARENT},
     interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     render::{WindowCommand, WindowEdge, shader::ShaderPass, vis::VisPass},
@@ -481,7 +482,7 @@ where
             frame.scene(),
             &self.surface.target_view,
             &RenderParams {
-                base_color: TRANSPARENT.into(),
+                base_color: paint_color(TRANSPARENT),
                 width: size.width,
                 height: size.height,
                 antialiasing_method: AaConfig::Area,

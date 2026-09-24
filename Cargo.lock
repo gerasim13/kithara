@@ -5937,12 +5937,12 @@ dependencies = [
  "iced_tiny_skia",
  "iced_wgpu",
  "kithara-apple",
- "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui-capture",
+ "kithara-ui-draw",
  "kithara-ui-shaping",
  "kithara-workspace-hack",
  "kurbo 0.12.0",
@@ -5953,7 +5953,6 @@ dependencies = [
  "png 0.17.16",
  "pollster",
  "ron",
- "roxmltree",
  "serde",
  "serde_yaml_ng",
  "skrifa 0.37.0",
@@ -5976,6 +5975,29 @@ dependencies = [
  "num-traits",
  "png 0.17.16",
  "tempfile",
+]
+
+[[package]]
+name = "kithara-ui-draw"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "derive-where",
+ "derive_more",
+ "fieldwork",
+ "iced",
+ "kithara-bufpool",
+ "kithara-derive",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui-shaping",
+ "kithara-workspace-hack",
+ "kurbo 0.12.0",
+ "num-traits",
+ "roxmltree",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
