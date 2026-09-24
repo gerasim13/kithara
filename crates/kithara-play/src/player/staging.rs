@@ -1,3 +1,5 @@
+use std::{collections::VecDeque, mem};
+
 use kithara_events::TrackId;
 use kithara_platform::{
     CancelToken,
@@ -60,10 +62,59 @@ struct Held {
     lane: Option<StagedLane>,
 }
 
+/// What the owner hears about one preparation: `rejected` is the reason its
+/// lane was dropped, `None` for an installed lane.
+#[derive(Clone, Copy)]
+struct Outcome {
+    stamp: SyncExecutionStamp,
+    rejected: Option<SyncExecutionReject>,
+}
+
 #[derive(Default)]
 struct State {
     loaded: Option<Loaded>,
     held: Option<Held>,
+    /// Outcomes not yet handed to the owner, in the order the executor
+    /// committed them.
+    outcomes: VecDeque<Outcome>,
+    /// Whether a drainer is handing `outcomes` to the owner.
+    delivering: bool,
+}
+
+impl State {
+    /// Queues `outcome` behind every outcome committed before it; returns
+    /// the runtime to start a drainer on when none is running.
+    fn commit(&mut self, outcome: Outcome, handle: &Handle) -> Option<Handle> {
+        self.outcomes.push_back(outcome);
+        (!mem::replace(&mut self.delivering, true)).then(|| handle.clone())
+    }
+
+    /// Queues the cancellation of a lane the executor dropped.
+    fn retire(&mut self, held: &Held) -> Option<Handle> {
+        let outcome = Outcome {
+            stamp: held.stamp,
+            rejected: Some(SyncExecutionReject::Cancelled),
+        };
+        self.commit(outcome, &held.handle)
+    }
+
+    /// The next outcome the owner still has to hear; an installed lane that
+    /// was superseded or dropped before its turn is skipped, since its
+    /// cancellation, if any, follows it.
+    fn next_outcome(&mut self) -> Option<Outcome> {
+        while let Some(outcome) = self.outcomes.pop_front() {
+            let current = outcome.rejected.is_some()
+                || self
+                    .held
+                    .as_ref()
+                    .is_some_and(|held| held.stamp == outcome.stamp);
+            if current {
+                return Some(outcome);
+            }
+        }
+        self.delivering = false;
+        None
+    }
 }
 
 struct Shared {
@@ -72,7 +123,6 @@ struct Shared {
     /// preparation is ever admitted.
     owner: Option<Arc<dyn ReceiptOwner>>,
     cancel: CancelToken,
-    response_frames: usize,
     state: Mutex<State>,
 }
 
@@ -90,13 +140,11 @@ impl SyncStaging {
         track: BeatGridId,
         owner: Option<Arc<dyn ReceiptOwner>>,
         cancel: CancelToken,
-        response_frames: usize,
     ) -> Self {
         Self(Arc::new(Shared {
             track,
             owner,
             cancel,
-            response_frames,
             state: Mutex::default(),
         }))
     }
@@ -143,8 +191,10 @@ impl SyncStaging {
         let mut state = self.0.state.lock();
         let stale = state.held.take_if(|held| held.item != item);
         state.loaded = Some(Loaded { item, recipe });
+        let drain = stale.as_ref().and_then(|held| state.retire(held));
         drop(state);
-        self.cancel_reported(stale);
+        Self::cancel_silently(stale);
+        self.0.drain(drain);
     }
 
     /// The player holds no track any more, or is closing.
@@ -152,8 +202,10 @@ impl SyncStaging {
         let mut state = self.0.state.lock();
         state.loaded = None;
         let stale = state.held.take();
+        let drain = stale.as_ref().and_then(|held| state.retire(held));
         drop(state);
-        self.cancel_reported(stale);
+        Self::cancel_silently(stale);
+        self.0.drain(drain);
     }
 
     fn admit<G: SyncGroup>(&self, operation: &SyncOperation<G>) -> Result<(), SyncError> {
@@ -245,23 +297,13 @@ impl SyncStaging {
             held.cancel.cancel();
         }
     }
-
-    fn cancel_reported(&self, held: Option<Held>) {
-        let Some(held) = held else {
-            return;
-        };
-        held.cancel.cancel();
-        let Held { stamp, handle, .. } = held;
-        self.0
-            .deliver(&handle, stamp, Some(SyncExecutionReject::Cancelled));
-    }
 }
 
 impl Shared {
     /// Reports the outcome of the lane staged for `stamp`, unless that
     /// preparation was superseded, withdrawn, or unloaded meanwhile.
     fn settle(
-        &self,
+        self: &Arc<Self>,
         stamp: SyncExecutionStamp,
         cancel: &CancelToken,
         outcome: Result<StagedLane, SyncExecutionReject>,
@@ -285,24 +327,33 @@ impl Shared {
                 Some(reason)
             }
         };
+        let drain = state.commit(Outcome { stamp, rejected }, &handle);
         drop(state);
-        self.deliver(&handle, stamp, rejected);
+        self.drain(drain);
     }
 
-    /// Hands the receipt for `stamp` to the owner off every caller's thread:
-    /// the owner may be the very dispatcher that is running this executor's
-    /// caller. `rejected` is the reason the lane was dropped, `None` for an
-    /// installed lane.
-    fn deliver(
-        &self,
-        handle: &Handle,
-        stamp: SyncExecutionStamp,
-        rejected: Option<SyncExecutionReject>,
-    ) {
-        let Some(owner) = self.owner.clone() else {
+    /// Starts handing queued outcomes to the owner off every caller's
+    /// thread: the owner may be the very dispatcher that is running this
+    /// executor's caller.
+    fn drain(self: &Arc<Self>, handle: Option<Handle>) {
+        let (Some(handle), Some(owner)) = (handle, self.owner.clone()) else {
             return;
         };
-        drop(spawn_blocking_on(handle, move || {
+        let shared = Arc::clone(self);
+        drop(spawn_blocking_on(&handle, move || {
+            shared.deliver_queued(owner.as_ref());
+        }));
+    }
+
+    /// Delivers queued outcomes one at a time, in commit order, without
+    /// holding the executor across the owner's answer. An installed lane the
+    /// owner refuses is dropped, unless a successor replaced it already.
+    fn deliver_queued(&self, owner: &dyn ReceiptOwner) {
+        loop {
+            let next = self.state.lock().next_outcome();
+            let Some(Outcome { stamp, rejected }) = next else {
+                return;
+            };
             let receipt = rejected.map_or(SyncReceipt::Installed(stamp), |reason| {
                 SyncReceipt::Rejected { stamp, reason }
             });
@@ -315,8 +366,12 @@ impl Shared {
             );
             if let Err(error) = answer {
                 debug!(%error, "sync: the owner refused an executor receipt");
+                if rejected.is_none() {
+                    let refused = self.state.lock().held.take_if(|held| held.stamp == stamp);
+                    SyncStaging::cancel_silently(refused);
+                }
             }
-        }));
+        }
     }
 }
 
@@ -339,7 +394,7 @@ async fn stage(
     plan: WarpPlan,
     cancel: CancelToken,
 ) {
-    let (probe, verdict) = ReadinessProbe::new(&plan, shared.response_frames);
+    let (probe, verdict) = ReadinessProbe::new(&plan);
     let request = StageRequest {
         plan,
         cancel: cancel.clone(),

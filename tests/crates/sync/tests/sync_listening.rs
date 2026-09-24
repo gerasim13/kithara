@@ -69,7 +69,11 @@ async fn render_mix(
     }
 }
 
-async fn render_frames(harness: &mut ProductHarness, case: SyncCase, frames: usize) -> Vec<f32> {
+pub(super) async fn render_frames(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    frames: usize,
+) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(frames * usize::from(CHANNELS));
     let mut rendered = 0;
     while rendered < frames {
@@ -86,7 +90,7 @@ async fn render_frames(harness: &mut ProductHarness, case: SyncCase, frames: usi
     pcm
 }
 
-fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> PathBuf {
+pub(super) fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> PathBuf {
     let frames = pcm.len() / usize::from(CHANNELS);
     let mut recording = artifacts
         .recording(label, Some(frames as u64))

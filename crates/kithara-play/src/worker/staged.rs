@@ -9,7 +9,7 @@ use kithara_worker::PendingTask;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Readiness {
     /// The lane's ring holds mapped PCM from the plan's activation on, as
-    /// much as the playback budget needs.
+    /// many chunks as the playback path preloads before it sounds.
     Ready,
     /// The lane ended, failed, or produced audio that cannot present the
     /// plan's activation.
@@ -26,7 +26,6 @@ pub(crate) enum Readiness {
 pub(crate) struct ReadinessProbe {
     revision: u64,
     origin: u64,
-    frames: usize,
     epoch: Option<u64>,
     admitted_chunks: usize,
     admitted_frames: usize,
@@ -35,14 +34,13 @@ pub(crate) struct ReadinessProbe {
 }
 
 impl ReadinessProbe {
-    /// A probe for `plan` that needs at least `frames` mapped output frames.
-    pub(crate) fn new(plan: &WarpPlan, frames: usize) -> (Self, oneshot::Receiver<Readiness>) {
+    /// A probe for the lane entering `plan`.
+    pub(crate) fn new(plan: &WarpPlan) -> (Self, oneshot::Receiver<Readiness>) {
         let (report, verdict) = oneshot::channel();
         let activation = plan.activation();
         let probe = Self {
             revision: u64::from(activation.revision()),
             origin: activation.source(),
-            frames: frames.max(1),
             epoch: None,
             admitted_chunks: 0,
             admitted_frames: 0,
@@ -76,7 +74,7 @@ impl ReadinessProbe {
         self.admitted_frames = self
             .admitted_frames
             .saturating_add(usize::try_from(meta.frames).unwrap_or(usize::MAX));
-        if self.admitted_chunks >= preload_chunks.max(1) && self.admitted_frames >= self.frames {
+        if self.admitted_chunks >= preload_chunks.max(1) && self.admitted_frames > 0 {
             self.verdict = Some(Readiness::Ready);
         }
     }
