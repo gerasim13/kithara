@@ -280,8 +280,10 @@ fn run_command(command: &mut Command, cancel: &Cancel) -> Result<()> {
 fn build_backend(backend: &Path, target: &Path, cancel: &Cancel) -> Result<()> {
     run_command(
         Command::new("cargo")
-            .current_dir(backend)
+            .current_dir(std::env::temp_dir())
             .args(["build", "--locked", "-p", "uniffi-bindgen-react-native"])
+            .arg("--manifest-path")
+            .arg(backend.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", target),
         cancel,
     )
