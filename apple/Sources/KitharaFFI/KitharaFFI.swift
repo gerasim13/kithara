@@ -4577,7 +4577,7 @@ public struct FfiPlayerConfig {
      */
     public let keyOptions: FfiKeyOptions
     /**
-     * Number of EQ bands (log-spaced), at most 64. Default: 10.
+     * Number of EQ bands (log-spaced), at most 128. Default: 10.
      */
     public let eqBandCount: UInt32
     /**
@@ -4602,7 +4602,7 @@ public struct FfiPlayerConfig {
          * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
-         * Number of EQ bands (log-spaced), at most 64. Default: 10.
+         * Number of EQ bands (log-spaced), at most 128. Default: 10.
          */eqBandCount: UInt32,
         /**
          * Player-wide auth token merged into item HTTP headers. Empty means no token.
