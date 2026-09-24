@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 ))]
 use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
-use crate::{StretchControls, WarpPlanSlot};
+use crate::{StretchControls, WarpPlan, WarpPlanSlot};
 
 const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
@@ -63,6 +63,36 @@ pub struct WarpConfig {
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[field(get, copy)]
     render_quantum_frames: Option<NonZeroUsize>,
+    /// Whether a renderer built from this configuration enters its plan at
+    /// the plan's activation rather than waiting for a presented output to
+    /// reach it. Only [`WarpConfig::entering`] sets it.
+    #[builder(skip)]
+    #[patch(skip)]
+    entering: bool,
+}
+
+impl WarpConfig {
+    /// A copy that renders `plan` from its activation on through a plan slot
+    /// of its own: a staged lane prepares audio the plan will present, while
+    /// the lane that sounds now keeps its slot and its selection.
+    #[must_use]
+    pub fn entering(&self, plan: Arc<WarpPlan>) -> Self {
+        let slot = WarpPlanSlot::default();
+        slot.install(Some(plan));
+        Self {
+            plan: Arc::new(slot),
+            entering: true,
+            ..self.clone()
+        }
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub(crate) const fn enters_plan(&self) -> bool {
+        self.entering
+    }
 }
 
 #[cfg(test)]

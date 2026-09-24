@@ -107,15 +107,26 @@ where
         SyncGroup::status(&self.sync)
     }
 
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition {
+        let transition = self.sync.apply_staged(staged);
+        self.runtime.core.staging.follow_transition(&transition);
+        transition
+    }
+
+    fn transact(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        self.runtime
+            .core
+            .staging
+            .transact(&mut self.sync, operation)
+    }
+
     delegate::delegate! {
         to self.sync {
             fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
-            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn transact(
-                &mut self,
-                operation: SyncOperation<PlayerMember>,
-            ) -> Result<SyncAdmission, SyncRejected<PlayerMember>>;
             fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
@@ -198,6 +209,7 @@ where
         Ok(PlayerMember::new(
             sync,
             self.runtime.core.engine.master_volume(),
+            self.runtime.core.staging.clone(),
         ))
     }
 }
