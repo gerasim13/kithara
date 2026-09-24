@@ -50,26 +50,17 @@ pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::Mirror)]
+#[mirror(into = TextStyle)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TextRoleSkin {
+    #[mirror(skip)]
     pub color: ColorRole,
     pub font: FontFamily,
     pub weight: FontWeight,
     pub size: f32,
     pub spacing: f32,
-}
-
-impl From<TextRoleSkin> for TextStyle {
-    fn from(role: TextRoleSkin) -> Self {
-        Self {
-            font: role.font,
-            weight: role.weight,
-            size: role.size,
-            spacing: role.spacing,
-        }
-    }
 }
 
 impl TextRoleSkin {
