@@ -42,15 +42,15 @@ render = [
     "dep:lucide-icons",
     "dep:naga",
     "dep:num-traits",
-    "dep:parley",
     "dep:png",
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
     "dep:velato",
+    "kithara-ui-shaping/shape",
 ]
 iced = ["render", "dep:iced", "iced/advanced"]
-vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:tracing", "dep:vello"]
+vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
@@ -58,6 +58,7 @@ kithara-derive = { workspace = true, features = ["built-default", "control", "co
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-ui-capture = { workspace = true, optional = true }
+kithara-ui-shaping = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }
@@ -74,7 +75,6 @@ lucide-icons = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }
 naga = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
-parley = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 ron = { workspace = true }

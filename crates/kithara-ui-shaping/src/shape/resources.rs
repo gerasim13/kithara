@@ -3,17 +3,15 @@ use parley::{
     FontData,
     fontique::{Blob, Collection, CollectionOptions, FallbackKey, Script},
 };
-#[cfg(feature = "render")]
 use skrifa::{FontRef, outline::OutlineGlyphCollection, raw::ReadError};
 use thiserror::Error;
 
-use super::{FontId, FontPolicy, GlyphFace};
+use crate::{FontId, FontPolicy, GlyphFace};
 
 /// Failure to construct the embedded text resources.
 #[derive(Clone, Debug, Error, PartialEq)]
 #[non_exhaustive]
 pub enum TextError {
-    #[cfg(feature = "render")]
     #[error("embedded font face {font:?} is invalid: {source}")]
     InvalidFont {
         font: FontId,
@@ -51,7 +49,7 @@ impl FaceBlobs {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[derive(derive_more::Debug)]
-pub(crate) struct TextResources {
+pub struct TextResources {
     #[debug(skip)]
     collection: Collection,
     fonts: [FontId; 10],
@@ -59,13 +57,19 @@ pub(crate) struct TextResources {
     #[debug(skip)]
     faces: FaceBlobs,
     policy: FontPolicy,
-    #[cfg(feature = "render")]
     #[debug(skip)]
     outlines: Vec<OutlineGlyphCollection<'static>>,
 }
 
 impl TextResources {
-    pub(crate) fn new(policy: FontPolicy) -> Result<Self, TextError> {
+    /// Registers the embedded faces, and the system collection when `policy`
+    /// asks for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextError`] when an embedded face or fallback cannot be
+    /// registered.
+    pub fn new(policy: FontPolicy) -> Result<Self, TextError> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: policy.system_fonts(),
@@ -84,7 +88,6 @@ impl TextResources {
             policy,
             fonts: FontId::ALL,
             faces: FaceBlobs(blobs),
-            #[cfg(feature = "render")]
             outlines: FontId::ALL
                 .into_iter()
                 .map(outline_collection)
@@ -92,12 +95,13 @@ impl TextResources {
         })
     }
 
-    pub(super) fn collection(&self) -> Collection {
+    pub(crate) fn collection(&self) -> Collection {
         self.collection.clone()
     }
 
-    #[cfg(feature = "render")]
-    pub(crate) fn outlines(&self, font: FontId) -> &OutlineGlyphCollection<'static> {
+    /// Returns the outline collection of one embedded face.
+    #[must_use]
+    pub fn outlines(&self, font: FontId) -> &OutlineGlyphCollection<'static> {
         &self.outlines[font.index()]
     }
 }
@@ -127,8 +131,6 @@ fn register_fallbacks(collection: &mut Collection) -> Result<(), TextError> {
     }
     Ok(())
 }
-
-#[cfg(feature = "render")]
 fn outline_collection(font: FontId) -> Result<OutlineGlyphCollection<'static>, TextError> {
     let font_ref =
         FontRef::new(font.bytes()).map_err(|source| TextError::InvalidFont { font, source })?;

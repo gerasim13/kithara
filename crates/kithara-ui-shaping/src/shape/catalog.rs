@@ -1,6 +1,6 @@
-use crate::skin::{FontFamily, FontWeight};
+use crate::{FontFamily, FontWeight};
 
-/// An embedded font face owned by `kithara-ui`.
+/// A font face embedded in this crate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum FontId {
@@ -17,7 +17,7 @@ pub enum FontId {
 }
 
 impl FontId {
-    pub(super) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::InterRegular,
         Self::InterSemibold,
         Self::JetBrainsMonoRegular,
@@ -59,7 +59,9 @@ impl FontId {
         }
     }
 
-    pub(crate) const fn family_name(self) -> &'static str {
+    /// Returns the family name this face registers under.
+    #[must_use]
+    pub const fn family_name(self) -> &'static str {
         match self {
             Self::InterRegular | Self::InterSemibold => "Inter",
             Self::JetBrainsMonoRegular
@@ -73,8 +75,7 @@ impl FontId {
         }
     }
 
-    #[cfg(feature = "render")]
-    pub(super) const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         match self {
             Self::InterRegular => 0,
             Self::InterSemibold => 1,
@@ -88,20 +89,22 @@ impl FontId {
             Self::Lucide => 9,
         }
     }
-}
 
-pub(crate) const fn select(family: FontFamily, weight: FontWeight) -> FontId {
-    match (family, weight) {
-        (FontFamily::Sans, FontWeight::Normal | FontWeight::Medium) => FontId::InterRegular,
-        (FontFamily::Sans, FontWeight::Semibold | FontWeight::Bold) => FontId::InterSemibold,
-        (FontFamily::Mono, FontWeight::Normal) => FontId::JetBrainsMonoRegular,
-        (FontFamily::Mono, FontWeight::Medium) => FontId::JetBrainsMonoMedium,
-        (FontFamily::Mono, FontWeight::Semibold | FontWeight::Bold) => {
-            FontId::JetBrainsMonoSemibold
+    /// Returns the embedded face that answers `family` at `weight`.
+    #[must_use]
+    pub const fn select(family: FontFamily, weight: FontWeight) -> Self {
+        match (family, weight) {
+            (FontFamily::Sans, FontWeight::Normal | FontWeight::Medium) => Self::InterRegular,
+            (FontFamily::Sans, FontWeight::Semibold | FontWeight::Bold) => Self::InterSemibold,
+            (FontFamily::Mono, FontWeight::Normal) => Self::JetBrainsMonoRegular,
+            (FontFamily::Mono, FontWeight::Medium) => Self::JetBrainsMonoMedium,
+            (FontFamily::Mono, FontWeight::Semibold | FontWeight::Bold) => {
+                Self::JetBrainsMonoSemibold
+            }
+            (FontFamily::Display, FontWeight::Normal) => Self::SpaceGroteskRegular,
+            (FontFamily::Display, FontWeight::Medium) => Self::SpaceGroteskMedium,
+            (FontFamily::Display, FontWeight::Semibold) => Self::SpaceGroteskSemibold,
+            (FontFamily::Display, FontWeight::Bold) => Self::SpaceGroteskBold,
         }
-        (FontFamily::Display, FontWeight::Normal) => FontId::SpaceGroteskRegular,
-        (FontFamily::Display, FontWeight::Medium) => FontId::SpaceGroteskMedium,
-        (FontFamily::Display, FontWeight::Semibold) => FontId::SpaceGroteskSemibold,
-        (FontFamily::Display, FontWeight::Bold) => FontId::SpaceGroteskBold,
     }
 }

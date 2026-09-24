@@ -24,8 +24,6 @@ pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
-#[cfg(any(feature = "render", feature = "vello"))]
-pub mod shaping;
 pub mod size;
 #[cfg(feature = "render")]
 pub(crate) mod solve;
@@ -33,6 +31,8 @@ pub mod source;
 pub mod view;
 
 pub use doc::{envelope, layout, module, package, param, skin, text};
+#[cfg(feature = "render")]
+pub use kithara_ui_shaping as shaping;
 
 mod doc;
 mod require;

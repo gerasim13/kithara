@@ -220,23 +220,6 @@ pub(crate) use skin_sections;
 
 skin_sections!(define_skin_doc);
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum FontWeight {
-    Normal,
-    Medium,
-    Semibold,
-    Bold,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum FontFamily {
-    Display,
-    Sans,
-    Mono,
-}
-
 /// Parses and validates a complete skin document.
 ///
 /// # Errors

@@ -27,6 +27,7 @@ not (
     + binary_id(=kithara-platform::flash_spawn)
     + binary_id(=kithara-integration-tests)
     + package(kithara-ui)
+    + package(kithara-ui-shaping)
     + (package(kithara-app) & test(/^gui::/))
 )
 """

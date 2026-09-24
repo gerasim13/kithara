@@ -1,4 +1,4 @@
-use super::GlyphFace;
+use crate::GlyphFace;
 
 /// A positioned glyph in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]

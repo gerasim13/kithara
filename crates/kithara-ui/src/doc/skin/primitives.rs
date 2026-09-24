@@ -1,9 +1,7 @@
+use kithara_ui_shaping::{FontFamily, FontWeight, TextStyle};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    document::{FontFamily, FontWeight},
-    palette::ColorRole,
-};
+use super::palette::ColorRole;
 use crate::module::{Tone, WindowControlsStyle};
 
 /// One of the two looks a control switches between: what it paints under
@@ -61,6 +59,17 @@ pub struct TextRoleSkin {
     pub weight: FontWeight,
     pub size: f32,
     pub spacing: f32,
+}
+
+impl From<TextRoleSkin> for TextStyle {
+    fn from(role: TextRoleSkin) -> Self {
+        Self {
+            font: role.font,
+            weight: role.weight,
+            size: role.size,
+            spacing: role.spacing,
+        }
+    }
 }
 
 impl TextRoleSkin {

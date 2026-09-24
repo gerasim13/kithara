@@ -3,13 +3,12 @@ use std::borrow::Cow;
 use kithara_platform::sync::Arc;
 use parley::{FontData, fontique::Blob};
 
-use super::FontId;
+use crate::FontId;
 
 /// A font face resolved for one shaped glyph segment.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum GlyphFace {
-    /// A face from `kithara-ui`'s embedded catalog.
+    /// A face from the embedded catalog.
     Embedded(FontId),
     /// A face resolved from the machine's system collection.
     System(FontData),
