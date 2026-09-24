@@ -516,7 +516,7 @@ mod tests {
         let env_file = directory.path().join("cache.env");
         std::fs::write(
             &env_file,
-            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+            "SCCACHE_BUCKET=cache\nSCCACHE_S3_KEY_PREFIX=sccache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write cache environment");
         permissions::set_mode(&env_file, permissions::OWNER_ONLY)

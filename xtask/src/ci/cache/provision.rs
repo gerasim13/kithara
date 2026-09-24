@@ -272,6 +272,23 @@ fn write_environment(
 mod tests {
     use super::*;
 
+    /// The retention rule expires only what sits under the compiler-cache
+    /// prefix, so a runner whose environment drops the prefix writes to the
+    /// bucket root, where nothing expires, until the quota refuses every write.
+    #[test]
+    fn a_provisioned_environment_reaches_the_client_with_its_key_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        write_environment(directory.path(), "bucket", "http://cache", "key", "secret").unwrap();
+
+        let environment = super::super::client_environment(&directory.path().join("cache.env"))
+            .expect("the client reads what provisioning writes");
+
+        assert_eq!(
+            environment.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
+            Some(SCCACHE_PREFIX)
+        );
+    }
+
     /// Scopes were sized apart on the live host and a shared quota would flatten
     /// them on the next initialize, so a scope names its own and only a scope
     /// that says nothing takes the shared one.
