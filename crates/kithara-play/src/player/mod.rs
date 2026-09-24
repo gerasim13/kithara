@@ -5,6 +5,7 @@ mod flow;
 mod lifecycle;
 mod player_impl;
 mod protocol;
+mod staging;
 mod state;
 mod view;
 

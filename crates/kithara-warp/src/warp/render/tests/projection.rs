@@ -364,7 +364,9 @@ fn planned_renderer_with_publisher(
     )
 }
 
-fn planned_renderer(controls: Arc<StretchControls>) -> (WarpRenderer, Arc<crate::WarpPlanSlot>) {
+pub(super) fn planned_renderer(
+    controls: Arc<StretchControls>,
+) -> (WarpRenderer, Arc<crate::WarpPlanSlot>) {
     let (renderer, slot, _) = planned_renderer_with_publisher(controls);
     (renderer, slot)
 }

@@ -8,6 +8,8 @@ use kithara_sync::{
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use portable_atomic::{AtomicF32, Ordering};
 
+use crate::player::staging::SyncStaging;
+
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,
     owned: Option<GroupState<PlayerMember>>,
@@ -103,12 +105,16 @@ impl SyncGroup for PlayerSync {
 pub struct PlayerMember {
     level: AtomicF32,
     sync: GroupState<PlayerMember>,
+    /// Command capability of the player's executor: the member admits and
+    /// follows preparations, the player's runtime carries them out.
+    staging: SyncStaging,
 }
 
 impl PlayerMember {
-    pub(crate) fn new(sync: GroupState<Self>, level: f32) -> Self {
+    pub(crate) fn new(sync: GroupState<Self>, level: f32, staging: SyncStaging) -> Self {
         Self {
             sync,
+            staging,
             level: AtomicF32::new(level),
         }
     }
@@ -137,15 +143,23 @@ impl BeatGrid for PlayerMember {
 impl SyncGroup for PlayerMember {
     type NestedGroup = Self;
 
+    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition {
+        let transition = self.sync.apply_staged(staged);
+        self.staging.follow_transition(&transition);
+        transition
+    }
+
+    fn transact(
+        &mut self,
+        operation: SyncOperation<Self>,
+    ) -> Result<SyncAdmission, SyncRejected<Self>> {
+        self.staging.transact(&mut self.sync, operation)
+    }
+
     delegate::delegate! {
         to self.sync {
             fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
-            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn transact(
-                &mut self,
-                operation: SyncOperation<Self>,
-            ) -> Result<SyncAdmission, SyncRejected<Self>>;
             fn status(&self) -> SyncStatusSnapshot;
             fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }

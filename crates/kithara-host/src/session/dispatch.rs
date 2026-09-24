@@ -7,7 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape, player::PlayerMember};
 use kithara_sync::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
+    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncReceipt, SyncRejected,
+    SyncStatusSnapshot, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
@@ -55,11 +56,7 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
             }
         }
         SyncCmd::Acknowledge(receipt) => {
-            let result = state.root.acknowledge(receipt);
-            if result.is_ok() {
-                state.publish_root();
-            }
-            return HostReply::Acknowledged(result);
+            return HostReply::Acknowledged(acknowledge_root(state, receipt));
         }
     };
     let result = transact_root(state, operation);
@@ -67,6 +64,19 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
         state.publish_root();
     }
     HostReply::Admission(result)
+}
+
+/// Records one executor receipt on the root group and publishes the state it
+/// leaves; a refused receipt changes nothing and publishes nothing.
+fn acknowledge_root<T, S>(
+    state: &mut SessionState<T, S>,
+    receipt: SyncReceipt,
+) -> Result<SyncStatusSnapshot, SyncError> {
+    let result = state.root.acknowledge(receipt);
+    if result.is_ok() {
+        state.publish_root();
+    }
+    result
 }
 
 fn transact_root<T, S>(
@@ -229,6 +239,10 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
+        Cmd::AcknowledgeSync { receipt } => match acknowledge_root(state, receipt) {
+            Ok(_) => Reply::Ok,
+            Err(error) => Reply::Err(SessionError::Sync(error)),
+        },
     }
 }
 

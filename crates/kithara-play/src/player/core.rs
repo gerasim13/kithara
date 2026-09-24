@@ -12,6 +12,7 @@ use tracing::{debug, warn};
 
 use super::{
     lifecycle::{CloseAdmission, PlayerLifecycle},
+    staging::SyncStaging,
     state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
 };
 use crate::{
@@ -63,6 +64,8 @@ pub(crate) struct PlayerCore<S> {
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker<S>,
     pub(crate) params: PlayerParams,
+    /// Executor of the preparations the player's group issues for its track.
+    pub(crate) staging: SyncStaging,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
     pub(crate) warp: WarpConfig,
@@ -128,6 +131,7 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         self.phase.lock().set_abr_handle(item.abr_handle);
+        self.core.staging.load(item.item_id, item.staging);
         let rate = self.core.engine.master_sample_rate();
         if let Some(sample_rate) = NonZeroU32::new(rate) {
             self.core.track_grid.load(
@@ -155,6 +159,7 @@ impl<S> PlayerRuntime<S> {
     /// an admitted operation rather than to queue behind one. `close` still
     /// takes the gate, so the orderly path keeps its ordering.
     pub(super) fn invalidate(&self) {
+        self.core.staging.unload();
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -168,6 +173,7 @@ impl<S> PlayerRuntime<S> {
         S: HasPool<f32>,
     {
         self.unarm_next();
+        self.core.staging.unload();
         self.core.track_grid.release();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);

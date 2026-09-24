@@ -9,7 +9,7 @@ use tracing::debug;
 use super::{QueuedResource, playlist::Playlist};
 use crate::{
     api::PlayerEvent,
-    resource::{PreparedGrid, Resource},
+    resource::{PreparedGrid, Resource, StagingRecipe},
     rt::track::PlayerResource,
 };
 
@@ -19,6 +19,8 @@ pub(crate) struct TakenItem {
     pub(crate) beat_grid: Arc<PreparedGrid>,
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(crate) player_resource: PlayerResource,
+    /// How to open staged lanes of this load's recording.
+    pub(crate) staging: Option<StagingRecipe>,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
 }
@@ -123,6 +125,7 @@ impl ItemQueue {
             .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
         let beat_grid = Arc::clone(resource.beat_grid());
+        let staging = resource.staging();
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
@@ -135,6 +138,7 @@ impl ItemQueue {
             beat_grid,
             abr_handle,
             player_resource,
+            staging,
             item_id,
             duration_seconds,
         }))

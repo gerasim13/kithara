@@ -22,6 +22,7 @@ use crate::{
     player::{
         PlayerConfig, PlayerControl,
         protocol::PlayerSync,
+        staging::SyncStaging,
         state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
     },
     worker::EngineLoad,
@@ -41,7 +42,7 @@ impl<S> Deref for PlayerImpl<S> {
     }
 }
 
-impl<S> PlayerImpl<S> {
+impl<S: Send + Sync + 'static> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     ///
     /// The player owns one persistent track-geometry grid for its whole life: loading, replacing,
@@ -86,6 +87,19 @@ impl<S> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
+        // A web session is not `Send`, and the web has no Warp backend to
+        // stage on.
+        #[cfg(not(target_arch = "wasm32"))]
+        let owner: Option<Arc<dyn crate::player::staging::ReceiptOwner>> =
+            Some(Arc::new(engine.session().clone()));
+        #[cfg(target_arch = "wasm32")]
+        let owner = None;
+        let staging = SyncStaging::new(
+            config.track_grid_id,
+            owner,
+            cancel.clone(),
+            config.response_budget_frames.map_or(1, NonZeroUsize::get),
+        );
         if config.abr.is_none() {
             let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
             config.abr = Some(AbrController::new(abr_settings));
@@ -96,6 +110,7 @@ impl<S> PlayerImpl<S> {
         let core = PlayerCore {
             engine,
             params,
+            staging,
             track_grid,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
