@@ -9,26 +9,25 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+use kithara_integration_tests::phase_continuity::FREQ_HZ;
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
+    phase_continuity::{
+        CHANNELS, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
+        SAMPLE_RATE, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan, measure_phase_rad_window,
+        seek_phase_scan, wrap_pi,
+    },
 };
 use kithara_test_fixtures::{
     Mp3Shape, SignalAsset, assets::by_name, integration_fixtures::listening_reference,
 };
 use tracing::info;
 use url::Url;
-
-#[cfg(all(
-    feature = "apple-fused-src",
-    any(target_os = "macos", target_os = "ios")
-))]
-use super::common::FREQ_HZ;
-use super::common::{
-    CHANNELS, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
-    SAMPLE_RATE, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan, measure_phase_rad_window,
-    seek_phase_scan, wrap_pi,
-};
 
 #[cfg(all(
     feature = "apple-fused-src",

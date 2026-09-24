@@ -1,3 +1,6 @@
+//! Sine phase-continuity oracle: fits the phase of a known tone window by
+//! window and reports sample drops, repeats and seam drift.
+
 use std::f64::consts::{PI, TAU};
 
 use kithara::{
@@ -10,39 +13,40 @@ use kithara::{
     play::RegisteredAudio,
     stream::{Stream, StreamType},
 };
-use kithara_integration_tests::{Xorshift64, bufpool_ext::TestPools};
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
-pub(crate) const SAMPLE_RATE: u32 = 44_100;
-pub(crate) const CHANNELS: u16 = 2;
-pub(crate) const FREQ_HZ: f64 = 440.0;
-pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
+use crate::{bufpool_ext::TestPools, rng::Xorshift64};
+
+pub const SAMPLE_RATE: u32 = 44_100;
+pub const CHANNELS: u16 = 2;
+pub const FREQ_HZ: f64 = 440.0;
+pub const TOLERANCE_SAMPLES: f64 = 0.5;
 /// Minimum fitted amplitude for a scan window to carry a meaningful phase.
 /// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);
 /// a window over codec priming/leading silence fits amp ≈ 1e-4, where the
 /// phase is pure fit noise. Anchoring continuity on such a window compares
 /// real signal against noise and false-positives at random — so windows
 /// below this floor are skipped entirely (no anchor, no comparison).
-pub(crate) const MIN_SIGNAL_AMP: f64 = 0.1;
+pub const MIN_SIGNAL_AMP: f64 = 0.1;
 /// Phase fit window. Needs ≥ one full period of the test sine
 /// (≈100 samples @ 440 Hz / 44.1 kHz) so DFT correlation leakage
 /// (`Σ cos(2δk+φ)` term) cancels to <1e-3 sample of bias. 128 samples
 /// = 2.9 ms post-seek read budget — well within decoder warm-up.
-pub(crate) const READ_FRAMES_AFTER_SEEK: usize = 128;
-pub(crate) const READ_PENDING_RETRIES: usize = 4096;
-pub(crate) const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
-pub(crate) const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
+pub const READ_FRAMES_AFTER_SEEK: usize = 128;
+pub const READ_PENDING_RETRIES: usize = 4096;
+pub const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
+pub const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SinePhaseSpec {
-    pub(crate) freq_hz: f64,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
+pub struct SinePhaseSpec {
+    pub freq_hz: f64,
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 impl SinePhaseSpec {
-    pub(crate) const fn default_440() -> Self {
+    pub const fn default_440() -> Self {
         Self {
             freq_hz: FREQ_HZ,
             sample_rate: SAMPLE_RATE,
@@ -50,7 +54,7 @@ impl SinePhaseSpec {
         }
     }
 
-    pub(crate) fn delta_rad_per_sample(&self) -> f64 {
+    pub fn delta_rad_per_sample(&self) -> f64 {
         TAU * self.freq_hz / f64::from(self.sample_rate)
     }
 }
@@ -59,15 +63,15 @@ impl SinePhaseSpec {
 #[display(
     "phase drift at frame {at_frame}: expected={expected_rad:.4}rad measured={measured_rad:.4}rad jump={jump_samples:.3} samples (amp={amplitude:.3})"
 )]
-pub(crate) struct PhaseDrift {
-    pub(crate) at_frame: u64,
-    pub(crate) expected_rad: f64,
-    pub(crate) measured_rad: f64,
-    pub(crate) jump_samples: f64,
-    pub(crate) amplitude: f64,
+pub struct PhaseDrift {
+    pub at_frame: u64,
+    pub expected_rad: f64,
+    pub measured_rad: f64,
+    pub jump_samples: f64,
+    pub amplitude: f64,
 }
 
-pub(crate) fn wrap_pi(x: f64) -> f64 {
+pub fn wrap_pi(x: f64) -> f64 {
     let mut v = x % TAU;
     if v > PI {
         v -= TAU;
@@ -95,7 +99,7 @@ pub(crate) fn wrap_pi(x: f64) -> f64 {
 /// sr=44.1k → 1.28 periods). Bias for a clean sine is < 1e-9 samples
 /// at f64 precision. Robust to ~5–10% amplitude quantization noise
 /// (lossy AAC/MP3).
-pub(crate) fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f64) {
+pub fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f64) {
     assert!(mono.len() >= 2, "phase window needs ≥2 samples");
     let mut ss = 0.0_f64;
     let mut cc = 0.0_f64;
@@ -213,15 +217,11 @@ where
                     retries < READ_PENDING_RETRIES,
                     "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
                 );
-                match produced.recv().await {
-                    Ok(_) => {}
-                    // A lagging receiver missed wakes, which is news enough: the
-                    // producer has been busy, so read again rather than wait for
-                    // a fresh event that may never come.
-                    Err(RecvError::Lagged(_)) => {}
-                    Err(RecvError::Closed) => {
-                        panic!("{label}: audio event bus closed while the read was pending")
-                    }
+                // A lagging receiver missed wakes, which is news enough: the
+                // producer has been busy, so read again rather than wait for a
+                // fresh event that may never come.
+                if let Err(RecvError::Closed) = produced.recv().await {
+                    panic!("{label}: audio event bus closed while the read was pending")
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
@@ -244,7 +244,7 @@ async fn consumer_pace(duration: Duration) {
 /// false-positive on that wobble. Measuring against the **last** scan
 /// captures only the inter-scan glitch, which is what we audibly care
 /// about. The last scan slides forward after every check.
-pub(crate) fn check_against_previous(
+pub fn check_against_previous(
     last: &mut Option<(u64, f64)>,
     consumed: u64,
     buf: &[f32],
@@ -306,7 +306,7 @@ pub(crate) fn check_against_previous(
     result
 }
 
-pub(crate) fn e2e_phase_scan<T>(
+pub fn e2e_phase_scan<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
@@ -345,7 +345,7 @@ where
     drifts
 }
 
-pub(crate) fn seek_phase_scan<T, F>(
+pub fn seek_phase_scan<T, F>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_secs: f64,
@@ -400,7 +400,7 @@ where
 /// continuity and is reported. A forward gap between steps is scanned through
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
-pub(crate) async fn scripted_phase_scan<T, S, F>(
+pub async fn scripted_phase_scan<T, S, F>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,

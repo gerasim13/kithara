@@ -16,10 +16,9 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{EncryptionRequest, PackagedSignal},
+    phase_continuity::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan},
 };
 use tracing::{info, warn};
-
-use super::common::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan};
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;
 const SEGMENTS_PER_VARIANT: usize = 30;

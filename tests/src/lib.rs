@@ -98,6 +98,8 @@ pub mod offline;
 pub mod packed_audio;
 #[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
 pub mod pcm_oracle;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod phase_continuity;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod reads;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]

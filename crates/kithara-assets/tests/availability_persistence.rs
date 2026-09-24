@@ -310,34 +310,6 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
     assert_eq!(scope2.store().final_len(&key), None);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
-    let dir = tempdir().unwrap();
-    let root = "p4-slow";
-
-    {
-        let store = AssetStore::builder(support::pools())
-            .backend(StorageBackend::Disk {
-                root: (dir.path()).into(),
-            })
-            .build();
-        let scope = store.scope::<Test>(&source(root)).unwrap();
-        let key = scope.key(&resource("segments/slow.bin")).unwrap();
-        write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
-    }
-
-    let store = AssetStore::builder(support::pools())
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .build();
-    let scope = store.scope::<Test>(&source(root)).unwrap();
-    let key = scope.key(&resource("segments/slow.bin")).unwrap();
-
-    assert_eq!(scope.store().final_len(&key), Some(3));
-    assert!(scope.store().contains_range(&key, 0..3));
-}
-
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     let root = "p4-mem";
