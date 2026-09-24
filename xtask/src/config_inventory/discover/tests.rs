@@ -59,8 +59,10 @@ fn manifest_reads_composed_builder_field_and_patch_groups() {
             #[config(value)]
             #[builder(default = 4)]
             count: u32,
-            #[config(value(Option<u32>, self.optional), builder(default))]
+            #[config(value(Option<u64>, self.optional.map(u64::from)), builder(default))]
             optional: Option<u32>,
+            #[config(nested)]
+            child: ChildConfig,
         }
         "#,
     )
@@ -85,9 +87,18 @@ fn manifest_reads_composed_builder_field_and_patch_groups() {
         ["# [cfg (feature = \"web\")]"]
     );
     assert_eq!(entries[0].fields[3].role, "value");
+    assert_eq!(entries[0].fields[3].rust_type, "Option < u32 >");
+    assert_eq!(
+        entries[0].fields[3].value_type.as_deref(),
+        Some("Option < u64 >")
+    );
     assert_eq!(
         entries[0].fields[3].builder_default.as_deref(),
         Some("default")
+    );
+    assert_eq!(
+        entries[0].fields[4].value_type.as_deref(),
+        Some("<ChildConfig as kithara_config::Config>::Values")
     );
 }
 

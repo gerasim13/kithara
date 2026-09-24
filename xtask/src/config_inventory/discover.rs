@@ -29,6 +29,7 @@ pub(super) struct Registration {
 pub(super) struct RegisteredField {
     pub(super) name: String,
     pub(super) rust_type: String,
+    value_type: Option<String>,
     pub(super) role: String,
     update: bool,
     builder_default: Option<String>,
@@ -160,6 +161,7 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
     let attr = config_attribute(&field.attrs)
         .ok_or_else(|| syn::Error::new_spanned(field, "registered config field is unclassified"))?;
     let mut role = None;
+    let mut projected_type = None;
     let mut update = false;
     let mut default = None;
     let mut exclusion_reason = None;
@@ -171,7 +173,13 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
             if meta.input.peek(syn::token::Paren) {
                 let content;
                 parenthesized!(content in meta.input);
-                let _: proc_macro2::TokenStream = content.parse()?;
+                let ty: syn::Type = content.parse()?;
+                content.parse::<Token![,]>()?;
+                let _: syn::Expr = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("unexpected projection tokens"));
+                }
+                projected_type = Some(tokens(&ty));
             }
         } else if meta.path.is_ident("nested") {
             role = Some("nested");
@@ -194,9 +202,16 @@ fn registered_field(field: &Field) -> syn::Result<RegisteredField> {
             default = builder_default(attr.meta.require_list()?.tokens.clone())?.or(default);
         }
     }
+    let rust_type = tokens(&field.ty);
+    let value_type = match role {
+        Some("value") => Some(projected_type.unwrap_or_else(|| rust_type.clone())),
+        Some("nested") => Some(format!("<{rust_type} as kithara_config::Config>::Values")),
+        _ => None,
+    };
     Ok(RegisteredField {
         name: name.to_string(),
-        rust_type: tokens(&field.ty),
+        rust_type,
+        value_type,
         role: role.unwrap_or("unknown").to_owned(),
         update,
         builder_default: default,
@@ -297,6 +312,7 @@ impl<'ast> Visit<'ast> for Registrations<'_> {
                         pattern => tokens(pattern),
                     },
                     rust_type: tokens(&input.ty),
+                    value_type: Some(tokens(&input.ty)),
                     role: "delegate_input".to_owned(),
                     update: true,
                     builder_default: None,
