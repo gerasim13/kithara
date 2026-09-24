@@ -811,7 +811,20 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Skip to the next item in the queue. No-op if already on the
     /// last item or the queue is empty. Mirrors AVQueuePlayer's
-    /// `advanceToNextItem`.
+    /// `advanceToNextItem`: it does not throw, and a failed selection
+    /// arrives on ``contextualError``.
+    public func advanceToNextItem() {
+        do {
+            try _inner.advanceToNextItem()
+        } catch let ffiError as FfiError {
+            publishCommandError(KitharaError(ffi: ffiError), itemId: nil)
+        } catch {
+            _eventSubject.send(.error(error: String(describing: error)))
+        }
+    }
+
+    /// Skip to the next item in the queue. No-op if already on the
+    /// last item or the queue is empty.
     public func next() throws {
         try _inner.advanceToNextItem()
     }

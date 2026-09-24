@@ -90,6 +90,35 @@ struct KitharaPlayerTests {
         _ = cancellable
     }
 
+    @Test("advanceToNextItem selects the next item and is a no-op on the last one")
+    func advanceToNextItemSelectsNextAndStopsAtLast() throws {
+        let player = KitharaPlayer()
+        let first = KitharaPlayerItem(
+            url: "https://example.com/first.mp3",
+            audioId: 42,
+            uuid: 123
+        )
+        let second = KitharaPlayerItem(
+            url: "https://example.com/second.mp3",
+            audioId: 43,
+            uuid: 124
+        )
+        var errors: [KitharaPlayerError] = []
+        let cancellable = player.contextualError.sink { errors.append($0) }
+
+        try player.insert(first)
+        try player.insert(second, after: first)
+        #expect(player.currentAudioItem?.uuid == first.uuid)
+
+        player.advanceToNextItem()
+        #expect(player.currentAudioItem?.uuid == second.uuid)
+
+        player.advanceToNextItem()
+        #expect(player.currentAudioItem?.uuid == second.uuid)
+        #expect(errors.isEmpty)
+        _ = cancellable
+    }
+
     @Test("represented item follows queue identity")
     func representedItemFollowsQueueIdentity() throws {
         let player = KitharaPlayer()
