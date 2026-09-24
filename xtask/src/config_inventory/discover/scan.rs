@@ -248,6 +248,63 @@ fn registered_field(field: &Field, snapshot: bool) -> syn::Result<RegisteredFiel
 }
 
 impl<'ast> Visit<'ast> for Registrations<'_> {
+    fn visit_item_enum(&mut self, item: &'ast ItemEnum) {
+        if let Some(attribute) = config_attribute(&item.attrs) {
+            let mut construction = false;
+            let parsed = attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("construction") {
+                    construction = true;
+                } else if meta.path.is_ident("builder") {
+                    let _: syn::LitBool = meta.value()?.parse()?;
+                } else {
+                    return Err(meta.error("unsupported config enum option"));
+                }
+                Ok(())
+            });
+            if let Err(error) = parsed {
+                self.error = Some(error.into());
+                return;
+            }
+            if !construction {
+                self.error = Some(
+                    syn::Error::new_spanned(item, "config enum must be construction-only").into(),
+                );
+                return;
+            }
+            for variant in &item.variants {
+                match variant
+                    .fields
+                    .iter()
+                    .map(|field| registered_field(field, false))
+                    .collect()
+                {
+                    Ok(fields) => self.registrations.push(Registration {
+                        source: self.source.to_owned(),
+                        package: self.package.clone(),
+                        module_path: self.module_path.clone(),
+                        scope: self.scope.clone(),
+                        owner: format!("{}::{}", item.ident, variant.ident),
+                        property: None,
+                        hook: None,
+                        kind: "construction",
+                        sdk: false,
+                        docs: docs(&variant.attrs),
+                        conditions: self
+                            .conditions
+                            .iter()
+                            .cloned()
+                            .chain(conditions(&item.attrs))
+                            .chain(conditions(&variant.attrs))
+                            .collect(),
+                        fields,
+                    }),
+                    Err(error) => self.error = Some(error.into()),
+                }
+            }
+        }
+        visit::visit_item_enum(self, item);
+    }
+
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         let count = self.conditions.len();
         self.conditions.extend(conditions(&item.attrs));

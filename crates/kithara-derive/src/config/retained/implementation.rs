@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Attribute, Fields, Item, ItemStruct, Result, parse::Parser as _, parse_quote};
+use syn::{Attribute, Fields, Item, ItemEnum, ItemStruct, Result, parse::Parser as _, parse_quote};
 
 use super::field;
 
@@ -8,6 +8,7 @@ pub(crate) fn expand(attributes: TokenStream, input: TokenStream) -> Result<Toke
     let item: Item = syn::parse2(input)?;
     match item {
         Item::Struct(item) => retained(attributes, item),
+        Item::Enum(item) => construction_enum(attributes, item),
         Item::Impl(item) if attributes.is_empty() => Ok(quote! {
             #[::kithara_config::__private::bon::bon(crate = ::kithara_config::__private::bon)]
             #item
@@ -19,9 +20,81 @@ pub(crate) fn expand(attributes: TokenStream, input: TokenStream) -> Result<Toke
         Item::Fn(item) => delegated(attributes, &item),
         other => Err(syn::Error::new_spanned(
             other,
-            "config requires a named struct, or a function/impl without options",
+            "config requires a named struct, a construction enum, or a function/impl without options",
         )),
     }
+}
+
+fn construction_enum(options: TokenStream, mut item: ItemEnum) -> Result<TokenStream> {
+    let mut construction = false;
+    let mut builder_disabled = false;
+    syn::meta::parser(|meta| {
+        if meta.path.is_ident("construction") && !construction {
+            construction = true;
+        } else if meta.path.is_ident("builder") && !builder_disabled {
+            let value: syn::LitBool = meta.value()?.parse()?;
+            if value.value {
+                return Err(meta.error("enum construction uses its existing builder"));
+            }
+            builder_disabled = true;
+        } else {
+            return Err(meta.error("expected construction, builder = false"));
+        }
+        Ok(())
+    })
+    .parse2(options)?;
+    if !construction || !builder_disabled {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "construction enum requires construction, builder = false",
+        ));
+    }
+    for variant in &mut item.variants {
+        let Fields::Named(fields) = &mut variant.fields else {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "construction enum variants require named fields",
+            ));
+        };
+        for field in &mut fields.named {
+            let position = field
+                .attrs
+                .iter()
+                .position(|attr| attr.path().is_ident("config"));
+            let Some(position) = position else {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "config field is unclassified",
+                ));
+            };
+            let attr = field.attrs.remove(position);
+            let mut classified = false;
+            attr.parse_nested_meta(|meta| {
+                if classified {
+                    return Err(meta.error("config enum field requires exactly one role"));
+                }
+                classified = true;
+                if meta.path.is_ident("value") || meta.path.is_ident("nested") {
+                    Ok(())
+                } else if meta.path.is_ident("skip") {
+                    let reason: syn::LitStr = meta.value()?.parse()?;
+                    if reason.value().trim().is_empty() {
+                        return Err(meta.error("skip requires a reason"));
+                    }
+                    Ok(())
+                } else {
+                    Err(meta.error("expected value, nested, or skip = reason"))
+                }
+            })?;
+            if !classified {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "config enum field requires one role",
+                ));
+            }
+        }
+    }
+    Ok(quote!(#item))
 }
 
 fn delegated(options: TokenStream, item: &syn::ItemFn) -> Result<TokenStream> {

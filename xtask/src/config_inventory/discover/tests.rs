@@ -1,6 +1,35 @@
 use super::{discover, registrations};
 
 #[test]
+fn construction_enum_records_each_variant_without_claiming_retained_values() {
+    let entries = registrations(
+        "crates/kithara-host/src/host/config.rs",
+        r#"
+        #[kithara_config::config(construction, builder = false)]
+        pub enum HostConfig<S> {
+            Realtime {
+                #[config(value)] rate: u32,
+                #[config(skip = "type marker")] marker: S,
+            },
+            #[cfg(feature = "offline")]
+            Offline {
+                #[config(nested)] worker: WorkerConfig,
+            },
+        }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].owner, "HostConfig::Realtime");
+    assert_eq!(entries[0].kind, "construction");
+    assert_eq!(entries[0].fields[0].role, "value");
+    assert!(entries[0].fields[0].value_type.is_none());
+    assert_eq!(entries[1].owner, "HostConfig::Offline");
+    assert_eq!(entries[1].fields[0].role, "nested");
+    assert_eq!(entries[1].conditions, ["# [cfg (feature = \"offline\")]"]);
+}
+
+#[test]
 fn registrations_separate_retained_values_from_delegated_operations() {
     let entries = registrations(
         "crates/player/src/control.rs",
