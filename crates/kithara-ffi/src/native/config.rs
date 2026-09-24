@@ -13,7 +13,7 @@ pub struct FfiPlayerConfig {
     pub store: Arc<FfiAssetStore>,
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
     pub key_options: FfiKeyOptions,
-    /// Number of EQ bands (log-spaced), at most 64. Default: 10.
+    /// Number of EQ bands (log-spaced), at most 128. Default: 10.
     pub eq_band_count: u32,
     /// Player-wide auth token merged into item HTTP headers. Empty means no token.
     pub auth_token: String,

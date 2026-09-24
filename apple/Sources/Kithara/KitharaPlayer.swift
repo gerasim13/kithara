@@ -326,7 +326,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Configuration for player creation.
     public struct Config: Sendable {
-        /// Number of EQ bands (log-spaced), at most 64. Default: 10.
+        /// Number of EQ bands (log-spaced), at most 128. Default: 10.
         public var eqBandCount: Int
         /// Domain-scoped DRM rules. Evaluated in order; first match wins.
         /// Wildcard `"*"` rules must come last — they mask any rule
