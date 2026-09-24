@@ -116,6 +116,46 @@ pub fn expand_blocks(
     Ok(blocks)
 }
 
+/// Start of the outer comments attached directly above an item that starts
+/// at `item_start`, never reaching before `lower_bound`: the bytes that move
+/// with the item when it moves alone.
+#[must_use]
+pub fn leading_trivia_start(src: &str, item_start: usize, lower_bound: usize) -> usize {
+    expand_leading(src, item_start, lower_bound)
+}
+
+/// Byte offset of the start of the line holding `at`.
+#[must_use]
+pub fn line_start(src: &str, at: usize) -> usize {
+    src[..at].rfind('\n').map_or(0, |pos| pos + 1)
+}
+
+/// The bytes to remove when deleting `range`: its indentation too when it
+/// opens its line, and the whitespace after it up to the next line with
+/// content, so no blank line is left behind.
+#[must_use]
+pub fn deletion_range(src: &str, range: Range<usize>) -> Range<usize> {
+    let line = line_start(src, range.start);
+    let start = if src[line..range.start]
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        line
+    } else {
+        range.start
+    };
+    let next = src[range.end..]
+        .find(|character: char| !character.is_whitespace())
+        .map_or(src.len(), |offset| range.end + offset);
+    let next_line = line_start(src, next);
+    let end = if src[range.end..next].contains('\n') && next_line >= range.end {
+        next_line
+    } else {
+        range.end
+    };
+    start..end
+}
+
 /// Walk backwards from `item_start` absorbing contiguous outer comments
 /// that immediately precede the item (no blank line between them and the
 /// item). Stops at `lower_bound`.

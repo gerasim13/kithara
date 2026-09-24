@@ -117,9 +117,9 @@ impl Asset {
                 AssetError::Store(source)
             } else {
                 AssetError::Read {
+                    source,
                     name: self.entry.name,
                     path: PathBuf::from(self.entry.path),
-                    source,
                 }
             }
         })
@@ -150,8 +150,8 @@ impl Asset {
                 let path = self.store_path()?;
                 let loaded = std::fs::read(&path).map_err(|source| AssetError::Read {
                     source,
-                    name: self.entry.name,
                     path,
+                    name: self.entry.name,
                 })?;
                 Ok(cell.get_or_init(|| loaded))
             }

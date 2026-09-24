@@ -66,13 +66,13 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     /// No lock on the produce-core. Folded in from the former
     /// `HookedDecoder` decorator — every decoder is hookable now.
     hooks: Option<BoxedEventSink>,
+    output: Option<DecodeResult<SampleBuffer>>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
     pools: PoolRegion<S>,
-    output: Option<DecodeResult<SampleBuffer>>,
     prefill: Prefill,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
@@ -134,14 +134,6 @@ where
         }
     }
 
-    fn decode_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        let output = self.output.take().ok_or(DecodeError::InvalidData {
-            detail: "decoder output was not prepared",
-        })??;
-        self.output = Some(Ok(output));
-        self.next_chunk_inner()
-    }
-
     /// Build the output `AudioChunk` from a just-filled pool buffer plus
     /// the demuxed frame's metadata. Inlined fields (rather than taking
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
@@ -190,6 +182,14 @@ where
             mapping_revision: None,
         };
         AudioChunk::new(meta, buf)
+    }
+
+    fn decode_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        let output = self.output.take().ok_or(DecodeError::InvalidData {
+            detail: "decoder output was not prepared",
+        })??;
+        self.output = Some(Ok(output));
+        self.next_chunk_inner()
     }
 
     fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -429,23 +429,6 @@ where
         TrackMetadata::default()
     }
 
-    fn prepare_next_chunk(&mut self) {
-        if matches!(self.prefill, Prefill::Buffered(_)) {
-            return;
-        }
-        if let Err(error) = self.demuxer.prepare_frame() {
-            self.output = Some(Err(error));
-            return;
-        }
-        if self.output.is_none() {
-            let mut buffer = self.pools.get::<f32>();
-            self.output = Some(self.codec.prepare_output(&mut buffer).map(|()| buffer));
-        }
-        if matches!(self.prefill, Prefill::Needed) {
-            self.prefill = Prefill::Buffered(self.decode_prepared());
-        }
-    }
-
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             self.prepare_next_chunk();
@@ -472,6 +455,23 @@ where
         let outcome = self.decode_prepared()?;
         self.emit_chunk_signal(&outcome);
         Ok(outcome)
+    }
+
+    fn prepare_next_chunk(&mut self) {
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            return;
+        }
+        if let Err(error) = self.demuxer.prepare_frame() {
+            self.output = Some(Err(error));
+            return;
+        }
+        if self.output.is_none() {
+            let mut buffer = self.pools.get::<f32>();
+            self.output = Some(self.codec.prepare_output(&mut buffer).map(|()| buffer));
+        }
+        if matches!(self.prefill, Prefill::Needed) {
+            self.prefill = Prefill::Buffered(self.decode_prepared());
+        }
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -639,8 +639,8 @@ mod default_priming_tests {
     #[derive(Debug, PartialEq)]
     struct Pcm {
         timestamp: Duration,
-        frame_offset: u64,
         samples: Vec<f32>,
+        frame_offset: u64,
     }
 
     fn pcm_prefix(mut next: impl FnMut() -> DecoderChunkOutcome) -> Pcm {
@@ -893,24 +893,24 @@ mod test_stub_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct ConstFrameCodec {
-        pcm: Vec<f32>,
         spec: AudioSpec,
+        pcm: Vec<f32>,
         frames_per_call: u32,
     }
 
     pub(super) struct LaggedQueueCodec {
-        pcm: Vec<f32>,
         spec: AudioSpec,
         decoded_pts: Duration,
         pending_pts: Option<Duration>,
+        pcm: Vec<f32>,
         frames_per_call: u32,
     }
 
     impl ConstFrameCodec {
         pub(super) fn new(pcm: Vec<f32>, spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
-                pcm,
                 spec,
+                pcm,
                 frames_per_call,
             }
         }
@@ -994,11 +994,11 @@ mod test_counting_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct CountingCodec {
-        pcm: Vec<f32>,
         pub(super) decode_calls: Arc<AtomicU32>,
         pub(super) flush_calls: Arc<AtomicU32>,
         pub(super) spec: AudioSpec,
         pub(super) frames_per_call: u32,
+        pcm: Vec<f32>,
         frames: VecDeque<u32>,
     }
 
@@ -1056,9 +1056,9 @@ mod test_eof_drain_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct EofDrainCodec {
-        pcm: Vec<f32>,
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: AudioSpec,
+        pcm: Vec<f32>,
         tail_pending: bool,
         frames_per_call: u32,
         tail_frames: u32,
@@ -1115,9 +1115,9 @@ mod test_eof_drain_codec {
     }
 
     pub(super) struct QueueCodec {
-        pcm: Vec<f32>,
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: AudioSpec,
+        pcm: Vec<f32>,
         tail_pending: bool,
         tail_frames: u32,
     }
@@ -1269,10 +1269,10 @@ mod seek_trim_tests {
                 packet_desc: &[],
             }))
         }
-        reset_demuxer_seek!(idx = 0);
         fn track_info(&self) -> &TrackInfo {
             &self.track
         }
+        reset_demuxer_seek!(idx = 0);
     }
 
     impl Demuxer for BoundaryFrameDemuxer {
@@ -1293,11 +1293,11 @@ mod seek_trim_tests {
             }))
         }
 
-        reset_demuxer_seek!(idx = 0);
-
         fn track_info(&self) -> &TrackInfo {
             &self.track
         }
+
+        reset_demuxer_seek!(idx = 0);
     }
 
     fn empty_track() -> TrackInfo {
@@ -1748,11 +1748,11 @@ mod eof_drain_tests {
             }))
         }
 
-        reset_demuxer_seek!(emitted = false);
-
         fn track_info(&self) -> &TrackInfo {
             &self.track
         }
+
+        reset_demuxer_seek!(emitted = false);
     }
 
     fn empty_track() -> TrackInfo {

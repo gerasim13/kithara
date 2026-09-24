@@ -25,19 +25,7 @@ mod sanitizer;
 pub(crate) use sanitizer::{ATTEMPT_MARKER, Findings, findings as sanitizer_findings};
 
 const PERCENT_SCALE: usize = 100;
-const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
 const MAX_INVENTORY_CASES: usize = 100_000;
-/// A repeat only qualifies for quarantine when it ran at least this many
-/// cases: a narrow filter (one test, fifty repeats) must keep its honest
-/// failures, and there mass failure is indistinguishable from the flake
-/// itself.
-const QUARANTINE_MIN_CASES: usize = 20;
-/// Quarantine a repeat when `failed * SHARE >= cases` — a quarter of the
-/// suite failing in one repeat. Real flake clusters stay far below this
-/// (run #5's worst honest repeat lost under 1% of its cases), while an
-/// environment event (evicted volume, vanished binaries) fails the suite
-/// wholesale.
-const QUARANTINE_FAIL_SHARE: usize = 4;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
 /// Bounds a lane log, which a run appends to once per attempt.
@@ -133,8 +121,8 @@ struct RenderedReport {
 struct EvidenceProblems {
     rows: Vec<String>,
     invalid: bool,
-    total: usize,
     row_budget: usize,
+    total: usize,
 }
 
 type TestId = (String, String);
@@ -168,10 +156,10 @@ struct InventoryMatch {
 impl EvidenceProblems {
     fn new(row_budget: usize) -> Self {
         Self {
+            row_budget,
             rows: Vec::new(),
             invalid: false,
             total: 0,
-            row_budget,
         }
     }
 
@@ -1259,6 +1247,19 @@ fn quarantine_poisoned_iterations(
     tests: &mut BTreeMap<TestId, TestStats>,
     observed: &mut BTreeSet<usize>,
 ) -> BTreeMap<usize, (usize, usize)> {
+    /// A repeat only qualifies for quarantine when it ran at least this many
+    /// cases: a narrow filter (one test, fifty repeats) must keep its honest
+    /// failures, and there mass failure is indistinguishable from the flake
+    /// itself.
+    const QUARANTINE_MIN_CASES: usize = 20;
+
+    /// Quarantine a repeat when `failed * SHARE >= cases` — a quarter of the
+    /// suite failing in one repeat. Real flake clusters stay far below this
+    /// (run #5's worst honest repeat lost under 1% of its cases), while an
+    /// environment event (evicted volume, vanished binaries) fails the suite
+    /// wholesale.
+    const QUARANTINE_FAIL_SHARE: usize = 4;
+
     let mut per_iteration = BTreeMap::<usize, (usize, usize)>::new();
     for stats in tests.values() {
         for &iteration in &stats.observed_iterations {
@@ -1420,6 +1421,8 @@ fn test_id(case: &CaseTiming, budgets: &StressRenderBudgets) -> String {
 }
 
 pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
+    const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
+
     if attempts == 0 {
         return "0.00%".to_owned();
     }

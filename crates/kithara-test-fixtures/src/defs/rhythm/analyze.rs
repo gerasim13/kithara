@@ -113,6 +113,39 @@ struct PcmReader {
 }
 
 impl PcmReader {
+    #[cfg(feature = "library")]
+    fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
+        let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
+            .build();
+        let mut decoder =
+            DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some(hint), config)
+                .map_err(|error| format!("open: {error}"))?;
+        let spec = decoder.spec();
+        let metadata = decoder.metadata();
+        let mut samples = Vec::new();
+        loop {
+            match decoder
+                .next_chunk()
+                .map_err(|error| format!("decode: {error}"))?
+            {
+                DecoderChunkOutcome::Chunk(chunk) => samples.extend_from_slice(&chunk.samples),
+                DecoderChunkOutcome::Pending(reason) => {
+                    return Err(format!("in-memory source is pending: {reason:?}"));
+                }
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        Ok(Self {
+            spec,
+            metadata,
+            samples,
+            bus: EventBus::default(),
+            cursor: 0,
+            pools: pools(),
+        })
+    }
+
     fn parse_wav(bytes: &[u8]) -> Result<Self, String> {
         if bytes.get(..4) != Some(b"RIFF")
             || bytes.get(8..12) != Some(b"WAVE")
@@ -152,39 +185,6 @@ impl PcmReader {
             metadata: TrackMetadata::default(),
             pools: pools(),
             spec: AudioSpec::new(channels, sample_rate),
-        })
-    }
-
-    #[cfg(feature = "library")]
-    fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
-        let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
-            .pools(pools())
-            .build();
-        let mut decoder =
-            DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some(hint), config)
-                .map_err(|error| format!("open: {error}"))?;
-        let spec = decoder.spec();
-        let metadata = decoder.metadata();
-        let mut samples = Vec::new();
-        loop {
-            match decoder
-                .next_chunk()
-                .map_err(|error| format!("decode: {error}"))?
-            {
-                DecoderChunkOutcome::Chunk(chunk) => samples.extend_from_slice(&chunk.samples),
-                DecoderChunkOutcome::Pending(reason) => {
-                    return Err(format!("in-memory source is pending: {reason:?}"));
-                }
-                DecoderChunkOutcome::Eof => break,
-            }
-        }
-        Ok(Self {
-            spec,
-            bus: EventBus::default(),
-            cursor: 0,
-            metadata,
-            pools: pools(),
-            samples,
         })
     }
 

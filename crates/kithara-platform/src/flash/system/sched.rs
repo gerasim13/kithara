@@ -83,15 +83,26 @@ pub(in crate::flash) enum ParkRole {
 pub(super) struct Entry {
     /// `Some` for deadline-less waiters only. See [`Parked`].
     pub(super) parked: Option<Parked>,
-    pub(super) kind: WaitKind,
     /// What this entry's deadline means. A [`ParkRole::Backstop`] entry never
     /// becomes the advance target while some other deadline exists; a jump that
     /// passes it still wakes it.
     pub(super) role: ParkRole,
+    pub(super) kind: WaitKind,
     pub(super) wake: Wake,
 }
 
 impl Entry {
+    /// A waiter whose deadline is only a backstop under an edge. See
+    /// [`ParkRole::Backstop`].
+    fn backstop(kind: WaitKind, wake: Wake) -> Self {
+        Self {
+            kind,
+            wake,
+            role: ParkRole::Backstop,
+            parked: None,
+        }
+    }
+
     /// A waiter with NO deadline: only a matching signal frees it, so when one
     /// of these pins quiescence its parking site IS the diagnosis.
     fn indef(kind: WaitKind, wake: Wake, parked: Parked) -> Self {
@@ -110,17 +121,6 @@ impl Entry {
             kind,
             wake,
             role: ParkRole::Deadline,
-            parked: None,
-        }
-    }
-
-    /// A waiter whose deadline is only a backstop under an edge. See
-    /// [`ParkRole::Backstop`].
-    fn backstop(kind: WaitKind, wake: Wake) -> Self {
-        Self {
-            kind,
-            wake,
-            role: ParkRole::Backstop,
             parked: None,
         }
     }
@@ -194,28 +194,6 @@ impl WakeBatch {
 }
 
 impl Core {
-    pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        // WHY: No `pinning_async` veto: a paced target exists only while an op is in flight, and there the pin must not suppress it - see
-        // `try_advance`.
-        if self.registry.active != 0 {
-            return None;
-        }
-        if self.sched.real_io == 0 {
-            return None;
-        }
-        self.sched.pace_anchor?;
-        let (&(min, _), _) = self.sched.timed.iter().next()?;
-        Some(StdDuration::from_nanos(self.pace_owed(min)))
-    }
-
-    /// Real nanoseconds the deadline `min` still owes while an op is in flight.
-    fn pace_owed(&self, min: u64) -> u64 {
-        self.sched.pace_anchor.map_or(0, |(real, virt)| {
-            let elapsed = u64::try_from(real.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            min.saturating_sub(virt).saturating_sub(elapsed)
-        })
-    }
-
     /// Bounds how far the paced clock may trail real time when a deadline is
     /// registered. A timer's overshoot carries to the next deadline, which is
     /// what keeps short timers at real pace where the OS sleeps in coarse
@@ -235,6 +213,28 @@ impl Core {
         {
             self.sched.pace_anchor = Some((real, now));
         }
+    }
+
+    /// Real nanoseconds the deadline `min` still owes while an op is in flight.
+    fn pace_owed(&self, min: u64) -> u64 {
+        self.sched.pace_anchor.map_or(0, |(real, virt)| {
+            let elapsed = u64::try_from(real.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            min.saturating_sub(virt).saturating_sub(elapsed)
+        })
+    }
+
+    pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
+        // WHY: No `pinning_async` veto: a paced target exists only while an op is in flight, and there the pin must not suppress it - see
+        // `try_advance`.
+        if self.registry.active != 0 {
+            return None;
+        }
+        if self.sched.real_io == 0 {
+            return None;
+        }
+        self.sched.pace_anchor?;
+        let (&(min, _), _) = self.sched.timed.iter().next()?;
+        Some(StdDuration::from_nanos(self.pace_owed(min)))
     }
 
     /// Decrement the async slot count under a held `core` lock and return the

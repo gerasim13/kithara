@@ -68,9 +68,9 @@ struct EofReader {
     bus: EventBus,
     _drop_probe: Option<DropProbe>,
     meta: TrackMetadata,
+    samples: Vec<f32>,
     position_frames: usize,
     total_frames: usize,
-    samples: Vec<f32>,
 }
 
 impl Default for EofReader {

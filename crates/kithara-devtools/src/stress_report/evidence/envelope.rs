@@ -23,10 +23,6 @@ use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
 
 const MAX_ENVELOPE_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
-/// Newest run-length groups of a failed attempt's probe tail kept in its
-/// dossier row. The tail's tempo is the verdict — a branch marker repeated
-/// hundreds of times is a starving pass loop — so groups carry `(xN)` counts.
-const FLIGHT_TAIL_GROUPS: usize = 4;
 
 /// Flight-recorder tail lines from attempt envelopes, clustered across
 /// repeats. Only failed attempts write dumps, so the passed column stays
@@ -415,6 +411,11 @@ fn fold_flight_tail(lines: &[String], budgets: &StressRenderBudgets) -> Vec<Stri
 
 /// The newest run-length groups of a folded tail — the dossier's bounded view.
 fn newest_groups(mut tail: Vec<String>) -> Vec<String> {
+    /// Newest run-length groups of a failed attempt's probe tail kept in its
+    /// dossier row. The tail's tempo is the verdict — a branch marker repeated
+    /// hundreds of times is a starving pass loop — so groups carry `(xN)` counts.
+    const FLIGHT_TAIL_GROUPS: usize = 4;
+
     let newest = tail.len().saturating_sub(FLIGHT_TAIL_GROUPS);
     tail.split_off(newest)
 }

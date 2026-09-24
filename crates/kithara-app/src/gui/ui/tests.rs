@@ -24,58 +24,6 @@ use super::{
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
-const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
-    ("deck-a/next", "activation"),
-    ("deck-a/play", "activation"),
-    ("deck-a/prev", "activation"),
-    ("deck-a/wave", "hero-wave"),
-    ("deck-a/zoom-in", "activation"),
-    ("deck-a/zoom-out", "activation"),
-    ("mixer/a/four-band/high-4", "knob"),
-    ("mixer/a/four-band/high-mid-4", "knob"),
-    ("mixer/a/four-band/low-4", "knob"),
-    ("mixer/a/four-band/low-mid-4", "knob"),
-    ("mixer/a/three-band/high-3", "knob"),
-    ("mixer/a/three-band/low-3", "knob"),
-    ("mixer/a/three-band/mid-3", "knob"),
-    ("mixer/a/volume", "vertical-vu"),
-    ("overview/a/wave", "wave"),
-];
-
-const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
-    ("deck-a/next", "activation"),
-    ("deck-a/play", "activation"),
-    ("deck-a/prev", "activation"),
-    ("deck-a/wave", "hero-wave"),
-    ("deck-a/zoom-in", "activation"),
-    ("deck-a/zoom-out", "activation"),
-    ("deck-b/next", "activation"),
-    ("deck-b/play", "activation"),
-    ("deck-b/prev", "activation"),
-    ("deck-b/wave", "hero-wave"),
-    ("deck-b/zoom-in", "activation"),
-    ("deck-b/zoom-out", "activation"),
-    ("mixer/a/four-band/high-4", "knob"),
-    ("mixer/a/four-band/high-mid-4", "knob"),
-    ("mixer/a/four-band/low-4", "knob"),
-    ("mixer/a/four-band/low-mid-4", "knob"),
-    ("mixer/a/three-band/high-3", "knob"),
-    ("mixer/a/three-band/low-3", "knob"),
-    ("mixer/a/three-band/mid-3", "knob"),
-    ("mixer/a/volume", "vertical-vu"),
-    ("mixer/b/four-band/high-4", "knob"),
-    ("mixer/b/four-band/high-mid-4", "knob"),
-    ("mixer/b/four-band/low-4", "knob"),
-    ("mixer/b/four-band/low-mid-4", "knob"),
-    ("mixer/b/three-band/high-3", "knob"),
-    ("mixer/b/three-band/low-3", "knob"),
-    ("mixer/b/three-band/mid-3", "knob"),
-    ("mixer/b/volume", "vertical-vu"),
-    ("mixer/xfade", "crossfader"),
-    ("overview/a/wave", "wave"),
-    ("overview/b/wave", "wave"),
-];
-
 fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
     visit(node);
     match node {
@@ -936,6 +884,58 @@ fn every_eq_bank_carries_its_pointer_menu() {
 
 #[kithara::test]
 fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
+    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+        ("deck-a/next", "activation"),
+        ("deck-a/play", "activation"),
+        ("deck-a/prev", "activation"),
+        ("deck-a/wave", "hero-wave"),
+        ("deck-a/zoom-in", "activation"),
+        ("deck-a/zoom-out", "activation"),
+        ("mixer/a/four-band/high-4", "knob"),
+        ("mixer/a/four-band/high-mid-4", "knob"),
+        ("mixer/a/four-band/low-4", "knob"),
+        ("mixer/a/four-band/low-mid-4", "knob"),
+        ("mixer/a/three-band/high-3", "knob"),
+        ("mixer/a/three-band/low-3", "knob"),
+        ("mixer/a/three-band/mid-3", "knob"),
+        ("mixer/a/volume", "vertical-vu"),
+        ("overview/a/wave", "wave"),
+    ];
+
+    const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+        ("deck-a/next", "activation"),
+        ("deck-a/play", "activation"),
+        ("deck-a/prev", "activation"),
+        ("deck-a/wave", "hero-wave"),
+        ("deck-a/zoom-in", "activation"),
+        ("deck-a/zoom-out", "activation"),
+        ("deck-b/next", "activation"),
+        ("deck-b/play", "activation"),
+        ("deck-b/prev", "activation"),
+        ("deck-b/wave", "hero-wave"),
+        ("deck-b/zoom-in", "activation"),
+        ("deck-b/zoom-out", "activation"),
+        ("mixer/a/four-band/high-4", "knob"),
+        ("mixer/a/four-band/high-mid-4", "knob"),
+        ("mixer/a/four-band/low-4", "knob"),
+        ("mixer/a/four-band/low-mid-4", "knob"),
+        ("mixer/a/three-band/high-3", "knob"),
+        ("mixer/a/three-band/low-3", "knob"),
+        ("mixer/a/three-band/mid-3", "knob"),
+        ("mixer/a/volume", "vertical-vu"),
+        ("mixer/b/four-band/high-4", "knob"),
+        ("mixer/b/four-band/high-mid-4", "knob"),
+        ("mixer/b/four-band/low-4", "knob"),
+        ("mixer/b/four-band/low-mid-4", "knob"),
+        ("mixer/b/three-band/high-3", "knob"),
+        ("mixer/b/three-band/low-3", "knob"),
+        ("mixer/b/three-band/mid-3", "knob"),
+        ("mixer/b/volume", "vertical-vu"),
+        ("mixer/xfade", "crossfader"),
+        ("overview/a/wave", "wave"),
+        ("overview/b/wave", "wave"),
+    ];
+
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
         let expected = match layout {

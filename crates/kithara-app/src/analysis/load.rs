@@ -19,14 +19,6 @@ pub(super) enum Loaded {
 }
 
 impl Loaded {
-    /// What the artifact is called in a log line.
-    const fn kind(&self) -> &'static str {
-        match self {
-            Self::BeatGrid(_) => "beat grid",
-            Self::Waveform(_) => "waveform",
-        }
-    }
-
     /// Why the load failed, when it did.
     const fn error(&self) -> Option<&ArtifactLoadError> {
         match self {
@@ -53,6 +45,14 @@ impl Loaded {
         .await
         .is_ok()
     }
+
+    /// What the artifact is called in a log line.
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::BeatGrid(_) => "beat grid",
+            Self::Waveform(_) => "waveform",
+        }
+    }
 }
 
 /// An artifact load answering for the entry and the epoch it was started on.
@@ -61,9 +61,9 @@ impl Loaded {
 /// track, reloaded, or released has moved on, and the reply is dropped instead
 /// of overwriting whatever that entry holds now.
 pub(super) struct LoadReply {
+    pub(super) loaded: Loaded,
     pub(super) epoch: u64,
     pub(super) index: usize,
-    pub(super) loaded: Loaded,
 }
 
 impl Owner {

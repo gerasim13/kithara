@@ -29,7 +29,7 @@ count printed ahead of it.
 
 | Namespace | Check | Rewrite |
 | --- | --- | --- |
-| `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes short unmarked prose |
+| `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes every other reported prose comment |
 | `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
 | `style` | `qualified_path_depth` | trades a deep path for the `use` that shortens it |
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_error`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto an existing derive or delegation macro |
@@ -50,20 +50,17 @@ declares, which is what `clippy::inconsistent_struct_constructor` demands;
 that import leaves naming nothing. Compile after a `--fix` all the same: a
 second lint pass calls its own output a fixpoint.
 
-`comment_hygiene --fix` makes only the two rewrites that cannot be wrong. A
-standalone `//` block directly above an item becomes that item's `///`: it already
-documents the item and only the marker was missing. A `//` line of at most 30
-characters with no digit, backtick, bracket, `=`, `:`, or second capital is
-deleted; prose that small loses a reader nothing. Longer prose is never deleted,
-because a deleted sentence is irreversible.
+`comment_hygiene --fix` enforces that a comment survives only as documentation.
+A standalone `//` block directly above an item becomes that item's `///`: it
+already documents the item and only the marker was missing. Every other prose
+comment the report names is deleted whole; comments the report excludes, such as
+`#[cfg(test)]` code, keep theirs.
 
-Everything else is a decision you owe. A comment inside a function body has no
-mechanical destination: being the only comment there does not make it the
-function's documentation - far more often it annotates the first statement of a
-long body, and a hoist would publish a wrong contract. A clean fix run is therefore
-not a clean file, and silencing the check with a marker is the worse of the two
-answers. Size and density are reported separately for the same reason, and neither
-has an autofix.
+A comment inside a function body has no mechanical destination: being the only
+comment there does not make it the function's documentation - far more often it
+annotates the first statement of a long body, and a hoist would publish a wrong
+contract. Carrying a reason worth keeping into the owning item's doc is therefore
+a judgment made before the fix runs, not by it. Doc size has no autofix.
 
 ## Architecture Analysis
 

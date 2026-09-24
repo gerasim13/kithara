@@ -34,6 +34,13 @@ impl ItemEventBridge {
     /// Threshold for suppressing redundant duration/buffered updates (seconds).
     const UPDATE_THRESHOLD: f64 = 0.01;
 
+    /// Same contract as `AudioPlayerItem::deliver`: state settles before
+    /// observers see the event.
+    fn deliver(observer: &Arc<dyn ItemObserver>, state: &Mutex<ItemView>, event: FfiItemEvent) {
+        state.lock().absorb(&event);
+        observer.on_event(event);
+    }
+
     fn dispatch(
         observer: &Arc<dyn ItemObserver>,
         event: &ItemBusEvent,
@@ -181,13 +188,6 @@ impl ItemEventBridge {
         }
         Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
         Self { cancel }
-    }
-
-    /// Same contract as `AudioPlayerItem::deliver`: state settles before
-    /// observers see the event.
-    fn deliver(observer: &Arc<dyn ItemObserver>, state: &Mutex<ItemView>, event: FfiItemEvent) {
-        state.lock().absorb(&event);
-        observer.on_event(event);
     }
 
     fn spawn_event_task(

@@ -37,6 +37,10 @@ impl AudioPlayer {
         }))
     }
 
+    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        self.inner.action_at_item_end()
+    }
+
     /// Append an item to the tail of the queue. AVQueuePlayer-style
     /// counterpart of [`Self::insert`], which follows the iOS protocol
     /// shape (`after == nil` ⇒ head).
@@ -56,17 +60,9 @@ impl AudioPlayer {
     pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
         self.inner.append(&item)
     }
-
     pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
         self.inner.crossfade_settings()
     }
-    pub fn playback_order(&self) -> FfiPlaybackOrder {
-        self.inner.playback_order()
-    }
-    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
-        self.inner.action_at_item_end()
-    }
-
     /// Currently playing item (if any). Resolves the queue's current
     /// track id against the player's Swift-owned item registry so
     /// callers get back the same `AudioPlayerItem` instance they passed
@@ -139,6 +135,10 @@ impl AudioPlayer {
 
     pub fn play(&self) {
         self.inner.play();
+    }
+
+    pub fn playback_order(&self) -> FfiPlaybackOrder {
+        self.inner.playback_order()
     }
 
     /// Target playback speed used by `play()`. When the player is

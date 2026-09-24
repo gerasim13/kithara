@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use core::fmt::Debug;
+
 use kithara_platform::tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::{Envelope, EventBus, EventMeta, TopicReceiver};
@@ -8,7 +10,7 @@ use crate::{Envelope, EventBus, EventMeta, TopicReceiver};
 ///
 /// Implemented only through `#[derive(Event)]` outside this crate; the
 /// `derivable_event` idiom check denies a hand-written impl anywhere else.
-pub trait Event: Clone + core::fmt::Debug + Send + Sync + 'static {}
+pub trait Event: Clone + Debug + Send + Sync + 'static {}
 
 /// One or more [`Event`] types a consumer wants on a single receiver.
 ///
@@ -23,24 +25,24 @@ pub trait Event: Clone + core::fmt::Debug + Send + Sync + 'static {}
 pub trait EventSet: Sized + Send + 'static {
     type Receivers: Send;
 
-    fn subscribe(bus: &EventBus) -> Self::Receivers;
+    fn publish(bus: &EventBus, meta: EventMeta, event: Self);
 
     fn recv(
         rx: &mut Self::Receivers,
     ) -> impl Future<Output = Result<Envelope<Self>, RecvError>> + Send;
 
+    fn subscribe(bus: &EventBus) -> Self::Receivers;
+
     /// # Errors
     /// Returns `Empty`, lag information, or `Closed` when all members close.
     fn try_recv(rx: &mut Self::Receivers) -> Result<Envelope<Self>, TryRecvError>;
-
-    fn publish(bus: &EventBus, meta: EventMeta, event: Self);
 }
 
 impl<E: Event> EventSet for E {
     type Receivers = TopicReceiver<E>;
 
-    fn subscribe(bus: &EventBus) -> Self::Receivers {
-        TopicReceiver::new(bus)
+    fn publish(bus: &EventBus, meta: EventMeta, event: Self) {
+        bus.publish_stamped(meta, event);
     }
 
     fn recv(
@@ -49,11 +51,11 @@ impl<E: Event> EventSet for E {
         rx.recv()
     }
 
-    fn try_recv(rx: &mut Self::Receivers) -> Result<Envelope<Self>, TryRecvError> {
-        rx.try_recv()
+    fn subscribe(bus: &EventBus) -> Self::Receivers {
+        TopicReceiver::new(bus)
     }
 
-    fn publish(bus: &EventBus, meta: EventMeta, event: Self) {
-        bus.publish_stamped(meta, event);
+    fn try_recv(rx: &mut Self::Receivers) -> Result<Envelope<Self>, TryRecvError> {
+        rx.try_recv()
     }
 }

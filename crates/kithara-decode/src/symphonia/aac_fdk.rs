@@ -187,12 +187,12 @@ pub(crate) struct AacDecoder {
     #[debug(skip)]
     decoder: Decoder,
     #[debug(skip)]
+    reset_error: Option<Error>,
+    #[debug(skip)]
     pcm: [i16; Consts::MAX_SAMPLES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
-    #[debug(skip)]
-    reset_error: Option<Error>,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
     /// first successful decode, decremented as each chunk consumes it.

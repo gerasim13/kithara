@@ -141,8 +141,8 @@ pub(crate) struct ResumeState {
 
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
-    pub(crate) runs: Vec<BeatRunResume>,
     pub(crate) taken: RangeSet<u64>,
+    pub(crate) runs: Vec<BeatRunResume>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
@@ -212,8 +212,8 @@ impl BeatResume {
         }
         let resume = Self {
             short,
-            runs,
             taken,
+            runs,
             windows,
         };
         resume.validate()?;

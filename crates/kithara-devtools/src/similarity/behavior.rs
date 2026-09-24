@@ -7,8 +7,6 @@ use syn::{
     visit::{self, Visit},
 };
 
-const WL_ROUNDS: usize = 3;
-
 #[derive(Debug, Clone)]
 struct Node {
     label: String,
@@ -58,6 +56,8 @@ impl BehaviorGraph {
     }
 
     fn compute_wl_fingerprint(&self) -> BTreeMap<String, usize> {
+        const WL_ROUNDS: usize = 3;
+
         let mut labels = self
             .nodes
             .iter()

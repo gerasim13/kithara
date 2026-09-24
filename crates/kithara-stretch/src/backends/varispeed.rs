@@ -14,9 +14,9 @@ use crate::{
 
 pub(crate) struct VarispeedElastic {
     capabilities: ElasticCapabilities,
+    resampler: GlideResampler,
     input: SmallVec<[SampleBuffer; 8]>,
     output: SmallVec<[SampleBuffer; 8]>,
-    resampler: GlideResampler,
 }
 
 impl ElasticEngine for VarispeedElastic {
@@ -72,10 +72,10 @@ impl ElasticEngine for VarispeedElastic {
             output.push(target);
         }
         Ok(Self {
-            capabilities: ElasticCapabilities::new(config.shape(), ElasticLatency::new(0, 0)),
             input,
             output,
             resampler,
+            capabilities: ElasticCapabilities::new(config.shape(), ElasticLatency::new(0, 0)),
         })
     }
 

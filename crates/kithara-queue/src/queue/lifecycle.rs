@@ -2,6 +2,7 @@ use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
+use kithara_play::SelectionPlayback;
 use smallvec::SmallVec;
 
 use super::{
@@ -123,9 +124,9 @@ where
                 id,
                 settings: Transition::None.settings(self.crossfade_settings()),
                 playback: if self.should_autoplay {
-                    kithara_play::SelectionPlayback::Play
+                    SelectionPlayback::Play
                 } else {
-                    kithara_play::SelectionPlayback::Pause
+                    SelectionPlayback::Pause
                 },
                 reason: AdvanceReason::InitialLoad,
             });
@@ -212,9 +213,9 @@ where
     fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
         let playback = if self.player.is_playing() {
-            kithara_play::SelectionPlayback::Play
+            SelectionPlayback::Play
         } else {
-            kithara_play::SelectionPlayback::Pause
+            SelectionPlayback::Pause
         };
         let successor_id = if was_current {
             let guard = self.lock_tracks();

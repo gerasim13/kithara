@@ -9,8 +9,6 @@ use super::{
 use crate::{junit::CaseTiming, stress::pressure::SCHEMA};
 
 const MAX_LINE_BYTES: usize = 1_048_576;
-const MAX_PRESSURE_RECORDS: usize = 100_000;
-
 #[derive(Debug, Deserialize)]
 struct PressureSample {
     metrics: BTreeMap<String, String>,
@@ -58,6 +56,8 @@ pub(super) struct PressurePoint {
 }
 
 pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool) {
+    const MAX_PRESSURE_RECORDS: usize = 100_000;
+
     let mut summary = PressureSummary::default();
     let mut points = Vec::new();
     let mut records = 0usize;

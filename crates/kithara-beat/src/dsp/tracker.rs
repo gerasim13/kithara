@@ -106,8 +106,6 @@ mod tests {
             .expect("a fresh region has room for the window")
     }
 
-    const SECONDS: f32 = 20.0;
-
     /// The tempo of a click train, read from the marks the tracker returns.
     fn reported_bpm(tempo: Tempo, pcm: &[f32]) -> f32 {
         let beats: Vec<f32> = SpectralBeats::new(pools(), tempo)
@@ -162,6 +160,8 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn markers_land_on_the_clicks(clicks_120_20s: Vec<f32>) {
+        const SECONDS: f32 = 20.0;
+
         let period = 0.5;
         let found = detect(&clicks_120_20s);
         let expected = clicks::positions(SECONDS, period);

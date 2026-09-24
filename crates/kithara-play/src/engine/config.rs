@@ -28,8 +28,6 @@ pub struct EngineConfig<S> {
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
     pub(crate) sample_rate: NonZeroU32,
-    /// Player-owned response contract used to validate session geometry.
-    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
@@ -37,12 +35,17 @@ pub struct EngineConfig<S> {
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
+    /// Player-owned response contract used to validate session geometry.
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Optional pre-bound session for isolated harnesses. Production engines
     /// receive theirs when the owning Player enters a Host.
     #[debug(skip)]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
+    /// Render-pass slot gate smoothing. Default: 5 ms.
+    #[builder(default = DEFAULT_GATE_SMOOTHING)]
+    pub(crate) gate_smoothing: SmootherConfig,
     /// EQ band layout per player. Default: 10-band log-spaced. Not a
     /// document key: every construction site in the workspace derives this
     /// from a generator (`generate_log_spaced_bands`), and a custom layout
@@ -51,9 +54,6 @@ pub struct EngineConfig<S> {
     #[builder(default = generate_log_spaced_bands(10))]
     #[debug(skip)]
     pub(crate) eq_layout: Vec<EqBandConfig>,
-    /// Render-pass slot gate smoothing. Default: 5 ms.
-    #[builder(default = DEFAULT_GATE_SMOOTHING)]
-    pub(crate) gate_smoothing: SmootherConfig,
     /// Number of output channels. Default: 2 (stereo). Not a document key:
     /// the only reader is a startup log line, so a document value would
     /// change nothing the engine actually does.

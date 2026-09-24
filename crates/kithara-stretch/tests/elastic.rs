@@ -22,16 +22,8 @@ use num_traits::ToPrimitive;
 
 const CHANNELS: usize = 2;
 const CONTROL_QUANTUM: usize = 64;
-const LANDMARK_FREQUENCIES: [f64; 12] = [
-    1_125.0, 1_875.0, 2_625.0, 3_375.0, 4_125.0, 4_875.0, 5_625.0, 6_375.0, 7_125.0, 7_875.0,
-    8_625.0, 9_375.0,
-];
 const SAMPLE_RATE: u32 = 48_000;
-const SHORT_MARKER_HZ: f64 = 15_000.0;
-const SHORT_MARKER_WINDOW_FRAMES: usize = 16;
 const TONE_HZ: f64 = 440.0;
-const TERMINAL_HIGH_HZ: f64 = 6_000.0;
-const TERMINAL_LOW_HZ: f64 = 1_500.0;
 const TERMINAL_WINDOW_FRAMES: usize = 64;
 
 fn conformance_backends() -> ElasticBackendConfig {
@@ -192,6 +184,10 @@ fn short_marker_signal(pcm: &StretchPcm, frames: usize) -> Vec<f32> {
 }
 
 fn short_marker_is_present(samples: &[f32]) -> bool {
+    const SHORT_MARKER_HZ: f64 = 15_000.0;
+
+    const SHORT_MARKER_WINDOW_FRAMES: usize = 16;
+
     const MINIMUM_MAGNITUDE: f64 = 0.05;
     const STEP_FRAMES: usize = 4;
 
@@ -222,6 +218,11 @@ fn strongest_tone_window(samples: &[f32], frequency: f64) -> Option<(usize, f64)
 }
 
 fn dominant_landmark_sequence(samples: &[f32], landmarks: &[usize]) -> Vec<usize> {
+    const LANDMARK_FREQUENCIES: [f64; 12] = [
+        1_125.0, 1_875.0, 2_625.0, 3_375.0, 4_125.0, 4_875.0, 5_625.0, 6_375.0, 7_125.0, 7_875.0,
+        8_625.0, 9_375.0,
+    ];
+
     const DOMINANCE: f64 = 1.25;
     const MINIMUM_MAGNITUDE: f64 = 0.03;
     const MINIMUM_RUN_WINDOWS: usize = 3;
@@ -336,6 +337,10 @@ fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop(
 }
 
 fn terminal_markers_are_ordered(samples: &[f32]) -> bool {
+    const TERMINAL_HIGH_HZ: f64 = 6_000.0;
+
+    const TERMINAL_LOW_HZ: f64 = 1_500.0;
+
     const MINIMUM_MAGNITUDE: f64 = 0.05;
 
     let Some((low_position, low_magnitude)) = strongest_tone_window(samples, TERMINAL_LOW_HZ)

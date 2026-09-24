@@ -190,8 +190,8 @@ just lint ast-grep <path>
 ```
 
 1. Add a judgment pass for what no check can decide: rules 3/6/7/9, and the
-  comments `comment_hygiene` refused to touch. Judge comments (1/3/5) under the
-  removal default.
+  comments whose reason should move into a doc before `comment_hygiene --fix`
+  deletes them. Judge comments (1/3/5) under the removal default.
 1. Group findings by category; for each give `file:line` and a short "why".
 1. Split into:
 

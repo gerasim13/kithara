@@ -26,8 +26,8 @@ use super::{
 use crate::error::PlayError;
 
 pub(crate) struct SessionClient<S> {
-    root_view: RootView,
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
+    root_view: RootView,
 }
 
 impl<S> SessionClient<S> {
@@ -51,15 +51,6 @@ impl<S> SessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
-    delegate::delegate! {
-        to self.root_view {
-            #[expr(Ok($))]
-            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            #[expr(Ok($))]
-            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
-        }
-    }
-
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
@@ -71,6 +62,15 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
             _ => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
             )),
+        }
+    }
+
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
         }
     }
 }

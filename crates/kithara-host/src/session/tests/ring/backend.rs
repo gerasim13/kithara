@@ -39,10 +39,6 @@ struct RingBackendProbeInner {
 }
 
 impl RingBackendProbe {
-    pub(crate) fn start_count(&self) -> usize {
-        self.inner.starts.load(Ordering::SeqCst)
-    }
-
     pub(crate) fn pre_arm_error(&self) -> Option<RingRenderError> {
         match self.inner.pre_arm_error.load(Ordering::SeqCst) {
             1 => Some(RingRenderError::NotArmed),
@@ -66,6 +62,10 @@ impl RingBackendProbe {
     fn record_start(&self) {
         self.inner.starts.fetch_add(1, Ordering::SeqCst);
     }
+
+    pub(crate) fn start_count(&self) -> usize {
+        self.inner.starts.load(Ordering::SeqCst)
+    }
 }
 
 #[non_exhaustive]
@@ -73,11 +73,11 @@ impl RingBackendProbe {
 #[fieldwork(opt_in, with)]
 pub(crate) struct RingBackendConfig {
     session_rate: NonZeroU32,
-    block_frames: u32,
-    layout: RingLayout,
+    writer: Option<RingWriter>,
     #[field(with, vis = "pub(crate)")]
     probe: RingBackendProbe,
-    writer: Option<RingWriter>,
+    layout: RingLayout,
+    block_frames: u32,
 }
 
 impl RingBackendConfig {
@@ -108,14 +108,14 @@ impl Default for RingBackendConfig {
 }
 
 pub(crate) struct RingBackend {
-    armed: bool,
-    block_frames: u32,
-    block_frames_usize: usize,
-    committed_frames: u64,
-    layout: RingLayout,
     processor: FirewheelProcessor,
     session_rate: NonZeroU32,
+    layout: RingLayout,
     writer: RingWriter,
+    armed: bool,
+    block_frames: u32,
+    committed_frames: u64,
+    block_frames_usize: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -145,41 +145,6 @@ pub(crate) enum RingStartError {
 }
 
 impl RingBackend {
-    /// Activates `cx` for manual rendering and takes the processor it returns.
-    /// Nothing drives this stream but `render_block`, so the test decides when
-    /// a block happens and what clock it happens at.
-    pub(crate) fn start(
-        cx: &mut FirewheelContext,
-        mut config: RingBackendConfig,
-    ) -> Result<Self, RingStartError> {
-        let max_block_frames =
-            NonZeroU32::new(config.block_frames).ok_or(RingStartError::ZeroBlockFrames)?;
-        let block_frames_usize = usize::try_from(config.block_frames)
-            .map_err(|_| RingStartError::BlockFramesOutOfRange)?;
-        let writer = config.writer.take().ok_or(RingStartError::MissingWriter)?;
-        let channels = config.layout.channels();
-        let processor = cx
-            .activate(ActivateInfo {
-                sample_rate: config.session_rate,
-                max_block_frames,
-                num_stream_in_channels: 0,
-                num_stream_out_channels: channels as u32,
-                input_to_output_latency_seconds: 0.0,
-            })
-            .map_err(|_| RingStartError::Activation)?;
-        config.probe.record_start();
-        Ok(Self {
-            armed: false,
-            block_frames: config.block_frames,
-            block_frames_usize,
-            committed_frames: 0,
-            layout: config.layout,
-            processor,
-            session_rate: config.session_rate,
-            writer,
-        })
-    }
-
     pub(crate) const fn arm(&mut self) {
         self.armed = true;
     }
@@ -226,5 +191,40 @@ impl RingBackend {
         }
         self.committed_frames = next_committed;
         Ok(())
+    }
+
+    /// Activates `cx` for manual rendering and takes the processor it returns.
+    /// Nothing drives this stream but `render_block`, so the test decides when
+    /// a block happens and what clock it happens at.
+    pub(crate) fn start(
+        cx: &mut FirewheelContext,
+        mut config: RingBackendConfig,
+    ) -> Result<Self, RingStartError> {
+        let max_block_frames =
+            NonZeroU32::new(config.block_frames).ok_or(RingStartError::ZeroBlockFrames)?;
+        let block_frames_usize = usize::try_from(config.block_frames)
+            .map_err(|_| RingStartError::BlockFramesOutOfRange)?;
+        let writer = config.writer.take().ok_or(RingStartError::MissingWriter)?;
+        let channels = config.layout.channels();
+        let processor = cx
+            .activate(ActivateInfo {
+                max_block_frames,
+                sample_rate: config.session_rate,
+                num_stream_in_channels: 0,
+                num_stream_out_channels: channels as u32,
+                input_to_output_latency_seconds: 0.0,
+            })
+            .map_err(|_| RingStartError::Activation)?;
+        config.probe.record_start();
+        Ok(Self {
+            block_frames_usize,
+            processor,
+            writer,
+            armed: false,
+            block_frames: config.block_frames,
+            committed_frames: 0,
+            layout: config.layout,
+            session_rate: config.session_rate,
+        })
     }
 }

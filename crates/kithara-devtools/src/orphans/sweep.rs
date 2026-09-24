@@ -48,11 +48,11 @@ pub struct OrphansArgs {
 /// One target of one package. `cargo modules` analyzes a single target per
 /// run, so a package with a library and binaries needs one run per target.
 struct Job {
+    build_script: Option<PathBuf>,
     src: PathBuf,
     label: String,
     package: String,
     selector: Vec<String>,
-    build_script: Option<PathBuf>,
 }
 
 /// A module the tool reported, at the file it named.

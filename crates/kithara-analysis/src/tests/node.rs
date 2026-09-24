@@ -196,11 +196,11 @@ fn enqueue(
 ) -> watch::Receiver<Option<AnalysisProgress>> {
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         ingest,
         reader,
         cancel,
+        demand: AnalysisDemand::ALL,
         token: token.into(),
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
@@ -246,8 +246,8 @@ fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
@@ -275,8 +275,8 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
@@ -309,10 +309,10 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
@@ -363,10 +363,10 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
         jobs.send(Job {
-            demand: AnalysisDemand::ALL,
             tx,
             rate,
             ingest,
+            demand: AnalysisDemand::ALL,
             token: token.into(),
             revision: 0,
             reader: Box::new(FakeReader::stalled(8)),
@@ -420,10 +420,10 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(4)),
@@ -470,10 +470,10 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
@@ -570,10 +570,10 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
@@ -680,10 +680,10 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
@@ -781,9 +781,9 @@ where
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         reader,
         tx,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
@@ -1415,10 +1415,10 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        demand: AnalysisDemand::ALL,
         tx,
         rate,
         ingest,
+        demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
         reader: Box::new(FakeReader::stalled(3)),

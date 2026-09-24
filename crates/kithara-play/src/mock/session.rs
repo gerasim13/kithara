@@ -23,8 +23,8 @@ pub struct SessionMock {
     next_player: AtomicU64,
     next_slot: AtomicU64,
     nodes: Mutex<Vec<NodeInputs>>,
-    shape: Option<StreamShape>,
     sample_rate: NonZeroU32,
+    shape: Option<StreamShape>,
 }
 
 impl<S> SessionDispatcher<S> for SessionMock {

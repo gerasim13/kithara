@@ -76,17 +76,17 @@ struct MiniWaveCanvas<'skin> {
 }
 
 struct MiniWaveState {
-    modifiers: Modifiers,
-    loop_start: Option<f32>,
-    text: RefCell<Option<TextContext>>,
-    drag: ScalarState,
     /// Tessellated picture kept between frames. Without it every frame hands
     /// the renderer freshly built geometry, and its buffer pool grows to the
     /// high-water mark of all of them and never gives it back.
     cache: canvas::Cache,
+    modifiers: Modifiers,
+    loop_start: Option<f32>,
     /// Everything the picture is built from. The cache is dropped exactly when
     /// this changes, so a reused picture can never be a stale one.
     painted: RefCell<Option<Painted>>,
+    text: RefCell<Option<TextContext>>,
+    drag: ScalarState,
 }
 
 impl Default for MiniWaveState {

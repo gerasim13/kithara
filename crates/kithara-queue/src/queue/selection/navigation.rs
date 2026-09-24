@@ -15,19 +15,6 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Advance to the next track per navigation rules. Returns the newly
-    /// selected id, or `None` when the queue has ended (and
-    /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
-    ///
-    /// # Errors
-    ///
-    /// Returns a queue or player error when the successor cannot be selected.
-    pub fn next(&self, transition: Transition) -> Result<Option<TrackId>, QueueError> {
-        self.with_open_result(|queue| {
-            queue.advance_to_next_inner(transition, AdvanceReason::UserNext)
-        })
-    }
-
     pub(in crate::queue) fn advance_to_next_inner(
         &self,
         transition: Transition,
@@ -48,6 +35,19 @@ where
         let id = next.id;
         self.select_with_reason(id, transition, reason)?;
         Ok(Some(id))
+    }
+
+    /// Advance to the next track per navigation rules. Returns the newly
+    /// selected id, or `None` when the queue has ended (and
+    /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or player error when the successor cannot be selected.
+    pub fn next(&self, transition: Transition) -> Result<Option<TrackId>, QueueError> {
+        self.with_open_result(|queue| {
+            queue.advance_to_next_inner(transition, AdvanceReason::UserNext)
+        })
     }
 
     /// Read the next selectable entry without mutating navigation. Selection

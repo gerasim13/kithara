@@ -20,8 +20,8 @@ pub(crate) struct CountingProbe {
 
 #[derive(Default)]
 struct CountingProbeInner {
-    constructions: AtomicUsize,
     construction_sample_rate: AtomicU32,
+    constructions: AtomicUsize,
     new_streams: AtomicUsize,
 }
 

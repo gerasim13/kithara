@@ -91,17 +91,17 @@ impl Bound {
             return Err(Error::new(expr.span(), "a ranged bound must be finite"));
         }
         Ok(Self {
-            tokens: quote! { #expr },
             value,
+            tokens: quote! { #expr },
         })
     }
 }
 
 #[derive(Default)]
 struct Spec {
-    min: Option<Bound>,
-    max: Option<Bound>,
     default: Option<Bound>,
+    max: Option<Bound>,
+    min: Option<Bound>,
     clamp: bool,
 }
 

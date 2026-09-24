@@ -10,7 +10,10 @@ use std::{
 
 use regex::{Captures, Regex};
 
-use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
+use self::{
+    attempt::{AttemptKey, AttemptOutcome, attempt_outcomes},
+    envelope::{FlightClusters, Input},
+};
 use super::{StressReportArgs, markdown_cell, test_id};
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
@@ -24,10 +27,6 @@ mod line;
 mod line_reader;
 mod overlap;
 mod pressure;
-
-/// Payload lines kept after a panic header: the assertion's message and, for
-/// `assert_eq!`, its `left` and `right`.
-const PANIC_DETAIL_LINES: usize = 4;
 
 #[derive(Debug, Default)]
 struct SignatureCluster {
@@ -153,12 +152,12 @@ pub(super) fn append_correlated_evidence(
             budgets,
         );
     }
-    let mut flight = envelope::FlightClusters::default();
+    let mut flight = FlightClusters::default();
     if let Some(path) = &args.envelope_dir {
         complete &= envelope::append(
             out,
             path,
-            envelope::Input::new(
+            Input::new(
                 &outcomes,
                 &expected_envelopes,
                 run_id,
@@ -360,6 +359,10 @@ fn failure_signature(
     evidence: &StressEvidenceConfig,
     budgets: &StressRenderBudgets,
 ) -> String {
+    /// Payload lines kept after a panic header: the assertion's message and, for
+    /// `assert_eq!`, its `left` and `right`.
+    const PANIC_DETAIL_LINES: usize = 4;
+
     let lines = clean_lines(&case.output);
     for (index, line) in lines.iter().enumerate() {
         if evidence
@@ -796,8 +799,8 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
-            flaky: false,
             secs,
+            flaky: false,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),

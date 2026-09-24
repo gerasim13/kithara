@@ -45,12 +45,12 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
 pub(crate) struct AssetArgs {
     pub(crate) content_type: LitStr,
     pub(crate) ext: LitStr,
+    /// Function returning a sample of the output format, keyed into the id.
+    pub(crate) format: Option<Path>,
     /// Cached assets that must be materialized before this producer runs.
     pub(crate) depends_on: Vec<LitStr>,
     /// Environment variables that invalidate this producer.
     pub(crate) env: Vec<LitStr>,
-    /// Function returning a sample of the output format, keyed into the id.
-    pub(crate) format: Option<Path>,
     /// Pass the build context to a required producer.
     pub(crate) context: bool,
     /// Bake the asset into filesystem-free wasm binaries.

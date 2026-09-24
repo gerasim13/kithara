@@ -335,10 +335,10 @@ where
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
         jobs.send(Job {
-            demand: AnalysisDemand::ALL,
             tx,
             rate,
             ingest,
+            demand: AnalysisDemand::ALL,
             token: Consts::TOKEN.into(),
             revision: 0,
             reader: Box::new(source),

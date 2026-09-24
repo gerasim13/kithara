@@ -17,13 +17,13 @@ impl Consts {
     const FRAMES_240MS_44K1: usize = 10_584;
     const FRAMES_2S_44K1: usize = 88_200;
     const FRAMES_30S_44K1: usize = 1_323_000;
-    const FRAMES_PER_BEAT_126BPM_44K1: usize = 21_000;
-    const FRAMES_CLICK_BURST_44K1: usize = 1_323;
     const FRAMES_60S_44K1: usize = 2_646_000;
     const FRAMES_6S_44K1: usize = 264_600;
+    const FRAMES_CLICK_BURST_44K1: usize = 1_323;
+    const FRAMES_PER_BEAT_126BPM_44K1: usize = 21_000;
+    const MONO: u16 = 1;
     const RATE_44K1: u32 = 44_100;
     const RATE_48K: u32 = 48_000;
-    const MONO: u16 = 1;
     const STEREO: u16 = 2;
     /// The sample count occupies the low 36 bits of that field.
     const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;

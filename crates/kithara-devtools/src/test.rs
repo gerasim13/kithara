@@ -28,12 +28,12 @@ pub struct TestArgs {
 #[derive(Debug)]
 struct TestRequest {
     flash: Option<bool>,
-    /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
-    /// they bound what the touched paths may select.
-    lanes: Vec<String>,
     loom: Option<bool>,
     net_backend: Option<String>,
     no_block: Option<bool>,
+    /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
+    /// they bound what the touched paths may select.
+    lanes: Vec<String>,
     passthrough: Vec<String>,
     touched: bool,
 }

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::FirewheelContext;
+use firewheel_web_audio::WebAudioBackend;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, mpsc};
 
@@ -123,10 +124,10 @@ pub(crate) fn warm_up_audio<S>(
 pub(super) fn start_stream_web_audio(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
-) -> Result<firewheel_web_audio::WebAudioBackend, String> {
+) -> Result<WebAudioBackend, String> {
     let config = firewheel_web_audio::WebAudioConfig {
         sample_rate: NonZeroU32::new(sample_rate),
         request_input: false,
     };
-    firewheel_web_audio::WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
+    WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
 }

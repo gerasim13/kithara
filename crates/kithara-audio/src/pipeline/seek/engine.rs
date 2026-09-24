@@ -162,8 +162,8 @@ impl SeekEngine {
         update_len(ctx.decode, ctx.stream);
         match ctx.decode.poll_seek(ctx.stream, ctx.playhead, request.seek) {
             Poll::Pending => SeekTransition::Apply(ApplySeekState {
-                mode: SeekMode::Anchor(anchor_value),
                 request,
+                mode: SeekMode::Anchor(anchor_value),
             }),
             Poll::Ready(Ok(_)) => self.applied(request, Some(anchor_value), ctx),
             Poll::Ready(Err(error)) => SeekRecovery::new(

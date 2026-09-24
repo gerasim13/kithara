@@ -7,11 +7,6 @@ use regex::Regex;
 use super::{clean_lines, line};
 use crate::{common::project::StressRenderBudgets, junit::CaseTiming};
 
-/// Below this repetition count a line is retry noise, not a spin.
-const SPIN_MIN_REPEATS: u64 = 16;
-/// Failing attempts must out-repeat passing ones by this factor to call a spin.
-const SPIN_RATIO: u64 = 10;
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
     OnlyFailures,
@@ -139,6 +134,12 @@ pub(super) fn append(
 }
 
 fn collect_failure_rows(test: &str, group: &Group, rows: &mut Vec<Row>) {
+    /// Below this repetition count a line is retry noise, not a spin.
+    const SPIN_MIN_REPEATS: u64 = 16;
+
+    /// Failing attempts must out-repeat passing ones by this factor to call a spin.
+    const SPIN_RATIO: u64 = 10;
+
     for (template, failed) in &group.failed.presence {
         if failed.attempts * 2 < group.failed.stored {
             continue;

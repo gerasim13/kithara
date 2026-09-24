@@ -55,6 +55,10 @@ pub struct PlayerConfig<S> {
     /// names it once under `host`.
     #[patch(skip)]
     pub sample_rate: NonZeroU32,
+    /// Capacity of each event topic when this player creates its root bus.
+    /// An injected [`EventBus`] keeps its own capacity and identity.
+    #[builder(default = default_event_bus_capacity())]
+    pub event_bus_capacity: NonZeroUsize,
     /// EQ band layout handed to the engine this player builds. Not a document
     /// key: every construction site derives it from a generator, and a custom
     /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
@@ -86,10 +90,6 @@ pub struct PlayerConfig<S> {
     /// [`DEFAULT_PLAYING_RATE`].
     #[builder(default = DEFAULT_PLAYING_RATE)]
     pub default_rate: f32,
-    /// Capacity of each event topic when this player creates its root bus.
-    /// An injected [`EventBus`] keeps its own capacity and identity.
-    #[builder(default = default_event_bus_capacity())]
-    pub event_bus_capacity: NonZeroUsize,
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
@@ -113,10 +113,6 @@ pub struct PlayerConfig<S> {
     #[patch(skip)]
     #[debug(skip)]
     pub(crate) track_grid_id: BeatGridId,
-    /// Optional application deadline for control-to-presented-audio response, in output frames.
-    /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
-    #[field(get, copy)]
-    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Shared ABR controller. When `None`, a default one is created.
     #[patch(skip)]
     #[debug(skip)]
@@ -129,6 +125,10 @@ pub struct PlayerConfig<S> {
     #[patch(skip)]
     #[debug(skip)]
     pub(crate) cancel: Option<CancelToken>,
+    /// Optional application deadline for control-to-presented-audio response, in output frames.
+    /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
+    #[field(get, copy)]
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     #[patch(skip)]

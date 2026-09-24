@@ -1,11 +1,11 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Expr, LitBool, Type, parse_macro_input};
+use syn::{DeriveInput, Error, Expr, LitBool, Type, parse_macro_input};
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive(&input)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 
@@ -35,9 +35,9 @@ fn derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         })?;
     }
     let data =
-        data.ok_or_else(|| syn::Error::new_spanned(input, "missing control painter data type"))?;
+        data.ok_or_else(|| Error::new_spanned(input, "missing control painter data type"))?;
     let draw =
-        draw.ok_or_else(|| syn::Error::new_spanned(input, "missing control painter draw call"))?;
+        draw.ok_or_else(|| Error::new_spanned(input, "missing control painter draw call"))?;
     let pointer = reads_pointer.then(|| {
         quote!(
             const READS_POINTER: bool = true;

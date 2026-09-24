@@ -31,6 +31,14 @@ impl TrackArtifacts {
         Self { analysis, prepared }
     }
 
+    /// The local analysis result, when a pass produced one. Facts that belong
+    /// to the pass itself — coverage, extent, what it settled on — are read
+    /// from here; artifacts are read from this type instead, which does not
+    /// care which origin served them.
+    pub(crate) const fn analysis(&self) -> Option<&TrackAnalysis> {
+        self.analysis.as_ref()
+    }
+
     /// The beat grid to paint and to clock against.
     pub(crate) fn grid(&self) -> Option<&BeatGridModel> {
         self.prepared
@@ -63,14 +71,6 @@ impl TrackArtifacts {
                         WaveformId::Analysed(analysis.token().clone(), analysis.revision())
                     })
             })
-    }
-
-    /// The local analysis result, when a pass produced one. Facts that belong
-    /// to the pass itself — coverage, extent, what it settled on — are read
-    /// from here; artifacts are read from this type instead, which does not
-    /// care which origin served them.
-    pub(crate) const fn analysis(&self) -> Option<&TrackAnalysis> {
-        self.analysis.as_ref()
     }
 }
 

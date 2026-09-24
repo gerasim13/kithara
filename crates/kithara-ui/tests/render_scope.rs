@@ -256,7 +256,9 @@ fn a_closed_popover_renders_none_of_its_content_and_an_open_one_renders_all_of_i
     }
 }
 
-const PRESSABLE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "shell",
+#[kithara::test]
+fn a_pressable_keeps_every_control_below_it_live() {
+    const PRESSABLE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "shell",
     root: Pressable(id: "row", press: Command(id: "ui.menu.toggle"),
         child: Row(children: [
             Button(id: "play", label: "PLAY",
@@ -268,8 +270,6 @@ const PRESSABLE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "sh
                 ])),
         ])))"#;
 
-#[kithara::test]
-fn a_pressable_keeps_every_control_below_it_live() {
     let ui = menu_ui(PRESSABLE_MODULE).unwrap();
 
     let seen = rendered_endpoints(&ui, keys([]));

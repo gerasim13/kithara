@@ -13,8 +13,6 @@ use crate::common::{
     project::{ArchitectureConfig, RuntimeScenarioConfig},
 };
 
-const TRACE_ENV: &str = "ARCHITECTURE_TRACE_PATH";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ScenarioState {
@@ -166,6 +164,8 @@ fn run_scenario(
     logs: &Path,
     graph: &mut EvidenceGraph,
 ) -> Result<ScenarioSummary> {
+    const TRACE_ENV: &str = "ARCHITECTURE_TRACE_PATH";
+
     let name = scenario.name();
     match scenario {
         RuntimeScenarioConfig::Trace { path, .. } => {

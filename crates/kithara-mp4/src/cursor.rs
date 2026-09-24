@@ -1,4 +1,4 @@
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Error, Read, Seek, SeekFrom};
 
 /// Window the box walk reads through. Box headers are 8 or 16 bytes and the
 /// `moov`/`moof` boxes an index is made of are kilobytes, so one window
@@ -23,13 +23,13 @@ pub trait ReadAt {
 /// window is refilled only when the walk lands outside it.
 pub(crate) struct ReadAtCursor<'a, R: ReadAt> {
     source: &'a R,
-    total: u64,
-    pos: u64,
     /// Fixed-size scratch, refilled in place.
     window: [u8; WALK_WINDOW_BYTES],
+    pos: u64,
+    total: u64,
+    window_start: u64,
     /// Bytes of `window` the last refill actually filled.
     window_len: usize,
-    window_start: u64,
 }
 
 impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
@@ -60,9 +60,9 @@ impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
             self.window_start = self.pos;
         }
         let offset = hit.unwrap_or(0);
-        self.window.get(offset..self.window_len).ok_or_else(|| {
-            io::Error::other("BUG: mp4 walk window offset outside the filled window")
-        })
+        self.window
+            .get(offset..self.window_len)
+            .ok_or_else(|| Error::other("BUG: mp4 walk window offset outside the filled window"))
     }
 }
 
@@ -76,7 +76,7 @@ impl<R: ReadAt> Read for ReadAtCursor<'_, R> {
         buf[..n].copy_from_slice(&available[..n]);
         self.pos = self
             .pos
-            .saturating_add(u64::try_from(n).map_err(io::Error::other)?);
+            .saturating_add(u64::try_from(n).map_err(Error::other)?);
         Ok(n)
     }
 }
@@ -88,7 +88,7 @@ impl<R: ReadAt> Seek for ReadAtCursor<'_, R> {
             SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
             SeekFrom::End(delta) => self.total.checked_add_signed(delta),
         };
-        self.pos = target.ok_or_else(|| io::Error::other("mp4 walk seek out of range"))?;
+        self.pos = target.ok_or_else(|| Error::other("mp4 walk seek out of range"))?;
         Ok(self.pos)
     }
 

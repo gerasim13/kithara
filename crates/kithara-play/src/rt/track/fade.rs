@@ -15,10 +15,10 @@ enum Direction {
 pub(super) struct TrackFade {
     settings: CrossfadeSettings,
     direction: Direction,
-    frame: u64,
-    frames: u64,
     #[field(get, copy)]
     settled: bool,
+    frame: u64,
+    frames: u64,
 }
 
 impl TrackFade {
@@ -33,12 +33,24 @@ impl TrackFade {
         }
     }
 
+    pub(super) const fn duration(&self) -> f32 {
+        self.settings.duration
+    }
+
     pub(super) fn fade_in(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
         self.start(Direction::In, settings, sample_rate);
     }
 
     pub(super) fn fade_out(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
         self.start(Direction::Out, settings, sample_rate);
+    }
+
+    fn frames(duration: f32, sample_rate: NonZeroU32) -> u64 {
+        let sample_rate = cast::<u32, f32>(sample_rate.get()).unwrap_or(f32::MAX);
+        (duration * sample_rate)
+            .round()
+            .to_u64()
+            .unwrap_or(u64::MAX)
     }
 
     pub(super) fn mix_range(
@@ -93,15 +105,24 @@ impl TrackFade {
         self.settled = true;
     }
 
+    fn start(
+        &mut self,
+        direction: Direction,
+        settings: CrossfadeSettings,
+        sample_rate: NonZeroU32,
+    ) {
+        self.settings = settings;
+        self.direction = direction;
+        self.frame = 0;
+        self.frames = Self::frames(settings.duration, sample_rate);
+        self.settled = self.frames == 0;
+    }
+
     pub(super) fn stop(&mut self, _sample_rate: NonZeroU32) {
         self.direction = Direction::Out;
         self.frame = 1;
         self.frames = 0;
         self.settled = true;
-    }
-
-    pub(super) const fn duration(&self) -> f32 {
-        self.settings.duration
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -119,27 +140,6 @@ impl TrackFade {
             let frames = cast::<u64, f64>(self.frames - 1).unwrap_or(f64::MAX);
             (progress * frames).round().to_u64().unwrap_or(u64::MAX)
         };
-    }
-
-    fn start(
-        &mut self,
-        direction: Direction,
-        settings: CrossfadeSettings,
-        sample_rate: NonZeroU32,
-    ) {
-        self.settings = settings;
-        self.direction = direction;
-        self.frame = 0;
-        self.frames = Self::frames(settings.duration, sample_rate);
-        self.settled = self.frames == 0;
-    }
-
-    fn frames(duration: f32, sample_rate: NonZeroU32) -> u64 {
-        let sample_rate = cast::<u32, f32>(sample_rate.get()).unwrap_or(f32::MAX);
-        (duration * sample_rate)
-            .round()
-            .to_u64()
-            .unwrap_or(u64::MAX)
     }
 }
 

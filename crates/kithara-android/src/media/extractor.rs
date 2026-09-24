@@ -1,10 +1,11 @@
 use std::{ffi::c_void, ptr::NonNull};
 
-use super::{format::OwnedFormat, sys};
+use super::{
+    format::OwnedFormat,
+    sys,
+    sys::{Off64, SSize},
+};
 use crate::error::AndroidBackendError;
-
-/// `AMediaDataSourceGetSize` reads -1 as "the source has no known length".
-const SIZE_UNKNOWN: i64 = -1;
 
 /// Byte source behind an `AMediaDataSource`. The platform calls it serially.
 pub trait MediaDataSource: Send + 'static {
@@ -33,6 +34,13 @@ pub struct OwnedExtractor<S> {
 unsafe impl<S: Send> Send for OwnedExtractor<S> {}
 
 impl<S: MediaDataSource> OwnedExtractor<S> {
+    /// Step to the next sample. Blocks on a streaming source, which can leave
+    /// the source's own failure record set.
+    pub fn advance(&mut self) {
+        // SAFETY: the extractor is live; its previous sample has been copied out.
+        unsafe { sys::AMediaExtractor_advance(self.raw.as_ptr()) };
+    }
+
     /// Open an extractor over `source`.
     ///
     /// # Errors
@@ -87,9 +95,9 @@ impl<S: MediaDataSource> OwnedExtractor<S> {
 
         Ok(Self {
             source,
-            data_source: ds,
             raw,
             track_count,
+            data_source: ds,
         })
     }
 
@@ -110,13 +118,6 @@ impl<S: MediaDataSource> OwnedExtractor<S> {
     pub fn sample_time_us(&self) -> i64 {
         // SAFETY: extractor is live.
         unsafe { sys::AMediaExtractor_getSampleTime(self.raw.as_ptr()) }
-    }
-
-    /// Step to the next sample. Blocks on a streaming source, which can leave
-    /// the source's own failure record set.
-    pub fn advance(&mut self) {
-        // SAFETY: the extractor is live; its previous sample has been copied out.
-        unsafe { sys::AMediaExtractor_advance(self.raw.as_ptr()) };
     }
 
     /// Seek to the nearest sync sample at or before `pts_us`.
@@ -157,6 +158,11 @@ impl<S: MediaDataSource> OwnedExtractor<S> {
         Ok(())
     }
 
+    #[must_use]
+    pub fn track_count(&self) -> usize {
+        self.track_count
+    }
+
     /// Format of one track.
     ///
     /// # Errors
@@ -169,11 +175,6 @@ impl<S: MediaDataSource> OwnedExtractor<S> {
         NonNull::new(raw).map(OwnedFormat::from).ok_or_else(|| {
             AndroidBackendError::operation("extractor-track-format", "returned null")
         })
-    }
-
-    #[must_use]
-    pub fn track_count(&self) -> usize {
-        self.track_count
     }
 }
 
@@ -189,10 +190,10 @@ impl<S> Drop for OwnedExtractor<S> {
 
 extern "C" fn read_at_thunk<S: MediaDataSource>(
     userdata: *mut c_void,
-    offset: sys::Off64,
+    offset: Off64,
     buffer: *mut c_void,
     size: usize,
-) -> sys::SSize {
+) -> SSize {
     // SAFETY: userdata names the pinned source retained by OwnedExtractor. The
     // NDK invokes this callback serially with a writable buffer of size bytes.
     let (source, slice) = unsafe {
@@ -207,15 +208,18 @@ extern "C" fn read_at_thunk<S: MediaDataSource>(
     };
     source
         .read_at(offset, slice)
-        .and_then(|read| sys::SSize::try_from(read).ok())
+        .and_then(|read| SSize::try_from(read).ok())
         .unwrap_or(-1)
 }
 
-extern "C" fn get_size_thunk<S: MediaDataSource>(userdata: *mut c_void) -> sys::Off64 {
+extern "C" fn get_size_thunk<S: MediaDataSource>(userdata: *mut c_void) -> Off64 {
+    /// `AMediaDataSourceGetSize` reads -1 as "the source has no known length".
+    const SIZE_UNKNOWN: i64 = -1;
+
     // SAFETY: userdata names the pinned source retained until both NDK handles drop.
     let source = unsafe { &*userdata.cast::<S>() };
     source
         .size()
-        .and_then(|size| sys::Off64::try_from(size).ok())
+        .and_then(|size| Off64::try_from(size).ok())
         .unwrap_or(SIZE_UNKNOWN)
 }

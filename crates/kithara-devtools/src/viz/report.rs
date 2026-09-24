@@ -8,7 +8,6 @@ use super::{
 };
 use crate::common::project::ArchitectureRenderBudgets;
 
-const DEGREE_FINDING_THRESHOLD: usize = 4;
 const LONG_CHAIN_THRESHOLD: usize = 6;
 
 pub(crate) fn render_metrics(metrics: &ArchitectureMetrics) -> String {
@@ -312,6 +311,8 @@ struct Finding {
 }
 
 fn analyze(model: &DiagramModel) -> Analysis {
+    const DEGREE_FINDING_THRESHOLD: usize = 4;
+
     let mut styles = [
         EvidenceStyle::Resolved,
         EvidenceStyle::Conditional,

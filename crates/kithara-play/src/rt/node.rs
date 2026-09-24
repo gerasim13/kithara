@@ -34,12 +34,12 @@ pub struct PlayerNode<S> {
     #[diff(skip)]
     context_requirement: ContextRequirement,
 
-    #[diff(skip)]
-    gate_smoothing: SmootherConfig,
-
     /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
     pools: PoolRegion<S>,
+
+    #[diff(skip)]
+    gate_smoothing: SmootherConfig,
 }
 
 /// A runtime parameter patch for [`PlayerNode`].
@@ -71,10 +71,10 @@ impl<S> PlayerNode<S> {
     pub fn new(inputs: NodeInputs, pools: PoolRegion<S>, gate_smoothing: SmootherConfig) -> Self {
         Self {
             pools,
+            gate_smoothing,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
             context_requirement: ContextRequirement::Standalone,
-            gate_smoothing,
         }
     }
 

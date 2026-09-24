@@ -269,15 +269,6 @@ impl NativeInner {
             })
     }
 
-    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        self.queue
-            .previous(Transition::None)
-            .map(|_| ())
-            .map_err(|error| FfiError::Internal {
-                description: error.to_string(),
-            })
-    }
-
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
@@ -435,6 +426,15 @@ impl NativeInner {
         Ok(())
     }
 
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        self.queue
+            .previous(Transition::None)
+            .map(|_| ())
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
+    }
+
     pub(crate) fn seek(
         &self,
         to_seconds: f64,
@@ -476,6 +476,34 @@ impl NativeInner {
         }
     }
 
+    pub(crate) fn set_action_at_item_end(
+        &self,
+        action: FfiActionAtItemEnd,
+    ) -> Result<(), FfiError> {
+        self.queue.set_action_at_item_end(action.try_into()?);
+        Ok(())
+    }
+
+    pub(crate) fn set_crossfade_settings(
+        &self,
+        settings: FfiCrossfadeSettings,
+    ) -> Result<(), FfiError> {
+        self.queue
+            .set_crossfade_settings(settings.try_into()?)
+            .map_err(FfiError::from)
+    }
+
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.queue
+            .set_session_ducking(mode.into())
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
+    }
+
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.queue
             .set_eq_gain(band as usize, gain_db)
@@ -501,15 +529,9 @@ impl NativeInner {
         drop(eb);
     }
 
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.queue
-            .set_session_ducking(mode.into())
-            .map_err(|err| match err {
-                QueueError::Play(err) => FfiError::from(err),
-                other => FfiError::Internal {
-                    description: other.to_string(),
-                },
-            })
+    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        self.queue.set_playback_order(order.try_into()?);
+        Ok(())
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
@@ -518,28 +540,6 @@ impl NativeInner {
         })?;
         self.queue.set_repeat(mode);
         Ok(())
-    }
-
-    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
-        self.queue.set_playback_order(order.try_into()?);
-        Ok(())
-    }
-
-    pub(crate) fn set_action_at_item_end(
-        &self,
-        action: FfiActionAtItemEnd,
-    ) -> Result<(), FfiError> {
-        self.queue.set_action_at_item_end(action.try_into()?);
-        Ok(())
-    }
-
-    pub(crate) fn set_crossfade_settings(
-        &self,
-        settings: FfiCrossfadeSettings,
-    ) -> Result<(), FfiError> {
-        self.queue
-            .set_crossfade_settings(settings.try_into()?)
-            .map_err(FfiError::from)
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {

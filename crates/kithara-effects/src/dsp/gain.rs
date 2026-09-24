@@ -57,9 +57,9 @@ impl SmoothedGain {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct GainBank {
+    smoothing: SmootherConfig,
     coeff: SmoothingFilterCoeff,
     gains: Vec<SmoothedGain>,
-    smoothing: SmootherConfig,
 }
 
 impl GainBank {
@@ -74,6 +74,13 @@ impl GainBank {
             coeff: smoothing_coeff(sample_rate, smoothing),
             smoothing,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_smoothing(&self) -> bool {
+        self.gains
+            .iter()
+            .any(|gain| gain.is_smoothing(self.smoothing))
     }
 
     pub(crate) fn reset(&mut self) {
@@ -96,13 +103,6 @@ impl GainBank {
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
         self.coeff = smoothing_coeff(sample_rate, self.smoothing);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains
-            .iter()
-            .any(|gain| gain.is_smoothing(self.smoothing))
     }
 
     delegate::delegate! {

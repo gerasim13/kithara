@@ -2,13 +2,6 @@ use super::EngineImpl;
 use crate::{bridge::SharedEq, error::PlayError, session::PlayerId};
 
 impl<S> EngineImpl<S> {
-    pub(super) fn registered_id(&self) -> Option<PlayerId> {
-        self.registration
-            .lock()
-            .as_ref()
-            .map(|registered| registered.id)
-    }
-
     pub(in crate::engine) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
         let mut registration = self.registration.lock();
         if let Some(registered) = registration.as_ref() {
@@ -28,6 +21,13 @@ impl<S> EngineImpl<S> {
         Ok(id)
     }
 
+    pub(crate) fn eq(&self) -> Option<SharedEq> {
+        self.registration
+            .lock()
+            .as_ref()
+            .map(|registered| registered.eq.clone())
+    }
+
     pub(crate) fn prepare(&self) -> Result<(), PlayError> {
         if let Some(quantum) = self.config.render_quantum_frames
             && let Some(shape) = self.stream_shape()?
@@ -37,10 +37,10 @@ impl<S> EngineImpl<S> {
         self.ensure_player_id().map(|_| ())
     }
 
-    pub(crate) fn eq(&self) -> Option<SharedEq> {
+    pub(super) fn registered_id(&self) -> Option<PlayerId> {
         self.registration
             .lock()
             .as_ref()
-            .map(|registered| registered.eq.clone())
+            .map(|registered| registered.id)
     }
 }

@@ -157,6 +157,13 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
+    /// Propagate a stream sample-rate change to the resource and fade.
+    pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.resource.set_host_sample_rate(sample_rate);
+        self.fade.update_sample_rate(sample_rate);
+        self.sample_rate = sample_rate.get();
+    }
+
     /// Update the prefetch lead time used for the preload trigger.
     pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
@@ -179,13 +186,6 @@ impl PlayerTrack {
         self.set_state(TrackState::Finished);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.stop(sample_rate);
-    }
-
-    /// Propagate a stream sample-rate change to the resource and fade.
-    pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.resource.set_host_sample_rate(sample_rate);
-        self.fade.update_sample_rate(sample_rate);
-        self.sample_rate = sample_rate.get();
     }
 
     /// Map track state to worker scheduling priority and push the update.

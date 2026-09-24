@@ -45,9 +45,9 @@ pub(crate) fn fetch_verified(
     let received = bytes.len() as u64;
     if received != length {
         return Err(RemoteFileError::Length {
+            received,
             url: RedactedUrl::new(url),
             expected: length,
-            received,
         });
     }
     let digest = hex::encode(Sha256::digest(&bytes));

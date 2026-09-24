@@ -20,10 +20,10 @@ use crate::{
 };
 
 pub(super) struct LruPersist {
+    file: IndexFile,
     /// One writer at a time for `lru.bin`: the snapshot and the atomic
     /// rename that publishes it are one step.
     writing: Mutex<()>,
-    file: IndexFile,
 }
 
 impl LruIndex {
@@ -42,8 +42,8 @@ impl LruIndex {
             inner: Arc::new(LruInner {
                 state: Mutex::new(initial),
                 persist: Some(LruPersist {
-                    writing: Mutex::new(()),
                     file,
+                    writing: Mutex::new(()),
                 }),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),

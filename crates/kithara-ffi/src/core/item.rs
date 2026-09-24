@@ -236,6 +236,15 @@ impl AudioPlayerItem {
         })
     }
 
+    /// Subscribes `observer` to this item's events and returns the handle
+    /// that [`Self::remove_observer`] unsubscribes it with. Every registered
+    /// observer receives every event.
+    pub fn add_observer(&self, observer: Arc<dyn ItemObserver>) -> u64 {
+        #[cfg(target_arch = "wasm32")]
+        self.prime(&observer);
+        self.observers.add(observer)
+    }
+
     /// Caller-facing content id. Mirrors the iOS
     /// `AudioPlayerItemProtocol.audioId: TrackId`.
     pub const fn audio_id(&self) -> TrackId {
@@ -246,18 +255,6 @@ impl AudioPlayerItem {
     /// underlying resource emits a duration update.
     pub fn duration_sec(&self) -> f64 {
         self.state.lock().duration_sec()
-    }
-
-    /// Consistent snapshot of status, duration, failure reason and
-    /// buffered ranges.
-    pub fn state(&self) -> FfiItemState {
-        let view = self.state.lock();
-        FfiItemState {
-            status: view.status(),
-            duration_seconds: view.duration(),
-            error: view.error.clone(),
-            loaded_ranges: view.loaded_ranges.clone(),
-        }
     }
 
     /// Whether this item represents a live HLS feed. The flag is set
@@ -335,18 +332,21 @@ impl AudioPlayerItem {
         self.queue_id
     }
 
-    /// Subscribes `observer` to this item's events and returns the handle
-    /// that [`Self::remove_observer`] unsubscribes it with. Every registered
-    /// observer receives every event.
-    pub fn add_observer(&self, observer: Arc<dyn ItemObserver>) -> u64 {
-        #[cfg(target_arch = "wasm32")]
-        self.prime(&observer);
-        self.observers.add(observer)
-    }
-
     /// Unsubscribes the observer registered under `id`.
     pub fn remove_observer(&self, id: u64) {
         self.observers.remove(id);
+    }
+
+    /// Consistent snapshot of status, duration, failure reason and
+    /// buffered ranges.
+    pub fn state(&self) -> FfiItemState {
+        let view = self.state.lock();
+        FfiItemState {
+            status: view.status(),
+            duration_seconds: view.duration(),
+            error: view.error.clone(),
+            loaded_ranges: view.loaded_ranges.clone(),
+        }
     }
 
     /// Audio source string — either a network URL or an absolute local

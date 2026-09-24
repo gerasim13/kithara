@@ -113,6 +113,19 @@ fn cfg_predicate_is_test_only(meta: &Meta) -> bool {
     }
 }
 
+/// Drop every violation the workspace's lint excludes cover: path globs,
+/// `#[cfg(test)]` code, and excluded inline modules.
+pub fn apply_lint_excludes(
+    report: &mut Report,
+    paths: &[String],
+    modules: &[String],
+    workspace_root: &Path,
+) {
+    apply_path_excludes(report, paths);
+    apply_cfg_test_exclusion(report, workspace_root);
+    apply_module_excludes(report, modules, workspace_root);
+}
+
 /// Drop violations whose path portion matches any glob. A no-op when empty.
 pub fn apply_path_excludes(report: &mut Report, patterns: &[String]) {
     if patterns.is_empty() {

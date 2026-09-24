@@ -39,6 +39,36 @@ fn id_to_f64(item: &Arc<AudioPlayerItem>) -> f64 {
 /// track ids, JS callback objects) onto the typed facade methods.
 #[wasm_bindgen]
 impl AudioPlayer {
+    #[wasm_bindgen(js_name = actionAtItemEnd)]
+    pub fn action_at_item_end_js(&self) -> String {
+        match self.inner.action_at_item_end() {
+            FfiActionAtItemEnd::Advance => "advance",
+            FfiActionAtItemEnd::Pause => "pause",
+            FfiActionAtItemEnd::None => "none",
+            FfiActionAtItemEnd::Unknown => "unknown",
+        }
+        .to_owned()
+    }
+
+    /// Subscribe `obj` to the marshalled
+    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects of the track
+    /// with `id`. Returns the observer handle `removeItemObserver` takes.
+    ///
+    /// # Errors
+    /// Returns a JS error if the id is not in the queue or `obj` is not a
+    /// callable function.
+    #[wasm_bindgen(js_name = addItemObserver)]
+    pub fn add_item_observer_js(&self, id: f64, obj: JsValue) -> Result<f64, JsValue> {
+        let func: Function = obj
+            .dyn_into()
+            .map_err(|_| JsValue::from_str("observer must be a function"))?;
+        let item = self
+            .item_by_id(id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
+        let observer_id = item.add_observer(Arc::new(ItemObserverJs::new(func)));
+        Ok(cast::<u64, f64>(observer_id).unwrap_or(0.0))
+    }
+
     /// Start (or restart) the analysis pass for a queued track.
     ///
     /// # Errors
@@ -85,27 +115,6 @@ impl AudioPlayer {
         Reflect::set(&object, &"depth".into(), &settings.depth.into())?;
         Reflect::set(&object, &"position".into(), &settings.position.into())?;
         Ok(object)
-    }
-
-    #[wasm_bindgen(js_name = playbackOrder)]
-    pub fn playback_order_js(&self) -> String {
-        match self.inner.playback_order() {
-            FfiPlaybackOrder::Sequential => "sequential",
-            FfiPlaybackOrder::Shuffle => "shuffle",
-            FfiPlaybackOrder::Unknown => "unknown",
-        }
-        .to_owned()
-    }
-
-    #[wasm_bindgen(js_name = actionAtItemEnd)]
-    pub fn action_at_item_end_js(&self) -> String {
-        match self.inner.action_at_item_end() {
-            FfiActionAtItemEnd::Advance => "advance",
-            FfiActionAtItemEnd::Pause => "pause",
-            FfiActionAtItemEnd::None => "none",
-            FfiActionAtItemEnd::Unknown => "unknown",
-        }
-        .to_owned()
     }
 
     /// Track id (`f64`) of the currently playing item, or `-1.0` if none.
@@ -191,6 +200,13 @@ impl AudioPlayer {
         }
     }
 
+    #[wasm_bindgen(js_name = next)]
+    pub fn next_js(&self) -> Result<(), JsValue> {
+        self.inner
+            .advance_to_next_item()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     #[wasm_bindgen(js_name = pause)]
     pub fn pause_js(&self) {
         self.inner.pause();
@@ -201,11 +217,14 @@ impl AudioPlayer {
         self.inner.play();
     }
 
-    #[wasm_bindgen(js_name = next)]
-    pub fn next_js(&self) -> Result<(), JsValue> {
-        self.inner
-            .advance_to_next_item()
-            .map_err(|error| JsValue::from_str(&error.to_string()))
+    #[wasm_bindgen(js_name = playbackOrder)]
+    pub fn playback_order_js(&self) -> String {
+        match self.inner.playback_order() {
+            FfiPlaybackOrder::Sequential => "sequential",
+            FfiPlaybackOrder::Shuffle => "shuffle",
+            FfiPlaybackOrder::Unknown => "unknown",
+        }
+        .to_owned()
     }
 
     #[wasm_bindgen(js_name = previous)]
@@ -218,6 +237,20 @@ impl AudioPlayer {
     #[wasm_bindgen(js_name = removeAllItems)]
     pub fn remove_all_items_js(&self) {
         self.inner.remove_all_items();
+    }
+
+    /// Unsubscribe the observer registered under `observer_id` from the
+    /// track with `id`.
+    ///
+    /// # Errors
+    /// Returns a JS error if the id is not in the queue.
+    #[wasm_bindgen(js_name = removeItemObserver)]
+    pub fn remove_item_observer_js(&self, id: f64, observer_id: f64) -> Result<(), JsValue> {
+        let item = self
+            .item_by_id(id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
+        item.remove_observer(cast(observer_id).unwrap_or(u64::MAX));
+        Ok(())
     }
 
     /// Remove a track by id.
@@ -333,6 +366,19 @@ impl AudioPlayer {
         self.inner.set_abr_mode(mode);
     }
 
+    #[wasm_bindgen(js_name = setActionAtItemEnd)]
+    pub fn set_action_at_item_end_js(&self, action: String) -> Result<(), JsValue> {
+        let action = match action.as_str() {
+            "advance" => FfiActionAtItemEnd::Advance,
+            "pause" => FfiActionAtItemEnd::Pause,
+            "none" => FfiActionAtItemEnd::None,
+            _ => return Err(JsValue::from_str("invalid terminal action")),
+        };
+        self.inner
+            .set_action_at_item_end(action)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     /// Register a JS callback receiving analysis publications.
     ///
     /// # Errors
@@ -369,31 +415,6 @@ impl AudioPlayer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
-    #[wasm_bindgen(js_name = setPlaybackOrder)]
-    pub fn set_playback_order_js(&self, order: String) -> Result<(), JsValue> {
-        let order = match order.as_str() {
-            "sequential" => FfiPlaybackOrder::Sequential,
-            "shuffle" => FfiPlaybackOrder::Shuffle,
-            _ => return Err(JsValue::from_str("invalid playback order")),
-        };
-        self.inner
-            .set_playback_order(order)
-            .map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    #[wasm_bindgen(js_name = setActionAtItemEnd)]
-    pub fn set_action_at_item_end_js(&self, action: String) -> Result<(), JsValue> {
-        let action = match action.as_str() {
-            "advance" => FfiActionAtItemEnd::Advance,
-            "pause" => FfiActionAtItemEnd::Pause,
-            "none" => FfiActionAtItemEnd::None,
-            _ => return Err(JsValue::from_str("invalid terminal action")),
-        };
-        self.inner
-            .set_action_at_item_end(action)
-            .map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
     /// Set the gain (dB) for an EQ band.
     ///
     /// # Errors
@@ -403,39 +424,6 @@ impl AudioPlayer {
         self.inner
             .set_eq_gain(band, gain_db)
             .map_err(|e| JsValue::from_str(&e.to_string()))
-    }
-
-    /// Subscribe `obj` to the marshalled
-    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects of the track
-    /// with `id`. Returns the observer handle `removeItemObserver` takes.
-    ///
-    /// # Errors
-    /// Returns a JS error if the id is not in the queue or `obj` is not a
-    /// callable function.
-    #[wasm_bindgen(js_name = addItemObserver)]
-    pub fn add_item_observer_js(&self, id: f64, obj: JsValue) -> Result<f64, JsValue> {
-        let func: Function = obj
-            .dyn_into()
-            .map_err(|_| JsValue::from_str("observer must be a function"))?;
-        let item = self
-            .item_by_id(id)
-            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
-        let observer_id = item.add_observer(Arc::new(ItemObserverJs::new(func)));
-        Ok(cast::<u64, f64>(observer_id).unwrap_or(0.0))
-    }
-
-    /// Unsubscribe the observer registered under `observer_id` from the
-    /// track with `id`.
-    ///
-    /// # Errors
-    /// Returns a JS error if the id is not in the queue.
-    #[wasm_bindgen(js_name = removeItemObserver)]
-    pub fn remove_item_observer_js(&self, id: f64, observer_id: f64) -> Result<(), JsValue> {
-        let item = self
-            .item_by_id(id)
-            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
-        item.remove_observer(cast(observer_id).unwrap_or(u64::MAX));
-        Ok(())
     }
 
     #[wasm_bindgen(js_name = setMuted)]
@@ -459,6 +447,18 @@ impl AudioPlayer {
         self.inner
             .set_observer(Arc::new(PlayerObserverJs::new(func)));
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setPlaybackOrder)]
+    pub fn set_playback_order_js(&self, order: String) -> Result<(), JsValue> {
+        let order = match order.as_str() {
+            "sequential" => FfiPlaybackOrder::Sequential,
+            "shuffle" => FfiPlaybackOrder::Shuffle,
+            _ => return Err(JsValue::from_str("invalid playback order")),
+        };
+        self.inner
+            .set_playback_order(order)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     #[wasm_bindgen(js_name = setVolume)]

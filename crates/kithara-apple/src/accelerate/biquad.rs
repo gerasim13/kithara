@@ -48,6 +48,10 @@ impl BiquadFilter {
         frames
     }
 
+    pub fn reset(&mut self) {
+        clear_f32(&mut self.delay);
+    }
+
     pub fn retune_low_pass(&mut self, sample_rate: f64, cutoff_hz: f64, q: f64) -> bool {
         let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff_hz, q) else {
             return false;
@@ -63,10 +67,6 @@ impl BiquadFilter {
         }
         self.setup = setup;
         true
-    }
-
-    pub fn reset(&mut self) {
-        clear_f32(&mut self.delay);
     }
 }
 

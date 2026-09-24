@@ -12,8 +12,8 @@ use crate::session::{
 };
 
 pub(crate) struct OfflineSessionClient<S> {
-    root_view: RootView,
     cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
+    root_view: RootView,
     control: TaskControl,
 }
 
@@ -90,15 +90,6 @@ impl<S> OfflineSessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
-    delegate::delegate! {
-        to self.root_view {
-            #[expr(Ok($))]
-            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            #[expr(Ok($))]
-            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
-        }
-    }
-
     /// Offline render pulls the graph from the session task, an ordinary thread
     /// that may block and read the clock, so a reader wakes its producer inline.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -112,6 +103,15 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> 
             _ => Err(PlayError::Internal(
                 "unexpected offline Host reply for player command".into(),
             )),
+        }
+    }
+
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
         }
     }
 }

@@ -19,6 +19,14 @@ impl AudioPlayer {
         self.inner.return_to_previous_item()
     }
 
+    /// Set the automatic terminal action.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown external enum value.
+    pub fn set_action_at_item_end(&self, action: FfiActionAtItemEnd) -> Result<(), FfiError> {
+        self.inner.set_action_at_item_end(action)
+    }
+
     /// Set the profile captured by future transitions.
     ///
     /// # Errors
@@ -33,13 +41,5 @@ impl AudioPlayer {
     /// Returns an error for an unknown external enum value.
     pub fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
         self.inner.set_playback_order(order)
-    }
-
-    /// Set the automatic terminal action.
-    ///
-    /// # Errors
-    /// Returns an error for an unknown external enum value.
-    pub fn set_action_at_item_end(&self, action: FfiActionAtItemEnd) -> Result<(), FfiError> {
-        self.inner.set_action_at_item_end(action)
     }
 }

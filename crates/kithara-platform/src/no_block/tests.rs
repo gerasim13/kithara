@@ -26,14 +26,10 @@ use super::{
 
 const FIRST_LOG_FILE_ID: usize = 0;
 const BLANKET_TEST_BUDGET_MS: u64 = 10;
-const BLANKET_TEST_SLEEP_MS: u64 = 50;
 const BLANKET_TEST_SPIN_MS: u64 = 50;
 const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
 const CENSUS_LOG_SLEEP_MS: u64 = 1;
-const FORCED_SPIN_CPU_MS: u64 = 10_000;
-const PAUSED_CPU_SLEEP_MS: u64 = 20;
 const WORK_TEST_BUDGET_MS: u64 = 10;
-const WORK_TEST_SLEEP_MS: u64 = 50;
 const WORK_TEST_SPIN_CPU_MS: u64 = 50;
 
 static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
@@ -139,6 +135,8 @@ fn budget_flags_over_budget_poll() {
 
 #[kithara::test(native, flash(false))]
 fn blanket_wait_over_budget_logs_not_panics() {
+    const BLANKET_TEST_SLEEP_MS: u64 = 50;
+
     force_mode(Mode::Panic);
     force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
 
@@ -167,6 +165,8 @@ fn blanket_wait_over_budget_logs_not_panics() {
 
 #[kithara::test(native, flash(false))]
 fn blanket_spin_over_budget_panics() {
+    const FORCED_SPIN_CPU_MS: u64 = 10_000;
+
     force_mode(Mode::Panic);
     force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
     force_cpu_elapsed(Some(Duration::from_millis(FORCED_SPIN_CPU_MS)));
@@ -232,6 +232,8 @@ fn budget_ignores_paused_time() {
 /// arithmetic.
 #[kithara::test(native, flash(false))]
 fn budget_ignores_paused_cpu() {
+    const PAUSED_CPU_SLEEP_MS: u64 = 20;
+
     force_mode(Mode::Census);
     force_no_log_path();
     force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
@@ -262,6 +264,8 @@ fn budget_ignores_paused_cpu() {
 /// deschedule it was.
 #[kithara::test(native, flash(false))]
 fn a_work_budget_ignores_a_poll_that_did_no_work() {
+    const WORK_TEST_SLEEP_MS: u64 = 50;
+
     force_mode(Mode::Panic);
 
     let fut = watch_cpu_budget("descheduled_task", WORK_TEST_BUDGET_MS, async {

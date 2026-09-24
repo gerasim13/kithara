@@ -12,9 +12,9 @@ struct Consts;
 
 impl Consts {
     const RHYTHM_FRAMES: u64 = 48_000 * 12;
-    const RHYTHM_LONG_FRAMES: u64 = 48_000 * 15;
     const RHYTHM_LISTENING_FRAMES: u64 = 48_000 * 45;
     const RHYTHM_LISTENING_LONG_FRAMES: u64 = 48_000 * 55;
+    const RHYTHM_LONG_FRAMES: u64 = 48_000 * 15;
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]

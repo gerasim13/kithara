@@ -109,6 +109,11 @@ pub(crate) struct StructFieldOrderConfig {
     /// is part of the layout contract.
     #[serde(default = "default_exempt_attrs")]
     pub(crate) exempt_attrs: Vec<String>,
+    /// Derive paths that exempt a struct from ordering checks, matched whole
+    /// through `derive(...)` or `cfg_attr(..., derive(...))`. `uniffi::Record`
+    /// fields are the positional constructor arguments of the foreign bindings.
+    #[serde(default = "default_exempt_derives")]
+    pub(crate) exempt_derives: Vec<String>,
     /// Visibility group order. Each field is bucketed by visibility, then
     /// sorted by type name, then by field name within the bucket.
     /// Recognised tokens: `pub`, `pub(crate)`, `pub(super)`, `pub(in)`, `private`.
@@ -121,6 +126,7 @@ impl Default for StructFieldOrderConfig {
         Self {
             visibility_order: default_visibility_order(),
             exempt_attrs: default_exempt_attrs(),
+            exempt_derives: default_exempt_derives(),
         }
     }
 }
@@ -134,6 +140,10 @@ fn default_visibility_order() -> Vec<String> {
 
 fn default_exempt_attrs() -> Vec<String> {
     ["repr"].iter().map(|s| (*s).to_string()).collect()
+}
+
+fn default_exempt_derives() -> Vec<String> {
+    vec!["uniffi::Record".to_owned()]
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,8 +241,8 @@ pub(crate) struct CommentHygieneConfig {
     pub(crate) exclude_paths: Vec<String>,
     /// Annotations an author reached for instead of writing documentation. A
     /// block carrying one is never promoted to `///`: publishing `WHY:` as
-    /// rendered docs would launder the note rather than answer it, so it stays
-    /// for a human.
+    /// rendered docs would launder the note rather than answer it, so the fix
+    /// removes it like any other prose.
     #[serde(default = "default_prose_markers")]
     pub(crate) prose_markers: Vec<String>,
     /// Density threshold in percent (0..=100): a fn body where the share

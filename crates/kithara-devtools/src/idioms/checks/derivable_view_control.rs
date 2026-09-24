@@ -1,7 +1,7 @@
 use std::fs;
 
 use anyhow::Result;
-use syn::{Expr, ImplItem, ItemImpl, Stmt, visit::Visit};
+use syn::{Expr, ImplItem, ItemImpl, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -70,7 +70,7 @@ impl<'ast> Visit<'ast> for ViewControlVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

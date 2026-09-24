@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, io, num::NonZeroUsize};
+use std::{error::Error as StdError, io::Error, num::NonZeroUsize};
 
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
@@ -44,8 +44,8 @@ where
     tracks: Arc<Tracks<S>>,
     store: AssetStore<S>,
     cancel: CancelToken,
-    player: PlayerControl<S>,
     runtime: Option<RuntimeHandle>,
+    player: PlayerControl<S>,
 }
 
 impl<S> Loader<S>
@@ -349,8 +349,8 @@ fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
             return Some(net);
         }
         if let Some(net) = err
-            .downcast_ref::<io::Error>()
-            .and_then(io::Error::get_ref)
+            .downcast_ref::<Error>()
+            .and_then(Error::get_ref)
             .and_then(|payload| net_cause(payload))
         {
             return Some(net);
@@ -415,7 +415,7 @@ mod tests {
             }),
         };
         // `io::Error` hides its payload from the source chain; the classifier looks inside.
-        assert!(can_answer_later(&io::Error::other(refused), true));
+        assert!(can_answer_later(&Error::other(refused), true));
     }
 
     /// A vanished transport is the same answer: nothing was reached, so the whole
@@ -423,7 +423,7 @@ mod tests {
     #[kithara::test]
     fn a_vanished_host_can_answer_later() {
         let gone = NetError::Network("connection closed".to_string());
-        assert!(can_answer_later(&io::Error::other(gone), true));
+        assert!(can_answer_later(&Error::other(gone), true));
     }
 
     /// A transfer that established and then stopped delivering is the net layer's
@@ -435,7 +435,7 @@ mod tests {
             max_retries: 1,
             source: Box::new(NetError::Timeout),
         };
-        assert!(!can_answer_later(&io::Error::other(stalled), true));
+        assert!(!can_answer_later(&Error::other(stalled), true));
     }
 
     /// A missing resource answers the same however long one waits.
@@ -446,14 +446,14 @@ mod tests {
             url: None,
             body: None,
         };
-        assert!(!can_answer_later(&io::Error::other(missing), true));
+        assert!(!can_answer_later(&Error::other(missing), true));
     }
 
     /// A failure the network had no part in — an unparseable container, a codec
     /// the build does not carry — is not a connectivity question.
     #[kithara::test]
     fn a_failure_with_no_network_cause_is_not_asked_again() {
-        let local = io::Error::other("unsupported container");
+        let local = Error::other("unsupported container");
         assert!(!can_answer_later(&local, true));
     }
 
@@ -462,7 +462,7 @@ mod tests {
     #[kithara::test]
     fn an_unselected_attempt_is_not_asked_again() {
         let refused = NetError::Network("connection refused".to_string());
-        assert!(!can_answer_later(&io::Error::other(refused), false));
+        assert!(!can_answer_later(&Error::other(refused), false));
     }
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;

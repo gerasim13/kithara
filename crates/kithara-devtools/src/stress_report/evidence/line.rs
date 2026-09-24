@@ -11,8 +11,6 @@ use super::{
 use crate::common::project::StressRenderBudgets;
 
 const MAX_LINE_BYTES: usize = 64 * 1_024;
-const MAX_RECORDS: usize = 250_000;
-
 pub(super) fn append(
     out: &mut String,
     path: &Path,
@@ -22,6 +20,8 @@ pub(super) fn append(
     dossiers: &mut BTreeMap<AttemptKey, AttemptDossier>,
     budgets: &StressRenderBudgets,
 ) -> bool {
+    const MAX_RECORDS: usize = 250_000;
+
     let mut clusters = BTreeMap::<String, SignatureCluster>::new();
     let mut foreign = 0usize;
     let mut invalid = 0usize;

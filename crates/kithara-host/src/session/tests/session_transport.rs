@@ -38,8 +38,8 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
     let events = bus.subscribe();
     match session
         .exec(Cmd::RegisterPlayer {
-            grid_id: BeatGridId::allocate().expect("fixture grid id"),
             bus,
+            grid_id: BeatGridId::allocate().expect("fixture grid id"),
             eq_layout: Vec::new(),
             gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),

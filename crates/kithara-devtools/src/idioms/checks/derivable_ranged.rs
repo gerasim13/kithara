@@ -154,8 +154,8 @@ fn bounded_impl(implementation: &ItemImpl, number: &str, name: &str) -> bool {
             return false;
         }
         let mut scan = RangeScan {
-            bounds: &bounds,
             name,
+            bounds: &bounds,
             found: false,
         };
         scan.visit_block(&function.block);

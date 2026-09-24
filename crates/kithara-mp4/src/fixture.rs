@@ -7,6 +7,7 @@
 
 use std::{
     io,
+    io::Error,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -58,45 +59,45 @@ fn matrix() -> Vec<u8> {
 
 fn init_segment() -> Vec<u8> {
     let mut mvhd = Vec::new();
-    mvhd.extend_from_slice(&0u32.to_be_bytes()); // creation time
-    mvhd.extend_from_slice(&0u32.to_be_bytes()); // modification time
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&TIMESCALE.to_be_bytes());
     mvhd.extend_from_slice(&0u32.to_be_bytes()); // duration: fragmented
-    mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // rate
-    mvhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
-    mvhd.extend_from_slice(&[0u8; 10]); // reserved
+    mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
+    mvhd.extend_from_slice(&[0u8; 10]);
     mvhd.extend_from_slice(&matrix());
-    mvhd.extend_from_slice(&[0u8; 24]); // pre-defined
-    mvhd.extend_from_slice(&2u32.to_be_bytes()); // next track id
+    mvhd.extend_from_slice(&[0u8; 24]);
+    mvhd.extend_from_slice(&2u32.to_be_bytes());
 
     let mut tkhd = Vec::new();
-    tkhd.extend_from_slice(&0u32.to_be_bytes()); // creation time
-    tkhd.extend_from_slice(&0u32.to_be_bytes()); // modification time
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
     tkhd.extend_from_slice(&TRACK_ID.to_be_bytes());
-    tkhd.extend_from_slice(&[0u8; 4]); // reserved
-    tkhd.extend_from_slice(&0u32.to_be_bytes()); // duration
-    tkhd.extend_from_slice(&[0u8; 8]); // reserved
-    tkhd.extend_from_slice(&0u16.to_be_bytes()); // layer
-    tkhd.extend_from_slice(&0u16.to_be_bytes()); // alternate group
-    tkhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
-    tkhd.extend_from_slice(&[0u8; 2]); // reserved
+    tkhd.extend_from_slice(&[0u8; 4]);
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&[0u8; 8]);
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0x0100u16.to_be_bytes());
+    tkhd.extend_from_slice(&[0u8; 2]);
     tkhd.extend_from_slice(&matrix());
-    tkhd.extend_from_slice(&0u32.to_be_bytes()); // width
-    tkhd.extend_from_slice(&0u32.to_be_bytes()); // height
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
 
     let mut mdhd = Vec::new();
-    mdhd.extend_from_slice(&0u32.to_be_bytes()); // creation time
-    mdhd.extend_from_slice(&0u32.to_be_bytes()); // modification time
+    mdhd.extend_from_slice(&0u32.to_be_bytes());
+    mdhd.extend_from_slice(&0u32.to_be_bytes());
     mdhd.extend_from_slice(&TIMESCALE.to_be_bytes());
-    mdhd.extend_from_slice(&0u32.to_be_bytes()); // duration
-    mdhd.extend_from_slice(&0x55c4u16.to_be_bytes()); // language "und"
-    mdhd.extend_from_slice(&[0u8; 2]); // pre-defined
+    mdhd.extend_from_slice(&0u32.to_be_bytes());
+    mdhd.extend_from_slice(&0x55c4u16.to_be_bytes());
+    mdhd.extend_from_slice(&[0u8; 2]);
 
     let mut hdlr = Vec::new();
-    hdlr.extend_from_slice(&[0u8; 4]); // pre-defined
+    hdlr.extend_from_slice(&[0u8; 4]);
     hdlr.extend_from_slice(b"soun");
-    hdlr.extend_from_slice(&[0u8; 12]); // reserved
-    hdlr.push(0); // empty name
+    hdlr.extend_from_slice(&[0u8; 12]);
+    hdlr.push(0);
 
     let dref = full_box(b"dref", 0, 0, &0u32.to_be_bytes());
     let dinf = mp4_box(b"dinf", &dref);
@@ -104,14 +105,14 @@ fn init_segment() -> Vec<u8> {
     // An unknown sample entry: the timescale comes from `mdhd`, so the
     // codec box itself never has to be decodable.
     let mut stsd = Vec::new();
-    stsd.extend_from_slice(&1u32.to_be_bytes()); // entry count
+    stsd.extend_from_slice(&1u32.to_be_bytes());
     stsd.extend_from_slice(&mp4_box(b"kthx", &[]));
     let stsd = full_box(b"stsd", 0, 0, &stsd);
     let stts = full_box(b"stts", 0, 0, &0u32.to_be_bytes());
     let stsc = full_box(b"stsc", 0, 0, &0u32.to_be_bytes());
     let mut stsz = Vec::new();
-    stsz.extend_from_slice(&0u32.to_be_bytes()); // uniform sample size
-    stsz.extend_from_slice(&0u32.to_be_bytes()); // sample count
+    stsz.extend_from_slice(&0u32.to_be_bytes());
+    stsz.extend_from_slice(&0u32.to_be_bytes());
     let stsz = full_box(b"stsz", 0, 0, &stsz);
     let stco = full_box(b"stco", 0, 0, &0u32.to_be_bytes());
 
@@ -151,13 +152,14 @@ fn init_segment() -> Vec<u8> {
 /// Track the synthetic fragments address.
 pub(crate) const TRACK_ID: u32 = 1;
 
-/// `tfhd` flags: default sample duration and size, and base-is-moof so a
-/// `trun` offset counts from the `moof` header rather than the file.
-const TFHD_FLAGS: u32 = 0x08 | 0x10 | 0x0002_0000;
-/// `trun` flags: the box carries an explicit data offset.
-const TRUN_FLAGS: u32 = 0x01;
-
 fn moof_box(index: u32, data_offset: i32) -> Vec<u8> {
+    /// `tfhd` flags: default sample duration and size, and base-is-moof so a
+    /// `trun` offset counts from the `moof` header rather than the file.
+    const TFHD_FLAGS: u32 = 0x08 | 0x10 | 0x0002_0000;
+
+    /// `trun` flags: the box carries an explicit data offset.
+    const TRUN_FLAGS: u32 = 0x01;
+
     let mfhd = full_box(b"mfhd", 0, 0, &(index + 1).to_be_bytes());
 
     let mut tfhd = Vec::new();
@@ -212,8 +214,8 @@ pub(crate) fn fragmented_mp4() -> (Vec<u8>, u64) {
 
 /// Byte source that counts every byte a walk pulls out of it.
 pub(crate) struct CountingSource {
-    bytes: Vec<u8>,
     delivered: AtomicU64,
+    bytes: Vec<u8>,
 }
 
 impl CountingSource {
@@ -224,29 +226,27 @@ impl CountingSource {
         }
     }
 
-    /// Length of the body, as the walks want it.
-    pub(crate) fn total(&self) -> u64 {
-        u64::try_from(self.bytes.len()).expect("test body fits u64")
-    }
-
     /// Bytes handed out so far.
     pub(crate) fn delivered(&self) -> u64 {
         self.delivered.load(Ordering::Relaxed)
+    }
+
+    /// Length of the body, as the walks want it.
+    pub(crate) fn total(&self) -> u64 {
+        u64::try_from(self.bytes.len()).expect("test body fits u64")
     }
 }
 
 impl ReadAt for CountingSource {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let start = usize::try_from(offset).map_err(io::Error::other)?;
+        let start = usize::try_from(offset).map_err(Error::other)?;
         let Some(tail) = self.bytes.get(start..) else {
             return Ok(0);
         };
         let n = tail.len().min(buf.len());
         buf[..n].copy_from_slice(&tail[..n]);
-        self.delivered.fetch_add(
-            u64::try_from(n).map_err(io::Error::other)?,
-            Ordering::Relaxed,
-        );
+        self.delivered
+            .fetch_add(u64::try_from(n).map_err(Error::other)?, Ordering::Relaxed);
         Ok(n)
     }
 }

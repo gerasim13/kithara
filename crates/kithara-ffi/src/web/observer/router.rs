@@ -22,9 +22,9 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 /// analysis sinks.
 #[derive(Clone)]
 pub(crate) struct Routes {
+    analysis: AnalysisRoute,
     queue_view: Arc<Mutex<QueueView>>,
     sinks: Arc<Mutex<Sinks>>,
-    analysis: AnalysisRoute,
 }
 
 #[derive(Default)]
@@ -42,22 +42,23 @@ impl Routes {
         }
     }
 
-    pub(crate) fn set_analysis(&self, func: Function) {
-        self.analysis.set(func);
-        self.arm();
-    }
-
-    pub(crate) fn set_player(&self, observer: Arc<dyn PlayerObserver>) {
-        self.sinks.lock().player = Some(observer);
-        self.arm();
-    }
-
     fn arm(&self) {
         if self.sinks.lock().installed {
             return;
         }
         if self.install() {
             self.sinks.lock().installed = true;
+        }
+    }
+
+    fn dispatch(&self, data: &JsValue) {
+        let scope = scope(data);
+        if self.analysis.dispatch(scope.as_deref(), data) {
+            return;
+        }
+        match scope.as_deref() {
+            Some("item") => self.route_item_message(data),
+            _ => self.route_player(data),
         }
     }
 
@@ -78,44 +79,12 @@ impl Routes {
         true
     }
 
-    fn dispatch(&self, data: &JsValue) {
-        let scope = scope(data);
-        if self.analysis.dispatch(scope.as_deref(), data) {
-            return;
-        }
-        match scope.as_deref() {
-            Some("item") => self.route_item_message(data),
-            _ => self.route_player(data),
-        }
-    }
-
-    fn route_player(&self, data: &JsValue) {
-        let Some(event) = decode(data) else {
-            return;
-        };
-        self.route_to_item(&event);
-        let observer = self.sinks.lock().player.clone();
-        if let Some(observer) = observer {
-            observer.on_event(event);
-        }
-    }
-
     fn item(&self, id: TrackId) -> Option<Arc<AudioPlayerItem>> {
         self.queue_view
             .lock()
             .iter()
             .find(|(existing, _)| *existing == id)
             .map(|(_, item)| Arc::clone(item))
-    }
-
-    fn route_to_item(&self, event: &FfiPlayerEvent) {
-        let FfiPlayerEvent::TrackStatusChanged { item_id, status } = event else {
-            return;
-        };
-        let Some(item) = self.item(*item_id) else {
-            return;
-        };
-        item.apply_track_status(status);
     }
 
     fn route_item_message(&self, data: &JsValue) {
@@ -129,11 +98,42 @@ impl Routes {
         };
         item.deliver(item_event);
     }
+
+    fn route_player(&self, data: &JsValue) {
+        let Some(event) = decode(data) else {
+            return;
+        };
+        self.route_to_item(&event);
+        let observer = self.sinks.lock().player.clone();
+        if let Some(observer) = observer {
+            observer.on_event(event);
+        }
+    }
+
+    fn route_to_item(&self, event: &FfiPlayerEvent) {
+        let FfiPlayerEvent::TrackStatusChanged { item_id, status } = event else {
+            return;
+        };
+        let Some(item) = self.item(*item_id) else {
+            return;
+        };
+        item.apply_track_status(status);
+    }
+
+    pub(crate) fn set_analysis(&self, func: Function) {
+        self.analysis.set(func);
+        self.arm();
+    }
+
+    pub(crate) fn set_player(&self, observer: Arc<dyn PlayerObserver>) {
+        self.sinks.lock().player = Some(observer);
+        self.arm();
+    }
 }
 
-const SCOPE_KEY: &str = "scope";
-
 fn scope(data: &JsValue) -> Option<String> {
+    const SCOPE_KEY: &str = "scope";
+
     Reflect::get(data, &JsValue::from_str(SCOPE_KEY))
         .ok()
         .and_then(|value| value.as_string())

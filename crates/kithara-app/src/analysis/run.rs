@@ -63,35 +63,6 @@ impl Owner {
         }
     }
 
-    /// Wait for whichever of the owner's two sources speaks first: an artifact
-    /// read, or the pass in flight. Artifact reads are taken first, because a
-    /// prepared artifact can only ever remove work the pass would do.
-    async fn wake(&mut self) -> Woke {
-        let Self {
-            active, replies, ..
-        } = self;
-        match active {
-            Some(Activity::Running(run)) => tokio::select! {
-                biased;
-                Some(reply) = replies.recv() => Woke::Load(reply),
-                changed = run.rx.changed() => if changed.is_err() {
-                    Woke::Finished
-                } else {
-                    Woke::Progress
-                },
-            },
-            Some(Activity::Committing(task)) => tokio::select! {
-                biased;
-                Some(reply) = replies.recv() => Woke::Load(reply),
-                result = task => Woke::Committed(result),
-            },
-            None => match replies.recv().await {
-                Some(reply) => Woke::Load(reply),
-                None => std::future::pending().await,
-            },
-        }
-    }
-
     pub(super) fn finish_run(&mut self) {
         let Some(Activity::Running(run)) = self.active.take() else {
             return;
@@ -245,6 +216,35 @@ impl Owner {
             queued,
             "analysis: revision published"
         );
+    }
+
+    /// Wait for whichever of the owner's two sources speaks first: an artifact
+    /// read, or the pass in flight. Artifact reads are taken first, because a
+    /// prepared artifact can only ever remove work the pass would do.
+    async fn wake(&mut self) -> Woke {
+        let Self {
+            active, replies, ..
+        } = self;
+        match active {
+            Some(Activity::Running(run)) => tokio::select! {
+                biased;
+                Some(reply) = replies.recv() => Woke::Load(reply),
+                changed = run.rx.changed() => if changed.is_err() {
+                    Woke::Finished
+                } else {
+                    Woke::Progress
+                },
+            },
+            Some(Activity::Committing(task)) => tokio::select! {
+                biased;
+                Some(reply) = replies.recv() => Woke::Load(reply),
+                result = task => Woke::Committed(result),
+            },
+            None => match replies.recv().await {
+                Some(reply) => Woke::Load(reply),
+                None => std::future::pending().await,
+            },
+        }
     }
 }
 

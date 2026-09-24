@@ -56,21 +56,6 @@ impl NetError {
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
-    /// Classifies the error for retry decisioning via its typed variant.
-    #[must_use]
-    pub fn retryability(&self) -> Retryability {
-        self.into()
-    }
-
-    /// The failure a spent retry budget was retrying: [`Self::RetryExhausted`]
-    /// resolves to what it wrapped, every other variant to itself.
-    fn cause(&self) -> &Self {
-        match self {
-            Self::RetryExhausted { source, .. } => source.cause(),
-            other => other,
-        }
-    }
-
     /// Whether asking again later can answer differently.
     ///
     /// [`Self::retryability`] answers whether *this request* may be retried
@@ -98,6 +83,21 @@ impl NetError {
             Self::Status { .. } => cause.retryability() == Retryability::Transient,
             _ => false,
         }
+    }
+
+    /// The failure a spent retry budget was retrying: [`Self::RetryExhausted`]
+    /// resolves to what it wrapped, every other variant to itself.
+    fn cause(&self) -> &Self {
+        match self {
+            Self::RetryExhausted { source, .. } => source.cause(),
+            other => other,
+        }
+    }
+
+    /// Classifies the error for retry decisioning via its typed variant.
+    #[must_use]
+    pub fn retryability(&self) -> Retryability {
+        self.into()
     }
 
     /// Creates a timeout error.

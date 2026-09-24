@@ -34,13 +34,21 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_deref: DerivableConfig,
     #[serde(default)]
+    pub(crate) derivable_from: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_delegation: DerivableDelegationConfig,
+    #[serde(default)]
+    pub(crate) derivable_event: DerivableEventConfig,
+    #[serde(default)]
+    pub(crate) derivable_getter: DerivableGetterConfig,
+    #[serde(default)]
+    pub(crate) derivable_built_default: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_clone: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_control: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_control_painter: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_built_default: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_debug: DerivableRangedConfig,
     #[serde(default)]
@@ -48,11 +56,19 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_display: DerivableRangedConfig,
     #[serde(default)]
+    pub(crate) derivable_enum_str: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_error: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_event: DerivableEventConfig,
+    pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_from: DerivableConfig,
+    pub(crate) derivable_mirror: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_node_control: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_patch: DerivableRangedConfig,
+    #[serde(default)]
+    pub(crate) derivable_phase: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
     #[serde(default)]
@@ -62,25 +78,9 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_skin_walk: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_patch: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_phase: DerivableRangedConfig,
+    pub(crate) derivable_variants: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_view_control: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_delegation: DerivableDelegationConfig,
-    #[serde(default)]
-    pub(crate) derivable_getter: DerivableGetterConfig,
-    #[serde(default)]
-    pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_mirror: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_node_control: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_enum_str: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_variants: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
@@ -125,10 +125,10 @@ impl Default for DerivableConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableEventConfig {
-    #[serde(default = "default_true")]
-    pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) unforwarded: Vec<String>,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
 }
 
 impl Default for DerivableEventConfig {
@@ -151,8 +151,8 @@ pub(crate) enum DerivableSeverity {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct DerivableRangedConfig {
-    pub(crate) enabled: bool,
     pub(crate) severity: DerivableSeverity,
+    pub(crate) enabled: bool,
 }
 
 impl Default for DerivableRangedConfig {

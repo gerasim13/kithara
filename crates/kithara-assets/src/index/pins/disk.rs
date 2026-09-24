@@ -22,10 +22,10 @@ use crate::{
 };
 
 pub(super) struct PinsPersist {
+    file: IndexFile,
     /// One writer at a time for `pins.bin`: the snapshot and the atomic
     /// rename that publishes it are one step.
     writing: Mutex<()>,
-    file: IndexFile,
 }
 
 impl PinsIndex {
@@ -45,8 +45,8 @@ impl PinsIndex {
             inner: Arc::new(PinsInner {
                 pins: initial,
                 persist: Some(PinsPersist {
-                    writing: Mutex::new(()),
                     file,
+                    writing: Mutex::new(()),
                 }),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),

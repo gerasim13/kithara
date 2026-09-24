@@ -24,9 +24,9 @@ pub enum WarpPlanError {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct WarpPlan {
-    map: WarpMap,
     #[field(get, copy)]
     activation: WarpCursor,
+    map: WarpMap,
 }
 
 impl WarpPlan {
@@ -48,7 +48,7 @@ impl WarpPlan {
             refusal => return Err(WarpPlanError::Rate(refusal)),
         }
         let activation = map.reanchor(source, output);
-        Ok(Self { map, activation })
+        Ok(Self { activation, map })
     }
 
     delegate::delegate! {

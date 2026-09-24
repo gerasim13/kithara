@@ -1,4 +1,4 @@
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Error, Read, Seek, SeekFrom};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
@@ -437,7 +437,7 @@ struct SegmentBytes<'a>(&'a [u8]);
 
 impl kithara_mp4::ReadAt for SegmentBytes<'_> {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let start = usize::try_from(offset).map_err(io::Error::other)?;
+        let start = usize::try_from(offset).map_err(Error::other)?;
         let Some(tail) = self.0.get(start..) else {
             return Ok(0);
         };
@@ -459,10 +459,10 @@ fn frame_from_sample(sample: &kithara_mp4::Sample) -> DecodeResult<Fmp4Frame> {
         }
     })?;
     Ok(Fmp4Frame {
-        decode_time: sample.decode_ticks,
-        duration: sample.duration_ticks,
         offset,
         size,
+        decode_time: sample.decode_ticks,
+        duration: sample.duration_ticks,
     })
 }
 

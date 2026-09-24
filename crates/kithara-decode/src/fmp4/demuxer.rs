@@ -34,7 +34,7 @@ pub(crate) struct Fmp4SegmentDemuxer<S> {
     source: BoxedSource,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
-    seek_target: Option<SegmentDescriptor>,
+    pending: Option<PendingReason>,
     /// Decode time the landing segment must be advanced to after a seek.
     ///
     /// A segment is the smallest unit the layout can address, so a seek lands
@@ -46,7 +46,7 @@ pub(crate) struct Fmp4SegmentDemuxer<S> {
     /// the codec's own declared pre-roll, which is what [`warmup_backoff`]
     /// subtracts. Cleared by the first segment parsed after the seek.
     seek_skip_to: Option<Duration>,
-    pending: Option<PendingReason>,
+    seek_target: Option<SegmentDescriptor>,
     /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
     /// recycles one high-water allocation instead of mallocing per
@@ -190,8 +190,56 @@ impl<S> Demuxer for Fmp4SegmentDemuxer<S>
 where
     S: HasPool<u8> + Send + Sync,
 {
+    fn current_segment_index(&self) -> Option<u32> {
+        self.seek_target.as_ref().map_or_else(
+            || self.cursor.as_ref().map(|cursor| cursor.segment_index),
+            |desc| Some(desc.segment_index),
+        )
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        self.seek_target.as_ref().map_or_else(
+            || self.cursor.as_ref().map(|cursor| cursor.variant_index),
+            |desc| Some(desc.variant_index),
+        )
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
+    }
+
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
+    }
+
+    #[kithara::probe]
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        if self.seek_target.is_some() {
+            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
+        }
+        if let Some(reason) = self.pending {
+            return Ok(DemuxOutcome::Pending(reason));
+        }
+        let Some(cursor) = self.cursor.as_mut() else {
+            return Ok(DemuxOutcome::Eof);
+        };
+        let Some(frames) = cursor.frames.as_mut() else {
+            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
+        };
+        let Some(frame) = frames.frames.get(frames.next_index).copied() else {
+            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
+        };
+        frames.next_index += 1;
+        let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
+        let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
+        let data = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
+        Ok(DemuxOutcome::Frame(Frame {
+            data,
+            pts,
+            duration: dur,
+            packet_desc: &[],
+        }))
     }
 
     fn prepare_frame(&mut self) -> DecodeResult<()> {
@@ -239,40 +287,6 @@ where
                 return Ok(());
             }
         }
-    }
-
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.prepare_frame()?;
-        self.next_frame_prepared()
-    }
-
-    #[kithara::probe]
-    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        if self.seek_target.is_some() {
-            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
-        }
-        if let Some(reason) = self.pending {
-            return Ok(DemuxOutcome::Pending(reason));
-        }
-        let Some(cursor) = self.cursor.as_mut() else {
-            return Ok(DemuxOutcome::Eof);
-        };
-        let Some(frames) = cursor.frames.as_mut() else {
-            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
-        };
-        let Some(frame) = frames.frames.get(frames.next_index).copied() else {
-            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
-        };
-        frames.next_index += 1;
-        let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
-        let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
-        let data = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
-        Ok(DemuxOutcome::Frame(Frame {
-            data,
-            pts,
-            duration: dur,
-            packet_desc: &[],
-        }))
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
@@ -326,20 +340,6 @@ where
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
-    }
-
-    fn current_segment_index(&self) -> Option<u32> {
-        self.seek_target.as_ref().map_or_else(
-            || self.cursor.as_ref().map(|cursor| cursor.segment_index),
-            |desc| Some(desc.segment_index),
-        )
-    }
-
-    fn current_variant_index(&self) -> Option<usize> {
-        self.seek_target.as_ref().map_or_else(
-            || self.cursor.as_ref().map(|cursor| cursor.variant_index),
-            |desc| Some(desc.variant_index),
-        )
     }
 }
 

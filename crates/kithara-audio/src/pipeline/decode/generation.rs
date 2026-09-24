@@ -54,8 +54,8 @@ pub(crate) enum StageOutput {
 
 #[derive(Default)]
 struct SeekPreparation {
-    requested: Option<SeekContext>,
     completed: Option<(SeekContext, DecodeResult<DecoderSeekOutcome>)>,
+    requested: Option<SeekContext>,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -111,13 +111,13 @@ impl DecoderGeneration {
         let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
         Self {
             decoder,
-            seek_preparation: SeekPreparation::default(),
             media_info,
             base_offset,
             installed_at_seek_epoch,
             gapless_profile,
             gapless,
             pending_head_skip,
+            seek_preparation: SeekPreparation::default(),
             finished: false,
             source_exhausted: false,
             exhaustion_observed: false,
@@ -126,59 +126,6 @@ impl DecoderGeneration {
             staged: VecDeque::new(),
             #[cfg(test)]
             staged_scan_count: Cell::new(0),
-        }
-    }
-
-    pub(crate) fn poll_seek(
-        &mut self,
-        request: SeekContext,
-    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
-        if self.has_completed_seek(request)
-            && let Some((_, result)) = self.seek_preparation.completed.take()
-        {
-            return Poll::Ready(result);
-        }
-        self.seek_preparation.requested = Some(request);
-        Poll::Pending
-    }
-
-    pub(crate) fn has_completed_seek(&self, request: SeekContext) -> bool {
-        self.seek_preparation
-            .completed
-            .as_ref()
-            .is_some_and(|(completed, _)| *completed == request)
-    }
-
-    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
-        if self
-            .seek_preparation
-            .completed
-            .as_ref()
-            .is_some_and(|(request, _)| request.epoch != live_epoch)
-        {
-            self.seek_preparation.completed = None;
-        }
-        if self
-            .seek_preparation
-            .requested
-            .is_some_and(|request| request.epoch != live_epoch)
-        {
-            self.seek_preparation.requested = None;
-        }
-        if let Some(request) = self.seek_preparation.requested.take() {
-            let result = match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(request.target)))
-            {
-                Ok(result) => result,
-                Err(payload) => {
-                    warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
-                    Err(DecodeError::InvalidData {
-                        detail: "decoder panicked during seek",
-                    })
-                }
-            };
-            self.seek_preparation.completed = Some((request, result));
-        } else if prepare_input && self.seek_preparation.completed.is_none() {
-            self.decoder.prepare_next_chunk();
         }
     }
 
@@ -266,6 +213,13 @@ impl DecoderGeneration {
         }
     }
 
+    pub(crate) fn has_completed_seek(&self, request: SeekContext) -> bool {
+        self.seek_preparation
+            .completed
+            .as_ref()
+            .is_some_and(|(completed, _)| *completed == request)
+    }
+
     pub(crate) fn has_output(&self) -> bool {
         !self.staged.is_empty() || self.gapless.has_output()
     }
@@ -295,6 +249,7 @@ impl DecoderGeneration {
             }
         }
     }
+
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         self.finished = false;
         self.source_exhausted = false;
@@ -309,14 +264,59 @@ impl DecoderGeneration {
     pub(crate) const fn observe_exhaustion(&mut self) {
         self.exhaustion_observed = true;
     }
-
     pub(crate) const fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
         self.pending_head_skip.as_mut()
+    }
+
+    pub(crate) fn poll_seek(
+        &mut self,
+        request: SeekContext,
+    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
+        if self.has_completed_seek(request)
+            && let Some((_, result)) = self.seek_preparation.completed.take()
+        {
+            return Poll::Ready(result);
+        }
+        self.seek_preparation.requested = Some(request);
+        Poll::Pending
     }
 
     pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
         self.holdback = None;
         self.staged.pop_front()
+    }
+
+    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+        if self
+            .seek_preparation
+            .completed
+            .as_ref()
+            .is_some_and(|(request, _)| request.epoch != live_epoch)
+        {
+            self.seek_preparation.completed = None;
+        }
+        if self
+            .seek_preparation
+            .requested
+            .is_some_and(|request| request.epoch != live_epoch)
+        {
+            self.seek_preparation.requested = None;
+        }
+        if let Some(request) = self.seek_preparation.requested.take() {
+            let result = match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(request.target)))
+            {
+                Ok(result) => result,
+                Err(payload) => {
+                    warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
+                    Err(DecodeError::InvalidData {
+                        detail: "decoder panicked during seek",
+                    })
+                }
+            };
+            self.seek_preparation.completed = Some((request, result));
+        } else if prepare_input && self.seek_preparation.completed.is_none() {
+            self.decoder.prepare_next_chunk();
+        }
     }
 
     pub(crate) fn push(&mut self, chunk: AudioChunk) {

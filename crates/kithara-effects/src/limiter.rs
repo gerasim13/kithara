@@ -1,4 +1,7 @@
-use core::num::{NonZeroU32, NonZeroUsize};
+use core::{
+    f32::consts::PI,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
@@ -6,11 +9,11 @@ use num_traits::ToPrimitive;
 struct Consts;
 
 impl Consts {
+    const DEFAULT_CEILING: f32 = 0.98;
+    const DEFAULT_RELEASE_MS: f32 = 50.0;
     /// Milliseconds per second: the release time arrives in ms, the coefficient
     /// is computed in samples.
     const MS_PER_SEC: f32 = 1000.0;
-    const DEFAULT_CEILING: f32 = 0.98;
-    const DEFAULT_RELEASE_MS: f32 = 50.0;
 }
 
 /// Configuration rejected by [`LimiterConfig`] or [`PeakLimiter::new`].
@@ -76,12 +79,6 @@ impl Default for LimiterConfig {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct PeakLimiter {
-    ceiling: f32,
-    envelope: f32,
-    release_coeff: f32,
-    channels: usize,
-    /// Polyphase windowed-sinc taps for the inter-sample phases, phase-major.
-    taps: [f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS],
     /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
     /// detector window reaching before the block still reads the signal as it entered the
     /// limiter rather than as it left.
@@ -90,41 +87,36 @@ pub struct PeakLimiter {
     /// this one. Both frames read the same untouched input there, so the sum is identical
     /// and computing it twice buys nothing.
     shared_peak: [f32; Self::DETECTOR_CHANNELS],
+    /// Polyphase windowed-sinc taps for the inter-sample phases, phase-major.
+    taps: [f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS],
     /// Whether [`Self::shared_peak`] describes the interval behind the next frame. It does
     /// not at the start of a block, where that interval was last judged against a held
     /// tail rather than the samples that actually followed.
     shared_valid: bool,
+    ceiling: f32,
+    envelope: f32,
+    release_coeff: f32,
+    channels: usize,
 }
 
 impl PeakLimiter {
-    /// Oversampling factor of the inter-sample peak detector: the reconstruction is
-    /// evaluated at every eighth-sample phase, close enough that a probe never misses
-    /// the crest of a partial sitting between two samples.
-    const DETECTOR_PHASES: usize = 8;
+    /// Channels the detector keeps history for. The limiter links its channels into one
+    /// gain, so a block wider than a small surround layout has no caller here; the extra
+    /// channels would silently lose their inter-sample peaks, so `new` rejects them.
+    const DETECTOR_CHANNELS: usize = 8;
 
     /// Half the detector kernel length in input samples. Eight taps per side keep the
     /// reconstruction of a full-scale quarter-rate sinusoid at or above its true peak
     /// while staying within a real-time budget.
     const DETECTOR_HALF_WIDTH: usize = 8;
 
+    /// Oversampling factor of the inter-sample peak detector: the reconstruction is
+    /// evaluated at every eighth-sample phase, close enough that a probe never misses
+    /// the crest of a partial sitting between two samples.
+    const DETECTOR_PHASES: usize = 8;
+
     /// Taps in one polyphase branch of the detector kernel.
     const DETECTOR_TAPS: usize = 2 * Self::DETECTOR_HALF_WIDTH + 1;
-
-    /// Channels the detector keeps history for. The limiter links its channels into one
-    /// gain, so a block wider than a small surround layout has no caller here; the extra
-    /// channels would silently lose their inter-sample peaks, so `new` rejects them.
-    const DETECTOR_CHANNELS: usize = 8;
-
-    /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
-    fn detector_tap(distance: f32) -> f32 {
-        if distance.abs() < f32::EPSILON {
-            return 1.0;
-        }
-        let argument = core::f32::consts::PI * distance;
-        let half_width = Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(1.0);
-        let window = 0.5 * (1.0 + (core::f32::consts::PI * distance / half_width).cos());
-        argument.sin() / argument * window
-    }
 
     /// Build a limiter applying `config` to `channels` linked channels.
     ///
@@ -161,55 +153,13 @@ impl PeakLimiter {
         Ok(Self {
             ceiling,
             release_coeff,
+            taps,
             envelope: 1.0,
             channels: channels.get(),
-            taps,
             history: [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS],
             shared_peak: [0.0; Self::DETECTOR_CHANNELS],
             shared_valid: false,
         })
-    }
-
-    /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
-    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
-    /// nothing, locks nothing, performs no I/O.
-    pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
-        debug_assert_eq!(channels.len(), self.channels);
-        debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
-
-        let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-        // WHY: The interval behind frame 0 was last judged against a held tail. The samples
-        // that actually followed are in this block, so it is judged again rather than taken
-        // from the cache.
-        self.shared_valid = false;
-
-        for frame in 0..frames {
-            let mut peak = 0.0_f32;
-            for (index, channel) in channels.iter_mut().enumerate() {
-                let sample = sanitize_sample(channel[frame]);
-                channel[frame] = sample;
-                peak = peak.max(sample.abs());
-                peak = peak.max(self.advance_detector(channel, index, frame));
-            }
-            for (index, channel) in channels.iter().enumerate() {
-                self.push_history(index, channel[frame]);
-            }
-
-            self.shared_valid = true;
-
-            let gain = self.step(peak);
-            for channel in channels.iter_mut() {
-                channel[frame] *= gain;
-            }
-        }
-    }
-
-    /// Reset the gain envelope to unity and forget the detector history.
-    pub fn reset(&mut self) {
-        self.envelope = 1.0;
-        self.history = [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS];
-        self.shared_peak = [0.0; Self::DETECTOR_CHANNELS];
-        self.shared_valid = false;
     }
 
     /// Peak of both reconstructed intervals touching `frame`. The one behind it is bounded
@@ -227,6 +177,17 @@ impl PeakLimiter {
             *shared = ahead;
         }
         ahead.max(behind)
+    }
+
+    /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
+    fn detector_tap(distance: f32) -> f32 {
+        if distance.abs() < f32::EPSILON {
+            return 1.0;
+        }
+        let argument = PI * distance;
+        let half_width = Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(1.0);
+        let window = 0.5 * (1.0 + (PI * distance / half_width).cos());
+        argument.sin() / argument * window
     }
 
     /// Largest magnitude the reconstruction reaches between `base` and the sample after it
@@ -264,6 +225,40 @@ impl PeakLimiter {
         peak
     }
 
+    /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
+    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
+    /// nothing, locks nothing, performs no I/O.
+    pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
+        debug_assert_eq!(channels.len(), self.channels);
+        debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
+
+        let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        // WHY: The interval behind frame 0 was last judged against a held tail. The samples
+        // that actually followed are in this block, so it is judged again rather than taken
+        // from the cache.
+        self.shared_valid = false;
+
+        for frame in 0..frames {
+            let mut peak = 0.0_f32;
+            for (index, channel) in channels.iter_mut().enumerate() {
+                let sample = sanitize_sample(channel[frame]);
+                channel[frame] = sample;
+                peak = peak.max(sample.abs());
+                peak = peak.max(self.advance_detector(channel, index, frame));
+            }
+            for (index, channel) in channels.iter().enumerate() {
+                self.push_history(index, channel[frame]);
+            }
+
+            self.shared_valid = true;
+
+            let gain = self.step(peak);
+            for channel in channels.iter_mut() {
+                channel[frame] *= gain;
+            }
+        }
+    }
+
     /// Record one input sample as the newest detector history for its channel.
     fn push_history(&mut self, channel: usize, sample: f32) {
         if let Some(history) = self.history.get_mut(channel) {
@@ -272,6 +267,14 @@ impl PeakLimiter {
                 *newest = sample;
             }
         }
+    }
+
+    /// Reset the gain envelope to unity and forget the detector history.
+    pub fn reset(&mut self) {
+        self.envelope = 1.0;
+        self.history = [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS];
+        self.shared_peak = [0.0; Self::DETECTOR_CHANNELS];
+        self.shared_valid = false;
     }
 
     #[inline]
@@ -363,12 +366,10 @@ mod tests {
                     let sinc = if distance.abs() < 1e-6 {
                         1.0
                     } else {
-                        let argument = core::f32::consts::PI * distance;
+                        let argument = PI * distance;
                         argument.sin() / argument
                     };
-                    let window = 0.5
-                        * (1.0 + (core::f32::consts::PI * distance / HALF_WIDTH as f32).cos())
-                            .max(0.0);
+                    let window = 0.5 * (1.0 + (PI * distance / HALF_WIDTH as f32).cos()).max(0.0);
                     value += sample * sinc * window;
                 }
                 peak = peak.max(value.abs());

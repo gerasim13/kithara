@@ -88,9 +88,9 @@ impl ResamplerBackend for AdapterProbeBackend {
 }
 
 struct AdapterProbeResampler {
-    markers: Vec<f32>,
     channels: NonZeroUsize,
     mode: ResamplerMode,
+    markers: Vec<f32>,
 }
 
 impl Resampler for AdapterProbeResampler {
@@ -173,10 +173,10 @@ impl ResamplerBackend for CaptureProbeBackend {
 }
 
 struct CaptureProbeResampler {
-    markers: Vec<f32>,
     captured: Captured,
     channels: NonZeroUsize,
     mode: ResamplerMode,
+    markers: Vec<f32>,
 }
 
 impl Resampler for CaptureProbeResampler {
@@ -264,10 +264,10 @@ impl ResamplerBackend for DelayedProbeBackend {
 }
 
 struct DelayedProbeResampler {
-    silence: Vec<f32>,
-    markers: Vec<f32>,
     channels: NonZeroUsize,
     mode: ResamplerMode,
+    markers: Vec<f32>,
+    silence: Vec<f32>,
     has_pending: bool,
 }
 

@@ -77,29 +77,6 @@ impl Case {
         Self::with_axis(Axis::Horizontal, max, width, height, items)
     }
 
-    fn vertical(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
-        Self::with_axis(Axis::Vertical, max, width, height, items)
-    }
-
-    fn with_axis(
-        axis: Axis,
-        max: Size,
-        width: Length,
-        height: Length,
-        items: Vec<TestItem>,
-    ) -> Self {
-        Self {
-            max,
-            width,
-            height,
-            items,
-            axis,
-            padding: Padding::default(),
-            spacing: 0.0,
-            align_items: Alignment::Start,
-        }
-    }
-
     fn run(&self) -> (Distribution, Vec<(usize, Limits)>) {
         let declared = self
             .items
@@ -130,6 +107,29 @@ impl Case {
             &mut measure,
         );
         (distribution, measure.calls)
+    }
+
+    fn vertical(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
+        Self::with_axis(Axis::Vertical, max, width, height, items)
+    }
+
+    fn with_axis(
+        axis: Axis,
+        max: Size,
+        width: Length,
+        height: Length,
+        items: Vec<TestItem>,
+    ) -> Self {
+        Self {
+            max,
+            width,
+            height,
+            items,
+            axis,
+            padding: Padding::default(),
+            spacing: 0.0,
+            align_items: Alignment::Start,
+        }
     }
 }
 

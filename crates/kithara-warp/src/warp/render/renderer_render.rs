@@ -127,6 +127,34 @@ where
         remaining.div_ceil(partitions)
     }
 
+    pub(super) fn output_frames(
+        source_frames: usize,
+        stretch: f64,
+        remainder: f64,
+    ) -> Result<(usize, f64), ElasticError> {
+        if !stretch.is_finite() || stretch <= 0.0 {
+            return Err(ElasticError::InvalidRate(stretch.recip()));
+        }
+        let source_frames = source_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let exact = source_frames.mul_add(stretch, remainder);
+        if !exact.is_finite() {
+            return Err(ElasticError::SampleCountOverflow);
+        }
+        // Backends require a non-empty output. Keep a sub-frame source span
+        // pending until its cumulative exact output reaches one full frame;
+        // EOF rounds the final residual once.
+        let output_frames = if exact < 1.0 { 0.0 } else { exact.round() };
+        let output_frames = output_frames
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let emitted = output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((output_frames, exact - emitted))
+    }
+
     fn quantized_source_span(
         frames: usize,
         pending_frames: usize,
@@ -173,34 +201,6 @@ where
             source = next.min(source - 1);
         }
         Ok(None)
-    }
-
-    pub(super) fn output_frames(
-        source_frames: usize,
-        stretch: f64,
-        remainder: f64,
-    ) -> Result<(usize, f64), ElasticError> {
-        if !stretch.is_finite() || stretch <= 0.0 {
-            return Err(ElasticError::InvalidRate(stretch.recip()));
-        }
-        let source_frames = source_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let exact = source_frames.mul_add(stretch, remainder);
-        if !exact.is_finite() {
-            return Err(ElasticError::SampleCountOverflow);
-        }
-        // Backends require a non-empty output. Keep a sub-frame source span
-        // pending until its cumulative exact output reaches one full frame;
-        // EOF rounds the final residual once.
-        let output_frames = if exact < 1.0 { 0.0 } else { exact.round() };
-        let output_frames = output_frames
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let emitted = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        Ok((output_frames, exact - emitted))
     }
 
     pub(super) fn source_block_limit(
@@ -525,27 +525,59 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    pub(super) fn render_resident_projection(
+    fn prime_resident_request(
         &mut self,
-        chunk: AudioChunk,
-        prepared: PreparedQuantum,
-    ) -> Result<Option<AudioChunk>, ElasticError> {
-        let channels = usize::from(self.spec.channels.max(1));
-        let AudioChunk { meta, samples } = chunk;
-        let result = (|| {
-            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            resident.append(meta, &samples)?;
-            self.last_input_meta = Some(meta);
-            if prepared
-                .projection
-                .is_some_and(|projection| projection.output_frames == 0)
-            {
-                return Ok(None);
-            }
-            self.process_resident_projection(meta, channels)
-        })();
-        self.defer_scratch(Some(samples));
-        result
+        request: super::renderer_residency::ResidentRequest,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        if let Some((cue, history, warm)) = request.prime {
+            let cue_i = i64::try_from(cue).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let history_i =
+                i64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let history_range = resident.range(
+                cue_i
+                    .checked_sub(history_i)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+                cue,
+                channels,
+            )?;
+            let lookahead_end = cue
+                .checked_add(u64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let lookahead_range = resident.range(cue_i, lookahead_end, channels)?;
+            let warm_range = resident.range(
+                i64::try_from(lookahead_end).map_err(|_| ElasticError::SampleCountOverflow)?,
+                request.source_start,
+                channels,
+            )?;
+            let discard = self
+                .activation_scratch
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?;
+            discard
+                .ensure_len(
+                    warm.output_frames()
+                        .checked_mul(channels)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                )
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            self.engine
+                .as_mut()
+                .ok_or(ElasticError::EnginePreparation(
+                    "projected engine is unavailable",
+                ))?
+                .prime(
+                    warm,
+                    &resident.samples[history_range],
+                    &resident.samples[lookahead_range],
+                    &resident.samples[warm_range],
+                    discard,
+                )?;
+            discard.clear();
+        }
+        resident.primed = true;
+        Ok(())
     }
 
     pub(super) fn process_resident_projection(
@@ -669,58 +701,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let output = self.scratch.take().ok_or(ElasticError::PoolCapacity)?;
         Ok(Some(AudioChunk::new(meta, output)))
     }
-    fn prime_resident_request(
+    pub(super) fn render_resident_projection(
         &mut self,
-        request: super::renderer_residency::ResidentRequest,
-        channels: usize,
-    ) -> Result<(), ElasticError> {
-        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        if let Some((cue, history, warm)) = request.prime {
-            let cue_i = i64::try_from(cue).map_err(|_| ElasticError::SampleCountOverflow)?;
-            let history_i =
-                i64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?;
-            let history_range = resident.range(
-                cue_i
-                    .checked_sub(history_i)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-                cue,
-                channels,
-            )?;
-            let lookahead_end = cue
-                .checked_add(u64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let lookahead_range = resident.range(cue_i, lookahead_end, channels)?;
-            let warm_range = resident.range(
-                i64::try_from(lookahead_end).map_err(|_| ElasticError::SampleCountOverflow)?,
-                request.source_start,
-                channels,
-            )?;
-            let discard = self
-                .activation_scratch
-                .as_mut()
-                .ok_or(ElasticError::PoolCapacity)?;
-            discard
-                .ensure_len(
-                    warm.output_frames()
-                        .checked_mul(channels)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            self.engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation(
-                    "projected engine is unavailable",
-                ))?
-                .prime(
-                    warm,
-                    &resident.samples[history_range],
-                    &resident.samples[lookahead_range],
-                    &resident.samples[warm_range],
-                    discard,
-                )?;
-            discard.clear();
-        }
-        resident.primed = true;
-        Ok(())
+        chunk: AudioChunk,
+        prepared: PreparedQuantum,
+    ) -> Result<Option<AudioChunk>, ElasticError> {
+        let channels = usize::from(self.spec.channels.max(1));
+        let AudioChunk { meta, samples } = chunk;
+        let result = (|| {
+            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            resident.append(meta, &samples)?;
+            self.last_input_meta = Some(meta);
+            if prepared
+                .projection
+                .is_some_and(|projection| projection.output_frames == 0)
+            {
+                return Ok(None);
+            }
+            self.process_resident_projection(meta, channels)
+        })();
+        self.defer_scratch(Some(samples));
+        result
     }
 }

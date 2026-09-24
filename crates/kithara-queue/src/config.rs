@@ -35,6 +35,12 @@ pub struct QueueConfig<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    #[builder(default)]
+    pub action_at_item_end: ActionAtItemEnd,
+
+    #[builder(default)]
+    pub crossfade_settings: CrossfadeSettings,
+
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
@@ -52,6 +58,9 @@ where
     #[debug(skip)]
     pub store: Option<AssetStore<S>>,
 
+    #[builder(default)]
+    pub playback_order: PlaybackOrder,
+
     /// Runtime the queue runs its loads and load completions on. `None`
     /// takes the runtime current where the queue is built; an embedding
     /// that drives the queue from threads without one (FFI hosts) passes
@@ -65,6 +74,14 @@ where
     #[debug(skip)]
     pub player: PlayerImpl<S>,
 
+    /// Whether the queue starts playback by itself once the first track
+    /// appended to a queue with nothing selected finishes loading. Off by
+    /// default: the embedding decides when playback starts. A document cannot
+    /// name it, because starting playback is the embedding's choice.
+    #[builder(default = false)]
+    #[patch(skip)]
+    pub should_autoplay: bool,
+
     /// Lead time in seconds before EOF at which the next queued track
     /// is preloaded into the audio processor. Default: 3.5. Stays `f32`
     /// seconds rather than the campaign's `humantime` duration convention:
@@ -74,28 +91,11 @@ where
     #[builder(default = DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
 
-    /// Whether the queue starts playback by itself once the first track
-    /// appended to a queue with nothing selected finishes loading. Off by
-    /// default: the embedding decides when playback starts. A document cannot
-    /// name it, because starting playback is the embedding's choice.
-    #[builder(default = false)]
-    #[patch(skip)]
-    pub should_autoplay: bool,
-
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
     #[builder(default = 100)]
     pub max_history_size: usize,
-
-    #[builder(default)]
-    pub playback_order: PlaybackOrder,
-
-    #[builder(default)]
-    pub action_at_item_end: ActionAtItemEnd,
-
-    #[builder(default)]
-    pub crossfade_settings: CrossfadeSettings,
 }
 
 #[cfg(test)]

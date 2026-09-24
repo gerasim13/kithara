@@ -165,15 +165,6 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
     #1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
 ";
 
-    /// What the run of 2026-08-15 actually collected: a stack the
-    /// sanitizer printed without a symbolizer, so every frame is an address.
-    const UNSYMBOLIZED: &str = "\
-==2837838==ERROR: RealtimeSanitizer: unsafe-library-call
-Intercepted call to real-time unsafe function `sched_yield` in real-time context!
-    #0 0x574f04be26bc  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0xd3e6bc) (BuildId: 159d3193)
-    #1 0x574f0780dd06  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0x3969d06) (BuildId: 159d3193)
-";
-
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig::default()
     }
@@ -231,6 +222,15 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
     /// looking in the wrong place.
     #[test]
     fn a_stack_the_symbolizer_never_resolved_is_declared_unsymbolized() {
+        /// What the run of 2026-08-15 actually collected: a stack the
+        /// sanitizer printed without a symbolizer, so every frame is an address.
+        const UNSYMBOLIZED: &str = "\
+==2837838==ERROR: RealtimeSanitizer: unsafe-library-call
+Intercepted call to real-time unsafe function `sched_yield` in real-time context!
+    #0 0x574f04be26bc  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0xd3e6bc) (BuildId: 159d3193)
+    #1 0x574f0780dd06  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0x3969d06) (BuildId: 159d3193)
+";
+
         let found = findings(UNSYMBOLIZED, &evidence(), &StressRenderBudgets::default());
 
         let signature = found.keys().next().expect("one finding");

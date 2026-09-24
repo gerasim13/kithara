@@ -410,9 +410,9 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
 
 #[derive(Default)]
 struct ProbeArgOptions {
+    with: Option<Path>,
     by_ref: bool,
     encode_only: bool,
-    with: Option<Path>,
 }
 
 impl ProbeArgOptions {

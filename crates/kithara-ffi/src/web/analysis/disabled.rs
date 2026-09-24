@@ -8,11 +8,11 @@ use crate::pools::{FfiQueueControl, FfiResourceConfig, Pools};
 pub(crate) struct AnalysisRoute;
 
 impl AnalysisRoute {
-    pub(crate) fn set(&self, _func: Function) {}
-
     pub(crate) const fn dispatch(&self, _scope: Option<&str>, _data: &JsValue) -> bool {
         false
     }
+
+    pub(crate) fn set(&self, _func: Function) {}
 }
 
 pub(crate) struct AnalysisRuns;

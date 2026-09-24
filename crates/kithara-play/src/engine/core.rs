@@ -190,21 +190,6 @@ impl<S> EngineImpl<S> {
         self.session.invalidate_audio_route(reason)
     }
 
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.session.set_session_ducking(mode)
-    }
-
-    /// The platform suspended this session's audio output at `tick`.
-    pub fn suspend_output(&self, tick: u64) {
-        self.session.suspend_output(tick);
-    }
-
-    /// The audio-thread tick this session's output was suspended at, while the
-    /// platform still holds it.
-    pub fn suspended_at(&self) -> Option<u64> {
-        self.session.suspended_at()
-    }
-
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }
@@ -242,6 +227,7 @@ impl<S> EngineImpl<S> {
             .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
     }
+
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -298,7 +284,6 @@ impl<S> EngineImpl<S> {
         drop(slots);
         result
     }
-
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
@@ -315,6 +300,10 @@ impl<S> EngineImpl<S> {
         }
         *self.eq_layout.lock() = eq_layout;
         Ok(())
+    }
+
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.session.set_session_ducking(mode)
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
@@ -373,6 +362,17 @@ impl<S> EngineImpl<S> {
 
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
+    }
+
+    /// The platform suspended this session's audio output at `tick`.
+    pub fn suspend_output(&self, tick: u64) {
+        self.session.suspend_output(tick);
+    }
+
+    /// The audio-thread tick this session's output was suspended at, while the
+    /// platform still holds it.
+    pub fn suspended_at(&self) -> Option<u64> {
+        self.session.suspended_at()
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {

@@ -13,12 +13,12 @@ use crate::{SessionAnchor, SessionBeat};
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderContext {
-    /// The physical output axis this render pass covers.
-    output: OutputContext,
     /// The corresponding half-open musical range when transport is playing.
     session_beats: Option<Range<SessionBeat>>,
     /// Exact committed trajectory when supplied by the transport owner.
     trajectory: Option<SessionAnchor>,
+    /// The physical output axis this render pass covers.
+    output: OutputContext,
 }
 
 impl RenderContext {
@@ -40,6 +40,21 @@ impl RenderContext {
         Some(context)
     }
 
+    /// Derives the same context for a half-open range relative to this output block.
+    #[must_use]
+    pub fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
+        let total_frames = self.output.frame_count()?;
+        let output = self.output.for_output_range(range.clone())?;
+        if self.trajectory.is_some() {
+            return Self::new(output, self.trajectory);
+        }
+        let session_beats = match self.session_beats.as_ref() {
+            Some(beats) => Some(beat_subrange(beats, range, total_frames)?),
+            None => None,
+        };
+        Self::new_linear(output, session_beats)
+    }
+
     /// Creates a context with an explicitly linear musical span.
     /// Use [`Self::new`] when the transport supplies an exact trajectory.
     #[must_use]
@@ -57,21 +72,6 @@ impl RenderContext {
             session_beats,
             trajectory: None,
         })
-    }
-
-    /// Derives the same context for a half-open range relative to this output block.
-    #[must_use]
-    pub fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
-        let total_frames = self.output.frame_count()?;
-        let output = self.output.for_output_range(range.clone())?;
-        if self.trajectory.is_some() {
-            return Self::new(output, self.trajectory);
-        }
-        let session_beats = match self.session_beats.as_ref() {
-            Some(beats) => Some(beat_subrange(beats, range, total_frames)?),
-            None => None,
-        };
-        Self::new_linear(output, session_beats)
     }
 }
 

@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    fs,
     ops::Range,
     path::{Path as FsPath, PathBuf},
 };
@@ -19,7 +18,7 @@ use syn::{
 use super::Context;
 use crate::{
     common::{
-        fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
+        fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks, line_start},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::relative_to,
@@ -221,7 +220,7 @@ pub(super) fn fix(ctx: &Context<'_>, kind: Kind, enabled: bool) -> Result<FixOut
             continue;
         }
         let rewritten = rewriter.finish().context("apply derive-collapse edits")?;
-        fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
+        ctx.scan.write(path, rewritten)?;
         outcome.writes += 1;
     }
     Ok(outcome)
@@ -892,32 +891,6 @@ pub(super) fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
         visibility => visibility.span().byte_range().start,
     };
     line_start(src, byte)
-}
-
-pub(super) fn line_start(src: &str, at: usize) -> usize {
-    src[..at].rfind('\n').map_or(0, |pos| pos + 1)
-}
-
-pub(super) fn deletion_range(src: &str, range: Range<usize>) -> Range<usize> {
-    let line = line_start(src, range.start);
-    let start = if src[line..range.start]
-        .bytes()
-        .all(|byte| matches!(byte, b' ' | b'\t'))
-    {
-        line
-    } else {
-        range.start
-    };
-    let next = src[range.end..]
-        .find(|character: char| !character.is_whitespace())
-        .map_or(src.len(), |offset| range.end + offset);
-    let next_line = line_start(src, next);
-    let end = if src[range.end..next].contains('\n') && next_line >= range.end {
-        next_line
-    } else {
-        range.end
-    };
-    start..end
 }
 
 pub(super) fn item_blocks(src: &str, impl_block: &ItemImpl) -> Result<Vec<BlockRange>, String> {

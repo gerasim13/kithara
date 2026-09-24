@@ -14,13 +14,13 @@ use crate::{
 };
 
 pub(crate) struct TakenItem {
+    /// The prepared beat grid this load carries, kept out of the resource the
+    /// processor takes so the player can publish its geometry.
+    pub(crate) beat_grid: Arc<PreparedGrid>,
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(crate) player_resource: PlayerResource,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
-    /// The prepared beat grid this load carries, kept out of the resource the
-    /// processor takes so the player can publish its geometry.
-    pub(crate) beat_grid: Arc<PreparedGrid>,
 }
 
 pub(crate) struct ItemQueue {
@@ -132,11 +132,11 @@ impl ItemQueue {
         drop(playlist);
 
         Ok(Some(TakenItem {
+            beat_grid,
             abr_handle,
             player_resource,
             item_id,
             duration_seconds,
-            beat_grid,
         }))
     }
 

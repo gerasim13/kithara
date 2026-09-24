@@ -8,6 +8,7 @@ use kithara_effects::{
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::SeekObserve;
+use kithara_warp::WarpRenderError;
 
 #[derive(Clone, Copy)]
 enum DrainState {
@@ -129,8 +130,8 @@ where
         };
         let frames = match self.warp.prepare_quantum(meta, remaining) {
             Ok(frames) => frames,
-            Err(kithara_warp::WarpRenderError::PendingActivation) => return,
-            Err(kithara_warp::WarpRenderError::NeedsService) => {
+            Err(WarpRenderError::PendingActivation) => return,
+            Err(WarpRenderError::NeedsService) => {
                 if self.warp.transition_pending() {
                     self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
                 }

@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-const DIRECTIVE_PREFIX: &str = "xtask-lint-ignore";
-
 /// Per-file map of suppressions extracted from comment directives.
 #[derive(Debug, Default)]
 pub struct Suppressions {
@@ -61,6 +59,8 @@ enum Directive {
 }
 
 fn parse_directive(line: &str) -> Option<Directive> {
+    const DIRECTIVE_PREFIX: &str = "xtask-lint-ignore";
+
     let after_slash = line.strip_prefix("//")?;
     let after_slash = after_slash.trim_start();
     let rest = after_slash.strip_prefix(DIRECTIVE_PREFIX)?;

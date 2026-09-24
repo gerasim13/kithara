@@ -23,11 +23,24 @@ pub struct Fragment {
 #[derive(Clone, Debug)]
 pub struct Fmp4Layout {
     init_range: Range<u64>,
-    timescale: u32,
     fragments: Vec<Fragment>,
+    timescale: u32,
 }
 
 impl Fmp4Layout {
+    /// Fragments in file order.
+    #[must_use]
+    pub fn fragments(&self) -> &[Fragment] {
+        &self.fragments
+    }
+
+    /// Byte range of the initialisation segment: everything before the first
+    /// `moof`.
+    #[must_use]
+    pub fn init_range(&self) -> Range<u64> {
+        self.init_range.clone()
+    }
+
     /// Walk the box headers of the `total`-byte file behind `source` and
     /// derive its fragment layout. Payload boxes are seeked over, so peak
     /// memory tracks the layout, not the track length.
@@ -46,29 +59,16 @@ impl Fmp4Layout {
         let fragments = fragments_of(&mp4, total)?;
 
         Some(Self {
-            init_range: 0..first_moof_start,
             timescale,
             fragments,
+            init_range: 0..first_moof_start,
         })
-    }
-
-    /// Byte range of the initialisation segment: everything before the first
-    /// `moof`.
-    #[must_use]
-    pub fn init_range(&self) -> Range<u64> {
-        self.init_range.clone()
     }
 
     /// Media timescale of the audio track, in ticks per second.
     #[must_use]
     pub const fn timescale(&self) -> u32 {
         self.timescale
-    }
-
-    /// Fragments in file order.
-    #[must_use]
-    pub fn fragments(&self) -> &[Fragment] {
-        &self.fragments
     }
 }
 
@@ -166,9 +166,9 @@ fn fragment_from_moof(
         return None;
     }
     Some(Fragment {
-        byte_range: byte_start..byte_end,
         decode_ticks,
         duration_ticks,
+        byte_range: byte_start..byte_end,
     })
 }
 

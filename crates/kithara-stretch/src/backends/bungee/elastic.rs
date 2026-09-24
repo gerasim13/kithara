@@ -26,14 +26,6 @@ pub(crate) struct BungeeElastic {
 }
 
 impl BungeeElastic {
-    fn rendered_source_frames(&self, request: ElasticRequest) -> usize {
-        if self.core.anchor.is_some() {
-            request.output_source_frames()
-        } else {
-            request.source_frames()
-        }
-    }
-
     fn exact_tail_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
         let latency = self.capabilities.latency();
         let source = Self::frame_count(self.rendered_source_frames(request))?;
@@ -119,6 +111,14 @@ impl BungeeElastic {
         self.last_request = Some(request);
         self.tail_remaining = None;
         Ok(())
+    }
+
+    fn rendered_source_frames(&self, request: ElasticRequest) -> usize {
+        if self.core.anchor.is_some() {
+            request.output_source_frames()
+        } else {
+            request.source_frames()
+        }
     }
 
     fn reset_rate(&mut self) {

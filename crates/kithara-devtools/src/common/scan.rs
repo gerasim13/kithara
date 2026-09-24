@@ -118,6 +118,24 @@ impl Scan {
             workspace_text_files_scoped(&self.workspace_root, scope)
         })
     }
+
+    /// Write `contents` to `path` and make it the text every later reader of
+    /// this scan sees.
+    ///
+    /// An autofix writes through here: the next fix in the same run then edits
+    /// what this one left instead of the text read before it, which it would
+    /// otherwise write back over this one's edits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    pub fn write(&self, path: &Path, contents: String) -> Result<()> {
+        std::fs::write(path, &contents).with_context(|| format!("write {}", path.display()))?;
+        if let Ok(mut map) = self.sources.write() {
+            map.insert(path.to_path_buf(), Some(Arc::new(contents)));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -4,9 +4,6 @@ use num_traits::Float;
 
 use super::{ElasticError, ElasticRequest};
 
-/// i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
-const RATE_FRACTION_DEPTH: u8 = 64;
-
 /// Supported source-frame advance per output frame.
 ///
 /// The envelope is the configured playback-rate policy restricted to ratios
@@ -83,6 +80,9 @@ fn largest_request_between(
     max_source_frames: usize,
     max_output_frames: usize,
 ) -> Option<ElasticRequest> {
+    /// i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
+    const RATE_FRACTION_DEPTH: u8 = 64;
+
     let (_, denominator) = simplest_fraction(minimum, maximum, RATE_FRACTION_DEPTH)?;
     let max_output_frames = u128::try_from(max_output_frames).ok()?;
     if denominator > max_output_frames {

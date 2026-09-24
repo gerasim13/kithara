@@ -47,11 +47,11 @@ enum OnRead {
 
 #[derive(Debug)]
 struct Plan {
-    on_start: OnStart,
-    on_read: OnRead,
-    status: u16,
-    headers: Vec<(String, String)>,
     body: Bytes,
+    on_read: OnRead,
+    on_start: OnStart,
+    headers: Vec<(String, String)>,
+    status: u16,
 }
 
 impl Plan {
@@ -68,14 +68,14 @@ impl Plan {
 
 struct Recorded {
     method: HostMethod,
-    headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
+    headers: Vec<(String, String)>,
 }
 
 #[derive(Default)]
 struct Seen {
-    starts: AtomicU32,
     cancels: AtomicU32,
+    starts: AtomicU32,
     requests: Mutex<Vec<Recorded>>,
 }
 
@@ -89,8 +89,8 @@ struct Route {
 /// under a URL of its own, so tests sharing a process stay apart.
 #[derive(Default)]
 struct Router {
-    routes: Mutex<HashMap<Url, Route>>,
     next: AtomicU32,
+    routes: Mutex<HashMap<Url, Route>>,
 }
 
 impl Router {
@@ -165,11 +165,11 @@ impl HostTransport for Router {
 }
 
 struct FakeCall {
-    events: HostEvents,
     plan: Arc<Plan>,
     seen: Arc<Seen>,
-    offset: Mutex<usize>,
+    events: HostEvents,
     held: Mutex<Option<HostBuffer>>,
+    offset: Mutex<usize>,
 }
 
 impl FakeCall {
@@ -192,6 +192,10 @@ impl FakeCall {
 }
 
 impl HostCall for FakeCall {
+    fn cancel(&self) {
+        self.seen.cancels.fetch_add(1, Ordering::SeqCst);
+    }
+
     fn read(&self, buffer: HostBuffer) {
         match self.plan.on_read {
             OnRead::Serve => {
@@ -214,10 +218,6 @@ impl HostCall for FakeCall {
                 }
             }
         }
-    }
-
-    fn cancel(&self) {
-        self.seen.cancels.fetch_add(1, Ordering::SeqCst);
     }
 }
 

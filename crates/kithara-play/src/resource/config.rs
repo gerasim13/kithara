@@ -37,14 +37,6 @@ where
     /// Audio resource source (URL or local path).
     #[builder(start_fn)]
     pub(crate) src: ResourceSrc,
-    /// A beat grid this track already has, as a structure the caller holds or
-    /// a source its bytes are read from. Analysis fills in only what no
-    /// prepared artifact covers, so a track opened with a grid here is never
-    /// re-analysed for one.
-    pub(crate) beat_grid: Option<ArtifactSource<BeatGridModel>>,
-    /// A waveform this track already has, on the same terms as
-    /// [`Self::beat_grid`].
-    pub(crate) waveform: Option<ArtifactSource<Waveform>>,
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
@@ -79,6 +71,11 @@ where
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
+    /// A beat grid this track already has, as a structure the caller holds or
+    /// a source its bytes are read from. Analysis fills in only what no
+    /// prepared artifact covers, so a track opened with a grid here is never
+    /// re-analysed for one.
+    pub(crate) beat_grid: Option<ArtifactSource<BeatGridModel>>,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -105,6 +102,9 @@ where
     /// pipeline. The player overwrites it from its engine, so it is not a
     /// document key.
     pub(crate) host_sample_rate: Option<NonZeroU32>,
+    /// A waveform this track already has, on the same terms as
+    /// [`Self::beat_grid`].
+    pub(crate) waveform: Option<ArtifactSource<Waveform>>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,

@@ -101,20 +101,6 @@ where
         self.publication.load().second.as_ref().map(Arc::clone)
     }
 
-    pub(in crate::stream) fn transition_demand_in_flight(
-        &self,
-        transition: VariantTransition,
-    ) -> bool {
-        self.publication
-            .load()
-            .second
-            .as_ref()
-            .is_some_and(|session| {
-                session.transition() == Some(transition)
-                    && session.wait_phase() == SourcePhase::WaitingDemand
-            })
-    }
-
     /// Retain replaced snapshots until readers release them; only writers reclaim.
     fn publish(&self, state: &mut TransitionState<S>, residents: ResidentSessions<S>) {
         state
@@ -144,6 +130,20 @@ where
         } else {
             1
         }
+    }
+
+    pub(in crate::stream) fn transition_demand_in_flight(
+        &self,
+        transition: VariantTransition,
+    ) -> bool {
+        self.publication
+            .load()
+            .second
+            .as_ref()
+            .is_some_and(|session| {
+                session.transition() == Some(transition)
+                    && session.wait_phase() == SourcePhase::WaitingDemand
+            })
     }
 }
 

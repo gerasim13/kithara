@@ -42,7 +42,6 @@ pub struct UiState {
     pub downbeat_marks: Arc<[f32]>,
     pub unready_ranges: Arc<[[f32; 2]]>,
     pub engine_load: EngineLoadSnapshot,
-    pub(crate) analysis: Option<TrackArtifacts>,
     pub current_track_index: Option<usize>,
     pub current_variant: Option<usize>,
     pub selected_variant: Option<usize>,
@@ -57,6 +56,7 @@ pub struct UiState {
     pub duration: f64,
     pub position: f64,
     pub seek_position: f64,
+    pub(crate) analysis: Option<TrackArtifacts>,
 }
 
 impl UiState {
@@ -117,20 +117,6 @@ impl UiState {
         }
     }
 
-    pub(crate) fn set_analysis(&mut self, analysis: Option<TrackArtifacts>) {
-        let marks = analysis
-            .as_ref()
-            .and_then(|artifacts| self.marks(artifacts))
-            .unwrap_or_default();
-        self.beat_marks = marks.beats;
-        self.downbeat_marks = marks.downbeats;
-        self.unready_ranges = analysis
-            .as_ref()
-            .and_then(TrackArtifacts::analysis)
-            .map_or_else(Arc::default, unready_ranges);
-        self.analysis = analysis;
-    }
-
     /// Where the published grid puts its beats, as fractions of the track.
     ///
     /// The grid is read the way it states itself — in media seconds — so a
@@ -153,6 +139,20 @@ impl UiState {
             beats: frames_to_fractions(grid.artifact().beats(), frames),
             downbeats: frames_to_fractions(grid.artifact().downbeats(), frames),
         })
+    }
+
+    pub(crate) fn set_analysis(&mut self, analysis: Option<TrackArtifacts>) {
+        let marks = analysis
+            .as_ref()
+            .and_then(|artifacts| self.marks(artifacts))
+            .unwrap_or_default();
+        self.beat_marks = marks.beats;
+        self.downbeat_marks = marks.downbeats;
+        self.unready_ranges = analysis
+            .as_ref()
+            .and_then(TrackArtifacts::analysis)
+            .map_or_else(Arc::default, unready_ranges);
+        self.analysis = analysis;
     }
 }
 

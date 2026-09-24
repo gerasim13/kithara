@@ -17,10 +17,10 @@ pub(crate) struct Entry {
     queue: AppQueueControl,
     #[field(get)]
     config: AppResourceConfig,
+    held: Option<AnalysisProgress>,
     #[field(get)]
     prepared: Prepared,
     tx: watch::Sender<Option<TrackArtifacts>>,
-    held: Option<AnalysisProgress>,
     #[field(get, copy)]
     stage: Stage,
     #[field(get, copy)]
@@ -60,6 +60,16 @@ impl Entry {
         }
     }
 
+    /// Take in an artifact its own source answered with, and republish: one
+    /// publication carries every origin the track has.
+    pub(crate) fn accept(&mut self, loaded: Loaded) {
+        match loaded {
+            Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
+            Loaded::Waveform(result) => self.prepared.waveform = result.into(),
+        }
+        self.republish();
+    }
+
     /// Publish what this track holds. A pass result is accepted only when it
     /// outranks the one already published; a prepared artifact is republished
     /// with it, so one publication carries both origins.
@@ -77,19 +87,6 @@ impl Entry {
         true
     }
 
-    /// Publish the prepared artifacts alone, before or without a pass.
-    pub(crate) fn republish(&self) {
-        let analysis = self
-            .held
-            .as_ref()
-            .map(|progress| progress.analysis().clone());
-        if analysis.is_none() && self.prepared.is_empty() {
-            return;
-        }
-        self.tx
-            .send_replace(Some(TrackArtifacts::new(analysis, self.prepared.clone())));
-    }
-
     pub(crate) fn point_at(
         &mut self,
         config: AppResourceConfig,
@@ -103,21 +100,24 @@ impl Entry {
         self.track_id = track_id;
     }
 
-    /// Take in an artifact its own source answered with, and republish: one
-    /// publication carries every origin the track has.
-    pub(crate) fn accept(&mut self, loaded: Loaded) {
-        match loaded {
-            Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
-            Loaded::Waveform(result) => self.prepared.waveform = result.into(),
-        }
-        self.republish();
-    }
-
     pub(crate) fn release(&mut self) {
         if !self.is_held() {
             self.held = None;
             self.tx.send_replace(None);
         }
+    }
+
+    /// Publish the prepared artifacts alone, before or without a pass.
+    pub(crate) fn republish(&self) {
+        let analysis = self
+            .held
+            .as_ref()
+            .map(|progress| progress.analysis().clone());
+        if analysis.is_none() && self.prepared.is_empty() {
+            return;
+        }
+        self.tx
+            .send_replace(Some(TrackArtifacts::new(analysis, self.prepared.clone())));
     }
 
     pub(crate) fn set_stage(&mut self, stage: Stage) {

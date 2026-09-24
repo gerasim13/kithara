@@ -58,8 +58,8 @@ impl FileSegmentIndex {
         }
 
         Some(Self {
-            init_range: layout.init_range(),
             segments,
+            init_range: layout.init_range(),
         })
     }
 }

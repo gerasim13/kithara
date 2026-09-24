@@ -22,9 +22,9 @@ pub enum CrossfadeCurve {
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 pub struct CrossfadeSettings {
-    pub duration: f32,
     pub curve: CrossfadeCurve,
     pub depth: f32,
+    pub duration: f32,
     pub position: f32,
 }
 
@@ -47,35 +47,13 @@ impl CrossfadeSettings {
         position: f32,
     ) -> Result<Self, PlayError> {
         let settings = Self {
-            duration,
             curve,
             depth,
+            duration,
             position,
         };
         settings.validate()?;
         Ok(settings)
-    }
-
-    pub fn validate(self) -> Result<Self, PlayError> {
-        if !self.duration.is_finite() || self.duration < 0.0 {
-            return Err(PlayError::InvalidParameter {
-                name: "crossfade.duration".into(),
-                value: self.duration,
-            });
-        }
-        if !self.depth.is_finite() || !(0.0..=1.0).contains(&self.depth) {
-            return Err(PlayError::InvalidParameter {
-                name: "crossfade.depth".into(),
-                value: self.depth,
-            });
-        }
-        if !self.position.is_finite() || self.position <= 0.0 || self.position >= 1.0 {
-            return Err(PlayError::InvalidParameter {
-                name: "crossfade.position".into(),
-                value: self.position,
-            });
-        }
-        Ok(self)
     }
 
     #[must_use]
@@ -104,6 +82,28 @@ impl CrossfadeSettings {
             self.depth.mul_add(selected.0 - linear.0, linear.0),
             self.depth.mul_add(selected.1 - linear.1, linear.1),
         )
+    }
+
+    pub fn validate(self) -> Result<Self, PlayError> {
+        if !self.duration.is_finite() || self.duration < 0.0 {
+            return Err(PlayError::InvalidParameter {
+                name: "crossfade.duration".into(),
+                value: self.duration,
+            });
+        }
+        if !self.depth.is_finite() || !(0.0..=1.0).contains(&self.depth) {
+            return Err(PlayError::InvalidParameter {
+                name: "crossfade.depth".into(),
+                value: self.depth,
+            });
+        }
+        if !self.position.is_finite() || self.position <= 0.0 || self.position >= 1.0 {
+            return Err(PlayError::InvalidParameter {
+                name: "crossfade.position".into(),
+                value: self.position,
+            });
+        }
+        Ok(self)
     }
 }
 

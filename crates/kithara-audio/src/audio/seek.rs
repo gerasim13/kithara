@@ -93,8 +93,8 @@ mod tests {
     use super::*;
 
     struct ReadyDuringSeek {
-        state: SeekState,
         gate: Arc<PreloadGate>,
+        state: SeekState,
     }
 
     impl SeekControl for ReadyDuringSeek {

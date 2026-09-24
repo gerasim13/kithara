@@ -3,7 +3,7 @@ use std::fs;
 use anyhow::Result;
 use syn::{
     Expr, ExprCall, ExprField, GenericArgument, GenericParam, ImplItem, ItemImpl, Member,
-    PathArguments, Stmt, Type, visit::Visit,
+    PathArguments, Stmt, Type, visit, visit::Visit,
 };
 
 use super::{Check, Context};
@@ -76,7 +76,7 @@ impl<'ast> Visit<'ast> for CloneVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

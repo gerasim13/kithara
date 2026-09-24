@@ -1147,7 +1147,9 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
     )
 }
 
-const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+#[kithara::test]
+fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
+    const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
     root: Adaptive(
         id: "bank",
         measure: Read(Model(id: "ui.measure")),
@@ -1157,8 +1159,6 @@ const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mix
         ],
     ))"#;
 
-#[kithara::test]
-fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
     let resolver = block_resolver(ADAPTIVE_MODULE);
 
     let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
@@ -2200,16 +2200,16 @@ fn cell_resolver(cells: &[(&str, f32)], layout: &str) -> MemResolver {
     resolver
 }
 
-const BAR_CELLS: [(&str, f32); 5] = [
-    ("menu", 40.0),
-    ("play", 38.0),
-    ("strip", 36.0),
-    ("wave", 60.0),
-    ("window", 80.0),
-];
-
 #[kithara::test]
 fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
+    const BAR_CELLS: [(&str, f32); 5] = [
+        ("menu", 40.0),
+        ("play", 38.0),
+        ("strip", 36.0),
+        ("wave", 60.0),
+        ("window", 80.0),
+    ];
+
     let bar = |head: &str, strip: &str, wave: &str| {
         format!(
             r#"(schema: "kithara.layout", version: 1, id: "cells",

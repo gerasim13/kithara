@@ -3245,6 +3245,10 @@ install_hint = "cargo install cargo-ndk"
 pin = "cargo-sort"
 install_hint = "cargo install --locked cargo-sort"
 
+[tools.git-cliff]
+pin = "git-cliff"
+install_hint = "cargo install --locked git-cliff"
+
 [tools.just]
 pin = "just"
 install_hint = "brew install just"

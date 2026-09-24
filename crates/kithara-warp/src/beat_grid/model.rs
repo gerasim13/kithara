@@ -89,9 +89,9 @@ impl BeatGridSnapshot {
 /// One beat of the model placed on the decoded axis.
 #[derive(Clone, Copy, Debug)]
 struct Anchor {
-    ordinal: i64,
-    frame: f64,
     evidence: BeatEvidence,
+    frame: f64,
+    ordinal: i64,
 }
 
 /// The model's beats on the decoded axis, or the origin a BPM-only grid
@@ -130,8 +130,8 @@ fn anchor(beat: GridBeat, axis: AssetAxis, rate: f64) -> Result<Anchor, BeatGrid
         });
     }
     Ok(Anchor {
-        ordinal: beat.ordinal,
         frame,
+        ordinal: beat.ordinal,
         evidence: if beat.confidence.is_some() {
             BeatEvidence::Observed
         } else {
@@ -368,13 +368,13 @@ mod tests {
 
     fn served(beats: Vec<GridBeat>) -> RawBeatGrid {
         RawBeatGrid {
+            beats,
             schema_version: kithara_beat::SCHEMA_VERSION,
             model_id: "fixture".to_owned(),
             revision: 1,
             state: WireState::Final,
             duration: None,
             bpm: Consts::BPM,
-            beats,
             downbeats: Vec::new(),
             meter: None,
         }

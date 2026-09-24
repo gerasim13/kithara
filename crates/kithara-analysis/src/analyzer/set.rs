@@ -24,10 +24,10 @@ where
     B: ResamplerBackend,
 {
     beat: Config<B>,
+    beat_config: Option<BeatAnalysisConfig<B>>,
     /// The bucket ceiling a waveform is asked to fill, when one is wanted at
     /// all. No waveform configured means no waveform slot is ever built.
     waveform: Option<usize>,
-    beat_config: Option<BeatAnalysisConfig<B>>,
     #[field(get, vis = "pub(crate)")]
     pools: PoolRegion<S>,
 }
@@ -616,10 +616,6 @@ mod tests {
         assert_eq!(ended.coverage().frames(), ended.extent().unwrap_or(0));
     }
 
-    /// Chunks of source the pass reads before it is asked for a grid: enough
-    /// to cover the markers the steady detector states.
-    const COVERED_CHUNKS: u32 = 24;
-
     /// A detector that hears a beat every half second, whatever it is handed:
     /// the pass, not the hearing, is what this test is about.
     fn steady_detector() -> Box<dyn BeatDetector> {
@@ -646,6 +642,10 @@ mod tests {
     /// what the round trip at the end stands for.
     #[kithara::test(native, flash(false))]
     fn every_publication_of_a_pass_states_the_grid_it_found(analysis_silence: Vec<f32>) {
+        /// Chunks of source the pass reads before it is asked for a grid: enough
+        /// to cover the markers the steady detector states.
+        const COVERED_CHUNKS: u32 = 24;
+
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
             .with_waveform(8)

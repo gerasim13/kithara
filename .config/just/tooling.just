@@ -24,6 +24,7 @@ install:
     cargo install --locked md-formatter
     cargo install --locked typos-cli
     cargo install --locked similarity-rs
+    cargo install --locked git-cliff
     # lockbud is a rustc driver, not a crates.io package: it installs from git,
     # it links `rustc_driver` against one nightly, and it only reads a workspace
     # that same nightly compiled. The CI image names its pinned one; a local

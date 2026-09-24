@@ -34,15 +34,15 @@ pub enum RepeatMode {
 pub struct NavigationState {
     #[field(get, copy)]
     current: Option<TrackId>,
-    #[field(get, copy, set = set_repeat)]
-    repeat_mode: RepeatMode,
-    history: VecDeque<TrackId>,
-    bag: Vec<TrackId>,
     #[field(get, copy)]
     playback_order: PlaybackOrder,
+    #[field(get, copy, set = set_repeat)]
+    repeat_mode: RepeatMode,
+    rng: StdRng,
+    bag: Vec<TrackId>,
+    history: VecDeque<TrackId>,
     #[field(get, copy)]
     history_limit: usize,
-    rng: StdRng,
 }
 
 impl NavigationState {
@@ -51,50 +51,37 @@ impl NavigationState {
         Self::with_rng(history_limit, StdRng::from_rng(&mut rand::rng()))
     }
 
-    fn with_rng(history_limit: usize, rng: StdRng) -> Self {
-        Self {
-            current: None,
-            repeat_mode: RepeatMode::Off,
-            history: VecDeque::new(),
-            bag: Vec::new(),
-            playback_order: PlaybackOrder::Sequential,
-            history_limit,
-            rng,
-        }
-    }
-
-    pub(crate) fn set_playback_order(&mut self, order: PlaybackOrder, tracks: &[TrackId]) {
-        if self.playback_order == order {
-            return;
-        }
-        self.playback_order = order;
-        self.history.clear();
-        self.fresh_cycle(tracks, self.current);
-    }
-
     pub(crate) fn finish(&mut self) {
         if let Some(current) = self.current.take() {
             self.push_history(current);
         }
     }
 
-    pub(crate) fn last_selected(&self) -> Option<TrackId> {
-        self.current.or_else(|| self.history.back().copied())
+    fn fresh_cycle(&mut self, tracks: &[TrackId], avoid_first: Option<TrackId>) {
+        self.bag.clear();
+        self.bag.extend_from_slice(tracks);
+        self.bag.shuffle(&mut self.rng);
+        if self.bag.len() > 1
+            && let Some(avoid) = avoid_first
+            && self.bag.last() == Some(&avoid)
+        {
+            let last = self.bag.len() - 1;
+            self.bag.swap(0, last);
+        }
     }
 
-    pub(crate) fn select(&mut self, id: TrackId, tracks: &[TrackId]) {
-        if let Some(current) = self.current
-            && current != id
+    pub(crate) fn insert(&mut self, id: TrackId) {
+        if self.playback_order == PlaybackOrder::Shuffle
+            && self.current != Some(id)
+            && !self.bag.contains(&id)
         {
-            self.push_history(current);
+            self.bag.push(id);
+            self.bag.shuffle(&mut self.rng);
         }
-        self.current = Some(id);
-        if self.playback_order == PlaybackOrder::Shuffle {
-            if self.bag.is_empty() {
-                self.fresh_cycle(tracks, Some(id));
-            }
-            self.bag.retain(|candidate| *candidate != id);
-        }
+    }
+
+    pub(crate) fn last_selected(&self) -> Option<TrackId> {
+        self.current.or_else(|| self.history.back().copied())
     }
 
     pub(crate) fn next(
@@ -116,49 +103,6 @@ impl NavigationState {
         }
         self.current = Some(next);
         Some(next)
-    }
-
-    pub(crate) fn prev(&mut self, tracks: &[TrackId]) -> Option<TrackId> {
-        while let Some(previous) = self.history.pop_back() {
-            if tracks.contains(&previous) {
-                self.current = Some(previous);
-                self.bag.retain(|candidate| *candidate != previous);
-                return Some(previous);
-            }
-        }
-        None
-    }
-
-    pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
-        match self.playback_order {
-            PlaybackOrder::Sequential => {
-                self.next_sequential(tracks, self.repeat_mode == RepeatMode::All)
-            }
-            PlaybackOrder::Shuffle => self
-                .bag
-                .iter()
-                .rev()
-                .find(|id| tracks.contains(id))
-                .copied(),
-        }
-    }
-
-    pub(crate) fn reconcile(&mut self, tracks: &[TrackId]) {
-        self.history.retain(|id| tracks.contains(id));
-        self.bag.retain(|id| tracks.contains(id));
-        if self.current.is_some_and(|id| !tracks.contains(&id)) {
-            self.current = None;
-        }
-    }
-
-    pub(crate) fn insert(&mut self, id: TrackId) {
-        if self.playback_order == PlaybackOrder::Shuffle
-            && self.current != Some(id)
-            && !self.bag.contains(&id)
-        {
-            self.bag.push(id);
-            self.bag.shuffle(&mut self.rng);
-        }
     }
 
     fn next_sequential(&self, tracks: &[TrackId], allow_wrap: bool) -> Option<TrackId> {
@@ -183,17 +127,29 @@ impl NavigationState {
         self.bag.pop()
     }
 
-    fn fresh_cycle(&mut self, tracks: &[TrackId], avoid_first: Option<TrackId>) {
-        self.bag.clear();
-        self.bag.extend_from_slice(tracks);
-        self.bag.shuffle(&mut self.rng);
-        if self.bag.len() > 1
-            && let Some(avoid) = avoid_first
-            && self.bag.last() == Some(&avoid)
-        {
-            let last = self.bag.len() - 1;
-            self.bag.swap(0, last);
+    pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
+        match self.playback_order {
+            PlaybackOrder::Sequential => {
+                self.next_sequential(tracks, self.repeat_mode == RepeatMode::All)
+            }
+            PlaybackOrder::Shuffle => self
+                .bag
+                .iter()
+                .rev()
+                .find(|id| tracks.contains(id))
+                .copied(),
         }
+    }
+
+    pub(crate) fn prev(&mut self, tracks: &[TrackId]) -> Option<TrackId> {
+        while let Some(previous) = self.history.pop_back() {
+            if tracks.contains(&previous) {
+                self.current = Some(previous);
+                self.bag.retain(|candidate| *candidate != previous);
+                return Some(previous);
+            }
+        }
+        None
     }
 
     fn push_history(&mut self, id: TrackId) {
@@ -204,6 +160,50 @@ impl NavigationState {
             self.history.pop_front();
         }
         self.history.push_back(id);
+    }
+
+    pub(crate) fn reconcile(&mut self, tracks: &[TrackId]) {
+        self.history.retain(|id| tracks.contains(id));
+        self.bag.retain(|id| tracks.contains(id));
+        if self.current.is_some_and(|id| !tracks.contains(&id)) {
+            self.current = None;
+        }
+    }
+
+    pub(crate) fn select(&mut self, id: TrackId, tracks: &[TrackId]) {
+        if let Some(current) = self.current
+            && current != id
+        {
+            self.push_history(current);
+        }
+        self.current = Some(id);
+        if self.playback_order == PlaybackOrder::Shuffle {
+            if self.bag.is_empty() {
+                self.fresh_cycle(tracks, Some(id));
+            }
+            self.bag.retain(|candidate| *candidate != id);
+        }
+    }
+
+    pub(crate) fn set_playback_order(&mut self, order: PlaybackOrder, tracks: &[TrackId]) {
+        if self.playback_order == order {
+            return;
+        }
+        self.playback_order = order;
+        self.history.clear();
+        self.fresh_cycle(tracks, self.current);
+    }
+
+    fn with_rng(history_limit: usize, rng: StdRng) -> Self {
+        Self {
+            history_limit,
+            rng,
+            current: None,
+            repeat_mode: RepeatMode::Off,
+            history: VecDeque::new(),
+            bag: Vec::new(),
+            playback_order: PlaybackOrder::Sequential,
+        }
     }
 }
 

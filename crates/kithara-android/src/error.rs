@@ -25,9 +25,9 @@ pub enum AndroidBackendError {
 }
 
 impl AndroidBackendError {
-    #[must_use]
-    pub const fn status(operation: &'static str, status: i32) -> Self {
-        Self::Status { operation, status }
+    /// The failure of the JNI call made for `operation`.
+    pub(crate) fn jni(operation: &'static str) -> impl FnOnce(jni::errors::Error) -> Self {
+        move |error| Self::operation(operation, error.to_string())
     }
 
     #[must_use]
@@ -38,8 +38,8 @@ impl AndroidBackendError {
         }
     }
 
-    /// The failure of the JNI call made for `operation`.
-    pub(crate) fn jni(operation: &'static str) -> impl FnOnce(jni::errors::Error) -> Self {
-        move |error| Self::operation(operation, error.to_string())
+    #[must_use]
+    pub const fn status(operation: &'static str, status: i32) -> Self {
+        Self::Status { operation, status }
     }
 }

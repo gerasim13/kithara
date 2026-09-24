@@ -1122,8 +1122,8 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// tag when the response arrives. `priority()` reads the shared
 /// activity flag so a mid-stream priority change is observable.
 struct TaggedPriorityPeer {
-    gate: Arc<CompletionGate>,
     active: Arc<AtomicBool>,
+    gate: Arc<CompletionGate>,
     cancel: CancelToken,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,

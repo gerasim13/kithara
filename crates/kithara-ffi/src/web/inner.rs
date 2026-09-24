@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
+    play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, InterruptionKind},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
@@ -44,14 +45,14 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 /// answer synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
     queue_view: Arc<Mutex<QueueView>>,
-    crossfade_settings: Mutex<FfiCrossfadeSettings>,
     playing_rate: AtomicU32,
     volume: AtomicU32,
-    muted: Mutex<bool>,
-    routes: Routes,
-    repeat_mode: Mutex<FfiRepeatMode>,
-    playback_order: Mutex<FfiPlaybackOrder>,
     action_at_item_end: Mutex<FfiActionAtItemEnd>,
+    crossfade_settings: Mutex<FfiCrossfadeSettings>,
+    muted: Mutex<bool>,
+    playback_order: Mutex<FfiPlaybackOrder>,
+    repeat_mode: Mutex<FfiRepeatMode>,
+    routes: Routes,
     bridge: WorkerBridge,
     eq_gains: [AtomicU32; EQ_BANDS],
 }
@@ -90,7 +91,7 @@ fn store_f32(a: &AtomicU32, v: f32) {
 
 impl WasmInner {
     /// Default crossfade window in seconds, matching the worker default.
-    const DEFAULT_CROSSFADE_SECONDS: f32 = kithara::play::DEFAULT_CROSSFADE_DURATION;
+    const DEFAULT_CROSSFADE_SECONDS: f32 = DEFAULT_CROSSFADE_DURATION;
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
     /// Default output volume, matching the legacy wasm player.
@@ -98,12 +99,12 @@ impl WasmInner {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
-    pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::Next)
+    pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        *self.action_at_item_end.lock()
     }
 
-    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::Previous)
+    pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::Next)
     }
 
     /// Start (or restart) the analysis pass for a queued track.
@@ -127,13 +128,6 @@ impl WasmInner {
     pub(crate) fn crossfade_settings(&self) -> FfiCrossfadeSettings {
         *self.crossfade_settings.lock()
     }
-    pub(crate) fn playback_order(&self) -> FfiPlaybackOrder {
-        *self.playback_order.lock()
-    }
-    pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd {
-        *self.action_at_item_end.lock()
-    }
-
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let current = self.bridge.current_track_id()?;
         self.queue_view
@@ -142,7 +136,6 @@ impl WasmInner {
             .find(|(id, _)| *id == current)
             .map(|(_, item)| Arc::clone(item))
     }
-
     pub(crate) fn eq_band_count(&self) -> u32 {
         let n = self.eq_gains.len();
         u32::try_from(n).unwrap_or_else(|_| {
@@ -213,11 +206,11 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
-    pub(crate) fn notify_interruption(&self, _kind: kithara::play::InterruptionKind) {}
-
     pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
         Ok(())
     }
+
+    pub(crate) fn notify_interruption(&self, _kind: InterruptionKind) {}
 
     pub(crate) fn pause(&self) {
         self.send(WorkerCmd::Pause);
@@ -225,6 +218,10 @@ impl WasmInner {
 
     pub(crate) fn play(&self) {
         self.send(WorkerCmd::Play);
+    }
+
+    pub(crate) fn playback_order(&self) -> FfiPlaybackOrder {
+        *self.playback_order.lock()
     }
 
     pub(crate) fn playing_rate(&self) -> f32 {
@@ -306,6 +303,10 @@ impl WasmInner {
         self.try_send(WorkerCmd::ResetEq)
     }
 
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::Previous)
+    }
+
     pub(crate) fn seek(
         &self,
         to_seconds: f64,
@@ -336,8 +337,8 @@ impl WasmInner {
         }
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::SelectQueue {
-            id: item.track_id(),
             request_id,
+            id: item.track_id(),
             transition: transition.try_into()?,
         });
         Ok(())
@@ -360,14 +361,28 @@ impl WasmInner {
         self.send(WorkerCmd::SetAbrMode { variant_index });
     }
 
+    pub(crate) fn set_action_at_item_end(
+        &self,
+        action: FfiActionAtItemEnd,
+    ) -> Result<(), FfiError> {
+        let typed: ActionAtItemEnd = action.try_into()?;
+        self.try_send(WorkerCmd::SetActionAtItemEnd(typed))?;
+        *self.action_at_item_end.lock() = action;
+        Ok(())
+    }
+
     pub(crate) fn set_crossfade_settings(
         &self,
         settings: FfiCrossfadeSettings,
     ) -> Result<(), FfiError> {
-        let typed: kithara::play::CrossfadeSettings = settings.try_into()?;
+        let typed: CrossfadeSettings = settings.try_into()?;
         self.try_send(WorkerCmd::SetCrossfade(typed))?;
         *self.crossfade_settings.lock() = settings;
         Ok(())
+    }
+
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::SetDucking(mode.into()))
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
@@ -383,12 +398,15 @@ impl WasmInner {
         self.send(WorkerCmd::SetVolume(volume));
     }
 
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
-        store_f32(&self.playing_rate, rate);
+    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        let typed: PlaybackOrder = order.try_into()?;
+        self.try_send(WorkerCmd::SetPlaybackOrder(typed))?;
+        *self.playback_order.lock() = order;
+        Ok(())
     }
 
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::SetDucking(mode.into()))
+    pub(crate) fn set_playing_rate(&self, rate: f32) {
+        store_f32(&self.playing_rate, rate);
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
@@ -397,23 +415,6 @@ impl WasmInner {
         })?;
         self.try_send(WorkerCmd::SetRepeat(mode))?;
         *self.repeat_mode.lock() = mode.into();
-        Ok(())
-    }
-
-    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
-        let typed: PlaybackOrder = order.try_into()?;
-        self.try_send(WorkerCmd::SetPlaybackOrder(typed))?;
-        *self.playback_order.lock() = order;
-        Ok(())
-    }
-
-    pub(crate) fn set_action_at_item_end(
-        &self,
-        action: FfiActionAtItemEnd,
-    ) -> Result<(), FfiError> {
-        let typed: ActionAtItemEnd = action.try_into()?;
-        self.try_send(WorkerCmd::SetActionAtItemEnd(typed))?;
-        *self.action_at_item_end.lock() = action;
         Ok(())
     }
 

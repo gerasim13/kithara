@@ -288,15 +288,6 @@ mod tests {
   </testsuite>
 </testsuites>"#;
 
-    const STRESS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="nextest-run" tests="1" failures="1">
-  <testsuite name="demo-tests::suite_stress@stress-7" tests="1" failures="1">
-    <testcase name="offline::seek" classname="demo-tests::suite_stress" time="0.201" timestamp="2026-08-13T12:34:56.789Z">
-      <failure type="test failure">boom</failure>
-    </testcase>
-  </testsuite>
-</testsuites>"#;
-
     /// What nextest writes for a failed `assert_eq!`: the panic header is
     /// lifted into `message` and the body repeats it verbatim.
     const PANIC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -443,6 +434,15 @@ stack backtrace:
 
     #[test]
     fn retains_the_zero_based_stress_iteration() {
+        const STRESS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1">
+  <testsuite name="demo-tests::suite_stress@stress-7" tests="1" failures="1">
+    <testcase name="offline::seek" classname="demo-tests::suite_stress" time="0.201" timestamp="2026-08-13T12:34:56.789Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+
         let report = parse_junit_report(STRESS).expect("parse stress junit");
         let cases = report.cases;
 

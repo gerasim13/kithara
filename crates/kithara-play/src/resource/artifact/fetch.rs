@@ -112,8 +112,8 @@ impl<'a> ArtifactFetch<'a> {
         T::decode(&bytes)
             .map(Arc::new)
             .map_err(|reason| ArtifactLoadError::Decode {
-                kind: T::KIND,
                 reason,
+                kind: T::KIND,
             })
     }
 
@@ -128,8 +128,8 @@ impl<'a> ArtifactFetch<'a> {
         match read {
             Ok(Capped::Bytes(bytes)) => Ok(bytes),
             Ok(Capped::TooLarge { bytes }) => Err(ArtifactLoadError::TooLarge {
-                kind: T::KIND,
                 bytes,
+                kind: T::KIND,
                 limit: MAX_ARTIFACT_BYTES,
             }),
             Err(error) => Err(ArtifactLoadError::Fetch {

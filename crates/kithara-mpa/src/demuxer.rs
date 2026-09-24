@@ -188,77 +188,6 @@ impl FormatReader for MpaReader<'_> {
 }
 
 impl<'s> MpaReader<'s> {
-    /// Seeks using caller-provided packet scratch storage.
-    ///
-    /// # Errors
-    /// Returns source, framing, or seek errors.
-    fn seek_with_buffer(
-        &mut self,
-        mode: SeekMode,
-        to: &SeekTo,
-        packet_buf: &mut [u8],
-    ) -> Result<SeekedTo> {
-        let required_ts = match *to {
-            SeekTo::Timestamp { ts, .. } => ts,
-            SeekTo::Time { time, .. } => {
-                let tb = self.tracks[0]
-                    .time_base
-                    .ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
-
-                tb.calc_timestamp(time)
-                    .ok_or(Error::SeekError(SeekErrorKind::OutOfRange))?
-            }
-        };
-
-        let dur_ts = self.tracks[0].num_frames.map(Duration::from);
-
-        let delay = self.tracks[0].delay.unwrap_or(0);
-        let padding = self.tracks[0].padding.unwrap_or(0);
-
-        let min_ts = Timestamp::from(-i64::from(delay));
-        let max_ts = dur_ts
-            .and_then(|dur| min_ts.checked_add(dur))
-            .and_then(|dur| dur.checked_add(Duration::from(delay + padding)));
-
-        if required_ts < min_ts {
-            return seek_error(SeekErrorKind::OutOfRange);
-        } else if let Some(max_ts) = max_ts
-            && required_ts > max_ts
-        {
-            return seek_error(SeekErrorKind::OutOfRange);
-        }
-
-        let is_seekable = self.reader.is_seekable();
-
-        if !is_seekable && required_ts < self.next_packet_ts {
-            return seek_error(SeekErrorKind::ForwardOnly);
-        }
-
-        debug!("seeking to ts={required_ts}");
-
-        match mode {
-            SeekMode::Coarse if is_seekable => {
-                self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
-            }
-            SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
-            SeekMode::Coarse => (),
-        }
-
-        self.scan_to(required_ts)?;
-
-        debug!(
-            "seeked to ts={} (delta={})",
-            self.next_packet_ts,
-            self.next_packet_ts.saturating_delta(required_ts),
-        );
-
-        Ok(SeekedTo {
-            required_ts,
-            track_id: 0,
-            actual_ts: self.next_packet_ts,
-        })
-    }
-
     /// Reads a packet into caller-provided bounded storage.
     ///
     /// # Errors
@@ -472,6 +401,77 @@ impl<'s> MpaReader<'s> {
         }
 
         Ok(())
+    }
+
+    /// Seeks using caller-provided packet scratch storage.
+    ///
+    /// # Errors
+    /// Returns source, framing, or seek errors.
+    fn seek_with_buffer(
+        &mut self,
+        mode: SeekMode,
+        to: &SeekTo,
+        packet_buf: &mut [u8],
+    ) -> Result<SeekedTo> {
+        let required_ts = match *to {
+            SeekTo::Timestamp { ts, .. } => ts,
+            SeekTo::Time { time, .. } => {
+                let tb = self.tracks[0]
+                    .time_base
+                    .ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
+
+                tb.calc_timestamp(time)
+                    .ok_or(Error::SeekError(SeekErrorKind::OutOfRange))?
+            }
+        };
+
+        let dur_ts = self.tracks[0].num_frames.map(Duration::from);
+
+        let delay = self.tracks[0].delay.unwrap_or(0);
+        let padding = self.tracks[0].padding.unwrap_or(0);
+
+        let min_ts = Timestamp::from(-i64::from(delay));
+        let max_ts = dur_ts
+            .and_then(|dur| min_ts.checked_add(dur))
+            .and_then(|dur| dur.checked_add(Duration::from(delay + padding)));
+
+        if required_ts < min_ts {
+            return seek_error(SeekErrorKind::OutOfRange);
+        } else if let Some(max_ts) = max_ts
+            && required_ts > max_ts
+        {
+            return seek_error(SeekErrorKind::OutOfRange);
+        }
+
+        let is_seekable = self.reader.is_seekable();
+
+        if !is_seekable && required_ts < self.next_packet_ts {
+            return seek_error(SeekErrorKind::ForwardOnly);
+        }
+
+        debug!("seeking to ts={required_ts}");
+
+        match mode {
+            SeekMode::Coarse if is_seekable => {
+                self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
+            }
+            SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
+            SeekMode::Coarse => (),
+        }
+
+        self.scan_to(required_ts)?;
+
+        debug!(
+            "seeked to ts={} (delta={})",
+            self.next_packet_ts,
+            self.next_packet_ts.saturating_delta(required_ts),
+        );
+
+        Ok(SeekedTo {
+            required_ts,
+            track_id: 0,
+            actual_ts: self.next_packet_ts,
+        })
     }
 
     /// Reads the first MPEG frame to identify the layer and build the track.

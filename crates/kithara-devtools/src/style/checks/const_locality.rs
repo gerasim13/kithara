@@ -1,66 +1,70 @@
 use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
+    collections::{BTreeMap, BTreeSet, HashSet},
+    ops::Range,
+    path::{Path, PathBuf},
 };
 
 use anyhow::Result;
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
-    Expr, GenericArgument, ImplItem, Item, ItemImpl, Lit, Meta, PathArguments, Type, Visibility,
+    Expr, GenericArgument, ImplItem, Item, ItemConst, ItemImpl, Lit, Meta, PathArguments, Type,
+    Visibility,
+    spanned::Spanned,
     visit::{self, Visit},
 };
 
 use super::{Check, Context};
-use crate::common::{parse::self_ty_name, violation::Violation, walker::relative_to};
+use crate::common::{
+    fix::{FixOutcome, SourceRewriter, deletion_range, leading_trivia_start, line_start},
+    parse::self_ty_name,
+    scope::Scope,
+    violation::Violation,
+    walker::relative_to,
+};
 
 pub(crate) const ID: &str = "const_locality";
 
 pub(crate) struct ConstLocality;
 
 impl Check for ConstLocality {
+    fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
+        let mut outcome = FixOutcome::default();
+        for file in analyze(ctx)? {
+            let Some(src) = ctx.scan.source(&file.path) else {
+                continue;
+            };
+            let mut rw = SourceRewriter::new(&src);
+            stage_moves(&src, &file.findings, &mut rw);
+            for finding in &file.findings {
+                match &finding.locality {
+                    Locality::SingleFn { label, .. } => outcome
+                        .changes
+                        .push(format!("{}: `{}` into `{label}`", file.rel, finding.name)),
+                    Locality::SingleImpl(target) => outcome.skipped.push(format!(
+                        "{}: `{}` is shared by the methods of `impl {target}`; choose \
+                         where it lives by hand",
+                        file.rel, finding.name
+                    )),
+                }
+            }
+            if !rw.is_empty() {
+                ctx.scan.write(&file.path, rw.finish()?)?;
+                outcome.writes += 1;
+            }
+        }
+        Ok(outcome)
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        // Pass 1: parse every scoped file and record, per file, the crate it
-        // belongs to and every identifier name it references. The crate key
-        // lets us ask "is this const referenced from another file of the same
-        // crate?" — a cross-file use that single-file scanning cannot see.
-        let mut files: Vec<ParsedFile> = Vec::new();
-        for path in ctx.scan.rs_files(ctx.scope)?.iter() {
-            let Ok(file) = ctx.scan.parse_file(path) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let crate_key = crate_key_for(ctx.workspace_root, path);
-            let mut names = HashSet::new();
-            let mut collector = NameCollector { names: &mut names };
-            collector.visit_file(&file);
-            files.push(ParsedFile {
-                file,
-                names,
-                crate_key,
-                rel,
-            });
-        }
-
-        // Pass 2: per file, flag module-level consts whose every reference is
-        // an expression-position use inside a single same-module fn/impl.
-        let mut violations = Vec::new();
-        for (idx, pf) in files.iter().enumerate() {
-            // Names referenced anywhere else in the same crate.
-            let external: HashSet<&str> = files
-                .iter()
-                .enumerate()
-                .filter(|(j, other)| *j != idx && other.crate_key == pf.crate_key)
-                .flat_map(|(_, other)| other.names.iter().map(String::as_str))
-                .collect();
-            analyze_file(&pf.rel, &pf.file, &external, &mut violations);
-        }
+        let mut violations: Vec<Violation> = analyze(ctx)?
+            .iter()
+            .flat_map(|file| file.findings.iter().map(Finding::violation))
+            .collect();
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
     }
@@ -69,8 +73,105 @@ impl Check for ConstLocality {
 struct ParsedFile {
     file: syn::File,
     names: HashSet<String>,
+    path: PathBuf,
     crate_key: String,
     rel: String,
+    in_scope: bool,
+}
+
+struct FileFindings {
+    path: PathBuf,
+    rel: String,
+    findings: Vec<Finding>,
+}
+
+/// One const that a single owner keeps to itself.
+struct Finding {
+    /// Source lines inside a multi-line literal of the const, which a move
+    /// must carry verbatim rather than re-indent.
+    literal_lines: BTreeSet<usize>,
+    locality: Locality,
+    vis: Option<Range<usize>>,
+    item: Range<usize>,
+    key: String,
+    name: String,
+    /// Where the container holding the const opens: the file start, or just
+    /// past the `{` of the inline module.
+    container: usize,
+}
+
+impl Finding {
+    fn violation(&self) -> Violation {
+        let msg = match &self.locality {
+            Locality::SingleImpl(target) => format!(
+                "L2: const `{}` is referenced only by methods of `impl {target}`; \
+                 move it into that impl block (accessed as `Self::{}`)",
+                self.name, self.name
+            ),
+            Locality::SingleFn { label, .. } => format!(
+                "L1: const `{}` is referenced only from `{label}`; move it \
+                 inside that function as a local `const`",
+                self.name
+            ),
+        };
+        Violation::warn(ID, self.key.clone(), msg)
+    }
+}
+
+/// Parse every scoped file and every other file of the crates they belong
+/// to, then report the consts of the scoped files. A const is only local
+/// when no other file of its crate names it, so the crate is read whole even
+/// when the scope is narrower: a narrower read would move a const out from
+/// under a file it did not see.
+fn analyze(ctx: &Context<'_>) -> Result<Vec<FileFindings>> {
+    let scoped: HashSet<PathBuf> = ctx.scan.rs_files(ctx.scope)?.iter().cloned().collect();
+    let crates: HashSet<String> = scoped
+        .iter()
+        .map(|path| crate_key_for(ctx.workspace_root, path))
+        .collect();
+    let mut files: Vec<ParsedFile> = Vec::new();
+    for path in ctx.scan.rs_files(&Scope::default())?.iter() {
+        let crate_key = crate_key_for(ctx.workspace_root, path);
+        if !crates.contains(&crate_key) {
+            continue;
+        }
+        let Ok(file) = ctx.scan.parse_file(path) else {
+            continue;
+        };
+        let rel = relative_to(ctx.workspace_root, path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut names = HashSet::new();
+        let mut collector = NameCollector { names: &mut names };
+        collector.visit_file(&file);
+        files.push(ParsedFile {
+            file,
+            names,
+            crate_key,
+            rel,
+            in_scope: scoped.contains(path),
+            path: path.clone(),
+        });
+    }
+
+    let mut out = Vec::new();
+    for (idx, pf) in files.iter().enumerate().filter(|(_, pf)| pf.in_scope) {
+        let external: HashSet<&str> = files
+            .iter()
+            .enumerate()
+            .filter(|(j, other)| *j != idx && other.crate_key == pf.crate_key)
+            .flat_map(|(_, other)| other.names.iter().map(String::as_str))
+            .collect();
+        let findings = analyze_file(&pf.rel, &pf.file, &external);
+        if !findings.is_empty() {
+            out.push(FileFindings {
+                findings,
+                path: pf.path.clone(),
+                rel: pf.rel.clone(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Nearest-ancestor crate directory (the dir holding `Cargo.toml`), relative
@@ -89,10 +190,11 @@ fn crate_key_for(workspace_root: &Path, file: &Path) -> String {
     String::new()
 }
 
-fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>, out: &mut Vec<Violation>) {
+fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>) -> Vec<Finding> {
     let mut consts: Vec<ConstSite> = Vec::new();
-    collect_consts(&file.items, &mut Vec::new(), &mut consts);
+    collect_consts(&file.items, 0, &mut Vec::new(), &mut consts);
 
+    let mut findings = Vec::new();
     for site in consts {
         // Referenced from another file of the same crate → shared, not local.
         if external.contains(site.name.as_str()) {
@@ -111,59 +213,83 @@ fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>, out: &mut
         if analyzer.disqualified {
             continue;
         }
+        let Some(locality) = classify(&analyzer.owners) else {
+            continue;
+        };
 
         let mod_prefix = if site.mod_path.is_empty() {
             String::new()
         } else {
             format!("{}::", site.mod_path.join("::"))
         };
-
-        match classify(&analyzer.owners) {
-            Locality::SingleFn(label) => {
-                let key = format!("{rel}::{mod_prefix}{}", site.name);
-                let msg = format!(
-                    "L1: const `{}` is referenced only from `{label}`; move it \
-                     inside that function as a local `const`",
-                    site.name
-                );
-                out.push(Violation::warn(ID, key, msg));
-            }
-            Locality::SingleImpl(target) => {
-                let key = format!("{rel}::{mod_prefix}{}", site.name);
-                let msg = format!(
-                    "L2: const `{}` is referenced only by methods of `impl {target}`; \
-                     move it into that impl block (accessed as `Self::{}`)",
-                    site.name, site.name
-                );
-                out.push(Violation::warn(ID, key, msg));
-            }
-            Locality::Spread | Locality::Unused => {}
-        }
+        findings.push(Finding {
+            locality,
+            key: format!("{rel}::{mod_prefix}{}", site.name),
+            literal_lines: site.literal_lines,
+            item: site.item,
+            container: site.container,
+            vis: site.vis,
+            name: site.name,
+        });
     }
+    findings
 }
 
 struct ConstSite {
+    literal_lines: BTreeSet<usize>,
+    vis: Option<Range<usize>>,
+    item: Range<usize>,
     name: String,
     mod_path: Vec<String>,
+    container: usize,
 }
 
-fn collect_consts(items: &[Item], mod_path: &mut Vec<String>, out: &mut Vec<ConstSite>) {
+fn collect_consts(
+    items: &[Item],
+    container: usize,
+    mod_path: &mut Vec<String>,
+    out: &mut Vec<ConstSite>,
+) {
     for item in items {
         match item {
             Item::Const(c) if is_intra_crate(&c.vis) => out.push(ConstSite {
+                container,
+                literal_lines: literal_lines(c),
+                item: c.span().byte_range(),
+                vis: (!matches!(c.vis, Visibility::Inherited)).then(|| c.vis.span().byte_range()),
                 name: c.ident.to_string(),
                 mod_path: mod_path.clone(),
             }),
             Item::Mod(m) => {
-                if let Some((_, inner)) = &m.content {
+                if let Some((brace, inner)) = &m.content {
                     mod_path.push(m.ident.to_string());
-                    collect_consts(inner, mod_path, out);
+                    collect_consts(inner, brace.span.open().byte_range().end, mod_path, out);
                     mod_path.pop();
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Source lines a multi-line literal of `item` continues onto. Their text is
+/// part of the value, so re-indenting them would change it.
+fn literal_lines(item: &ItemConst) -> BTreeSet<usize> {
+    fn walk(tokens: TokenStream, out: &mut BTreeSet<usize>) {
+        for tt in tokens {
+            match tt {
+                TokenTree::Literal(lit) => {
+                    let span = lit.span();
+                    out.extend(span.start().line + 1..=span.end().line);
+                }
+                TokenTree::Group(g) => walk(g.stream(), out),
+                TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(item.to_token_stream(), &mut out);
+    out
 }
 
 fn is_intra_crate(vis: &Visibility) -> bool {
@@ -174,36 +300,112 @@ fn is_intra_crate(vis: &Visibility) -> bool {
     }
 }
 
+/// Moves the const, with the comments attached above it, to the top of the
+/// body that opens at `body`, dropping its visibility and re-indenting it to
+/// that body.
+/// Move every const a single fn owns into that fn. Consts bound for one body
+/// are inserted together, so they stay one block.
+fn stage_moves(src: &str, findings: &[Finding], rw: &mut SourceRewriter<'_>) {
+    let mut moved: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for finding in findings {
+        if let Locality::SingleFn { body, .. } = finding.locality {
+            let text = stage_removal(src, finding, body, rw);
+            moved.entry(body).or_default().push(text);
+        }
+    }
+    for (body, consts) in moved {
+        rw.replace(body..body, format!("\n{}\n", consts.join("\n")));
+    }
+}
+
+/// Stage the removal of `finding` and return its text re-indented for the
+/// body opening at `body`.
+fn stage_removal(src: &str, finding: &Finding, body: usize, rw: &mut SourceRewriter<'_>) -> String {
+    let start = line_start(
+        src,
+        leading_trivia_start(src, finding.item.start, finding.container),
+    );
+    let rest = &src[finding.item.end..];
+    let line = &rest[..rest.find('\n').unwrap_or(rest.len())];
+    let end = if line.trim_start().starts_with("//") {
+        finding.item.end + line.len()
+    } else {
+        finding.item.end
+    };
+    rw.replace(deletion_range(src, start..end), "");
+
+    let mut text = String::from(&src[start..end]);
+    if let Some(vis) = &finding.vis {
+        let after = &src[vis.end..end];
+        let gap = after.len() - after.trim_start().len();
+        text.replace_range(vis.start - start..vis.end + gap - start, "");
+    }
+    let from = &src[start..start + indent_len(&src[start..])];
+    let body_line = line_start(src, body);
+    let to = format!(
+        "{}    ",
+        &src[body_line..body_line + indent_len(&src[body_line..])]
+    );
+    let first_line = src[..start].matches('\n').count() + 1;
+    text.split('\n')
+        .enumerate()
+        .map(|(offset, line)| {
+            if finding.literal_lines.contains(&(first_line + offset)) || line.is_empty() {
+                return line.to_owned();
+            }
+            line.strip_prefix(from)
+                .map_or_else(|| line.to_owned(), |rest| format!("{to}{rest}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn indent_len(line: &str) -> usize {
+    line.len() - line.trim_start_matches([' ', '\t']).len()
+}
+
 #[derive(Debug, Clone)]
 enum Owner {
-    TopFn(String),
+    TopFn {
+        name: String,
+        body: usize,
+    },
     ImplMethod {
         impl_id: usize,
         target: String,
         method: String,
+        body: usize,
     },
+}
+
+impl Owner {
+    /// Byte offset just past the `{` that opens the owning body; it names the
+    /// body uniquely.
+    const fn body(&self) -> usize {
+        match self {
+            Self::TopFn { body, .. } | Self::ImplMethod { body, .. } => *body,
+        }
+    }
 }
 
 #[derive(Debug)]
 enum Locality {
-    Unused,
-    SingleFn(String),
+    SingleFn { label: String, body: usize },
     SingleImpl(String),
-    Spread,
 }
 
-fn classify(owners: &[Owner]) -> Locality {
-    if owners.is_empty() {
-        return Locality::Unused;
-    }
-    if owners.len() == 1 {
-        return Locality::SingleFn(format_owner(&owners[0]));
+/// `None` when the const is unused or spread over several owners.
+fn classify(owners: &[Owner]) -> Option<Locality> {
+    if let [owner] = owners {
+        return Some(Locality::SingleFn {
+            label: format_owner(owner),
+            body: owner.body(),
+        });
     }
     let mut impl_ids: BTreeMap<usize, &str> = BTreeMap::new();
-    let mut top_fn_seen = false;
     for o in owners {
         match o {
-            Owner::TopFn(_) => top_fn_seen = true,
+            Owner::TopFn { .. } => return None,
             Owner::ImplMethod {
                 impl_id, target, ..
             } => {
@@ -211,16 +413,15 @@ fn classify(owners: &[Owner]) -> Locality {
             }
         }
     }
-    if !top_fn_seen && impl_ids.len() == 1 {
-        let target = impl_ids.values().next().unwrap_or(&"_").to_string();
-        return Locality::SingleImpl(target);
+    match impl_ids.into_values().collect::<Vec<_>>().as_slice() {
+        [target] => Some(Locality::SingleImpl((*target).to_owned())),
+        _ => None,
     }
-    Locality::Spread
 }
 
 fn format_owner(o: &Owner) -> String {
     match o {
-        Owner::TopFn(name) => format!("fn {name}"),
+        Owner::TopFn { name, .. } => format!("fn {name}"),
         Owner::ImplMethod { target, method, .. } => format!("impl {target} :: {method}"),
     }
 }
@@ -271,7 +472,7 @@ impl<'a> RefAnalyzer<'a> {
         }
         match &self.current_owner {
             Some(owner) => {
-                if !self.owners.iter().any(|o| same_owner(o, owner)) {
+                if !self.owners.iter().any(|o| o.body() == owner.body()) {
                     self.owners.push(owner.clone());
                 }
             }
@@ -283,25 +484,6 @@ impl<'a> RefAnalyzer<'a> {
 
     fn tokens_mention_name(&self, tokens: &TokenStream) -> bool {
         token_stream_mentions(tokens, self.name)
-    }
-}
-
-fn same_owner(a: &Owner, b: &Owner) -> bool {
-    match (a, b) {
-        (Owner::TopFn(x), Owner::TopFn(y)) => x == y,
-        (
-            Owner::ImplMethod {
-                impl_id: ia,
-                method: ma,
-                ..
-            },
-            Owner::ImplMethod {
-                impl_id: ib,
-                method: mb,
-                ..
-            },
-        ) => ia == ib && ma == mb,
-        _ => false,
     }
 }
 
@@ -347,7 +529,10 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         // A reference there cannot be turned into a body-local const.
         self.visit_signature(&f.sig);
         let saved = self.current_owner.take();
-        self.current_owner = Some(Owner::TopFn(f.sig.ident.to_string()));
+        self.current_owner = Some(Owner::TopFn {
+            name: f.sig.ident.to_string(),
+            body: f.block.brace_token.span.open().byte_range().end,
+        });
         self.visit_block(&f.block);
         self.current_owner = saved;
     }
@@ -375,6 +560,7 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
                         impl_id,
                         target: target.clone(),
                         method: method.sig.ident.to_string(),
+                        body: method.block.brace_token.span.open().byte_range().end,
                     });
                     self.visit_block(&method.block);
                     self.current_owner = saved;
@@ -444,7 +630,32 @@ fn token_stream_mentions(tokens: &TokenStream, name: &str) -> bool {
     tokens.clone().into_iter().any(|tt| match tt {
         TokenTree::Ident(id) => id == name,
         TokenTree::Group(g) => token_stream_mentions(&g.stream(), name),
-        _ => false,
+        TokenTree::Literal(lit) => format_captures(&lit.to_string()).any(|c| c == name),
+        TokenTree::Punct(_) => false,
+    })
+}
+
+/// The identifiers a format string captures inline — `{NAME}`, `{NAME:>4}` —
+/// which name a binding from inside a string literal, where no path is seen.
+/// An escaped `{{` opens no capture.
+fn format_captures(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        loop {
+            let open = rest.find('{')?;
+            let after = &rest[open + 1..];
+            if let Some(escaped) = after.strip_prefix('{') {
+                rest = escaped;
+                continue;
+            }
+            let len = after
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            rest = &after[len..];
+            if len > 0 && (rest.starts_with('}') || rest.starts_with(':')) {
+                return Some(&after[..len]);
+            }
+        }
     })
 }
 
@@ -471,7 +682,10 @@ fn collect_token_idents(tokens: &TokenStream, out: &mut HashSet<String>) {
                 out.insert(id.to_string());
             }
             TokenTree::Group(g) => collect_token_idents(&g.stream(), out),
-            _ => {}
+            TokenTree::Literal(lit) => {
+                out.extend(format_captures(&lit.to_string()).map(str::to_owned));
+            }
+            TokenTree::Punct(_) => {}
         }
     }
 }
@@ -512,11 +726,131 @@ mod tests {
         run_with_external(src, &HashSet::new())
     }
 
+    fn fix(src: &str) -> String {
+        let file = syn::parse_file(src).expect("valid Rust source");
+        let mut rw = SourceRewriter::new(src);
+        stage_moves(
+            src,
+            &analyze_file("fixture.rs", &file, &HashSet::new()),
+            &mut rw,
+        );
+        rw.finish().expect("non-overlapping edits")
+    }
+
+    #[test]
+    fn a_fix_moves_the_const_and_its_docs_into_its_only_fn() {
+        let src = "\
+use std::fmt;
+
+/// Bytes per frame.
+pub(crate) const FRAME: usize = 4;
+
+fn size(n: usize) -> usize {
+    n * FRAME
+}
+";
+        assert_eq!(
+            fix(src),
+            "\
+use std::fmt;
+
+fn size(n: usize) -> usize {
+    /// Bytes per frame.
+    const FRAME: usize = 4;
+
+    n * FRAME
+}
+"
+        );
+    }
+
+    #[test]
+    fn a_fix_carries_attached_comments_to_the_method_indentation() {
+        let src = "\
+mod tests {
+    // Chunk count the fixture covers.
+    const CHUNKS: usize = 3; // three
+
+    struct S;
+
+    impl S {
+        fn count(&self) -> usize {
+            CHUNKS
+        }
+    }
+}
+";
+        assert_eq!(
+            fix(src),
+            "\
+mod tests {
+    struct S;
+
+    impl S {
+        fn count(&self) -> usize {
+            // Chunk count the fixture covers.
+            const CHUNKS: usize = 3; // three
+
+            CHUNKS
+        }
+    }
+}
+"
+        );
+    }
+
+    #[test]
+    fn a_fix_keeps_the_text_of_a_multi_line_literal() {
+        let src = "\
+const HEADER: &str = \"first
+  second\";
+
+fn header() -> &'static str {
+    HEADER
+}
+";
+        assert_eq!(
+            fix(src),
+            "\
+fn header() -> &'static str {
+    const HEADER: &str = \"first
+  second\";
+
+    HEADER
+}
+"
+        );
+    }
+
+    #[test]
+    fn a_fix_moves_the_consts_of_one_fn_as_one_block() {
+        let src = "\
+const WIDTH: usize = 4;
+const HEIGHT: usize = 3;
+
+fn area() -> usize {
+    WIDTH * HEIGHT
+}
+";
+        assert_eq!(
+            fix(src),
+            "\
+fn area() -> usize {
+    const WIDTH: usize = 4;
+    const HEIGHT: usize = 3;
+
+    WIDTH * HEIGHT
+}
+"
+        );
+    }
+
     fn run_with_external(src: &str, external: &HashSet<&str>) -> Vec<String> {
         let file: syn::File = syn::parse_str(src).expect("valid Rust source");
-        let mut out = Vec::new();
-        analyze_file("fixture.rs", &file, external, &mut out);
-        out.into_iter().map(|v| v.key).collect()
+        analyze_file("fixture.rs", &file, external)
+            .into_iter()
+            .map(|finding| finding.key)
+            .collect()
     }
 
     #[test]
@@ -597,6 +931,36 @@ fn check(v: usize) {
             run(src).is_empty(),
             "a const referenced only inside a macro token stream is unprovable — must not flag"
         );
+    }
+
+    #[test]
+    fn format_capture_ref_is_not_flagged() {
+        // `envelope.rs::MAX_ENVELOPE_DIRECTORY_ENTRIES` shape: the second fn
+        // names the const only as an inline capture inside a format string.
+        let src = "\
+const LIMIT: usize = 100;
+fn check(n: usize) -> bool { n >= LIMIT }
+fn explain() -> String { format!(\"limit of {LIMIT} entries, {{LIMIT}} escaped\") }
+";
+        assert!(
+            run(src).is_empty(),
+            "a format-string capture is a use the fixer must not move away from"
+        );
+    }
+
+    #[test]
+    fn format_capture_in_another_file_is_not_flagged() {
+        let src = "\
+const LIMIT: usize = 100;
+fn check(n: usize) -> bool { n >= LIMIT }
+";
+        let file: syn::File = syn::parse_str("fn explain() -> String { format!(\"{LIMIT:>4}\") }")
+            .expect("valid Rust source");
+        let mut names = HashSet::new();
+        NameCollector { names: &mut names }.visit_file(&file);
+        let external: HashSet<&str> = names.iter().map(String::as_str).collect();
+
+        assert!(run_with_external(src, &external).is_empty());
     }
 
     #[test]

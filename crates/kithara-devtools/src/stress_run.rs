@@ -24,13 +24,13 @@ pub(crate) struct StressRunSpec {
     pub(crate) config_file: PathBuf,
     pub(crate) inventory: PathBuf,
     pub(crate) junit: PathBuf,
+    pub(crate) render: StressRenderBudgets,
     pub(crate) filter: String,
     pub(crate) profile: String,
     pub(crate) test_threads: String,
     pub(crate) count: usize,
     pub(crate) max_count: usize,
     pub(crate) max_test_threads: usize,
-    pub(crate) render: StressRenderBudgets,
 }
 
 /// Lists the exact selection, validates it, then runs every selected test.
@@ -168,7 +168,14 @@ fn run_child(command: &mut Command, log_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    const INVENTORY: &str = r#"{
+    const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
+  </testsuite>
+</testsuites>"#;
+
+    fn evidence_paths(temp: &tempfile::TempDir, junit: &str) -> (PathBuf, PathBuf) {
+        const INVENTORY: &str = r#"{
   "rust-suites": {
     "demo::tests": {
       "binary-id": "demo::tests",
@@ -180,24 +187,6 @@ mod tests {
   }
 }"#;
 
-    const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
-  <testsuite name="demo::tests@stress-0">
-    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
-  </testsuite>
-</testsuites>"#;
-
-    const EARLY_FAILED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
-  <testsuite name="demo::tests@stress-0">
-    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
-      <failure type="test failure">boom</failure>
-    </testcase>
-  </testsuite>
-  <testsuite name="demo::tests@stress-1">
-    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:01Z"/>
-  </testsuite>
-</testsuites>"#;
-
-    fn evidence_paths(temp: &tempfile::TempDir, junit: &str) -> (PathBuf, PathBuf) {
         let inventory = temp.path().join("inventory.json");
         let junit_path = temp.path().join("junit.xml");
         fs::write(&inventory, INVENTORY).expect("write inventory fixture");
@@ -240,6 +229,17 @@ mod tests {
 
     #[test]
     fn failed_attempt_before_passing_last_attempt_is_not_clean() {
+        const EARLY_FAILED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="demo::tests@stress-1">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:01Z"/>
+  </testsuite>
+</testsuites>"#;
+
         let temp = tempfile::tempdir().expect("tempdir");
         let (inventory, junit) = evidence_paths(&temp, EARLY_FAILED_JUNIT);
 

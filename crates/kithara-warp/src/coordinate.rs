@@ -156,12 +156,12 @@ pub enum AssetExtent {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct AssetAxis {
-    /// Returns the sample rate defining asset frames.
-    #[field(get, copy)]
-    sample_rate: NonZeroU32,
     /// Returns how far the decoded asset is known to run.
     #[field(get, copy)]
     extent: AssetExtent,
+    /// Returns the sample rate defining asset frames.
+    #[field(get, copy)]
+    sample_rate: NonZeroU32,
 }
 
 impl AssetAxis {
@@ -173,8 +173,8 @@ impl AssetAxis {
     #[must_use]
     pub const fn new(sample_rate: NonZeroU32, extent: AssetExtent) -> Self {
         Self {
-            sample_rate,
             extent,
+            sample_rate,
         }
     }
 

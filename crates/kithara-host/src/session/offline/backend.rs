@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
+use bevy_platform::time::Instant;
 use bon::Builder;
 use firewheel::{
     ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
@@ -32,34 +33,11 @@ impl Default for BackendConfig {
 /// processor itself, one requested block at a time, so a caller pulls audio at
 /// whatever pace it likes instead of a sound card setting it.
 pub(super) struct OfflineStream {
-    sample_rate: NonZeroU32,
     processor: FirewheelProcessor,
+    sample_rate: NonZeroU32,
 }
 
 impl OfflineStream {
-    /// Activates `cx` for offline rendering and takes ownership of the
-    /// processor it hands back.
-    pub(super) fn start(
-        cx: &mut FirewheelContext,
-        config: BackendConfig,
-    ) -> Result<Self, OfflineSessionError> {
-        let num_stream_out_channels =
-            u32::try_from(CHANNELS).map_err(|_| OfflineSessionError::ChannelCountOverflow)?;
-        let processor = cx
-            .activate(ActivateInfo {
-                sample_rate: config.sample_rate,
-                max_block_frames: config.block_frames,
-                num_stream_in_channels: 0,
-                num_stream_out_channels,
-                input_to_output_latency_seconds: config.declared_latency.as_secs_f64(),
-            })
-            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
-        Ok(Self {
-            processor,
-            sample_rate: config.sample_rate,
-        })
-    }
-
     pub(super) fn render(
         &mut self,
         position: u64,
@@ -74,7 +52,7 @@ impl OfflineStream {
             frames,
             // Firewheel stamps a block with its own clock type, so the
             // platform clock cannot be handed over here.
-            process_timestamp: Some(bevy_platform::time::Instant::now()),
+            process_timestamp: Some(Instant::now()),
             duration_since_stream_start: Duration::from_secs(whole_seconds)
                 + Duration::from_secs_f64(f64::from(remainder) / f64::from(self.sample_rate.get())),
             input_stream_status: StreamStatus::empty(),
@@ -88,6 +66,29 @@ impl OfflineStream {
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         self.processor.process(&input, &mut output, process_info);
         Ok(())
+    }
+
+    /// Activates `cx` for offline rendering and takes ownership of the
+    /// processor it hands back.
+    pub(super) fn start(
+        cx: &mut FirewheelContext,
+        config: BackendConfig,
+    ) -> Result<Self, OfflineSessionError> {
+        let num_stream_out_channels =
+            u32::try_from(CHANNELS).map_err(|_| OfflineSessionError::ChannelCountOverflow)?;
+        let processor = cx
+            .activate(ActivateInfo {
+                num_stream_out_channels,
+                sample_rate: config.sample_rate,
+                max_block_frames: config.block_frames,
+                num_stream_in_channels: 0,
+                input_to_output_latency_seconds: config.declared_latency.as_secs_f64(),
+            })
+            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        Ok(Self {
+            processor,
+            sample_rate: config.sample_rate,
+        })
     }
 }
 

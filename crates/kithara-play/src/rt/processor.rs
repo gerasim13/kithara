@@ -68,6 +68,14 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
+    #[must_use]
+    pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
+        Self {
+            max_block_frames,
+            sample_rate,
+        }
+    }
+
     /// Compute decoder buffer depths, enforcing an application deadline when supplied.
     ///
     /// # Errors
@@ -102,14 +110,6 @@ impl StreamShape {
             NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
             NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
         ))
-    }
-
-    #[must_use]
-    pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
-        Self {
-            max_block_frames,
-            sample_rate,
-        }
     }
 }
 
