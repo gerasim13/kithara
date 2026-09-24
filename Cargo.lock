@@ -4727,6 +4727,7 @@ dependencies = [
  "hls_m3u8",
  "humantime-serde",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-encode",
  "kithara-output",
