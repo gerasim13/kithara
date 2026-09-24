@@ -164,8 +164,6 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    // WHY: Use the consumer-registered shim name (see `set_wasm_shim_name`); fall back to `wasm_safe_thread`'s Performance-API
-    // auto-detection only when unset.
     let mut builder = WasmThreadBuilder::new();
     if let Some(shim) = wasm_shim_name().get() {
         builder = builder.shim_name(shim.clone());

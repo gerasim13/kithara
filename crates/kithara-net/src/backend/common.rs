@@ -23,7 +23,7 @@ pub(crate) fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
     }
 }
 
-// A 206 to a probe states the representation total in content-range alone.
+/// A 206 to a probe states the representation total in content-range alone.
 pub(crate) fn normalize_head_headers(mut headers: Headers) -> Headers {
     if headers.get("content-length").is_none()
         && let Some(total) = content_length_from_range(&headers)

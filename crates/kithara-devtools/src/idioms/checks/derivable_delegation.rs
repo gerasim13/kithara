@@ -1049,8 +1049,6 @@ fn method_is_supported(
         return false;
     }
     for attr in &method.attrs {
-        // delegate 0.13.5 forwards other attrs verbatim (attributes.rs:446,
-        // lib.rs:1069), but these names are interpreted as its method DSL.
         if attr.path().segments.last().is_some_and(|segment| {
             matches!(
                 segment.ident.to_string().as_str(),

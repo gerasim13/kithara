@@ -378,8 +378,6 @@ where
             Recognize::Span(span) => {
                 let outcome = span.follow(input, &gripped);
                 if let Some((edge, value)) = outcome.value() {
-                    // The control draws the end it just authored; the host's
-                    // own answer, snapped and gapped, lands a frame later.
                     let next = span.spec.moved(edge, value);
                     span.at(next);
                     self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Range(next));
@@ -390,8 +388,6 @@ where
             }
             Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
-        // The control draws the value it just authored: the application is told
-        // the same number, but its answer only comes back a frame later.
         if let Some(value) = outcome.value() {
             self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Scalar(f64::from(value)));
             self.moved_to(&ReadValue::Scalar(f64::from(value)));

@@ -271,8 +271,6 @@ pub fn compile(
     config: &UiConfig,
     view: &ViewState,
 ) -> Result<CompiledUi, UiDocError> {
-    // Over the application's own declarations, so a document may bind to what
-    // the host answers for itself without every application registering it.
     let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
@@ -429,8 +427,6 @@ impl Compiler<'_> {
                 children,
             } => self.build_split(*axis, *measure, *size, children, layout_uri),
             LayoutNode::Optional { id, hidden, node } => {
-                // A layout node sits under no module instance, so a state it names is
-                // named at the top of the document rather than inside one.
                 let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0, "")?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
                 self.states.note(&id.0, &hidden, layout_uri, Side::Read);
@@ -494,11 +490,7 @@ impl Compiler<'_> {
                 pages,
             } => {
                 let path = NodePath::default().push(format!("Tabs({state})")).render();
-                // The layout holds every instance, so a state named here is the
-                // screen's however the document wrote it.
                 let state = scoped_state("", &state.0);
-                // The page the screen stands at is the only one compiled: the
-                // rest are pages this screen never reads.
                 let standing = self.view.page(&state).unwrap_or(initial);
                 let node = pages.get(standing).ok_or_else(|| UiDocError::UnknownPage {
                     origin: layout_uri.clone(),
@@ -657,8 +649,6 @@ fn motion_of_layout(node: &CompiledNode) -> Unprompted {
             .map(|cell| motion_of_layout(&cell.node))
             .fold(Unprompted::default(), Unprompted::or),
         CompiledNode::Optional { child, .. } => motion_of_layout(child),
-        // Which branch stands is settled by the room, which this side of the
-        // walk does not know, so the layout moves if any of them does.
         CompiledNode::Adaptive { base, steps, .. } => steps
             .iter()
             .map(|(_, branch)| motion_of_layout(branch))

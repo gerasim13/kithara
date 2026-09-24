@@ -93,8 +93,6 @@ pub(crate) fn worker_main(
     const CROSSFADE_SECONDS: f32 = 5.0;
 
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
-    // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
-    // the Worker, killing the command + tick loops.
     keep_worker_alive();
 
     task_spawn(async move {

@@ -55,13 +55,9 @@ pub(crate) fn tick<T: StreamType>(
         }
         if core.active().is_source_exhausted() {
             if core.has_live_incoming() {
-                // WHY: Exhausted with the switch still in flight but the output hold not engaged (frontier unlatched or blender mid-join): surfacing
-                // EOF here would latch AtEof and abort the pending intent, so park as a transition wait instead.
                 return transition_hold(core, &ctx);
             }
             if !core.active().is_exhaustion_observed() {
-                // WHY: Defer finalization by exactly one tick: the scheduler runs the transition driver between ticks, so an intent that raced the
-                // last chunk still gets its incoming slot planted before EOF finalizes and AtEof can latch.
                 core.observe_source_exhaustion();
                 return DecodeAction::TransitionPending;
             }

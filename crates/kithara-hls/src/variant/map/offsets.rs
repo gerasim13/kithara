@@ -133,7 +133,6 @@ impl Frame {
         let start = self.served_from as usize;
         let end = (self.served_until as usize).min(segments.len());
         if start >= end {
-            // WHY: No served media segments (init-only / empty): the offset table alone bounds the stream; treat as complete.
             return true;
         }
         segments[start..end].iter().all(|s| s.size().is_exact())

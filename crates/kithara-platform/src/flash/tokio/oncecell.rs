@@ -99,7 +99,6 @@ impl<T> OnceCell<T> {
         Fut: Future<Output = Result<T, E>>,
     {
         loop {
-            // WHY: Authoritative fast check - a set value is never unset.
             if let Some(value) = self.value.get() {
                 return Ok(value);
             }
@@ -115,13 +114,9 @@ impl<T> OnceCell<T> {
                 }
             };
             match claim {
-                // WHY: Re-loop: the fast check returns the now-set value.
                 Claim::Ready => continue,
-                // WHY: Park until the current initializer resolves, then re-loop.
                 Claim::Wait => AwaitChange::new(self).await,
                 Claim::Init => {
-                    // WHY: We own the init. The guard releases the init (and wakes waiters) if `f().await` is cancelled or panics before we disarm it,
-                    // so a waiter is never stranded.
                     let mut guard = AbandonGuard {
                         cell: self,
                         armed: true,
@@ -130,7 +125,6 @@ impl<T> OnceCell<T> {
                     guard.armed = false;
                     return match result {
                         Ok(value) => {
-                            // WHY: Sole initializer + empty cell ⇒ this sets it; the returned `&T` borrows the stable `OnceLock` slot.
                             let stored = self.value.get_or_init(move || value);
                             self.finish_init();
                             Ok(stored)
@@ -218,7 +212,6 @@ impl<T> Future for AwaitChange<'_, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
         match this.pending.as_ref() {
-            // WHY: Engine wait resolves only when granted (a clock jump via some other advance cannot resolve it early).
             Some(Parked::Engine(handle)) => {
                 if handle.granted() {
                     this.pending = None;
@@ -226,16 +219,12 @@ impl<T> Future for AwaitChange<'_, T> {
                 }
                 return Poll::Pending;
             }
-            // WHY: Real wait: woken by `finish_init` (or spuriously). Resolve so the caller re-checks state under the lock and re-parks if still
-            // busy.
             Some(Parked::Real(_)) => {
                 this.pending = None;
                 return Poll::Ready(());
             }
             None => {}
         }
-        // WHY: Register the waiter WHILE holding the init lock so a concurrent `finish_init` (same lock, then signal) cannot slip between
-        // this
         let mut init = this.cell.init.lock();
         if this.cell.value.get().is_some() || !init.in_progress {
             return Poll::Ready(());
@@ -264,8 +253,6 @@ impl<T> Drop for AwaitChange<'_, T> {
     /// but exact removal keeps the waker list tight.
     fn drop(&mut self) {
         match self.pending.take() {
-            // WHY: Remove EXACTLY our own waker so a `finish_init` does not wake a dropped future (leaving a stale waker is harmless here - it
-            // only costs one spurious wake - but exact removal keeps the list tight).
             Some(Parked::Real(waker)) => {
                 self.cell
                     .init

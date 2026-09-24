@@ -17,7 +17,6 @@ impl<D: DriverIo> ResourceCore<D> {
             return Ok(0);
         }
 
-        // WHY: Lock-free committed fast path: a committed resource exposes an immutable snapshot; read straight from it with no state mutex.
         if let Some(committed_len) = self.inner.driver.committed_len() {
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -136,7 +135,6 @@ impl<D: DriverIo> ResourceCore<D> {
                 .store(Arc::new(state.available.clone()));
         }
         self.inner.gate.notify_all();
-        // WHY: This write just replaced the generation a produce-core read may own; the write side pays the frees it parked.
         self.inner.retired.drain();
 
         if let Some(observer) = self.inner.observer.as_ref() {

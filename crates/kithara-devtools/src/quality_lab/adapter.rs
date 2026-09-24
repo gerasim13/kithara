@@ -87,11 +87,6 @@ fn cargo_crap(_workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<To
                 finding_exit_codes,
                 report,
             },
-            // Same scoring, rendered for a reader instead of for the gate: the
-            // JSON report is the one `validate_report` judges, and a metric
-            // nobody can read is the reason this run went unpublished for so
-            // long. Deltas stay out of it — a baseline only narrows what the
-            // gate accepts, and the report exists to state the whole picture.
             InvocationSpec {
                 name: "coverage-risk-report",
                 args: readable,

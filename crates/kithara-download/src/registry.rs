@@ -319,7 +319,6 @@ impl Registry {
         for (slot, slot_entry) in demoted {
             self.slots[slot].push_back(slot_entry);
         }
-        // WHY: Reverse keeps scan order among entries escalated into one slot.
         for (slot, slot_entry) in escalated.into_iter().rev() {
             self.slots[slot].push_front(slot_entry);
             if slot <= 1 {

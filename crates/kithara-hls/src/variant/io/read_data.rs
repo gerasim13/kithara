@@ -83,8 +83,6 @@ where
             }
         }
 
-        // WHY: A fresh unsized `#EXT-X-MAP` still reserves offset zero; serving
-        // media there would replace the required container header.
         if self.has_init()
             && self.init_size() == 0
             && self.served_from() == 0

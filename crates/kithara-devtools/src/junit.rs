@@ -203,10 +203,6 @@ fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>
         .unwrap_or_else(|| node.tag_name().name());
     let message = node.attribute("message").unwrap_or_default().trim();
     let body = node.text().unwrap_or_default().trim();
-    // A Rust panic puts the same header in both: nextest lifts the first line
-    // of the body into `message`. Keeping both spent the retained output — and
-    // every signature derived from it — on saying the header twice, which
-    // pushed the assertion's own values past the width a report row has.
     let message = if body.starts_with(message) {
         ""
     } else {

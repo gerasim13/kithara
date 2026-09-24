@@ -134,9 +134,6 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
             });
         entry.hits.push(Hit {
             file: m.file,
-            // ast-grep counts from zero and every reader of this report counts
-            // from one. Printing its own numbers sent each hit one line above
-            // the code it is about, which is a different statement.
             line: m.range.start.line + 1,
             column: m.range.start.column + 1,
         });
@@ -169,10 +166,6 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     parse_into(&String::from_utf8_lossy(&output.stdout), &mut by_rule);
     let mut ok = output.status.success();
 
-    // Second pass: hard-correctness rules that must see tests too. The main
-    // scan applied the `[lint_exclude].paths` globs (production-only); re-run
-    // each `scan_all` rule standalone with NO exclude globs so its own
-    // `files:`/`ignores:` are the only scope, then replace its prod-only group.
     for rule_id in &project.lint_exclude.scan_all_rules {
         let rule_file = format!(".config/ast-grep/{rule_id}.yml");
         let mut rule_cmd = Command::new(ctx.config.tools.program("ast-grep"));

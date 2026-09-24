@@ -144,9 +144,6 @@ where
         if !exact.is_finite() {
             return Err(ElasticError::SampleCountOverflow);
         }
-        // Backends require a non-empty output. Keep a sub-frame source span
-        // pending until its cumulative exact output reaches one full frame;
-        // EOF rounds the final residual once.
         let output_frames = if exact < 1.0 { 0.0 } else { exact.round() };
         let output_frames = output_frames
             .to_usize()
@@ -296,7 +293,6 @@ where
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
         let frames = region_frames.min(available);
-        // Short regions can accumulate until their joint request is representable.
         Ok(Self::quantized_source_span(
             frames,
             pending_frames,

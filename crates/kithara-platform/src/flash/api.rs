@@ -90,9 +90,6 @@ impl Future for FlashSleep {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if let Some(handle) = self.handle.as_ref() {
             if handle.granted() {
-                // WHY: The engine crossed our deadline and granted this waiter. Resolve is GRANT-driven, never a bare `Clock` read (`now >=
-                // deadline`): only the engine firing THIS waiter sets `granted`, so a clock that jumps past our deadline via some OTHER advance
-                // cannot resolve us early.
                 self.handle = None;
                 return Poll::Ready(());
             }
@@ -199,8 +196,6 @@ impl Future for Yield {
     /// Both `Yield` variants are `Unpin`, so the compiler rejects this code if a variant gains a
     /// `!Unpin` field, keeping the safe `Pin::new` projection sound.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        // WHY: `Yield` is `Unpin` (every field of both variants is), so the safe `get_mut`/`Pin::new` projection is available, and the
-        // compiler rejects this code if a variant gains a `!Unpin` field.
         match self.get_mut() {
             Self::Flash(f) => Pin::new(f).poll(cx),
             Self::Real { yielded } => {
@@ -281,7 +276,6 @@ pub fn virtual_park_timeout(duration: Duration) {
 /// Folds seconds and subsec nanoseconds via `u64` arithmetic rather than a `u128` intermediate,
 /// avoiding a cast.
 pub(super) fn duration_to_nanos(d: Duration) -> u64 {
-    // WHY: Fold via `u64` seconds + `u32` subsec - no `u128` intermediate, no cast.
     const NANOS_PER_SEC: u64 = 1_000_000_000;
     d.as_secs()
         .saturating_mul(NANOS_PER_SEC)
@@ -407,7 +401,6 @@ impl<F: Future> Future for WithAmbient<F> {
     /// worker thread's previous ambient value across the poll.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
-        // WHY: The guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the worker thread's previous ambient.
         let _a = set_ambient_for_spawn(*this.on);
         this.fut.poll(cx)
     }
@@ -441,7 +434,6 @@ impl<F: Future> Future for FlashDynamic<F> {
     /// previous flash mode across the poll.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
-        // WHY: The `_g` guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the previous mode.
         let _g = enter_dynamic(*this.on);
         this.fut.poll(cx)
     }

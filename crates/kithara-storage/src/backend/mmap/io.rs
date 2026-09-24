@@ -26,8 +26,6 @@ impl DriverIo for MmapDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 
-        // WHY: A re-download (`reactivate`) wrote the new generation to a temp file so it never aliased the still-published committed
-        // snapshot.
         let rewrite_temp: Option<PathBuf> = match &*mmap_guard {
             MmapState::Active(m) if m.path() != self.path => Some(m.path().to_path_buf()),
             _ => None,
@@ -40,7 +38,6 @@ impl DriverIo for MmapDriver {
                     MmapState::Active(mmap) if len < mmap.len()
                 );
 
-                // WHY: Flush the temp generation's dirty pages before dropping the map and renaming, so the republished RO mmap sees them.
                 if rewrite_temp.is_some()
                     && let MmapState::Active(m) = &*mmap_guard
                 {
@@ -124,13 +121,9 @@ impl DriverIo for MmapDriver {
         let mut mmap_guard = self.mmap.lock();
 
         match &*mmap_guard {
-            // WHY: Already active (initial download in flight) - nothing to do, but only while the file this maps still exists.
             MmapState::Active(active) if active.path().exists() => {}
-            // WHY: Re-download. Keep the committed snapshot PUBLISHED so in-flight readers keep serving the immutable prior generation zero-copy
-            // via the old RO mmap.
             MmapState::Active(_) | MmapState::Committed(_) | MmapState::Empty => {
                 let temp = self.rewrite_temp_path();
-                // WHY: Drop any stale temp left by a previously-cancelled rewrite.
                 let _ = fs::remove_file(&temp);
                 let rw = MemoryMappedFile::create_rw(&temp, self.initial_len)?;
                 *mmap_guard = MmapState::Active(rw);
@@ -207,8 +200,6 @@ impl DriverIo for MmapDriver {
             drop(mmap_guard);
             return self.commit(final_len);
         };
-        // WHY: Flush the written prefix, not the whole mapping: the reservation beyond `final_len` is untouched, and syncing it back would
-        // cost more than the re-map this seal exists to avoid.
         match final_len.filter(|len| *len < mmap.len()) {
             Some(len) => mmap.flush_range(0, len)?,
             None => mmap.flush()?,

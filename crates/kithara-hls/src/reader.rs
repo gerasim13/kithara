@@ -240,7 +240,6 @@ where
             return;
         };
         if let PrerollHint::Required(byte) = preroll {
-            // TODO: route preroll byte to the coordinator once preroll plumbing lands.
             let _ = byte;
         }
         let Some(to) = landed_byte else {

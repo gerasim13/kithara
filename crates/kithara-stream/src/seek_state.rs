@@ -214,7 +214,6 @@ impl SeekControl for SeekState {
             .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
-        // NOTE: do NOT pre-set `committed_position` to `target` here.
         self.flags
             .fetch_or(TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
         self.flags
@@ -250,7 +249,6 @@ impl SeekControl for SeekState {
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             return;
         }
-        // NOTE: we do NOT clear seek_target_ns here.
         self.flags
             .fetch_and(!TimelineFlags::FLUSHING.bits(), Ordering::SeqCst);
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {

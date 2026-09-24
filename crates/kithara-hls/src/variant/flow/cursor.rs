@@ -35,7 +35,6 @@ where
             self.retire_seek_projection_if_moved(pos);
         }
         if moved {
-            // WHY: The parked read belonged to the position the seek abandoned.
             self.flow.reader.clear_wait();
             self.set_exact_byte_seek_demand(pos);
         }

@@ -88,8 +88,6 @@ fn complete_shutdown<T, S>(
     state: SessionState<T, S>,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
-    // Disconnect queued callers before PlayerRuntime::drop takes its
-    // admission gate; otherwise each side can wait on the other.
     drop(cmd_rx);
     drop(state);
     if reply_tx.send(HostReply::Ok).is_err() {

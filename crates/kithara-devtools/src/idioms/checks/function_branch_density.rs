@@ -157,13 +157,6 @@ impl<'ast> Visit<'ast> for BranchCounter {
     /// A `match` lowers to a jump table, not an if/else-if ladder, so variant dispatch counts as
     /// one branch; each arm guard is a sequential conditional and counts separately.
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
-        // A `match` lowers to a jump table / balanced decision tree, not an
-        // `if/else-if` ladder: variant dispatch is one control-flow decision
-        // regardless of arm count, so count it as a single branch (like an
-        // `if`). Each arm *guard* is a sequential conditional the CPU
-        // evaluates in arm order, so it counts +1 — a guard-ladder disguised
-        // as a `match` is still measured. Nested control flow in arm bodies
-        // and guards is counted by descent.
         if node.arms.len() > 1 {
             self.own_branches += 1;
         }
@@ -179,12 +172,6 @@ impl<'ast> Visit<'ast> for BranchCounter {
     /// error-plumbing is not counted as hot-path branch pressure; data-dependent control flow
     /// inside the fallible expression is still counted by descent.
     fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
-        // `?` lowers to a discriminant test + cold early-return. LLVM marks
-        // the Err/None arm `unlikely` and the branch predictor nails a
-        // consistently-not-taken branch at ~zero cost, so error-plumbing
-        // does not contribute the hot-path pressure this check measures. It
-        // is not counted; real data-dependent control flow inside the
-        // fallible expression is still counted by descent.
         visit::visit_expr_try(self, node);
     }
 

@@ -4,10 +4,6 @@ use kithara_bufpool::PoolRegion;
 
 const DEFAULT_EQ_SMOOTHING: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.01,
-    // A band settles only once it is within this fraction of the gain span.
-    // The tightest the smoother accepts: a band that snaps early is a step in
-    // the frequency response, which is exactly what the smoothing is here to
-    // keep out.
     settle_ratio: MIN_SETTLE_RATIO,
 };
 

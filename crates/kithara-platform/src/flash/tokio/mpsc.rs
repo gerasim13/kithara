@@ -176,8 +176,6 @@ pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), Send
         return Err(SendError(value));
     }
     inner.queue.push_back(value);
-    // WHY: Take the receiver's real waker under the same lock the receiver parks under (no-op on the flash path), so push + wake are
-    // atomic w.r.t. a recv.
     let waker = inner.data_waker.take();
     drop(inner);
     shared.wake_data(waker);
@@ -202,8 +200,6 @@ fn poll_recv_inner<T>(
     pending: &mut Option<Parked>,
     cx: &mut Context<'_>,
 ) -> Poll<Option<T>> {
-    // WHY: Engine wait resolves only when granted; a real wait always re-checks the queue below (a spurious wake re-parks). Clear the
-    // marker either way.
     if let Some(Parked::Engine(handle)) = pending.as_ref() {
         if handle.granted() {
             *pending = None;
@@ -214,9 +210,6 @@ fn poll_recv_inner<T>(
     let mut inner = shared.inner.lock();
     if let Some(value) = inner.queue.pop_front() {
         let bounded = shared.capacity.is_some();
-        // WHY: Every pop frees one slot: wake one parked sender if any (no-op when none). Signalling only on the full->not-full edge would
-        // strand the other senders when the consumer drains several slots before a woken sender re-pushes - a lost wakeup that deadlocks
-        // under load.
         let wakers = if bounded {
             take_one_space_waker(shared.backend, &mut inner)
         } else {
@@ -231,8 +224,6 @@ fn poll_recv_inner<T>(
     if inner.senders == 0 {
         return Poll::Ready(None);
     }
-    // WHY: Register the wakeup WHILE holding the queue lock so a concurrent send cannot slip its signal between this empty-check and the
-    // park.
     match shared.backend {
         Backend::Engine { data, .. } => {
             let (handle, adv) = system::register_channel_async(data, cx.waker().clone());
@@ -257,7 +248,6 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
     let bounded = shared.capacity.is_some();
     match inner.queue.pop_front() {
         Some(value) => {
-            // WHY: Wake one parked sender per freed slot (see `poll_recv_inner`).
             let wakers = if bounded {
                 take_one_space_waker(shared.backend, &mut inner)
             } else {
@@ -278,9 +268,7 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
 fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     let mut inner = shared.inner.lock();
     inner.receiver_alive = false;
-    // WHY: Wake every sender blocked on capacity so each observes the closed receiver.
     let wakers = std::mem::take(&mut inner.space_wakers);
-    // WHY: Drop our own data waker if we parked real, so no late push wakes us.
     if matches!(pending, Some(Parked::Real(_))) {
         inner.data_waker = None;
     }
@@ -299,7 +287,6 @@ pub(super) fn drop_sender<T>(shared: &Shared<T>) {
     let waker = if last { inner.data_waker.take() } else { None };
     drop(inner);
     if last {
-        // WHY: Wake the receiver so its next poll observes the closed channel (None).
         shared.wake_data(waker);
     }
 }
@@ -364,8 +351,6 @@ pub struct Send<'a, T> {
     value: Option<T>,
 }
 
-// WHY: The queued value is plain data we move out via `take` - never structurally pinned - so the future is `Unpin` for any payload
-// (lets `poll` use `get_mut`).
 /// The queued value is moved out via `take`, never structurally pinned, so this `Send` future is
 /// `Unpin` for any payload — letting `poll` use `get_mut`.
 impl<T> Unpin for Send<'_, T> {}
@@ -377,8 +362,6 @@ impl<T> Future for Send<'_, T> {
     /// under the same lock cannot slip its wake between this capacity check and the park.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        // WHY: Engine wait resolves only when granted; a real wait always re-checks capacity/alive below (a spurious wake re-parks). Clear
-        // the marker.
         if let Some(Parked::Engine(handle)) = this.pending.as_ref() {
             if handle.granted() {
                 this.pending = None;
@@ -405,8 +388,6 @@ impl<T> Future for Send<'_, T> {
             }
             return Poll::Ready(Ok(()));
         }
-        // WHY: Full: park on space. Register the waiter WHILE holding the lock so a concurrent recv (which frees a slot under the same lock,
-        // then wakes) cannot slip its wake between this capacity-check and the park.
         match this.shared.backend {
             Backend::Engine { space, .. } => {
                 let (handle, adv) = system::register_channel_async(space, cx.waker().clone());
@@ -432,8 +413,6 @@ impl<T> Drop for Send<'_, T> {
     fn drop(&mut self) {
         match self.pending.take() {
             Some(Parked::Real(waker)) => {
-                // WHY: Remove EXACTLY our own waker so a freed slot does not wake a dropped sender (which would steal the wake from a still-blocked
-                // peer).
                 let mut inner = self.shared.inner.lock();
                 inner.space_wakers.retain(|w| !w.will_wake(&waker));
             }

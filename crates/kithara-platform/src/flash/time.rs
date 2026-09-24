@@ -74,7 +74,6 @@ impl<F: Future> Future for FlashTimeout<F> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
         this.sleep.as_mut().arm(cx);
-        // WHY: The future is polled FIRST, so a ready result wins a tie with the
         if let Poll::Ready(out) = this.future.poll(cx) {
             return Poll::Ready(Ok(out));
         }

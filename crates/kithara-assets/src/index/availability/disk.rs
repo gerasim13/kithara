@@ -128,8 +128,6 @@ impl InnerIndex {
         let Some(p) = self.persist.get() else {
             return Ok(());
         };
-        // WHY: Order is the whole point: force the committed files onto the medium first, then name them. Reversed, a crash could leave the
-        // manifest vouching for bytes that never landed.
         let _writing = p.writing.lock();
         self.barrier_pending_files();
         write_aggregate(self, &p.file, durable)?;
@@ -150,8 +148,6 @@ fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> Asset
                 .iter()
                 .filter_map(|(path, entry)| {
                     let avail = entry.load();
-                    // WHY: The crash-recovery snapshot is a COMMITTED-only contract: an uncommitted partial write (whose `.tmp` was never renamed) must
-                    // be invisible after a rebuild, matching the aggregate probes' verdict.
                     if !avail.committed {
                         return None;
                     }

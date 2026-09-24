@@ -139,7 +139,6 @@ where
     /// Sweeping here would delete partial bytes that are still owned by the successor.
     fn abandon(mut self) {
         self.inner.abandon();
-        // WHY: Sweeping here would delete partial bytes still owned by the successor.
         self.cleanup.disarm();
     }
 
@@ -185,7 +184,6 @@ where
         self.cleanup
             .events
             .publish_failed(self.cleanup.resource_key.as_ref(), &reason);
-        // WHY: Explicit failure remains observable through `resource_state`; only silent abandonment removes a partial resource.
         self.cleanup.disarm();
     }
 

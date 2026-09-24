@@ -246,9 +246,6 @@ where
             .upgrade()
             .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
         self.signal.wake_peer();
-        // Steady-state recovery, not an incident: a cancelled or superseded
-        // fetch drops its claim on every seek and variant switch, so a stress
-        // lane sees thousands of these in green runs.
         debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
@@ -320,11 +317,6 @@ where
     /// [`FetchClaim<Downloading>`](FetchClaim) handle is moved into exactly one
     /// terminal transition, so the slot state can never be double-driven.
     fn settle(self, bytes_written: u64, err: Option<&NetError>) {
-        // Wake any reader parked on this range AFTER the terminal transition
-        // (commit makes bytes readable / fail flips `range_has_failed`). The
-        // worker wake re-ticks the RT decoder's audio worker too — for DRM the
-        // decrypted bytes only become readable at this commit, so settle (not
-        // the ciphertext write) is the load-bearing wake.
         let signal = self.signal.clone();
         self.settle_inner(bytes_written, err);
         signal.fire();
@@ -350,22 +342,9 @@ where
             "stale (cancelled)"
         );
         if committed {
-            // Committed by the new epoch's writer — dropping our (stale)
-            // writer fails only its own generation's gate; the cleanup is
-            // race-safe (skips removal when the live state is Committed).
             drop(writer);
             handle.abandon();
         } else {
-            // Release without stamping. The stamp lives on the shared resource,
-            // not on this writer, so it would fail the first `write_at` of
-            // whoever refills the slot. Stamping here made a cancel
-            // indistinguishable from a broken sink, and the successor's error
-            // came back as a fatal `Decode`, parking the slot `Failed` for
-            // good. The work itself goes back on the plan it came from — a
-            // transition's look-ahead retire cancels without rebuilding, so
-            // nobody else re-plans the entry dispatch popped; a settle that
-            // outlived a rebuild carries a superseded revision and the
-            // requeue refuses it, leaving the re-dispatch to that rebuild.
             let planned = handle.planned();
             let plan_revision = handle.plan_revision();
             let variant = handle.variant();
@@ -394,8 +373,6 @@ where
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
         debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
         if committed {
-            // Committed by the new epoch's writer; ours never wrote — drop it
-            // (cleanup is race-safe) and adopt the on-disk length.
             drop(writer);
             if let ResourceStatus::Committed { final_len: Some(n) } = reader.status() {
                 handle.into_loaded(n);
@@ -415,14 +392,6 @@ where
                 });
                 handle.into_failed();
             } else {
-                // Freeing the slot is not enough to get this segment fetched
-                // again. Dispatch popped its plan entry when it sent the
-                // fetch, and `poll_next` only runs on reader progress or the
-                // slow-fetch hook — neither of which a failed download
-                // produces. So the work has to go back on the plan, and the
-                // peer has to be woken to take it; without both, the segment
-                // is never asked for again and playback stops at the gap it
-                // leaves, even once the network is back.
                 let planned = handle.planned();
                 let plan_revision = handle.plan_revision();
                 let variant = handle.variant();
@@ -457,8 +426,6 @@ where
         } = self;
         let planned = handle.planned();
         let variant = handle.variant();
-        // Consume-self commit returns the Ready reader; read `final_len` off it
-        // (PKCS7 unpad shrinks DRM segments below the announced size).
         match writer.commit(Some(bytes_written)) {
             Ok(reader) => {
                 debug!(target: "kithara_hls::settle", bytes_written, "success");

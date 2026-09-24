@@ -127,7 +127,6 @@ impl FlushHub {
     /// `cancel` is a caller-owned child token; dropping the hub cancels it to stop the worker.
     #[must_use]
     pub fn new(cancel: CancelToken, policy: FlushPolicy) -> Arc<Self> {
-        // NOTE: `cancel` is a caller-owned child token; `Drop` cancels it to stop the worker.
         Arc::new(Self {
             cancel,
             policy,
@@ -161,8 +160,6 @@ impl FlushHub {
         for src in &alive {
             let key = Arc::as_ptr(src).cast::<()>().addr();
             let was_dirty = src.dirty().swap(false, Ordering::AcqRel);
-            // WHY: The durable (checkpoint) path also flushes a source the worker last wrote non-durably, so an explicit checkpoint always lands
-            // a durable, current snapshot - even though that worker flush cleared `dirty` after persisting a possibly-stale pre-commit state.
             let needs_flush = was_dirty || durable && self.non_durable.contains(&key);
             if !needs_flush {
                 continue;

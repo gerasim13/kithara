@@ -88,9 +88,6 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let package = Rc::clone(&app.state.ui.package);
     let endpoints = Registry::default();
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
-    // Cloned into a local rather than borrowed from `app.state.config.ui`
-    // directly: `app` itself is moved into the call below, and a reference
-    // into one of its fields cannot outlive that move.
     let settings = app.state.config.ui.clone();
     app::run(
         app,

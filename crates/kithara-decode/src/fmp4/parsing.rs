@@ -424,8 +424,6 @@ pub(crate) fn parse_segment_frames(
         .map_err(|error| DecodeError::InvalidData {
             detail: error.detail(),
         })?;
-    // Presized and filled by hand: collecting into a `Result<Vec<_>>`
-    // loses the exact capacity, and a segment must cost one allocation.
     let mut frames: Vec<Fmp4Frame> = Vec::with_capacity(samples.len());
     for sample in &samples {
         frames.push(frame_from_sample(sample)?);

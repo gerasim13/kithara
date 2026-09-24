@@ -343,8 +343,6 @@ impl Assets for DiskAssetStore {
             }
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
-        // WHY: Unconfirmed leftovers are indistinguishable from a torn write, so they are refetched rather than trusted. Clear the path so
-        // the fresh acquisition can claim its temp file.
         if path.exists() {
             let _ = fs::remove_file(&path);
         }

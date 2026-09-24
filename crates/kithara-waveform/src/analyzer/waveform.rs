@@ -85,9 +85,6 @@ impl WaveformAnalyzer {
         let bin_hz = if size_f > 0.0 { rate / size_f } else { 0.0 };
         let low_mid_bin = crossover_bin(params.low_mid_hz(), bin_hz, bins);
         let mid_high_bin = crossover_bin(params.mid_high_hz(), bin_hz, bins).max(low_mid_bin);
-        // Per-band inverse bin count: divide summed energy by bandwidth so a
-        // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
-        // count. This makes each band an energy density (RMS-like).
         let inv = |count: usize| 1.0 / count.max(1).to_f32().unwrap_or(1.0);
         let band_bin_inv = [
             inv(low_mid_bin.saturating_sub(1)),
@@ -170,7 +167,6 @@ impl WaveformAnalyzer {
         let hop = self.hop();
         let size = self.size();
         let end = at.saturating_add(span);
-        // Windows overlapping `[at, end)`: `k·hop < end` and `k·hop + size > at`.
         let first = if at >= size { (at - size) / hop + 1 } else { 0 };
         let last = (end - 1) / hop;
 
@@ -254,9 +250,6 @@ impl WaveformAnalyzer {
         }
 
         let total = self.window_count(extent);
-        // `bucketize` answers a zero bucket count with no buckets, and a zero
-        // window count leaves every bucket range empty, so neither needs a
-        // guard of its own here.
         let mut raw = vec![[0.0; Band::COUNT]; total];
         for (&index, energy) in &self.bands {
             if let Ok(index) = usize::try_from(index)

@@ -139,8 +139,6 @@ impl ResumeCursor {
             .media_info()
             .cloned()
             .or_else(|| ctx.stream.media_info())?;
-        // WHY: A route change keeps the container, so the rebuilt demuxer must start where the container starts - not at the byte the resume
-        // time maps to.
         let offset = if ctx.stream.has_variant_surface() {
             anchor::recreate_offset(
                 ctx.stream,

@@ -651,7 +651,6 @@ fn read_mpeg_frame_strict_into(
         {
             warn!("skipping junk at {} bytes", pos - packet_len as u64);
 
-            // WHY: Resume one byte into the rejected candidate to avoid selecting it again.
             reader.seek_buffered_rev(packet_len + MPEG_HEADER_LEN - 1);
             continue;
         }

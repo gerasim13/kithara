@@ -377,12 +377,6 @@ fn failure_signature(
             return normalize_signature(line, budgets);
         }
         if is_panic_header(line) {
-            // The header arrives twice — nextest puts it in the failure
-            // `message` attribute and the body repeats it — so the first line
-            // after it is the duplicate, not the payload. Taking that one line
-            // as the detail spent the whole signature on saying the same thing
-            // twice and dropped what distinguishes one failure from another:
-            // the assertion's own message and its values.
             let detail: Vec<&str> = lines
                 .iter()
                 .skip(index + 1)

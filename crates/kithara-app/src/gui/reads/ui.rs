@@ -203,8 +203,6 @@ struct ModulesNode<'a> {
 }
 
 impl_child_node!(ModulesNode<'a>, |this, segment, scope| {
-    // `on` and `hidden` are the scoped reads the menu grid binds; any other
-    // segment is a module document id whose chrome reports its own collapse.
     let value = match segment {
         "on" => ReadValue::Bool(this.is_on(scope)),
         "hidden" => ReadValue::Bool(!this.is_on(scope)),

@@ -57,7 +57,6 @@ impl FileLock {
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        // Taken on this owned descriptor, so nothing is left to report.
         let _ = FileExt::unlock(&self.file);
     }
 }

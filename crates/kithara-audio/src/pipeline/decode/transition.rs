@@ -558,8 +558,6 @@ fn promotion_readiness(
     }
     if outgoing_next >= incoming_end_time {
         if active.is_source_exhausted() && generation.is_finished() {
-            // WHY: Nothing exists past the cut on either side: the outgoing ran out of source at the frontier and the incoming ran out at or
-            // before it.
             debug!(
                 incoming_first,
                 incoming_end,
@@ -638,8 +636,6 @@ fn resolve_frontier(
     incoming_first: u64,
 ) -> Result<(u64, u32), PromotionReadiness> {
     match frontier {
-        // WHY: An exhausted outgoing can never establish (or advance) a frontier, so every "wait for the outgoing" answer below is a dead
-        // end; the switch degrades to a hard cut instead of wedging forever.
         OutgoingFrontier::Awaiting if !active.is_source_exhausted() => {
             Err(PromotionReadiness::NeedIncoming)
         }
@@ -680,8 +676,6 @@ fn same_spec_join(
         });
     }
     if active.is_source_exhausted() {
-        // WHY: The join PCM would have to come from past the final decode head - it does not exist. Cut at the frontier instead of demanding
-        // PCM the outgoing can never produce.
         debug!(
             frames,
             incoming_next,
@@ -840,8 +834,6 @@ fn incoming_origin_from(
         incoming.timeline_gap()
     };
     let origin = incoming.timeline_origin_with_gap(mode, gap);
-    // WHY: The seam moves by exactly the AAC-LC default priming when the incoming track's own gapless metadata is missing: `origin`
-    // alone cannot say which of the two it is, so record the profile that produced it.
     debug!(
         origin,
         gap,

@@ -50,7 +50,6 @@ impl SourceResidency {
                 .min(usize::try_from(meta.frame_offset).unwrap_or(usize::MAX));
             self.start =
                 i64::try_from(meta.frame_offset).map_err(|_| ElasticError::SampleCountOverflow)?;
-            // Only the portion before the physical recording is known silence.
             if meta.frame_offset == 0 {
                 let history = self
                     .history_frames
@@ -335,8 +334,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .checked_sub(output_offset)
             .filter(|frames| *frames > 0)
             .ok_or(ElasticError::EmptyOutput)?;
-        // This chord sizes terminal DSP silence; it does not extend the map.
-        // Padding is materialized only by flush after the decoder reports EOF.
         let warm_frames = (covered_source
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?
@@ -469,8 +466,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         let mut virtual_meta = meta;
         virtual_meta.frame_offset = delayed_start;
-        // Latency is expressed once at the engine boundary. The map itself
-        // already converts source frames per session output frame.
         let prepared = match self.projected_span(
             plan,
             advanced_start,

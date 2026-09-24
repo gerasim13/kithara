@@ -80,8 +80,6 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
                 final_flush(weak);
                 return;
             }
-            // WHY: Event-driven idle wait (no bounded poll). `signal()` sets `pending` and notifies; shutdown cancels and `notify_all`s - both
-            // wake this wait, so a periodic re-check is unnecessary.
             guard = wait.cv.wait(guard);
         }
         drop(guard);

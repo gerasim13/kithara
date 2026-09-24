@@ -401,8 +401,6 @@ impl StateController {
             return;
         }
 
-        // The grid names each beat by its ordinal, so a marker the pass could not
-        // place leaves a gap in the numbers rather than renaming its neighbours.
         let crossed = grid.beats.partition_point(|beat| beat.at <= state.position);
         let last = beat_clock.last_beat_number;
         for beat in grid.beats[..crossed]
@@ -580,8 +578,6 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
         AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
             state.lock().playing = rate > 0.0;
         }
-        // Session-mix gain deliberately has no event mapping here: `st.volume`
-        // is content volume, owned by the player's volume path alone.
         AnalysisEvent::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;

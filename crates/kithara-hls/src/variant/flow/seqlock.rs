@@ -32,8 +32,6 @@ impl SeqVersion {
             let start = self.version.load(Ordering::Acquire);
             if start & 1 == 0 {
                 let out = f();
-                // WHY: Pin the Relaxed body loads in `f` before the version recheck: AArch64 load-load reordering could otherwise accept a torn
-                // snapshot from a concurrent writer.
                 fence(Ordering::Acquire);
                 if self.version.load(Ordering::Acquire) == start {
                     return out;
@@ -101,8 +99,6 @@ impl SeqAnchorCell {
                     self.anchor.load(Ordering::Relaxed),
                 )
             });
-            // WHY: The body is coherent with `generation` iff `active` is still `generation` after the snapshot. Generations are monotonic, so
-            // there is no ABA.
             if self.active.load(Ordering::Acquire) == generation {
                 return Some(AnchorEntry {
                     segment,
@@ -122,7 +118,6 @@ impl SeqAnchorCell {
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
         if generation == 0 {
-            // WHY: 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
             self.next_gen
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
@@ -203,8 +198,6 @@ impl AtomicSeekAlias {
     /// resolver's mismatching tag is ignored.
     pub(super) fn load(&self) -> Option<AliasSnapshot> {
         let base = self.base.load()?;
-        // WHY: Accept `exact_anchor` only when its tag matches the live base generation; a stale resolver leaves a mismatching tag we
-        // ignore.
         let exact_anchor = if self.exact_gen.load(Ordering::Acquire) == base.generation {
             match self.exact_anchor.load(Ordering::Relaxed) {
                 Self::NONE_ANCHOR => None,

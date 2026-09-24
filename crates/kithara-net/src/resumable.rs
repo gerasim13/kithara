@@ -174,9 +174,6 @@ impl State {
     /// conversion, with `min` capping the skip at the chunk length so the fallback split point is
     /// always valid.
     fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
-        // WHY: `usize -> u64` is a widening cast (lossless on every target), so `AsPrimitive` is infallible; `u64 -> usize` can narrow, so
-        // it goes through checked `ToPrimitive` - `min` caps the skip at the chunk length, so it always fits and the fallback is a valid
-        // split point.
         let received: u64 = bytes.len().as_();
         let skip = self.to_skip.min(received);
         self.to_skip -= skip;
@@ -260,8 +257,6 @@ pub(crate) fn resumable_body(
         to_skip: 0,
         resumes: 0,
     };
-    // WHY: `Option<State>` is the unfold's alive/finished switch: a terminal error is yielded together with `None`, so the next poll
-    // ends the stream.
     Box::pin(stream::unfold(Some(state), |st| async move {
         let mut st = st?;
         loop {

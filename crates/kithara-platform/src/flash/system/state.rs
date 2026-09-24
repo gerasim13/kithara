@@ -66,7 +66,6 @@ impl AtomicTaskState {
             2 => TaskState::Running,
             3 => TaskState::RunningNotified,
             4 => TaskState::Done,
-            // WHY: Only `TaskState` discriminants are ever stored in the cell.
             _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
         }
     }

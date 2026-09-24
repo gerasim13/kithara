@@ -73,9 +73,6 @@ where
         leading_frames: u64::from(trim.enc_delay),
         trailing_frames: u64::from(trim.enc_padding),
     });
-    // A Xing/Info frame count is authoritative. Without one, a CBR stream still
-    // defines its duration through its byte length; a VBR stream does not, and
-    // `read_cbr_duration` refuses those. See `CONTEXT.md`, "MP3 duration".
     let duration = read_xing_duration(&buffer)
         .or_else(|| total_bytes.and_then(|total| read_cbr_duration(&buffer, base, total)));
     Ok(StartupProbe { duration, gapless })
@@ -125,8 +122,6 @@ where
 {
     let buffer = read_probe_window(source, pools)?;
     let audio_start = skip_id3v2(&buffer);
-    // WHY: A short window means the source ran out of ready bytes, not that the tag is long, and seeking past the download frontier
-    // reads back as EOF.
     if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
         return Ok((buffer, 0));
     }

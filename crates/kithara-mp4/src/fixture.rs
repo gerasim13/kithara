@@ -64,7 +64,7 @@ fn init_segment() -> Vec<u8> {
     mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&TIMESCALE.to_be_bytes());
-    mvhd.extend_from_slice(&0u32.to_be_bytes()); // duration: fragmented
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes());
     mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
     mvhd.extend_from_slice(&[0u8; 10]);
@@ -104,8 +104,6 @@ fn init_segment() -> Vec<u8> {
     let dref = full_box(b"dref", 0, 0, &0u32.to_be_bytes());
     let dinf = mp4_box(b"dinf", &dref);
 
-    // An unknown sample entry: the timescale comes from `mdhd`, so the
-    // codec box itself never has to be decodable.
     let mut stsd = Vec::new();
     stsd.extend_from_slice(&1u32.to_be_bytes());
     stsd.extend_from_slice(&mp4_box(b"kthx", &[]));

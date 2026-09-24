@@ -164,8 +164,6 @@ where
         };
         let mut meta = self.last_input_meta.unwrap_or_default();
         self.record_rendered_source_end(meta, held_source_frames);
-        // A non-empty output always carries the live source spec. The default
-        // metadata sentinel has zero channels and cannot reach the resampler.
         meta.spec = self.spec;
         meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
         if let Some(start) = self.output_start_meta.take() {
@@ -654,7 +652,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let result = (|| {
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
             resident.pad_to(request.source_end, channels)?;
-            // EOF silence supplies DSP lookahead, never new recording geometry.
             let meta = self.last_input_meta.ok_or(ElasticError::EmptySource)?;
             self.process_resident_projection(meta, channels)
         })();

@@ -219,8 +219,6 @@ where
         let ResourceStatus::Committed { final_len } = reader.status() else {
             return None;
         };
-        // WHY: A committed resource of unknown length counts as unbounded so it cannot
-        // stay in a byte-bounded cache.
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 
@@ -298,8 +296,6 @@ where
                 }
                 Some((key.clone(), Self::entry_hits(entry)))
             })
-            // WHY: Frequency-aware victim: fewest hits wins; ties fall to the least-recently-used end (iter yields MRU->LRU, so a later equal
-            // candidate is the better victim).
             .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
             .map(|(key, _)| key)?;
         cache.pop(&key).map(|entry| (key, entry))
@@ -469,8 +465,6 @@ where
                 drop(cache);
                 return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
             }
-            // WHY: In-flight slot: reactivate mints a fresh-generation writer; cache its current-generation reader-view so concurrent opens
-            // block on the new generation's gate.
             let writer = reader.reactivate()?;
             cache.put(
                 cache_key,

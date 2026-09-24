@@ -121,9 +121,6 @@ where
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
-        // WHY: Resuming the same item is not a track change; announce gates on it. An empty slot means the item's load is still in flight:
-        // announcing it would mark the index current, and the select that plants the arriving resource would then take
-        // `select_item_with_crossfade`'s reselecting-current path and never enqueue it.
         if loaded {
             self.announce_current_item(self.current_index());
         }
@@ -153,10 +150,6 @@ where
         let target = Duration::from_secs_f64(target_secs);
 
         let Some(slot_id) = self.slot() else {
-            // No slot means no processor to carry the re-base, and refusing
-            // here drops a real target: a host restores its stored position
-            // while seeding the queue. Keep it — the load that starts the
-            // current item places the track there instead of at its head.
             *self.core.start_position.lock() = Some(target);
             debug!(target_secs, "seek held until a track is loaded");
             return Ok(SeekOutcome::Landed {
@@ -179,19 +172,14 @@ where
             },
         };
 
-        // WHY: The `fetch_add` inside is the publication: storing the returned value back would let two concurrent seeks reinstate the older
-        // epoch.
         let seek_epoch = playback.next_seek_epoch();
 
-        // WHY: Begin here, on the control thread: minting the source epoch publishes an event and wakes the decode worker, both of which
-        // take locks.
         self.core.engine.begin_slot_seek(slot_id, target);
 
         if let Err(err) = self.send_to_slot(PlayerCmd::Seek {
             seek_epoch,
             seconds: target_secs,
         }) {
-            // WHY: Nothing will carry the re-base now, and the processor holds a track's natural end while a published seek outranks it.
             playback.withdraw_seek_epoch(seek_epoch);
             return Err(err);
         }
@@ -247,8 +235,6 @@ where
             });
         }
 
-        // WHY: Re-selecting the already-current item: its resource was consumed by the load that made it current and now lives in the
-        // processor (it is the playing track).
         let reselecting_current =
             index == self.core.items.current_index() && self.core.items.is_announced(index);
         let has_resource = self.core.items.has_resource(index);
@@ -258,8 +244,6 @@ where
             .lock()
             .pending()
             .is_some_and(|p| !p.state.activated() && p.index == index);
-        // WHY: An armed (or current-and-loaded) item's resource already lives in the processor; otherwise the slot must still hold one -
-        // `enqueue_to_processor` takes it out, so an emptied slot means the caller's view of the item is stale.
         if !armed_for_index && !reselecting_current && !has_resource {
             return Err(PlayError::ItemConsumed { index });
         }

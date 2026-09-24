@@ -260,8 +260,6 @@ pub(crate) fn intern_binding(
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
     if let BindingRef::View { id, set } = binding {
-        // A state has no scope map: the name it was given under its module
-        // instance is already the whole of its identity, so its key is its id.
         let id = interner.intern(&id.0, origin)?;
         return Ok(Binding {
             with: BTreeMap::new(),

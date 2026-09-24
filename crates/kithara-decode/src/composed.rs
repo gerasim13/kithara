@@ -304,7 +304,6 @@ where
             } else if let Some(decoded_pts) = decoded_pts {
                 decoded_pts
             } else {
-                // A head-trimmed packet keeps its end time; the missing prefix precedes its PCM.
                 let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
                 frame_pts.saturating_add(
                     self.codec
@@ -329,15 +328,12 @@ where
                     }
                     continue;
                 }
-                // WHY: frame straddles target — trim leading samples.
                 if frames > 0 && chunk_pts < target {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 =
                         frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
                             .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
-                    // Duration rounding can leave `frame_end > target` even when
-                    // this packet is fully pre-target in sample space.
                     if trim_frames >= frames {
                         self.output = Some(Ok(buf));
                         continue;
@@ -730,7 +726,6 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
     }
     let delta_nanos = target.saturating_sub(frame_pts).as_nanos();
     let sr_u128 = u128::from(sample_rate);
-    // WHY: round-to-nearest sample, half-up via +5e8 before the /1e9 divide.
     let frames_u128 = delta_nanos
         .saturating_mul(sr_u128)
         .saturating_add(500_000_000)

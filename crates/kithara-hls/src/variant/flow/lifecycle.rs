@@ -41,8 +41,6 @@ where
     pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
         match planned {
             PlannedFetch::Init => {
-                // WHY: Only a `Some(Init)` slot is ever settled (it is the only init that gets fetched). A `None` init has no size atom; a stray
-                // settle is a no-op rather than resurrecting an init.
                 if let Some(init) = self.segments.init.as_ref() {
                     init.set_loaded_size(final_len);
                 }

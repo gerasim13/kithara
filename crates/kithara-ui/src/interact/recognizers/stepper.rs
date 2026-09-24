@@ -64,12 +64,6 @@ impl Stepper {
                     self.drag = None;
                     return Outcome::set(StepEvent::Activate);
                 }
-                // Travel is measured against the event, never against the hit:
-                // the two are different spaces on a host that expresses the hit
-                // locally, and a drag that mixes them jumps by however far the
-                // surface stands from the window corner. The press leaves the
-                // event free for whoever else wants it, and only takes the
-                // pointer so the rest of the drag still arrives.
                 self.drag = Some(pointer.at.unwrap_or(position).y);
                 Outcome::IGNORED.with_ownership(PointerOwnership::Claim)
             }

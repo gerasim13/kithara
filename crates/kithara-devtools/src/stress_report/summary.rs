@@ -540,12 +540,6 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
         }
         match inventory.status.as_str() {
             "listed" => {}
-            // A target the project's `default-filter` excludes is inventoried
-            // with this status and none of its cases. It owes the run
-            // nothing, and reading the exclusion as a malformed inventory is
-            // how a run ends before its first test. The suite is dropped
-            // whole rather than filtered case by case, so a future nextest
-            // that does list them still cannot contribute any.
             "skipped-default-filter" => continue,
             status => bail!("stress inventory suite `{suite}` has unsupported status `{status}`"),
         }
@@ -921,10 +915,6 @@ pub(crate) fn append_attempt_reports(
     let retried = records.retried();
     out.push_str("\n## What the lane's own runner recorded\n");
     if failures.is_empty() {
-        // A heading with nothing under it reads as evidence that failed to
-        // arrive. What actually happened — the runner reported, over this many
-        // tests and this many repeats, and none of them failed — is the reason
-        // the lane is green, so it belongs here as a sentence.
         let _ = writeln!(
             out,
             "\nNo test failed in any repeat the runner reported: `{}` test(s) over `{}` repeat(s).",
@@ -932,9 +922,6 @@ pub(crate) fn append_attempt_reports(
             records.repeats()
         );
     } else {
-        // The attempt a failure belongs to is only worth a column when there is
-        // more than one attempt to tell apart. A lane that repeats inside a
-        // single launch would print the same "0" on every row.
         let per_attempt = records.attempts > 1;
         out.push_str(if per_attempt {
             "\n| test | rate | attempts |\n|---|---:|---|\n"

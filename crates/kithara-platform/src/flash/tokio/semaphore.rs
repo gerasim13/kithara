@@ -82,8 +82,6 @@ impl Semaphore {
     fn release(&self) {
         let mut inner = self.inner.lock();
         inner.permits += 1;
-        // WHY: Take one parked acquirer's real waker under the lock (no-op on the flash path), so the count bump and the wake are atomic
-        // w.r.t. a park.
         let waker = match self.backend {
             Backend::Engine(_) => None,
             Backend::Native if inner.wakers.is_empty() => None,
@@ -135,8 +133,6 @@ impl Future for AcquireOwned {
     /// then signal) cannot slip its wake between this check and the park.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        // WHY: Engine wait resolves only when granted; a real wait re-checks the count below (a spurious wake just re-parks). Clear the
-        // marker either way.
         if let Some(Parked::Engine(handle)) = this.pending.as_ref() {
             if handle.granted() {
                 this.pending = None;
@@ -151,8 +147,6 @@ impl Future for AcquireOwned {
                 sem: Arc::clone(&this.sem),
             }));
         }
-        // WHY: No permit: register the waiter WHILE holding the count lock so a concurrent release (same lock, then signal) cannot slip its
-        // wake between this check and the park.
         match this.sem.backend {
             Backend::Engine(cvid) => {
                 let (handle, adv) = system::register_channel_async(cvid, cx.waker().clone());
@@ -177,8 +171,6 @@ impl Drop for AcquireOwned {
     /// mirrors the same drop-race guard in `mpsc`'s `Send::drop`.
     fn drop(&mut self) {
         match self.pending.take() {
-            // WHY: Remove EXACTLY our own waker so a release does not wake a dropped acquirer (mirrors `mpsc` `Send::drop`; the
-            // granted-then-dropped edge is the shared deferred wakeup hole, design section 11).
             Some(Parked::Real(waker)) => {
                 self.sem
                     .inner

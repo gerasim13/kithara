@@ -147,7 +147,6 @@ impl AndroidMediaExtractor {
         match self.cursor {
             SampleCursor::Current => Ok(()),
             SampleCursor::Recover { at } => {
-                // Native seeks floor microsecond timestamps onto the PCM grid.
                 let micros = at.as_nanos().div_ceil(1_000);
                 let result = self.seek_to(i64::try_from(micros).unwrap_or(i64::MAX));
                 if result.is_err() {
@@ -157,7 +156,6 @@ impl AndroidMediaExtractor {
             }
             SampleCursor::Advance { next_pcm } => {
                 self.cursor = SampleCursor::Current;
-                // Advancing fetches the next sample and can block on streaming input.
                 self.inner.advance();
                 if let Some(source) = self.inner.source_mut().error.take() {
                     let error = DecodeError::Io { source };
@@ -251,7 +249,6 @@ impl AndroidMediaExtractor {
                     });
                 }
                 if self.inner.source_mut().init_end.take().is_some() {
-                    // Track selection can cache EOF at the init boundary.
                     self.cursor = SampleCursor::Recover { at: Duration::ZERO };
                 }
                 return Ok((info, format));

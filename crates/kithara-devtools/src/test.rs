@@ -175,9 +175,6 @@ fn run_lane(
     let status = cmd
         .status()
         .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
-    // Before the verdict rather than after it: a red lane is exactly when the
-    // build's share of the wall clock needs explaining, and reporting after the
-    // early return would print the number only for lanes that passed.
     sccache::report_stats(project.tools.program("sccache"));
     if !status.success() {
         return Err(ChildFailure::inherited(

@@ -52,7 +52,6 @@ impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
             .and_then(|offset| usize::try_from(offset).ok())
             .filter(|offset| *offset < self.window_len);
         if hit.is_none() {
-            // A remainder past `usize` just means "more than one full window".
             let want = usize::try_from(self.total.saturating_sub(self.pos))
                 .unwrap_or(WALK_WINDOW_BYTES)
                 .min(WALK_WINDOW_BYTES);

@@ -20,7 +20,7 @@ pub(super) struct Response {
     pub(super) status: u16,
 }
 
-// What the transport reported and Kithara has not taken yet.
+/// What the transport reported and Kithara has not taken yet.
 #[derive(Default)]
 pub(super) struct CallState {
     reports: Mutex<Reports>,

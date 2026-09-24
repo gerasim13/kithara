@@ -248,9 +248,6 @@ impl Census {
         if let Some(binding) = site.write {
             self.note(site.path, binding, origin, Side::Write);
         }
-        // A popover publishes its dismissal on its own path, so state it reads
-        // for whether it stands open is state that dismissal shuts. Saying so
-        // in the document would be saying twice what a popover already is.
         if let (ControlNode::Popover { .. }, Some(BindingRef::View { id, .. })) =
             (site.control, site.read)
         {

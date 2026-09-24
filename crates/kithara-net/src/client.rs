@@ -318,8 +318,6 @@ impl RawHttp {
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
-                // WHY: `206` -> body already starts at `abs` (skip 0); `200` -> server ignored Range and re-sent from zero, drop the consumed
-                // prefix.
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -589,7 +587,6 @@ impl Net for RawHttp {
         let first = self
             .raw_body(url.clone(), None, headers.clone(), false)
             .await?;
-        // WHY: Full GET; a resume re-fetches `bytes=consumed-` (base 0).
         Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }

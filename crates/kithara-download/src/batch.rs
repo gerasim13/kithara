@@ -225,7 +225,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     });
 }
 
-// Stamped in the flash dispatch, read in the real-time fetch task.
+/// Stamped in the flash dispatch, read in the real-time fetch task.
 #[derive(Clone, Copy)]
 struct FetchStart {
     virtual_clock: Instant,
@@ -426,8 +426,6 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
-            // WHY: Collect the body here, on the downloader's (possibly separate) worker, so only `Send` bytes cross back to the caller - the
-            // raw HTTP body stream is `!Send` on wasm.
             let collected = match result {
                 Ok(resp) => {
                     let headers = resp.headers.clone();

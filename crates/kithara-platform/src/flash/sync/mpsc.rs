@@ -50,8 +50,6 @@ impl<T> Sender<T> {
         }
         queue.push_back(value);
         drop(queue);
-        // WHY: A receiver registers its condvar waiter UNDER the queue lock and releases the lock only as it parks, so this notify (which we
-        // issue after releasing the lock above) can never land before the waiter is registered - no lost wakeup.
         self.0.cv.notify_one();
         Ok(())
     }
@@ -69,8 +67,6 @@ impl<T> Drop for Sender<T> {
     /// registering its waiter under the same lock so the disconnect is never missed.
     fn drop(&mut self) {
         if self.0.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
-            // WHY: Last sender gone. Take the queue lock so this serializes with a receiver registering its waiter under the same lock, then
-            // wake it to observe the disconnect (no lost wakeup against the unlocked `senders` predicate).
             let guard = self.0.queue.lock();
             self.0.cv.notify_all();
             drop(guard);

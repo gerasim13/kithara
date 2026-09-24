@@ -41,9 +41,6 @@ impl Check for StructInitOrder {
                 .to_string_lossy()
                 .replace('\\', "/");
             let krate = crate_of(&rel);
-            // Reordering a literal moves nested literals with it, so the
-            // visitor defers them (see `visit_expr_struct`) and each write
-            // exposes the next nesting level; loop until a clean pass.
             let mut skipped = HashSet::new();
             let mut wrote = false;
             for pass in 0.. {
@@ -142,9 +139,6 @@ impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
             e,
         );
         match try_fix_expr_struct(self.src, e, order, self.rw) {
-            // Reordered: nested literals travel inside the moved blocks, so
-            // touching them now would stage overlapping edits. The caller's
-            // fix loop revisits them on the next pass.
             Ok(true) => return,
             Ok(false) => {}
             Err(reason) => {
@@ -500,10 +494,6 @@ fn check_expr_struct(rel: &str, e: &ExprStruct, order: ExpectedOrder, out: &mut 
     if e.fields.len() < 2 {
         return;
     }
-    // Mirror the autofix safety model: a `..base` rest or a shorthand field
-    // read by an earlier explicit initializer makes reordering to
-    // declaration order a move-before-read (use-after-move) — the fix
-    // refuses these, so detection must not flag them either.
     if e.dot2_token.is_some() || e.rest.is_some() {
         return;
     }
@@ -588,9 +578,6 @@ impl<'ast> Visit<'ast> for IdentScanner<'_> {
     /// `Visit` does not parse macro bodies, so a `vec![x.clone()]` read of a shorthand field is
     /// invisible to `visit_path`; the raw token stream is scanned instead.
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
-        // `Visit` does not parse macro bodies, so a `vec![x.clone()]` read
-        // of a shorthand field is invisible to `visit_path`. Scan the raw
-        // token stream instead.
         if !self.found && tokens_contain_ident(m.tokens.clone(), self.names) {
             self.found = true;
         }

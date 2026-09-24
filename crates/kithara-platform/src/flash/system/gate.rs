@@ -132,8 +132,6 @@ impl Wake for TaskGate {
         loop {
             match self.state().load() {
                 TaskState::Parked => {
-                    // WHY: Re-acquire the slot the park released BEFORE the real poll runs: this wake->poll window must stay counted so the clock cannot
-                    // jump past this task.
                     match FLASH.gate_wake_parked(self.state(), self.id, self.loc) {
                         WakeOutcome::Resumed => {
                             self.forward();
@@ -147,12 +145,10 @@ impl Wake for TaskGate {
                         .state()
                         .compare_exchange(TaskState::Running, TaskState::RunningNotified)
                     {
-                        // WHY: Woken during its own poll; slot already held. Forward so the runtime re-polls after the current poll returns.
                         self.forward();
                         return;
                     }
                 }
-                // WHY: Runnable / RunningNotified: already pending a poll, slot held - idempotent. Done: nothing to wake.
                 TaskState::Runnable | TaskState::RunningNotified => {
                     self.forward();
                     return;

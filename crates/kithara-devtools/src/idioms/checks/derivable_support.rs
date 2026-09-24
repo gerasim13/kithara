@@ -688,10 +688,6 @@ fn complete_from(
             return;
         }
     }
-    // `thiserror::Error` reads `#[from]` itself, on the field rather than the
-    // variant, and writes the conversion from it. A second derive of the same
-    // attribute is what the compiler refuses, so the enum takes the spelling
-    // its own derive already understands.
     let thiserror = derives_thiserror(item_attrs(item));
     if !thiserror {
         add_derive(src, item, Kind::From.derive(), item_start, candidate);

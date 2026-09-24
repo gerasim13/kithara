@@ -30,7 +30,6 @@ where
             return;
         }
 
-        // WHY: Held across the whole synchronous block (never across .await): the Cancelled re-check and select_item must be atomic w.r.t. a
         let _apply = self
             .select_apply
             .lock()

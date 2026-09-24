@@ -206,9 +206,6 @@ impl DrawListBuilder {
                 start,
                 end,
             } => match by.similarity() {
-                // An arc names the direction it sweeps in, so a turn or a
-                // mirror would have to rewrite its angles. Only the transform
-                // that leaves those angles alone keeps it an arc.
                 Some(scale) if upright => Geom::Arc {
                     start,
                     end,

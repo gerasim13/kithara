@@ -309,9 +309,6 @@ impl VariantFlow {
         Self {
             prefetch_anchor: AtomicU64::new(0),
             prefetch_resume_at: AtomicU64::new(NO_PREFETCH_DEFERRAL),
-            // Preallocate to the worst-case rebuild size (init + every media
-            // segment + the seg-0 decoder probe) so the per-seek rebuild in
-            // `rebuild_queue` never reallocates.
             queue: PlanQueue::new(num_segments.saturating_add(2), num_segments),
             reader: ReaderRuntime::new(seek_obs),
         }

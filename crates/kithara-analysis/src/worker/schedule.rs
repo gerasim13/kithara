@@ -5,7 +5,6 @@ use rangemap::RangeSet;
 
 #[derive(Default)]
 pub(crate) struct Schedule {
-    // WHY: Retire seeks that snap into covered audio or they repeat forever.
     barren: BTreeSet<u64>,
 }
 
@@ -66,7 +65,6 @@ impl Schedule {
         let identities = extent.div_ceil(window);
         let mut regions = 2;
 
-        // WHY: Region centres spread early work before scanning leftovers.
         while regions < identities {
             for region in 0..regions {
                 let identity = region_midpoint(identities, regions, region);

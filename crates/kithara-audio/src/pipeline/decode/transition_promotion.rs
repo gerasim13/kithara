@@ -82,8 +82,6 @@ impl ActiveDecode {
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
         };
-        // WHY: A finished incoming may trim to empty: the end-of-track hard cut proves there is nothing past the cut, and an empty tail is
-        // exactly consistent with that proof.
         let trimmed = trim_staged_head(&mut generation, span.overlap);
         assert!(
             trimmed || generation.is_finished(),

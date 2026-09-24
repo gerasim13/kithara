@@ -49,7 +49,6 @@ impl SeekBegin for SeekHandle {
         if let Some(prepare) = &self.seek_prepare {
             prepare.prepare();
         }
-        // Rearm before publishing the epoch: the worker may complete preload immediately.
         self.preload_gate.rearm();
         let epoch = self.seek.begin(position);
         self.seek.mark_pending(epoch);

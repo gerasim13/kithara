@@ -169,8 +169,6 @@ where
             reader: Some(reader),
         });
         drop(state);
-        // WHY: The outgoing look-ahead holds the downloader capacity this slot's construction needs, and its bytes lie past the cut the
-        // transition latches.
         outgoing.retire_lookahead();
         self.signal().wake_peer();
         Ok(Some(transition))

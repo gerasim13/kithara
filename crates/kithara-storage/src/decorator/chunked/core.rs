@@ -208,12 +208,8 @@ impl<D: DriverIo> AtomicChunked<D> {
         };
         let TmpClaim { path: tmp, file } = &claim;
 
-        // WHY: Sealing skips the driver's snapshot: it would map the temp file that the rename below retires. The claim's own handle then
-        // trims the surplus reservation and forces the bytes down, so the canonical path can only ever appear fully durable.
         self.inner.load().seal_in_place(final_len)?;
         let _handover = self.handover.write();
-        // WHY: The seal leaves the inner mapping on the temp file alive, and Windows refuses to resize or rename a mapped file, so the
-        // handle goes before the bytes move. The factory below reopens on the canonical path.
         self.inner.load().release_backing_in_place()?;
 
         if let Some(len) = final_len

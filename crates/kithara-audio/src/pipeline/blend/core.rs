@@ -5,8 +5,6 @@ use kithara_signal::{AudioChunk, AudioSpec};
 struct Consts;
 
 impl Consts {
-    // WHY: The AAC decoder's post-seek onset transient outlasts 20 ms; 40 ms
-    // keeps that measured transition inside the existing linear generation join.
     /// The AAC decoder's post-seek onset transient outlasts 20 ms; 40 ms keeps that measured
     /// transition inside the existing linear generation join.
     const JOIN_MICROS: u32 = 40_000;

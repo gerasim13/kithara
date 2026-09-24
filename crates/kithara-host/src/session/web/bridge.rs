@@ -43,9 +43,6 @@ pub(crate) fn tick_and_poll_remote<S>(
         return;
     };
 
-    // Firewheel no longer owns the backend, so nothing polls the web stream on
-    // the session's behalf: this tick is where its clock timestamps are fed and
-    // a terminated worklet is noticed.
     if let Some(stream) = state.stream.as_mut()
         && stream.poll().is_err()
     {

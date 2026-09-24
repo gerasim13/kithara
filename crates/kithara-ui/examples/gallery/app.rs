@@ -193,8 +193,6 @@ pub(crate) fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Ui(UiEvent::Control { path, action }) => {
-            // What the document turns for itself is answered here, by the host
-            // that owns the store, before the demo model is told anything.
             if matches!(action, ControlAction::Activate) {
                 state.press(&path);
             }

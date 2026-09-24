@@ -217,7 +217,6 @@ pub(crate) fn prepare_route_restart<T, S>(
         let stamp = target
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        // WHY: Zero remains a backend-default request; the grid axis is always concrete.
         let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
         state
             .root
@@ -368,7 +367,6 @@ fn update_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionErr
     let Err(error) = state.ctx.as_mut().ok_or(SessionError::NoContext)?.update() else {
         return Ok(());
     };
-    // WHY: The session owns stream restarts; swallowing this into a message would strand the transport behind a stream nobody rearms.
     if stream_died(state) {
         state.stream_needs_restart = true;
     }
@@ -399,8 +397,6 @@ fn abort_commit<T, S>(
 /// deliver nothing.
 fn deliver_abort<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     update_context(state)?;
-    // WHY: Firewheel only flushes queued events while a stream runs, so an update that succeeds on a stopped stream has delivered
-    // nothing; leaving the abort `Pending` is what makes the next refresh retry it.
     if !state.ctx.as_ref().is_some_and(FirewheelContext::is_active) {
         return Ok(());
     }
@@ -481,8 +477,6 @@ fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportC
         {
             (Some(next), Some(next), false)
         }
-        // WHY: The graph is authoritative about what it aborted: if it reports our pending revision, the abort happened whether or not our
-        // own delivery bookkeeping had caught up.
         (
             TransportCommitResult::Aborted(_),
             TransportPhase::Aborting {

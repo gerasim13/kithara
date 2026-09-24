@@ -172,7 +172,6 @@ impl FrameCodec for AndroidCodec {
     fn priming(&self, codec: AudioCodec) -> CodecPriming {
         match codec {
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
-                // Restore AAC overlap and SBR state before the requested seek time.
                 packets: 2,
                 ..CodecPriming::default()
             },

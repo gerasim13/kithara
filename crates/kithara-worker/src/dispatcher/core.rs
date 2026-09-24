@@ -69,8 +69,6 @@ pub(super) fn run_pass(
         backpressured = report.backpressured_tasks,
         done = report.done_tasks
     );
-    // A pass leaves no terminal slot behind for the next one to park on. The
-    // order of what remains is the order it already had.
     remove_terminal(slots);
     report_outcome(observer, report);
     report

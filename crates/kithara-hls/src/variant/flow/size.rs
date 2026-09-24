@@ -30,7 +30,6 @@ where
 
     /// RT-reachable: a lock-free, alloc-free store of the none sentinel.
     pub(super) fn clear_exact_byte_seek(&self) {
-        // WHY: RT-reachable (via `exact_byte_metadata_phase`): a lock-free, alloc-free store of the none sentinel.
         self.seek.exact_byte_seek.store(None);
     }
 
@@ -56,8 +55,6 @@ where
         }) else {
             return;
         };
-        // WHY: Keep the demand live until the reader moves. A committed body may revise an already exact prefix size, so every metadata poll
-        // must be able to refresh this projection before the first byte is consumed.
         self.resolve_seek_alias(demand, exact_anchor);
     }
 
@@ -216,8 +213,6 @@ where
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             || self.all_sizes_complete()
         {
-            // WHY: No exact-size demand to register: either the container resolves ranges by segment index, or every served size *and* the init
-            // are already exact, so the O(prefix) re-scan and recompute would be
             self.clear_exact_seek();
             return;
         }

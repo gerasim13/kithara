@@ -370,9 +370,6 @@ mod handle {
         /// to the RT-safe production path; explicit offline dispatchers override it once bound.
         #[must_use]
         pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            // An instance may prepare resources before Host insertion. The
-            // pending policy must therefore preserve the RT-safe production
-            // path; explicit offline dispatchers override it after binding.
             self.dispatcher()
                 .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
                     dispatcher.consumer_wake_mode()

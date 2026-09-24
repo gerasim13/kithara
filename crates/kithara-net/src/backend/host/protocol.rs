@@ -47,7 +47,6 @@ pub(super) fn response_headers(
     status: u16,
     url: &Url,
 ) -> Result<Headers, NetError> {
-    // A surviving Content-Encoding names a coding the host's client left undecoded.
     if (200..300).contains(&status)
         && let Some(value) = non_identity_content_encoding(&pairs)
     {

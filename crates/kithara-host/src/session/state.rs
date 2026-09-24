@@ -402,8 +402,6 @@ fn create_firewheel_context<T, S>(
         ..FirewheelConfig::default()
     };
     if let Some(declick_frames) = state.requested_declick_frames {
-        // Firewheel takes the fade as seconds; the frame count is the session's
-        // own unit. Duration carries the division so neither side is cast.
         config.declick_seconds =
             Duration::from_secs_f64(f64::from(declick_frames.get()) / f64::from(sample_rate))
                 .as_secs_f32();

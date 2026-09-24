@@ -145,8 +145,6 @@ pub(crate) fn fill_segment_buffer(
         source.seek(SeekFrom::Start(abs_offset))?;
         if refresh_range(state, live) {
             let total_after = state.total();
-            // WHY: Resize WITHOUT clearing: `refresh_range` already reset `state.filled` to 0 on a start shift (whole prefix invalid, re-read
-            // from scratch) and left it intact on an end-only shrink (prefix still valid).
             state.resize_to(total_after)?;
             if state.filled >= total_after {
                 return Ok(FillStatus::Ready);

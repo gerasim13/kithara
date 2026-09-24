@@ -287,11 +287,6 @@ pub(super) mod lifecycle {
                     .map_err(|error| graph_state(error.message()))?,
                 None => observed_session_grid,
             };
-            // Backends may defer processor drop after `stop_stream`. Reserve a
-            // successor before stopping so teardown never depends on the RT
-            // `stream_stopped` callback reaching this control handle. Control
-            // admits at most one unobserved commit; the next context advances
-            // once more before publishing.
             session_grid_generation
                 .advance_restart()
                 .map_err(|error| graph_state(error.message()))?;
@@ -502,8 +497,6 @@ pub(super) mod controls {
             if resolved.iter().any(|&(seen, _)| seen == idx) {
                 return Err(SessionError::DuplicatePlayer(player_id));
             }
-            // Checked here so the apply pass below is infallible
-            // (all-or-nothing).
             let player = deck_at(state, idx)?;
             if player.started
                 && (state.ctx.is_none()

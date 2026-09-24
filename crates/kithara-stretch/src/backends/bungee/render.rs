@@ -307,8 +307,6 @@ impl StreamCore {
                 .audible_output_end
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            // Anchor each grain to all audible source spans, including calls
-            // served entirely from an already synthesised native output chunk.
             let desired_position =
                 (self.grain_output_position - output_end).mul_add(rate, source_end);
             let minimum_position =

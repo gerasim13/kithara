@@ -77,8 +77,6 @@ where
             }
         }
         if lagged {
-            // WHY: `CurrentItemChanged` is edge-triggered and de-duplicated by `ItemQueue::announce_current_item`, so waiting cannot recover a
-            // drop.
             self.handle_current_item_changed();
         }
     }

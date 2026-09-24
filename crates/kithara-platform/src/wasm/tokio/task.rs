@@ -90,7 +90,6 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    // Blocking work has no yield point, so its abort handle stays inert.
     let (abort_handle, _registration) = futures::future::AbortHandle::new_pair();
 
     if crate::thread::is_worker_thread() {

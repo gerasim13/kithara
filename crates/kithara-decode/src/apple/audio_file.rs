@@ -120,7 +120,6 @@ impl AppleAudioFile {
         }
 
         let data_format = read_data_format(&handle)?;
-        // WHY: `read_packet_count` / `read_max_packet_size` force a full-file scan for VBR formats with no on-disk packet index (FLAC).
         let packet_count = if has_size && scan_packets {
             Some(read_packet_count(&handle)?)
         } else {
@@ -265,8 +264,6 @@ impl AppleAudioFile {
             self.handle
                 .read_packet_data(starting_packet, Some(&mut desc), &mut packets, buf);
 
-        // WHY: A not-ready streamed read is masked by AudioFile either as a graceful EOF (noErr, 0 packets) or as a truncated packet (a
-        // short `packets >= 1` with a stashed callback error) - both for compressed formats.
         if let Some(pending) = self.take_pending_callback_error() {
             return Err(pending);
         }

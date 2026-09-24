@@ -327,7 +327,6 @@ impl GaplessTrimmer {
 
 impl From<GaplessInfo> for GaplessTrimmer {
     fn from(info: GaplessInfo) -> Self {
-        // WHY: Factory/codec boundaries resolve GaplessInfo to this trimmer's input domain.
         let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
         Self {
             mode: if enabled {

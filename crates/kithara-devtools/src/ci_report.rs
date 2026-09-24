@@ -236,8 +236,6 @@ fn architecture(artifacts: &Path, top_contours: usize) -> Result<String> {
     if contours.is_empty() {
         return Ok(out);
     }
-    // Ranked by the metric itself, so the worst contour is the first row a
-    // reader lands on; ties keep the file's own order.
     contours.sort_by(|left, right| right.1.total_cmp(&left.1));
     out.push_str("\n| Contour | ACI |\n|---|---:|\n");
     for (name, score) in contours.iter().take(top_contours) {

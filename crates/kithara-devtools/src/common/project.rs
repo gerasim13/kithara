@@ -859,9 +859,6 @@ impl StressConfig {
             if !self.modes.contains_key(name) {
                 bail!("stress.default_modes names `{name}`, which is not configured");
             }
-            // A lane names the directory its evidence lands in, so a run
-            // that listed one twice would have its second run overwrite the
-            // first and report half of what it did.
             if !seen.insert(name) {
                 bail!("stress.default_modes names `{name}` twice");
             }
@@ -987,9 +984,6 @@ impl StressConfig {
         if let Some(path) = &mode.attempt_junit {
             validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
-        // A command lane selects nothing through the test runner, so features
-        // meant for that runner would be read by no one. Saying so here beats
-        // a lane that silently ignores half of what it was configured with.
         if !mode.command.is_empty() && !mode.features.is_empty() {
             bail!("stress mode `{name}` runs a command, so its features reach nothing");
         }

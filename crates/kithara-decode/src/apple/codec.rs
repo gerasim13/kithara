@@ -524,7 +524,6 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         });
     }
 
-    // WHY: First byte 0x03 means a full ESDS body; otherwise wrap raw ASC.
     let esds = if track.extra_data.first() == Some(&0x03) {
         track.extra_data.clone()
     } else {
@@ -624,7 +623,6 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
     let esd_body: u8 = esd_body_len.try_into().map_err(|_| TOO_LONG)?;
 
-    // WHY: ES_Descriptor chain.
     let header: [u8; 22] = [
         0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,

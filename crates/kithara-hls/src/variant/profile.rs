@@ -110,8 +110,6 @@ where
         })?;
 
         self.set_prefetch_anchor(warmup_start);
-        // WHY: The plan covers one segment behind the landing, whatever the container. A demuxer handed a landing time parks at the packet
-        // boundary at or before it, and when the landing is a segment start the first packet it reads begins in the segment before.
         let tail_start = forward_segment.saturating_sub(1);
         let header_segment = self.header_segment(profile.input())?;
         self.set_segment_aware_seek_tail(tail_start);
@@ -161,8 +159,6 @@ where
         };
         let forward = self.forward_window(preparation);
         let forward_ready = self.reader_range_is_ready(forward.clone())?;
-        // WHY: Polled every transition pass, so `trace!`: the pair of flags plus the window they are asked about is the difference between
-        // "the header never arrived" and "the window is not covered yet", which no other
         trace!(
             variant = self.variant,
             header_ready,
@@ -174,8 +170,6 @@ where
             init_downloading = self.init().is_some_and(|i| i.state().is_downloading()),
             init_slow = self.init().is_some_and(|i| i.state().is_slow()),
             init_failed = self.init().is_some_and(|i| i.state().is_failed()),
-            // WHY: A window this session waits on but has nothing queued for is the shape of a stall: nothing is in flight, nothing is planned,
-            // and the only thing that re-drives the peer is another readiness poll the consumer cannot make while it waits for this one.
             queued = self.flow.queue.lock().len(),
             "variant reader readiness"
         );

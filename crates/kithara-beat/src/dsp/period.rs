@@ -27,8 +27,6 @@ where
     let mut window = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
     let mut autocorrelation = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
-    // The last window is filled out with zeros, and the first window that
-    // needs that is the last.
     let mut start = 0;
     loop {
         let end = (start + PeriodConsts::ACF_FRAME).min(onsets.len());

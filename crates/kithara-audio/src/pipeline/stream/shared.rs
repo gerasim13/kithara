@@ -160,8 +160,6 @@ impl<T: StreamType> SharedStream<T> {
     pub(crate) fn probe_seek(&self, pos: SeekFrom) -> io::Result<u64> {
         let new_pos = resolve_seek_target(pos, self.probe.position(), self.probe.len())?;
         self.probe.set_position(new_pos);
-        // WHY: The reader cursor moved on the produce core: arm the peer so it re-targets fetches around the new position. The shell flushes
-        // it.
         if let Some(ref wake) = self.peer_wake {
             wake.arm();
         }
@@ -181,7 +179,6 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     delegate! {
-        // WHY: Byte-space polls answered by the narrow probe, never the control mutex: RT-safe on the forbid-blocking produce core.
         to self.probe {
             /// Overall source readiness at current position.
             ///

@@ -291,7 +291,6 @@ impl AvailabilityIndex {
         if range.start >= range.end {
             return;
         }
-        // WHY: The write side pays the frees the produce-core reads parked.
         self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);

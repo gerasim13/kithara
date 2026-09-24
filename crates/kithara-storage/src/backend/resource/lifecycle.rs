@@ -40,8 +40,6 @@ impl<D: DriverIo> ResourceCore<D> {
         if range.is_empty() {
             return true;
         }
-        // WHY: Lock-free committed fast path. A published committed snapshot covers the whole `[0, committed_len)` (both drivers are linear
-        // - `valid_window()` is `None`, no eviction - so a snapshot implies no gaps), so coverage reduces
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
@@ -92,7 +90,6 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
-        // WHY: The write side pays the frees the produce-core reads parked.
         self.inner.retired.drain();
 
         if let Some(len) = final_len
@@ -108,8 +105,6 @@ impl<D: DriverIo> ResourceCore<D> {
     /// lifecycle flag is still committed before trusting the snapshot's length as the resource's
     /// final length.
     pub(super) fn len_inner(&self) -> Option<u64> {
-        // WHY: The committed snapshot stays published across a `reactivate` so reads remain consistent, so confirm the *lifecycle* is still
-        // committed (the lock-free flag) before reporting its length as the resource's final length.
         if self.inner.committed.load(Ordering::Acquire)
             && let Some(committed_len) = self.inner.driver.committed_len()
         {
@@ -142,8 +137,6 @@ impl<D: DriverIo> ResourceCore<D> {
 
         self.inner.driver.reactivate()?;
         self.inner.committed.store(false, Ordering::Release);
-        // WHY: A new write generation starts armed: `abandon` waives the anti-hang stamp for the writer that owns the refill, not for
-        // whoever writes next over the same core.
         self.inner.stamp_on_drop.store(true, Ordering::Release);
 
         {

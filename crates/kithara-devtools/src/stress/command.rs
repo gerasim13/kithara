@@ -299,8 +299,6 @@ fn lane_runner(
         suffix_args: Vec::new(),
         feature_arg: "--features".to_owned(),
         features: Vec::new(),
-        // A mode that names its own command replaces the runner, so it carries
-        // no lane environment; `set_env` is the channel a mode has for that.
         env: BTreeMap::new(),
     })
 }
@@ -355,10 +353,6 @@ fn run_command_lane(
     let mut codes = Vec::with_capacity(attempts);
     for attempt in 0..attempts {
         mark_attempt(&paths.log, attempt)?;
-        // The runner writes to one path. Removing it first means a copy can
-        // only ever be this attempt's: an attempt that died before writing
-        // leaves no file rather than the previous attempt's verdict under a
-        // new number.
         if let Some(report) = report.as_deref()
             && let Err(error) = fs::remove_file(report)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -441,13 +435,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     let subject_junit = subject_junit(&subject_root, config);
     let runner = lane_runner(&ctx.config, config, mode)?;
     let commanded = !mode.command.is_empty();
-    // A command lane runs its own recipe in the controller checkout; every
-    // other lane runs the configured runner against the subject. Each builds
-    // beside the tree it compiles, so one lane's artifacts never answer for
-    // another lane's source.
     let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
-    // Held for the lane, so the host's build-cache budget leaves these
-    // artifacts alone while the lane is still executing them.
     let _build_lease = lease::hold(&build);
     let spec = StressRunSpec {
         count,
@@ -531,9 +519,6 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         (Err(manifest_error), Err(sampler_error)) => (Err(manifest_error), Err(sampler_error)),
     };
     let sampler_healthy = sampler_result.is_ok();
-    // A command lane produces no per-test evidence, so there is nothing to
-    // stage and nothing for the per-test reporter to read. Its verdict is the
-    // attempts it recorded.
     let (stage_result, report_result) = if commanded {
         (Ok(()), Ok(()))
     } else {
@@ -656,13 +641,6 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
         writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
         sections.push_str(&body);
-        // Only a lane that verified against its expected identity, read valid
-        // evidence, AND accounted for every requested iteration may stand in a
-        // comparison. Numbers from one that did not are of unknown origin, and
-        // putting them beside trustworthy ones is how a run reports a
-        // difference between lanes that is really a difference between runs.
-        // A lane short of its own request measures a smaller run than the
-        // one that was asked for, so its rate belongs to a different question.
         match excluded_because {
             Some(reason) => excluded.push((lane_name.clone(), reason)),
             None => match lane.attempts {
@@ -801,10 +779,6 @@ fn command_lane_report(
     let failed = codes.iter().filter(|code| **code != 0).count();
     let observed = codes.len();
     let records = stress_report::attempt_records(&paths.attempt_junit, &codes);
-    // A lane that repeats inside one launch is only as complete as its own
-    // report: the exit code says the command finished, not that it ran the
-    // repeats it was given. Requiring the recorded repeats to match what was
-    // asked is what keeps a run that stopped early out of the comparison.
     let short = mode.owns_repeats && records.repeats() != count;
     let retried = records.retried();
     let result = if observed != expected || short {
@@ -856,10 +830,6 @@ fn command_lane_report(
     } else {
         Err(NotClean::reported("stress evidence"))
     };
-    // A lane that repeats internally is measured per test, like the lanes the
-    // run drives itself, and belongs in that comparison. A lane launched per
-    // repeat has only its exit codes, and a per-test table it cannot fill would
-    // read as though every test passed.
     let (rates, attempts) = if mode.owns_repeats {
         (records.rates, None)
     } else {
