@@ -18,7 +18,7 @@ fn micro_preset() -> CompiledUi {
     compile(
         builtin::MICRO_PRESET,
         &builtin::resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -146,7 +146,7 @@ fn player_preset_compiles_against_player_registry() {
     compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -160,7 +160,7 @@ fn player_deck_starts_with_one_hero_wave() {
     let ui = compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -203,7 +203,7 @@ fn player_deck_compiles_canonical_transport_row() {
     let ui = compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -297,7 +297,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     let ui = compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

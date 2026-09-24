@@ -187,8 +187,8 @@ impl Host for WaveHost<'_> {
     }
 }
 
-fn studio_registry() -> common::TestRegistry {
-    let mut registry = common::player_registry();
+fn studio_registry() -> common::registry::TestRegistry {
+    let mut registry = common::registry::player_registry();
     for (category, id, value) in [
         (
             EndpointCategory::Command,
@@ -246,7 +246,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
     let registry = if studio {
         studio_registry()
     } else {
-        common::player_registry()
+        common::registry::player_registry()
     };
     let ui = compile(
         "wave-document.klayout.ron",

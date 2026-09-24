@@ -170,8 +170,8 @@ impl Reads for Phase {
     }
 }
 
-fn registry() -> common::TestRegistry {
-    let mut registry = common::player_registry();
+fn registry() -> common::registry::TestRegistry {
+    let mut registry = common::registry::player_registry();
     for id in ["gallery.phase", "gallery.clock"] {
         registry.insert(
             EndpointCategory::Model,

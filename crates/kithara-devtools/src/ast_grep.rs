@@ -357,6 +357,47 @@ mod tests {
         rule_hits("style.no-magic-numbers.yml", source)
     }
 
+    fn module_root_hits(relative_path: &str, source: &str) -> usize {
+        rule_hits_at("style.no-items-in-lib-or-mod-rs.yml", relative_path, source)
+    }
+
+    #[test]
+    fn module_root_rule_reports_code_in_every_module_root() {
+        let source = "mod child;\npub use child::Item;\n\nfn helper() {}\n";
+        for path in [
+            "crates/kithara-audio/src/lib.rs",
+            "crates/kithara-audio/src/engine/mod.rs",
+            "crates/kithara-audio/src/engine/tests/mod.rs",
+            "crates/kithara-audio/tests/common/mod.rs",
+            "tests/crates/core/src/lib.rs",
+            "xtask/src/android/mod.rs",
+        ] {
+            assert_eq!(module_root_hits(path, source), 1, "{path}");
+        }
+    }
+
+    #[test]
+    fn module_root_rule_allows_declarations_and_reexports() {
+        let root = "//! Engine.\n\nmod child;\n#[cfg(test)]\nmod tests;\n\npub use child::Item;\npub(crate) use child::{helper, other};\n";
+        assert_eq!(
+            module_root_hits("crates/kithara-audio/src/engine/mod.rs", root),
+            0
+        );
+
+        let code = "fn helper() {}\n";
+        assert_eq!(
+            module_root_hits("crates/kithara-audio/src/engine/child.rs", code),
+            0
+        );
+        assert_eq!(
+            module_root_hits(
+                "crates/kithara-devtools/tests/fixtures/workspace/crates/demo/src/lib.rs",
+                code
+            ),
+            0
+        );
+    }
+
     #[test]
     fn local_use_rule_only_reports_production_functions() {
         let source = r#"

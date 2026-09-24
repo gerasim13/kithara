@@ -866,7 +866,7 @@ fn builtin_layouts_match_rect_fixtures() {
         let ui = compile(
             preset,
             &builtin::resolver(),
-            &common::player_registry(),
+            &common::registry::player_registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
@@ -933,7 +933,7 @@ fn split_weights_reach_layout_as_f32() {
     let ui = compile(
         "fractional.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -1001,7 +1001,7 @@ fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
     let ui = compile(
         "banded.klayout.ron",
         &resolver,
-        &common::player_registry(),
+        &common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -1109,7 +1109,7 @@ const SCENE: &str = r#"(schema: "kithara.module", version: 1, id: "scene", chrom
 /// Where a placement's child ended up in the scene around it, measured against
 /// the marker that stands at the stage's own origin.
 fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
-    let mut registry = common::player_registry();
+    let mut registry = common::registry::player_registry();
     for category in [EndpointCategory::Model, EndpointCategory::Parameter] {
         registry.insert(category, "scene.at", EndpointDesc::new(ValueKind::Point));
     }

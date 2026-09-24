@@ -3355,4 +3355,5 @@ scan_all_rules = [
   "arch.no-flash-time-hacks",
   "arch.no-raw-test",
   "perf.no-local-test-pools",
+  "style.no-items-in-lib-or-mod-rs",
 ]
