@@ -19,8 +19,6 @@ use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 
 const ROOT_A: &str = "asset_root_a";
-const ROOT_B: &str = "asset_root_b";
-
 type TestAssetStore = AssetStore<TestPools>;
 type TestAssetScope = AssetScope<TestPools>;
 
@@ -72,6 +70,8 @@ fn evicted_key_under_subscribed_root_is_delivered() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn evicted_key_under_other_root_is_not_delivered() {
+    const ROOT_B: &str = "asset_root_b";
+
     let store = ephemeral_store(2);
     let scope_a = store.scope::<Test>(&source(ROOT_A)).unwrap();
     let scope_b = store.scope::<Test>(&source(ROOT_B)).unwrap();

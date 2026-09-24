@@ -47,78 +47,6 @@ const DECK_MODULE: &str = r#"(
     ),
 )"#;
 
-const ROUNDTRIP_MODULE: &str = r##"(
-    schema: "kithara.module",
-    version: 1,
-    id: "roundtrip",
-    parameters: ["deck"],
-    root: Column(
-        id: "root",
-        children: [
-            Row(
-                children: [
-                    Button(
-                        id: "play",
-                        label: "PLAY",
-                        active_label: Some("PAUSE"),
-                        style: TransportPrimary,
-                        read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
-                        write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-                        size: Some((w: Fixed(96.0), h: Fixed(32.0))),
-                    ),
-                    Scalar(
-                        id: "load",
-                        read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
-                        size: Some((w: Shrink, h: Fill)),
-                        format: Percent,
-                        framed: false,
-                    ),
-                    Fader(
-                        id: "volume",
-                        style: Volume,
-                        read: Parameter(id: "player.output.volume"),
-                        write: Parameter(id: "player.output.volume"),
-                        size: Some((w: Fixed(120.0), h: Fill)),
-                    ),
-                    Table(
-                        id: "tracks",
-                        read: Model(id: "library.visible_tracks"),
-                        columns: [
-                            (id: "index", label: "#", style: Index, width: 28.0),
-                            (id: "deck", label: "DECK", style: Badge, width: 64.0),
-                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
-                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
-                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
-                            (id: "key", label: "KEY", style: Mono, width: 56.0),
-                            (id: "time", label: "TIME", style: Time, width: 70.0),
-                            (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
-                            (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
-                        ],
-                        columns_state: Some(Model(id: "ui.table.columns")),
-                        size: Some((w: Fill, h: Fixed(160.0))),
-                    ),
-                ],
-            ),
-            Include(
-                id: "transport",
-                source: "deck/transport.kmodule.ron",
-                with: { "deck": "$deck" },
-            ),
-            Slot(
-                id: "extra",
-                default: [
-                    Column(
-                        id: "nested",
-                        children: [
-                            Text(id: "status"),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    ),
-)"##;
-
 fn to_ron_pretty<T: serde::Serialize>(value: &T) -> String {
     ron::Options::default()
         .with_default_extension(Extensions::IMPLICIT_SOME)
@@ -273,6 +201,78 @@ fn module_parses_with_implicit_some_bindings() {
 
 #[kithara::test]
 fn module_roundtrip_is_semantically_stable() {
+    const ROUNDTRIP_MODULE: &str = r##"(
+    schema: "kithara.module",
+    version: 1,
+    id: "roundtrip",
+    parameters: ["deck"],
+    root: Column(
+        id: "root",
+        children: [
+            Row(
+                children: [
+                    Button(
+                        id: "play",
+                        label: "PLAY",
+                        active_label: Some("PAUSE"),
+                        style: TransportPrimary,
+                        read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                        size: Some((w: Fixed(96.0), h: Fixed(32.0))),
+                    ),
+                    Scalar(
+                        id: "load",
+                        read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
+                        size: Some((w: Shrink, h: Fill)),
+                        format: Percent,
+                        framed: false,
+                    ),
+                    Fader(
+                        id: "volume",
+                        style: Volume,
+                        read: Parameter(id: "player.output.volume"),
+                        write: Parameter(id: "player.output.volume"),
+                        size: Some((w: Fixed(120.0), h: Fill)),
+                    ),
+                    Table(
+                        id: "tracks",
+                        read: Model(id: "library.visible_tracks"),
+                        columns: [
+                            (id: "index", label: "#", style: Index, width: 28.0),
+                            (id: "deck", label: "DECK", style: Badge, width: 64.0),
+                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
+                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
+                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
+                            (id: "key", label: "KEY", style: Mono, width: 56.0),
+                            (id: "time", label: "TIME", style: Time, width: 70.0),
+                            (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
+                            (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
+                        ],
+                        columns_state: Some(Model(id: "ui.table.columns")),
+                        size: Some((w: Fill, h: Fixed(160.0))),
+                    ),
+                ],
+            ),
+            Include(
+                id: "transport",
+                source: "deck/transport.kmodule.ron",
+                with: { "deck": "$deck" },
+            ),
+            Slot(
+                id: "extra",
+                default: [
+                    Column(
+                        id: "nested",
+                        children: [
+                            Text(id: "status"),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)"##;
+
     let doc = parse_module(ROUNDTRIP_MODULE, &module_origin()).unwrap();
     let printed = to_ron_pretty(&doc);
     let reparsed = parse_module(&printed, &module_origin()).unwrap();
@@ -426,23 +426,6 @@ fn chip_style_is_typed_and_defaults_to_deck() {
     ));
 }
 
-const OPTIONAL_LAYOUT: &str = r#"(
-    schema: "kithara.layout",
-    version: 1,
-    id: "optional",
-    root: Split(
-        axis: Horizontal,
-        children: [
-            (node: Optional(
-                id: "library",
-                hidden: Model(id: "ui.block.hidden"),
-                node: Module(instance: "library", source: "modules/library.kmodule.ron"),
-            )),
-            (node: Module(instance: "deck-a", source: "modules/deck.kmodule.ron", with: { "deck": "a" })),
-        ],
-    ),
-)"#;
-
 const OPTIONAL_MODULE: &str = r#"(
     schema: "kithara.module",
     version: 1,
@@ -466,6 +449,23 @@ const OPTIONAL_MODULE: &str = r#"(
 
 #[kithara::test]
 fn an_optional_layout_block_roundtrips() {
+    const OPTIONAL_LAYOUT: &str = r#"(
+    schema: "kithara.layout",
+    version: 1,
+    id: "optional",
+    root: Split(
+        axis: Horizontal,
+        children: [
+            (node: Optional(
+                id: "library",
+                hidden: Model(id: "ui.block.hidden"),
+                node: Module(instance: "library", source: "modules/library.kmodule.ron"),
+            )),
+            (node: Module(instance: "deck-a", source: "modules/deck.kmodule.ron", with: { "deck": "a" })),
+        ],
+    ),
+)"#;
+
     let doc = parse_layout(OPTIONAL_LAYOUT, &origin()).unwrap();
     let printed = to_ron_pretty(&doc);
     let reparsed = parse_layout(&printed, &origin()).unwrap();
@@ -577,7 +577,9 @@ fn a_popover_with_a_pressable_anchor_roundtrips() {
     assert_eq!(printed, to_ron_pretty(&reparsed));
 }
 
-const POINTER_POPOVER_MODULE: &str = r#"(
+#[kithara::test]
+fn a_popover_opening_at_the_pointer_roundtrips() {
+    const POINTER_POPOVER_MODULE: &str = r#"(
     schema: "kithara.module",
     version: 1,
     id: "context-menu",
@@ -604,8 +606,6 @@ const POINTER_POPOVER_MODULE: &str = r#"(
     ),
 )"#;
 
-#[kithara::test]
-fn a_popover_opening_at_the_pointer_roundtrips() {
     let doc = parse_module(POINTER_POPOVER_MODULE, &module_origin()).unwrap();
     let printed = to_ron_pretty(&doc);
     let reparsed = parse_module(&printed, &module_origin()).unwrap();

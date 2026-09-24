@@ -10,22 +10,6 @@ use crate::{codec::CodecPriming, error::DecodeResult};
 /// and emit raw codec frames with timing metadata. The codec layer
 /// ([`crate::codec::FrameCodec`]) consumes those frames into PCM.
 pub(crate) trait Demuxer: Send {
-    /// Prepare container storage and metadata outside the real-time decode core.
-    ///
-    /// # Errors
-    /// Returns source, parser, or pool-budget failures encountered during preparation.
-    fn prepare_frame(&mut self) -> DecodeResult<()> {
-        Ok(())
-    }
-
-    /// Borrow a frame using only resources prepared by `prepare_frame`.
-    ///
-    /// # Errors
-    /// Returns the same frame errors as `next_frame`.
-    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.next_frame()
-    }
-
     /// Segment index of the frame from the last `next_frame`.
     /// `None` for non-segmented sources.
     fn current_segment_index(&self) -> Option<u32> {
@@ -53,6 +37,22 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level failures verbatim. Source-level pending
     /// states return `Ok(DemuxOutcome::Pending(_))`.
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
+
+    /// Borrow a frame using only resources prepared by `prepare_frame`.
+    ///
+    /// # Errors
+    /// Returns the same frame errors as `next_frame`.
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.next_frame()
+    }
+
+    /// Prepare container storage and metadata outside the real-time decode core.
+    ///
+    /// # Errors
+    /// Returns source, parser, or pool-budget failures encountered during preparation.
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        Ok(())
+    }
 
     /// Seek the demuxer to `target` time.
     ///

@@ -13,28 +13,18 @@ use crate::resource::ResourceSrc;
 /// The value is held behind an [`Arc`] because a resource configuration is
 /// cloned per load, per queue forward, and per analysis entry. A full-track
 /// grid or waveform must not be copied on any of those.
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, derive_more::From)]
 #[derive_where::derive_where(Clone)]
 #[non_exhaustive]
 pub enum ArtifactSource<T> {
     /// The artifact itself, already built by the caller.
     #[debug("Value(..)")]
+    #[from]
     Value(Arc<T>),
     /// A URL or local path the artifact's own bytes are read from. Never the
     /// audio source: an artifact has its own identity and its own format.
+    #[from]
     Source(ResourceSrc),
-}
-
-impl<T> From<Arc<T>> for ArtifactSource<T> {
-    fn from(value: Arc<T>) -> Self {
-        Self::Value(value)
-    }
-}
-
-impl<T> From<ResourceSrc> for ArtifactSource<T> {
-    fn from(src: ResourceSrc) -> Self {
-        Self::Source(src)
-    }
 }
 
 impl<T: ArtifactDocument> ArtifactSource<T> {

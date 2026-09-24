@@ -22,14 +22,14 @@ pub(crate) struct Ticket {
 /// A track's live load attempt. Dropping the guard armed cancels the
 /// attempt's per-track token, so removing a track aborts the load without an explicit call.
 pub(crate) struct AttemptGuard {
-    pub(crate) waiting: bool,
-    pub(crate) generation: u64,
-    /// `None` = disarmed: the token now belongs to the built `Resource`.
-    cancel: Option<CancelToken>,
     /// The user's selection wants this track. Set when the track is selected,
     /// which can happen while a background prefetch attempt is already running:
     /// the lane the attempt was spawned into is fixed, being wanted is not.
     pub(crate) selected: bool,
+    pub(crate) waiting: bool,
+    pub(crate) generation: u64,
+    /// `None` = disarmed: the token now belongs to the built `Resource`.
+    cancel: Option<CancelToken>,
 }
 
 impl AttemptGuard {

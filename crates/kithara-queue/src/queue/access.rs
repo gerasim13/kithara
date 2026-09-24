@@ -14,6 +14,14 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    #[must_use]
+    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
+        *self
+            .action_at_item_end
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// The currently playing track entry, if any.
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
@@ -35,13 +43,15 @@ where
         if idx < self.len() { Some(idx) } else { None }
     }
 
-    /// Set repeat mode.
-    pub fn set_repeat(&self, mode: RepeatMode) {
+    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
         self.command(|queue| {
-            queue.lock_navigation_mut().set_repeat(mode);
-            queue.bus.publish(QueueEvent::RepeatModeChanged {
-                mode: map_repeat_mode(mode),
-            });
+            *queue
+                .action_at_item_end
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = action;
+            queue
+                .bus
+                .publish(QueueEvent::ActionAtItemEndChanged { action });
         });
     }
 
@@ -59,23 +69,13 @@ where
         });
     }
 
-    #[must_use]
-    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self
-            .action_at_item_end
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
+    /// Set repeat mode.
+    pub fn set_repeat(&self, mode: RepeatMode) {
         self.command(|queue| {
-            *queue
-                .action_at_item_end
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = action;
-            queue
-                .bus
-                .publish(QueueEvent::ActionAtItemEndChanged { action });
+            queue.lock_navigation_mut().set_repeat(mode);
+            queue.bus.publish(QueueEvent::RepeatModeChanged {
+                mode: map_repeat_mode(mode),
+            });
         });
     }
 

@@ -96,7 +96,9 @@ mod tests {
 
     use super::*;
 
-    const JSON: &str = r#"{
+    #[test]
+    fn parses_suite_binaries() {
+        const JSON: &str = r#"{
       "rust-build-meta": {},
       "test-count": 2,
       "rust-suites": {
@@ -109,8 +111,6 @@ mod tests {
       }
     }"#;
 
-    #[test]
-    fn parses_suite_binaries() {
         let suites = parse_list(JSON).expect("parse nextest list");
         let s = &suites["demo-tests::suite_light"];
 

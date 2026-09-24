@@ -24,7 +24,6 @@ use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
 const EXPECTED_CHANNELS: u16 = 2;
 const EXPECTED_SAMPLE_RATE: u32 = 44_100;
 const MP3_FRAME_TOLERANCE: usize = 2 * 1_152;
-const AAC_FRAME_TOLERANCE: usize = 2 * 1_024;
 const MAX_DECODE_OUTCOMES: usize = 100_000;
 /// Keep in sync with webcodecs/probe.rs.
 const FLAC_PROBE_STREAMINFO: [u8; 34] = [
@@ -257,6 +256,8 @@ async fn eof_tail_drain() {
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
 async fn aac_parity() {
+    const AAC_FRAME_TOLERANCE: usize = 2 * 1_024;
+
     let aac_lc = fetch_signal("aac_lc.mp4").await;
     prepare_webcodecs("mp4a.40.2", aac_lc).await;
 

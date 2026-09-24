@@ -42,8 +42,8 @@ pub(crate) struct ScopeTopics {
 impl ScopeTopics {
     pub(crate) const fn new(capacity: usize) -> Self {
         Self {
-            head: OnceLock::new(),
             capacity,
+            head: OnceLock::new(),
         }
     }
 

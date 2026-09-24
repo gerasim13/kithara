@@ -82,16 +82,16 @@ where
     type Control = super::QueueControl<S>;
     type Schema = S;
 
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.with_open_result(|queue| queue.player.prepare())
-    }
-
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
     }
 
     fn control(&self) -> Self::Control {
         self.control.clone()
+    }
+
+    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
+        control.with_open_result(|queue| queue.player.prepare())
     }
 
     delegate::delegate! {

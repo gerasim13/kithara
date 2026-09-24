@@ -37,10 +37,10 @@ where
 {
     pub(super) fingerprint: AnalysisFingerprint,
     pub(super) token: AnalysisToken,
-    #[field(get, vis = "pub(crate)")]
-    pub(super) coverage: RangeSet<u64>,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) pools: PoolRegion<S>,
+    #[field(get, vis = "pub(crate)")]
+    pub(super) coverage: RangeSet<u64>,
     pub(super) beat: Slot<B>,
     pub(super) waveform: waveform::Slot,
     pub(super) settled: bool,

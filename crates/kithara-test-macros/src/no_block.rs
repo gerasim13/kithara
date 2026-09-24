@@ -3,8 +3,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Error, Expr, ExprLit, ItemFn, Lit, MetaNameValue, parse_macro_input, parse_quote};
 
-const DEFAULT_BUDGET_MS: u64 = 25;
-
 /// What a watched poll's budget is spent on.
 enum Budget {
     /// Wall the poll must not sit in, sanctioned regions removed.
@@ -22,6 +20,8 @@ pub(crate) fn expand_allow_block(attr: TokenStream, item: TokenStream) -> TokenS
 }
 
 fn expand_with_path(attr: TokenStream, item: TokenStream, path: &TokenStream2) -> TokenStream {
+    const DEFAULT_BUDGET_MS: u64 = 25;
+
     let budget = if attr.is_empty() {
         Budget::Wall(DEFAULT_BUDGET_MS)
     } else {

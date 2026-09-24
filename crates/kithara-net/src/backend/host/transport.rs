@@ -39,12 +39,12 @@ pub trait HostTransport: fmt::Debug + Send + Sync {
 
 /// One call a [`HostTransport`] started.
 pub trait HostCall: Send + Sync {
+    /// Stop the call from any thread. Idempotent.
+    fn cancel(&self);
+
     /// Fill `buffer` from its start and hand it back through
     /// [`HostEvents::read`]. Kithara lends one buffer at a time.
     fn read(&self, buffer: HostBuffer);
-
-    /// Stop the call from any thread. Idempotent.
-    fn cancel(&self);
 }
 
 /// An HTTP method a [`HostTransport`] runs.
@@ -71,11 +71,11 @@ impl HostMethod {
 #[derive(Debug)]
 pub struct HostRequest {
     pub method: HostMethod,
+    /// The body of a POST, readable until the call's terminal report.
+    pub body: Option<HostRequestBody>,
     pub url: Url,
     /// Header names and values, sent as given.
     pub headers: Vec<(String, String)>,
-    /// The body of a POST, readable until the call's terminal report.
-    pub body: Option<HostRequestBody>,
 }
 
 /// The body of a request, lent to a transport until the call's terminal
@@ -116,17 +116,17 @@ impl fmt::Debug for HostRequestBody {
 pub struct HostBuffer(ByteBuffer);
 
 impl HostBuffer {
+    pub(super) fn into_bytes(self, len: usize) -> Bytes {
+        let mut bytes = self.0;
+        bytes.truncate(len);
+        pooled_bytes(bytes)
+    }
+
     pub(super) fn with_len(buffers: &ByteBuffers, len: usize) -> Result<Self, NetError> {
         buffers
             .get_with_len(len)
             .map(Self)
             .map_err(|error| NetError::Network(error.to_string()))
-    }
-
-    pub(super) fn into_bytes(self, len: usize) -> Bytes {
-        let mut bytes = self.0;
-        bytes.truncate(len);
-        pooled_bytes(bytes)
     }
 }
 

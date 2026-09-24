@@ -32,20 +32,13 @@ impl MasterRing {
 }
 
 pub(crate) struct RingWriter {
-    block_frames: u32,
-    block_samples: usize,
     producer: HeapProd<f32>,
     staging: Vec<f32>,
+    block_frames: u32,
+    block_samples: usize,
 }
 
 impl RingWriter {
-    delegate::delegate! {
-        to self {
-            #[field(block_frames)]
-            pub(crate) const fn block_frames(&self) -> u32;
-        }
-    }
-
     pub(crate) fn reserve(&mut self, block_frames: u32) -> Option<ReservedBlock<'_>> {
         assert_eq!(
             block_frames, self.block_frames,
@@ -56,6 +49,13 @@ impl RingWriter {
         }
         self.staging.fill(0.0);
         Some(ReservedBlock { writer: self })
+    }
+
+    delegate::delegate! {
+        to self {
+            #[field(block_frames)]
+            pub(crate) const fn block_frames(&self) -> u32;
+        }
     }
 }
 

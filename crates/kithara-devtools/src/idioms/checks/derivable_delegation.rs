@@ -12,13 +12,11 @@ use syn::{
 
 use super::{
     Check, Context,
-    derivable_support::{
-        attrs_match_config, crate_manifest, deletion_range, item_blocks, line_start,
-    },
+    derivable_support::{attrs_match_config, crate_manifest, item_blocks},
 };
 use crate::{
     common::{
-        fix::{FixOutcome, SourceRewriter, block::BlockRange},
+        fix::{FixOutcome, SourceRewriter, block::BlockRange, deletion_range, line_start},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
         walker::relative_to,
@@ -27,7 +25,6 @@ use crate::{
 };
 
 pub(crate) const ID: &str = "derivable_delegation";
-const MAX_RAW_STRING_HASHES: usize = 255;
 const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
 const UNSUPPORTED_DELEGATE_SYNTAX: &str = "existing delegate! block has unsupported syntax";
 
@@ -83,7 +80,7 @@ impl Check for DerivableDelegation {
                 continue;
             }
             let rewritten = rewriter.finish().context("apply delegation edits")?;
-            fs::write(path, rewritten).with_context(|| format!("write {}", path.display()))?;
+            ctx.scan.write(path, rewritten)?;
             outcome.writes += 1;
             if let Some(manifest) = crate_manifest(ctx.workspace_root, path) {
                 manifests.insert(manifest);
@@ -1097,6 +1094,8 @@ fn block_doc_attribute(attr: &syn::Attribute) -> Option<String> {
 }
 
 fn raw_string_literal(value: &str) -> Option<String> {
+    const MAX_RAW_STRING_HASHES: usize = 255;
+
     for count in 0..=MAX_RAW_STRING_HASHES {
         let hashes = "#".repeat(count);
         if !value.contains(&format!("\"{hashes}")) {

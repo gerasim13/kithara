@@ -77,14 +77,14 @@ pub trait PlayerControlSource: Player {
     /// Attaches the resident Player to its canonical session exactly once.
     fn attach_session(&mut self, binding: SessionBinding<Self::Schema>) -> Result<(), PlayError>;
 
-    /// Prepare the attached graph and slot before exposing musical controls.
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
-
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
 
     /// Creates a command capability for this player.
     fn control(&self) -> Self::Control;
+
+    /// Prepare the attached graph and slot before exposing musical controls.
+    fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
 
     /// Transfers only the sendable Host-owned part of a wasm player.
     #[cfg(target_arch = "wasm32")]
@@ -185,16 +185,16 @@ where
         self.runtime.attach_session(binding)
     }
 
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.prepare()
-    }
-
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
     }
 
     fn control(&self) -> Self::Control {
         self.make_control()
+    }
+
+    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
+        control.prepare()
     }
 
     #[cfg(target_arch = "wasm32")]

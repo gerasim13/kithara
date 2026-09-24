@@ -235,12 +235,6 @@ impl ActiveDecode {
         )
     }
 
-    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
-        self.active.prepare_deferred(live_epoch, prepare_input);
-        self.active.decoder_mut().flush_reader_signals();
-        self.flush_incoming_reader_signals();
-    }
-
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.active.next_chunk();
         let (chunks, samples) = self.stats();
@@ -306,12 +300,51 @@ impl ActiveDecode {
         self.next_output_inner(cursor, epoch, false)
     }
 
+    /// Retires the transition join a seek invalidated.
+    ///
+    /// A priming incoming means a join is armed on the active generation:
+    /// `outgoing_holdback_is_active` reports one, and decode output flows
+    /// through the holdback so the incoming can be spliced at the frontier it
+    /// latched. Retiring the active generation's staged PCM disarms that
+    /// holdback, and the claim outlives it — the next chunk is rejected as
+    /// unprepared, and the rejection fails the track. Re-arming is no answer
+    /// either: the latched frontier is pre-seek and the repositioned
+    /// generation never reaches it. So the incoming half goes back for
+    /// retirement, and the surviving ABR intent mints a fresh transition.
+    #[must_use]
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) -> Option<DecoderGeneration> {
+        self.active.notify_seek(retire);
+        if !matches!(self.incoming, Some(IncomingDecode::Priming { .. })) {
+            return None;
+        }
+        self.discard_incoming()
+    }
+
     fn outgoing_holdback_is_active(&self) -> bool {
         let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
             return false;
         };
         self.blender.is_steady()
             && self.active.blender_profile().spec() == generation.blender_profile().spec()
+    }
+
+    pub(crate) fn poll_seek<T: StreamType>(
+        &mut self,
+        stream: &SharedStream<T>,
+        playhead: &dyn PlayheadWrite,
+        request: SeekContext,
+    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
+        let outcome = self.active.poll_seek(request);
+        if let Poll::Ready(Ok(ref result)) = outcome {
+            commit_outcome(&self.active, stream, playhead, result);
+        }
+        outcome
+    }
+
+    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+        self.active.prepare_deferred(live_epoch, prepare_input);
+        self.active.decoder_mut().flush_reader_signals();
+        self.flush_incoming_reader_signals();
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
@@ -360,43 +393,10 @@ impl ActiveDecode {
         mem::replace(&mut self.active, active)
     }
 
-    /// Retires the transition join a seek invalidated.
-    ///
-    /// A priming incoming means a join is armed on the active generation:
-    /// `outgoing_holdback_is_active` reports one, and decode output flows
-    /// through the holdback so the incoming can be spliced at the frontier it
-    /// latched. Retiring the active generation's staged PCM disarms that
-    /// holdback, and the claim outlives it — the next chunk is rejected as
-    /// unprepared, and the rejection fails the track. Re-arming is no answer
-    /// either: the latched frontier is pre-seek and the repositioned
-    /// generation never reaches it. So the incoming half goes back for
-    /// retirement, and the surviving ABR intent mints a fresh transition.
-    #[must_use]
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) -> Option<DecoderGeneration> {
-        self.active.notify_seek(retire);
-        if !matches!(self.incoming, Some(IncomingDecode::Priming { .. })) {
-            return None;
-        }
-        self.discard_incoming()
-    }
-
     pub(crate) fn reset(&mut self) {
         self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         self.stage_error = None;
         self.blender.reset();
-    }
-
-    pub(crate) fn poll_seek<T: StreamType>(
-        &mut self,
-        stream: &SharedStream<T>,
-        playhead: &dyn PlayheadWrite,
-        request: SeekContext,
-    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
-        let outcome = self.active.poll_seek(request);
-        if let Poll::Ready(Ok(ref result)) = outcome {
-            commit_outcome(&self.active, stream, playhead, result);
-        }
-        outcome
     }
 
     pub(crate) fn seek<T: StreamType>(

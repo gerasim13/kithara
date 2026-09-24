@@ -10,9 +10,9 @@ pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
 /// AES-128-CBC [`ResourceProcessor`] over a [`DecryptContext`].
 #[derive(derive_more::Debug)]
 pub(crate) struct DecryptProcessor {
+    ctx: DecryptContext,
     #[debug("<redacted>")]
     identity: [u8; 32],
-    ctx: DecryptContext,
 }
 
 impl DecryptProcessor {
@@ -22,7 +22,7 @@ impl DecryptProcessor {
         let (key, iv) = identity.split_at_mut(ctx.key.len());
         key.copy_from_slice(&ctx.key);
         iv.copy_from_slice(&ctx.iv);
-        Self { identity, ctx }
+        Self { ctx, identity }
     }
 }
 

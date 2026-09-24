@@ -21,12 +21,6 @@ use kithara_ui::{
 use num_traits::cast::AsPrimitive;
 use ron::ser::to_string;
 
-const MODULE_SKELETON: &str = r#"(
-    schema: "kithara.module",
-    version: 1,
-    id: "bench",
-    root: Column(children: []),
-)"#;
 static ROWS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
     vec![
         TableRow::new(vec![TableCell::text("name", "Signal Path")], true),
@@ -337,6 +331,13 @@ fn generic_control(scope: &str, index: usize) -> ControlNode {
 }
 
 fn module_text(id: &str, root: ControlNode) -> String {
+    const MODULE_SKELETON: &str = r#"(
+    schema: "kithara.module",
+    version: 1,
+    id: "bench",
+    root: Column(children: []),
+)"#;
+
     let origin = SourceUri(format!("{id}.kmodule.ron"));
     let mut document: ModuleDoc = parse_module(MODULE_SKELETON, &origin)
         .unwrap_or_else(|error| panic!("module skeleton must parse: {error}"));

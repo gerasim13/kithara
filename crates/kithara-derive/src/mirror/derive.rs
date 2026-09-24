@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DeriveInput, Fields, Generics, Ident, Lifetime,
-    LifetimeParam, Path,
+    Attribute, Data, DataEnum, DataStruct, DeriveInput, Error, Fields, GenericParam, Generics,
+    Ident, Index, Lifetime, LifetimeParam, Path,
 };
 
 #[derive(Default)]
@@ -16,22 +16,22 @@ struct Options {
 #[derive(Default)]
 struct MemberOptions {
     rename: Option<Ident>,
-    copy: bool,
     as_ref: bool,
+    copy: bool,
     skip: bool,
     tuple: bool,
 }
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     expand_inner(&syn::parse_macro_input!(input as DeriveInput))
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 
 fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let options = parse_options(&input.attrs)?;
     if options.from.is_none() && options.from_ref.is_none() && options.into.is_none() {
-        return Err(syn::Error::new_spanned(
+        return Err(Error::new_spanned(
             &input.ident,
             "Mirror requires `from`, `from_ref`, or `into`",
         ));
@@ -92,7 +92,7 @@ fn member_options(attrs: &[Attribute]) -> syn::Result<MemberOptions> {
         })?;
     }
     if options.copy && options.as_ref {
-        return Err(syn::Error::new_spanned(
+        return Err(Error::new_spanned(
             attrs.first(),
             "a mirror field cannot be both `copy` and `as_ref`",
         ));
@@ -115,7 +115,7 @@ fn expand_from(input: &DeriveInput, source: &Path, by_ref: bool) -> syn::Result<
         Data::Struct(data) => from_struct(data, source, by_ref)?,
         Data::Enum(data) => from_enum(data, source, by_ref)?,
         Data::Union(union) => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 union.union_token,
                 "Mirror does not support unions",
             ));
@@ -137,10 +137,10 @@ fn impl_generics_for_ref(generics: &Generics, by_ref: bool) -> (Generics, TokenS
         return (generics.clone(), quote!(#lifetime));
     }
     let mut generics = generics.clone();
-    let lifetime = Lifetime::new("'mirror", proc_macro2::Span::call_site());
+    let lifetime = Lifetime::new("'mirror", Span::call_site());
     generics.params.insert(
         0,
-        syn::GenericParam::Lifetime(LifetimeParam::new(lifetime.clone())),
+        GenericParam::Lifetime(LifetimeParam::new(lifetime.clone())),
     );
     (generics, quote!(#lifetime))
 }
@@ -167,7 +167,7 @@ fn from_struct(data: &DataStruct, _source: &Path, by_ref: bool) -> syn::Result<T
                 .iter()
                 .enumerate()
                 .map(|(index, field)| {
-                    let index = syn::Index::from(index);
+                    let index = Index::from(index);
                     let options = member_options(&field.attrs)?;
                     Ok(field_value(quote!(value.#index), &options, by_ref))
                 })
@@ -285,7 +285,7 @@ fn expand_into(input: &DeriveInput, target: &Path) -> syn::Result<TokenStream2> 
         Data::Struct(data) => into_struct(data, target)?,
         Data::Enum(data) => into_enum(data, name, target)?,
         Data::Union(union) => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 union.union_token,
                 "Mirror does not support unions",
             ));
@@ -314,7 +314,7 @@ fn into_struct(data: &DataStruct, target: &Path) -> syn::Result<TokenStream2> {
             Ok(quote!(#target { #(#values,)* }))
         }
         Fields::Unnamed(fields) => {
-            let values = (0..fields.unnamed.len()).map(syn::Index::from);
+            let values = (0..fields.unnamed.len()).map(Index::from);
             Ok(quote!(#target(#(value.#values),*)))
         }
         Fields::Unit => Ok(quote!(#target)),

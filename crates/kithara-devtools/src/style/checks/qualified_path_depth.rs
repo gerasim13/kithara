@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs,
     ops::Range,
     path::Path as FsPath,
 };
@@ -49,7 +48,7 @@ impl Check for QualifiedPathDepth {
             let Some(rewritten) = rewrite.source else {
                 continue;
             };
-            fs::write(path, rewritten)?;
+            ctx.scan.write(path, rewritten)?;
             outcome.writes += 1;
             outcome.changes.push(rel);
         }

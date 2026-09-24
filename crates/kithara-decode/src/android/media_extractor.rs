@@ -39,10 +39,10 @@ enum SourceSize {
 /// The pipeline's source as the platform extractor reads it.
 struct DataSourceCtx {
     source: BoxedSource,
-    size: SourceSize,
     error: Option<io::Error>,
-    // Container recognition sees only the separately supplied init segment.
+    /// Container recognition sees only the separately supplied init segment.
     init_end: Option<u64>,
+    size: SourceSize,
 }
 
 impl MediaDataSource for DataSourceCtx {
@@ -92,9 +92,9 @@ struct PcmOutput {
 /// track format for codec configuration and reporting the extractor's actual
 /// seek position.
 pub(crate) struct AndroidMediaExtractor {
+    pcm_output: Option<PcmOutput>,
     inner: OwnedExtractor<DataSourceCtx>,
     cursor: SampleCursor,
-    pcm_output: Option<PcmOutput>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -122,8 +122,8 @@ impl AndroidMediaExtractor {
         let ctx = DataSourceCtx {
             source,
             size,
-            error: None,
             init_end,
+            error: None,
         };
 
         let mut inner = OwnedExtractor::open(ctx).map_err(|(mut ctx, error)| {
@@ -139,6 +139,36 @@ impl AndroidMediaExtractor {
             cursor: SampleCursor::Current,
             pcm_output: None,
         })
+    }
+
+    fn prepare_sample(&mut self) -> DecodeResult<()> {
+        match self.cursor {
+            SampleCursor::Current => Ok(()),
+            SampleCursor::Recover { at } => {
+                // Native seeks floor microsecond timestamps onto the PCM grid.
+                let micros = at.as_nanos().div_ceil(1_000);
+                let result = self.seek_to(i64::try_from(micros).unwrap_or(i64::MAX));
+                if result.is_err() {
+                    self.cursor = SampleCursor::Recover { at };
+                }
+                result.map(|_| ())
+            }
+            SampleCursor::Advance { next_pcm } => {
+                self.cursor = SampleCursor::Current;
+                // Advancing fetches the next sample and can block on streaming input.
+                self.inner.advance();
+                if let Some(source) = self.inner.source_mut().error.take() {
+                    let error = DecodeError::Io { source };
+                    if error.pending_reason().is_some()
+                        && let Some(at) = next_pcm
+                    {
+                        self.cursor = SampleCursor::Recover { at };
+                    }
+                    return Err(error);
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Read the current sample into `buf`. Returns `Ok(Some((n, pts_us)))`
@@ -180,38 +210,11 @@ impl AndroidMediaExtractor {
         Ok(Some((read, pts_us)))
     }
 
-    fn prepare_sample(&mut self) -> DecodeResult<()> {
-        match self.cursor {
-            SampleCursor::Current => Ok(()),
-            SampleCursor::Recover { at } => {
-                // Native seeks floor microsecond timestamps onto the PCM grid.
-                let micros = at.as_nanos().div_ceil(1_000);
-                let result = self.seek_to(i64::try_from(micros).unwrap_or(i64::MAX));
-                if result.is_err() {
-                    self.cursor = SampleCursor::Recover { at };
-                }
-                result.map(|_| ())
-            }
-            SampleCursor::Advance { next_pcm } => {
-                self.cursor = SampleCursor::Current;
-                // Advancing fetches the next sample and can block on streaming input.
-                self.inner.advance();
-                if let Some(source) = self.inner.source_mut().error.take() {
-                    let error = DecodeError::Io { source };
-                    if error.pending_reason().is_some()
-                        && let Some(at) = next_pcm
-                    {
-                        self.cursor = SampleCursor::Recover { at };
-                    }
-                    return Err(error);
-                }
-                Ok(())
-            }
-        }
-    }
-
     /// Seek to nearest previous-sync sample at or before `pts_us`.
     pub(crate) fn seek_to(&mut self, pts_us: i64) -> DecodeResult<Option<(Duration, u64)>> {
+        /// `AMediaExtractor_getSampleTime` reads -1 as "the extractor holds no sample".
+        const NO_SAMPLE: i64 = -1;
+
         self.inner.source_mut().error = None;
         self.cursor = SampleCursor::Current;
         let seek = self.inner.seek_to_previous_sync(pts_us);
@@ -262,9 +265,6 @@ impl AndroidMediaExtractor {
         Ok((info, format))
     }
 }
-
-/// `AMediaExtractor_getSampleTime` reads -1 as "the extractor holds no sample".
-const NO_SAMPLE: i64 = -1;
 
 fn read_track_format(fmt: &OwnedFormat) -> DecodeResult<TrackFormatInfo> {
     let mime = fmt

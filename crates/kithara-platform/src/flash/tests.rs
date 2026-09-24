@@ -33,15 +33,8 @@ fn guard() -> MutexGuard<'static, ()> {
 }
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
-const STARVED_BACKOFF_STEP_MS: u64 = 1;
-const STARVED_BACKOFF_RETRIES: usize = 16;
-#[cfg(feature = "no-block")]
-const NO_BLOCK_BRIDGED_BUDGET_MS: u64 = 10_000;
 #[cfg(feature = "no-block")]
 const NO_BLOCK_ENGINE_WAIT_MS: u64 = 30;
-#[cfg(feature = "no-block")]
-const NO_BLOCK_TIGHT_BUDGET_MS: u64 = 1;
-
 /// Generous real-time bound: every engine test below must return in ~0 real
 /// time because nothing blocks on the wall clock. A bug that stops the engine
 /// advancing would hang; this only exists so a hung join surfaces as a slow
@@ -122,6 +115,9 @@ fn poll_once_no_block<F: Future>(fut: F) -> std::task::Poll<F::Output> {
 #[cfg(feature = "no-block")]
 #[kithara::test(native, flash(false))]
 fn no_block_bridged_engine_wait_panics() {
+    #[cfg(feature = "no-block")]
+    const NO_BLOCK_BRIDGED_BUDGET_MS: u64 = 10_000;
+
     let _g = guard();
     reset();
     crate::no_block::mode::force_mode(crate::no_block::mode::Mode::Panic);
@@ -155,6 +151,9 @@ fn no_block_bridged_engine_wait_panics() {
 #[cfg(feature = "no-block")]
 #[kithara::test(native, flash(false))]
 fn no_block_permit_poll_suppresses_bridged_wait_and_budget() {
+    #[cfg(feature = "no-block")]
+    const NO_BLOCK_TIGHT_BUDGET_MS: u64 = 1;
+
     let _g = guard();
     reset();
     crate::no_block::mode::force_mode(crate::no_block::mode::Mode::Panic);
@@ -1147,6 +1146,10 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// the other half - that a sibling's deadline is HELD while such a closure runs.
 #[kithara::test(native, flash(false))]
 fn a_starved_backoff_loop_does_not_advance_the_virtual_clock() {
+    const STARVED_BACKOFF_STEP_MS: u64 = 1;
+
+    const STARVED_BACKOFF_RETRIES: usize = 16;
+
     let _g = guard();
     reset();
     let _a = ambient_scope(true);

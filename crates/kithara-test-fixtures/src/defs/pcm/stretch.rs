@@ -6,8 +6,8 @@ use num_traits::ToPrimitive;
 struct Consts;
 
 impl Consts {
-    const FRAMES: usize = 262_144;
     const BANK_FRAMES: usize = 65_536;
+    const FRAMES: usize = 262_144;
     const FREQUENCIES: [f32; 15] = [
         1125.0, 1875.0, 2625.0, 3375.0, 4125.0, 4875.0, 5625.0, 6375.0, 7125.0, 7875.0, 8625.0,
         9375.0, 440.0, 1500.0, 6000.0,

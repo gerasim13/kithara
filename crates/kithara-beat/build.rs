@@ -9,12 +9,15 @@ use sha2::{Digest, Sha256};
 /// Where a fetched model lands, so a rebuild does not fetch it again.
 const CACHE_ENV: &str = "KITHARA_BEAT_MODEL_CACHE";
 const FULL_FILE: &str = "beat_this_full.onnx";
-const FULL_URL: &str =
-    "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx";
-const FULL_SHA256: &str = "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02";
-const INT8_FILE: &str = "beat_this_full_int8.onnx";
 
 fn main() {
+    const FULL_URL: &str =
+        "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx";
+
+    const FULL_SHA256: &str = "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02";
+
+    const INT8_FILE: &str = "beat_this_full_int8.onnx";
+
     println!("cargo::rerun-if-changed=models");
     println!("cargo::rerun-if-env-changed={CACHE_ENV}");
 

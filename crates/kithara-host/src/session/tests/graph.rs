@@ -55,10 +55,6 @@ where
         self.state.ctx.as_mut()
     }
 
-    pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
-        self.state.stream.as_mut()
-    }
-
     #[must_use]
     pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
         if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
@@ -67,6 +63,10 @@ where
             attach_player_with_id(&mut self.state, *grid_id, pools.clone());
         }
         run_cmd(&mut self.state, cmd)
+    }
+
+    pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
+        self.state.stream.as_mut()
     }
 
     #[must_use]

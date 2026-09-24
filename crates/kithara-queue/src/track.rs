@@ -179,6 +179,21 @@ where
         slot.attach(observer);
     }
 
+    /// Whether the user's selection wants this track's live attempt.
+    ///
+    /// Read by the attempt itself, so it reflects a selection that arrived
+    /// after the attempt started.
+    pub(crate) fn attempt_selected(&self, id: TrackId) -> bool {
+        let guard = self.lock();
+        let selected = guard
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.load.as_ref())
+            .is_some_and(|a| a.selected);
+        drop(guard);
+        selected
+    }
+
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
     /// one that is already cancelled but still unwinding.
     pub(crate) fn begin_attempt(
@@ -196,21 +211,6 @@ where
         };
         drop(guard);
         ticket
-    }
-
-    /// Whether the user's selection wants this track's live attempt.
-    ///
-    /// Read by the attempt itself, so it reflects a selection that arrived
-    /// after the attempt started.
-    pub(crate) fn attempt_selected(&self, id: TrackId) -> bool {
-        let guard = self.lock();
-        let selected = guard
-            .iter()
-            .find(|r| r.id == id)
-            .and_then(|r| r.load.as_ref())
-            .is_some_and(|a| a.selected);
-        drop(guard);
-        selected
     }
 
     /// Attempt finished. Disarms and removes the guard this ticket owns

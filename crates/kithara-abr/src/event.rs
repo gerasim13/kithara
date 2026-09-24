@@ -3,6 +3,7 @@
 use kithara_events::Event;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use num_traits::AsPrimitive;
 
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
 /// `usize` representation of [`AbrMode`].
@@ -75,6 +76,10 @@ impl Default for AbrMode {
 }
 
 impl AbrMode {
+    fn encode_probe_arg(self) -> u64 {
+        AsPrimitive::<u64>::as_(usize::from(self))
+    }
+
     /// Manual mode pinned to variant `idx`. Shorthand for
     /// `Manual(VariantIndex::new(idx))` — the index is wrapped without a
     /// bounds check; validate at trust boundaries via
@@ -82,10 +87,6 @@ impl AbrMode {
     #[must_use]
     pub const fn manual(idx: usize) -> Self {
         Self::Manual(VariantIndex::new(idx))
-    }
-
-    fn encode_probe_arg(self) -> u64 {
-        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

@@ -484,10 +484,10 @@ mod tests {
             });
             ring.preloaded = preloaded;
             Self {
-                cursor: ChunkCursor::new(AudioChunkInfo::default().spec),
                 pools,
                 ring,
                 data_tx,
+                cursor: ChunkCursor::new(AudioChunkInfo::default().spec),
                 events: crate::audio::event::AudioEvents::test(),
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,

@@ -7,6 +7,7 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
+use self::filter::Filter;
 use super::{GlideConfig, GlideInterpolation};
 use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
 
@@ -36,7 +37,7 @@ pub(in crate::glide) struct GlideEngine {
     filtered_previous: SampleBuffer,
     positions: SampleBuffer,
     filtered: SmallVec<[SampleBuffer; 8]>,
-    filters: SmallVec<[Option<filter::Filter>; 8]>,
+    filters: SmallVec<[Option<Filter>; 8]>,
     padded: SmallVec<[SampleBuffer; 8]>,
     max_input_frames: usize,
     #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
@@ -104,7 +105,7 @@ impl GlideEngine {
             let ready = if let Some(filter) = filter {
                 filter.retune(sample_rate, cutoff, FILTER_PARAMS.low_pass_q)
             } else {
-                *filter = filter::Filter::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
+                *filter = Filter::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
                 filter.is_some()
             };
             if !ready {
@@ -355,14 +356,6 @@ mod filter {
     }
 
     impl Filter {
-        pub(super) fn retune(&mut self, sample_rate: f64, cutoff: f64, q: f64) -> bool {
-            let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff, q) else {
-                return false;
-            };
-            self.coefficients = coefficients;
-            true
-        }
-
         pub(super) fn low_pass(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<Self> {
             Some(Self {
                 coefficients: rbj_low_pass_coefficients(sample_rate, cutoff_hz, q)?,
@@ -389,6 +382,14 @@ mod filter {
 
         pub(super) fn reset(&mut self) {
             self.delay = [0.0; 4];
+        }
+
+        pub(super) fn retune(&mut self, sample_rate: f64, cutoff: f64, q: f64) -> bool {
+            let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff, q) else {
+                return false;
+            };
+            self.coefficients = coefficients;
+            true
         }
     }
 

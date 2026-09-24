@@ -16,6 +16,14 @@ where
         &self.bus
     }
 
+    #[must_use]
+    pub fn crossfade_settings(&self) -> CrossfadeSettings {
+        *self
+            .crossfade_settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Drain pending player-side notifications. Called by FFI tick
     /// loops after [`Self::tick`].
     pub fn process_notifications(&self) {
@@ -47,14 +55,6 @@ where
                 .publish(QueueEvent::CrossfadeSettingsChanged { settings });
             Ok(())
         })
-    }
-
-    #[must_use]
-    pub fn crossfade_settings(&self) -> CrossfadeSettings {
-        *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Set the default playback rate.

@@ -16,6 +16,20 @@ impl<S, B: Default> ResourceConfig<S, B>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// The I/O a prepared artifact of this track is read over: the same
+    /// downloader, the same headers policy, and the same cancel epoch as the
+    /// audio. Loading an artifact through this is what keeps a `remove` or a
+    /// reload from publishing a stale document.
+    #[must_use]
+    pub const fn artifact_fetch(&self) -> ArtifactFetch<'_> {
+        ArtifactFetch::new(
+            &self.src,
+            self.downloader.as_ref(),
+            self.headers.as_ref(),
+            self.cancel.as_ref(),
+        )
+    }
+
     /// Mint a layout-owned key for a playback or derived resource.
     ///
     /// # Errors
@@ -41,36 +55,16 @@ where
         scope.key(resource).map_err(DecodeError::backend)
     }
 
-    /// Event bus attached to this resource, when one was configured.
-    #[must_use]
-    pub const fn bus(&self) -> Option<&EventBus> {
-        self.bus.as_ref()
-    }
-
     /// The prepared beat grid this track was opened with, when it has one.
     #[must_use]
     pub const fn beat_grid(&self) -> Option<&ArtifactSource<BeatGridModel>> {
         self.beat_grid.as_ref()
     }
 
-    /// The prepared waveform this track was opened with, when it has one.
+    /// Event bus attached to this resource, when one was configured.
     #[must_use]
-    pub const fn waveform(&self) -> Option<&ArtifactSource<Waveform>> {
-        self.waveform.as_ref()
-    }
-
-    /// The I/O a prepared artifact of this track is read over: the same
-    /// downloader, the same headers policy, and the same cancel epoch as the
-    /// audio. Loading an artifact through this is what keeps a `remove` or a
-    /// reload from publishing a stale document.
-    #[must_use]
-    pub const fn artifact_fetch(&self) -> ArtifactFetch<'_> {
-        ArtifactFetch::new(
-            &self.src,
-            self.downloader.as_ref(),
-            self.headers.as_ref(),
-            self.cancel.as_ref(),
-        )
+    pub const fn bus(&self) -> Option<&EventBus> {
+        self.bus.as_ref()
     }
 
     /// Per-track parent cancel token, when one was configured.
@@ -116,5 +110,11 @@ where
     #[must_use]
     pub const fn store(&self) -> &AssetStore<S> {
         &self.store
+    }
+
+    /// The prepared waveform this track was opened with, when it has one.
+    #[must_use]
+    pub const fn waveform(&self) -> Option<&ArtifactSource<Waveform>> {
+        self.waveform.as_ref()
     }
 }

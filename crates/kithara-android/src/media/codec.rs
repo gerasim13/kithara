@@ -36,9 +36,9 @@ impl InputBuffer {
 }
 
 pub struct OutputBuffer {
-    pub index: usize,
-    pub presentation_time_us: i64,
     pub end_of_stream: bool,
+    pub presentation_time_us: i64,
+    pub index: usize,
     ptr: NonNull<u8>,
     len: usize,
 }

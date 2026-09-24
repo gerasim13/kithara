@@ -1,7 +1,7 @@
 use kithara::{
     effects::GainDb,
     ui::render::{
-        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, Zoom, zoom_in, zoom_out,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -131,7 +131,7 @@ fn deck_control(
         ("wave/zoom", ControlAction::SetScalar(zoom)) => {
             let zoom: f32 = zoom.as_();
             state.ui.cache.deck_mut(index)?.view.zoom =
-                Some(f64::from(f32::from(kithara::ui::render::Zoom::from(zoom))));
+                Some(f64::from(f32::from(Zoom::from(zoom))));
             return None;
         }
         ("tempo", ControlAction::StepScalar(steps)) => {
@@ -188,7 +188,7 @@ fn zoom_control(
     control: &str,
     action: &ControlAction,
 ) -> Option<()> {
-    let step: fn(kithara::ui::render::Zoom) -> kithara::ui::render::Zoom = match (control, action) {
+    let step: fn(Zoom) -> Zoom = match (control, action) {
         ("zoom-in", ControlAction::Activate) => zoom_in,
         ("zoom-out", ControlAction::Activate) => zoom_out,
         _ => return None,

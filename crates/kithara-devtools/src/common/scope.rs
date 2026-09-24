@@ -58,15 +58,15 @@ pub struct Scope {
     /// Crate names from `--crate <name>`. Resolved against
     /// `<workspace>/crates/<name>/`.
     pub(crate) crates: Vec<String>,
+    /// Additional roots used by checks whose policy covers workspace source
+    /// outside the historical `crates/` default.
+    pub(crate) extra_roots: Vec<PathBuf>,
     /// Workspace-relative paths from `--path <p>`.
     pub(crate) paths: Vec<PathBuf>,
     /// True when any path is outside `crates/` (e.g. `tests/`, `xtask/`).
     /// Tells `flags_for(Clippy|Fmt)` to fall back to workspace-wide because
     /// those tools don't accept arbitrary path scoping.
     pub(crate) has_noncrate_path: bool,
-    /// Additional roots used by checks whose policy covers workspace source
-    /// outside the historical `crates/` default.
-    pub(crate) extra_roots: Vec<PathBuf>,
 }
 
 impl Scope {
@@ -78,16 +78,6 @@ impl Scope {
             has_noncrate_path: false,
             extra_roots: Vec::new(),
         }
-    }
-
-    /// Extend an otherwise empty scope with workspace test and build-tool
-    /// roots. Explicit scopes remain exact and are never widened.
-    #[must_use]
-    pub(crate) fn with_workspace_sources(mut self) -> Self {
-        if self.is_empty() {
-            self.extra_roots = vec![PathBuf::from("tests"), PathBuf::from("xtask")];
-        }
-        self
     }
 
     /// Crate names extracted from `crates/<name>[/...]` paths. Used by
@@ -307,6 +297,16 @@ impl Scope {
             out.push(abs);
         }
         out
+    }
+
+    /// Extend an otherwise empty scope with workspace test and build-tool
+    /// roots. Explicit scopes remain exact and are never widened.
+    #[must_use]
+    pub(crate) fn with_workspace_sources(mut self) -> Self {
+        if self.is_empty() {
+            self.extra_roots = vec![PathBuf::from("tests"), PathBuf::from("xtask")];
+        }
+        self
     }
 }
 

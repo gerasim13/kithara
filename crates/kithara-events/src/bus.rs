@@ -36,27 +36,10 @@ impl EventBus {
         let mut topics = SmallVec::new();
         topics.push(Arc::new(ScopeTopics::new(capacity.max(1))));
         Self {
+            topics,
             scope: BusScope::root(next_bus_id()),
             label: ScopeLabel::default(),
             next_seq: Arc::new(AtomicU64::new(0)),
-            topics,
-        }
-    }
-
-    #[must_use]
-    pub fn scoped(&self) -> Self {
-        self.scoped_labeled(ScopeLabel::default())
-    }
-
-    pub fn scoped_labeled(&self, label: ScopeLabel) -> Self {
-        let mut topics = SmallVec::with_capacity(self.topics.len() + 1);
-        topics.push(Arc::new(ScopeTopics::new(self.topics[0].capacity())));
-        topics.extend(self.topics.iter().map(Arc::clone));
-        Self {
-            scope: self.scope.child(next_bus_id()),
-            label: self.label.merged_with(label),
-            next_seq: Arc::clone(&self.next_seq),
-            topics,
         }
     }
 
@@ -65,18 +48,18 @@ impl EventBus {
         self.scope.id()
     }
 
-    pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.next_seq)
-    }
-
     pub(crate) fn meta(&self, seq: u64, ts_micros: u64) -> EventMeta {
         EventMeta {
-            origin: self.scope.id(),
             seq,
             ts_micros,
+            origin: self.scope.id(),
             deck: self.label.deck,
             track: self.label.track,
         }
+    }
+
+    pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.next_seq)
     }
 
     /// Stamps `event` and sends it to every scope on this bus's path that has a
@@ -101,6 +84,23 @@ impl EventBus {
             current = next;
         }
         current.send(envelope);
+    }
+
+    #[must_use]
+    pub fn scoped(&self) -> Self {
+        self.scoped_labeled(ScopeLabel::default())
+    }
+
+    pub fn scoped_labeled(&self, label: ScopeLabel) -> Self {
+        let mut topics = SmallVec::with_capacity(self.topics.len() + 1);
+        topics.push(Arc::new(ScopeTopics::new(self.topics[0].capacity())));
+        topics.extend(self.topics.iter().map(Arc::clone));
+        Self {
+            topics,
+            scope: self.scope.child(next_bus_id()),
+            label: self.label.merged_with(label),
+            next_seq: Arc::clone(&self.next_seq),
+        }
     }
 
     #[must_use]

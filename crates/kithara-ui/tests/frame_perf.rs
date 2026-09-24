@@ -61,9 +61,6 @@ const MODULE: &str = "fixture.kmodule.ron";
 const WIDTH: u16 = 240;
 const HEIGHT: u16 = 120;
 
-const LAYOUT_RON: &str = r#"(schema: "kithara.layout", version: 1, id: "fixture",
-    root: Module(instance: "demo", source: "fixture.kmodule.ron", size: (w: Fill, h: Fill)))"#;
-
 /// The one source the census table names beside a control. Only the shader row
 /// asks for it.
 const SOURCES: &[(&str, &str)] = &[(
@@ -646,6 +643,9 @@ fn census_kinds() -> CustomKinds {
 
 impl Fixture {
     fn new(control: &str) -> Self {
+        const LAYOUT_RON: &str = r#"(schema: "kithara.layout", version: 1, id: "fixture",
+    root: Module(instance: "demo", source: "fixture.kmodule.ron", size: (w: Fill, h: Fill)))"#;
+
         let mut resolver = MemResolver::default();
         resolver.insert(LAYOUT, LAYOUT_RON);
         resolver.insert(

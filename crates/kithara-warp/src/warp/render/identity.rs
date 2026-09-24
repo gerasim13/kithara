@@ -11,12 +11,12 @@ use crate::{RenderReader, RenderSnapshot, WarpConfig, WarpPlanSlot, WarpRenderEr
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    plan: Arc<WarpPlanSlot>,
     committed: Option<RenderSnapshot>,
     prepared: Option<usize>,
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
     context: RenderReader,
-    plan: Arc<WarpPlanSlot>,
     projected: bool,
 }
 

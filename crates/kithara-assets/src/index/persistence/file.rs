@@ -2,7 +2,8 @@
 
 use std::{
     fs,
-    io::{self, Read, Write},
+    fs::File,
+    io::{Error, ErrorKind, Read, Write},
     path::PathBuf,
 };
 
@@ -30,13 +31,13 @@ impl IndexFile {
     /// bytes read. A file that does not exist yet reads as empty.
     pub(crate) fn read_into(&self, buf: &mut ByteBuffer) -> AssetsResult<()> {
         buf.clear();
-        let mut file = match fs::File::open(&self.path) {
+        let mut file = match File::open(&self.path) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
         let len = usize::try_from(file.metadata()?.len())
-            .map_err(|error| AssetsError::Io(io::Error::other(error)))?;
+            .map_err(|error| AssetsError::Io(Error::other(error)))?;
         buf.ensure_len(len)?;
         let mut read = 0;
         while read < len {
@@ -55,7 +56,7 @@ impl IndexFile {
         let parent = self
             .path
             .parent()
-            .ok_or_else(|| io::Error::other("index file has no parent directory"))?;
+            .ok_or_else(|| Error::other("index file has no parent directory"))?;
         fs::create_dir_all(parent)?;
         let mut tmp = NamedTempFile::new_in(parent)?;
         tmp.write_all(bytes)?;

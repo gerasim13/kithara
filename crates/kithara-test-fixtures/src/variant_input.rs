@@ -14,17 +14,17 @@ use crate::{
 #[non_exhaustive]
 pub struct VariantInput {
     pub codec: AudioCodec,
-    pub sample_rate: u32,
+    pub gapless_encoding: GaplessEncoding,
+    pub signal: Wave,
     pub channels: u16,
+    pub encoder_delay: u32,
+    pub sample_rate: u32,
+    pub timescale: u32,
+    pub trailing_delay: u32,
+    pub bit_rate: u64,
     pub content_frames: usize,
     pub packets_per_segment: usize,
-    pub signal: Wave,
     pub start_frame: usize,
-    pub bit_rate: u64,
-    pub timescale: u32,
-    pub encoder_delay: u32,
-    pub trailing_delay: u32,
-    pub gapless_encoding: GaplessEncoding,
 }
 
 impl VariantInput {
@@ -94,8 +94,8 @@ impl VariantInput {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct VariantArtifact {
     pub(crate) init: String,
-    pub(crate) media: Vec<String>,
     pub(crate) durations: Vec<f64>,
+    pub(crate) media: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

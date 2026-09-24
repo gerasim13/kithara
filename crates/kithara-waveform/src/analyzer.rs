@@ -451,6 +451,10 @@ mod tests {
     }
 
     impl Pass {
+        fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
+            self.analyzer.restore(&self.pools, resume)
+        }
+
         /// The resume record this pass would hand its successor, rebuilt from
         /// the state itself so a test can bend one field at a time.
         fn resume(&self) -> WaveformResume {
@@ -466,18 +470,14 @@ mod tests {
                     .partial
                     .iter()
                     .map(|(&index, partial)| WaveformPartialResume {
+                        index,
                         samples: partial.samples.to_vec().into_boxed_slice(),
                         written: partial.written.clone(),
-                        index,
                         seq: partial.seq,
                     })
                     .collect(),
                 opened: self.analyzer.opened,
             }
-        }
-
-        fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
-            self.analyzer.restore(&self.pools, resume)
         }
     }
 

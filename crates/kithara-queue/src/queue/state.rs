@@ -37,32 +37,8 @@ pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Serializes every state-changing command against terminal close.
-    pub(super) admission: Mutex<()>,
-    /// Authoritative playback position updated on every `tick`. Filters
-    /// transient 0.0 blips the engine reports on pause/resume —
-    /// downstream UIs should read from this field rather than polling
-    /// the engine directly. Read/written lock-free as a typed
-    /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
-    /// stable sample.
-    pub(super) cached_position: AtomicCachedPosition,
-    /// Tracks the id of the track whose crossfade-advance has already
-    /// been armed during `tick()`. Prevents triggering the next-track
-    /// select repeatedly as the remaining playtime keeps ticking below
-    /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
-    ///
-    /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
-    /// loop and the engine event handler.
-    pub(super) crossfade_armed_for: AtomicTrackId,
-    /// Track whose load completion starts playback: the first one appended
-    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
-    pub(super) autoplay_target: AtomicTrackId,
-    pub(super) should_autoplay: bool,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
-    pub(super) action_at_item_end: Mutex<ActionAtItemEnd>,
-    pub(super) crossfade_settings: Mutex<CrossfadeSettings>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
     /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
@@ -78,13 +54,37 @@ where
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
     /// and the event stream stay in sync.
     pub(super) tracks: Arc<Tracks<S>>,
+    /// Authoritative playback position updated on every `tick`. Filters
+    /// transient 0.0 blips the engine reports on pause/resume —
+    /// downstream UIs should read from this field rather than polling
+    /// the engine directly. Read/written lock-free as a typed
+    /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
+    /// stable sample.
+    pub(super) cached_position: AtomicCachedPosition,
+    /// Track whose load completion starts playback: the first one appended
+    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
+    pub(super) autoplay_target: AtomicTrackId,
+    /// Tracks the id of the track whose crossfade-advance has already
+    /// been armed during `tick()`. Prevents triggering the next-track
+    /// select repeatedly as the remaining playtime keeps ticking below
+    /// the crossfade threshold. Cleared on
+    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
+    ///
+    /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
+    /// loop and the engine event handler.
+    pub(super) crossfade_armed_for: AtomicTrackId,
+    /// Master cancel token for queue-owned loader work.
+    pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
+    pub(super) action_at_item_end: Mutex<ActionAtItemEnd>,
+    /// Serializes every state-changing command against terminal close.
+    pub(super) admission: Mutex<()>,
+    pub(super) crossfade_settings: Mutex<CrossfadeSettings>,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
-    /// Master cancel token for queue-owned loader work.
-    pub(super) shutdown: CancelToken,
+    pub(super) should_autoplay: bool,
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
@@ -182,6 +182,7 @@ where
             loader,
             tracks,
             bus,
+            should_autoplay,
             admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(navigation)),
@@ -192,7 +193,6 @@ where
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
             autoplay_target: AtomicTrackId::disarmed(),
-            should_autoplay,
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {

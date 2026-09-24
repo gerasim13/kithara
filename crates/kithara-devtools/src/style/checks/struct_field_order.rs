@@ -2,7 +2,10 @@ use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
 use proc_macro2::TokenTree;
-use syn::{Attribute, Field, Fields, Item, Meta, Type, Visibility, spanned::Spanned};
+use syn::{
+    Attribute, Field, Fields, Item, Meta, Path, Token, Type, Visibility, parse::Parser,
+    punctuated::Punctuated, spanned::Spanned,
+};
 
 use super::{Check, Context};
 use crate::{
@@ -36,7 +39,7 @@ impl Check for StructFieldOrder {
             fix_items(cfg, &rel, &src, &file.items, &mut rw, &mut outcome.skipped);
             if !rw.is_empty() {
                 let new_src = rw.finish()?;
-                std::fs::write(path, new_src)?;
+                ctx.scan.write(path, new_src)?;
                 outcome.writes += 1;
             }
         }
@@ -75,7 +78,7 @@ fn fix_items<'src>(
     for item in items {
         match item {
             Item::Struct(s) => {
-                if has_exempt_attr(&s.attrs, &cfg.exempt_attrs) {
+                if is_exempt(&s.attrs, cfg) {
                     continue;
                 }
                 if let Fields::Named(named) = &s.fields {
@@ -97,7 +100,7 @@ fn fix_items<'src>(
                 }
             }
             Item::Union(u) => {
-                if has_exempt_attr(&u.attrs, &cfg.exempt_attrs) {
+                if is_exempt(&u.attrs, cfg) {
                     continue;
                 }
                 let collected: Vec<&Field> = u.fields.named.iter().collect();
@@ -228,7 +231,7 @@ fn scan_items(
     for item in items {
         match item {
             Item::Struct(s) => {
-                if has_exempt_attr(&s.attrs, &cfg.exempt_attrs) {
+                if is_exempt(&s.attrs, cfg) {
                     continue;
                 }
                 if let Fields::Named(named) = &s.fields {
@@ -245,7 +248,7 @@ fn scan_items(
                 }
             }
             Item::Union(u) => {
-                if has_exempt_attr(&u.attrs, &cfg.exempt_attrs) {
+                if is_exempt(&u.attrs, cfg) {
                     continue;
                 }
                 let collected: Vec<&Field> = u.fields.named.iter().collect();
@@ -436,12 +439,57 @@ fn vis_token(vis: &Visibility) -> &'static str {
     }
 }
 
-fn has_exempt_attr(attrs: &[Attribute], names: &[String]) -> bool {
+fn is_exempt(attrs: &[Attribute], cfg: &StructFieldOrderConfig) -> bool {
     attrs.iter().any(|a| {
         a.path()
             .get_ident()
-            .is_some_and(|id| names.iter().any(|n| id == n))
+            .is_some_and(|id| cfg.exempt_attrs.iter().any(|n| id == n))
+            || derived_paths(a)
+                .iter()
+                .any(|path| cfg.exempt_derives.contains(path))
     })
+}
+
+/// The `::`-joined paths an attribute derives, directly or through `cfg_attr`.
+fn derived_paths(attr: &Attribute) -> Vec<String> {
+    let Meta::List(list) = &attr.meta else {
+        return Vec::new();
+    };
+    if list.path.is_ident("derive") {
+        return parse_derive_list(list.tokens.clone());
+    }
+    if !list.path.is_ident("cfg_attr") {
+        return Vec::new();
+    }
+    let tokens: Vec<TokenTree> = list.tokens.clone().into_iter().collect();
+    tokens
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [TokenTree::Ident(id), TokenTree::Group(group)] if id == "derive" => {
+                Some(parse_derive_list(group.stream()))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn parse_derive_list(tokens: proc_macro2::TokenStream) -> Vec<String> {
+    Punctuated::<Path, Token![,]>::parse_terminated
+        .parse2(tokens)
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|path| {
+                    path.segments
+                        .iter()
+                        .map(|segment| segment.ident.to_string())
+                        .collect::<Vec<_>>()
+                        .join("::")
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Stable, last-segment-based sort key for a `Type`.
@@ -491,6 +539,7 @@ mod tests {
                 "private".to_string(),
             ],
             exempt_attrs: vec!["repr".to_string()],
+            exempt_derives: vec!["uniffi::Record".to_string()],
         }
     }
 
@@ -557,6 +606,25 @@ struct Layout {
 ";
         let (out, _) = run_fix(src);
         assert_eq!(out, src, "repr layout must not change");
+    }
+
+    #[test]
+    fn a_derived_foreign_record_is_skipped() {
+        let src = "\
+#[derive(Clone, uniffi::Record)]
+struct Direct {
+    z: u32,
+    a: u32,
+}
+
+#[cfg_attr(feature = \"uniffi\", derive(uniffi::Record))]
+struct Gated {
+    z: u32,
+    a: u32,
+}
+";
+        let (out, _) = run_fix(src);
+        assert_eq!(out, src, "a foreign binding's field order is its contract");
     }
 
     #[test]

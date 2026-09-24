@@ -79,15 +79,6 @@ impl<S> SessionDispatcher<S> for SessionClient<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    delegate::delegate! {
-        to self.root_view {
-            #[expr(Ok($))]
-            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            #[expr(Ok($))]
-            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
-        }
-    }
-
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
@@ -99,6 +90,15 @@ where
             _ => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
             )),
+        }
+    }
+
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
         }
     }
 }

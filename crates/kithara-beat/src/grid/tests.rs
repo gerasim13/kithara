@@ -35,14 +35,14 @@ fn downbeat(ordinal: i16) -> GridDownbeat {
 
 fn raw(beats: Vec<GridBeat>, downbeats: Vec<GridDownbeat>) -> RawBeatGrid {
     RawBeatGrid {
+        beats,
+        downbeats,
         schema_version: SCHEMA_VERSION,
         model_id: "track-42".to_owned(),
         revision: 1,
         state: BeatGridState::Provisional,
         duration: Some(60.0),
         bpm: Consts::BPM,
-        beats,
-        downbeats,
         meter: None,
     }
 }

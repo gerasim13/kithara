@@ -218,14 +218,6 @@ impl<S> Host<S> {
         })
     }
 
-    /// Move the output stream to `sample_rate`, keeping Host-owned graph state.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot restart its output at that rate.
-    pub fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
-    }
-
     fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
     where
         P: PlayerControlSource,
@@ -290,6 +282,14 @@ impl<S> Host<S> {
             view,
             id: grid_id,
         })
+    }
+
+    /// Move the output stream to `sample_rate`, keeping Host-owned graph state.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot restart its output at that rate.
+    pub fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
     }
 
     /// Change the canonical session tempo at the next render boundary.

@@ -604,15 +604,6 @@ pub struct TestLaneConfig {
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
-    /// Toggles whose feature none of this lane's packages declares.
-    ///
-    /// `default_flash`/`default_no_block` say what a lane runs with by
-    /// default, which a caller may override. This says the lane cannot carry
-    /// the toggle at all: cargo applies an unqualified feature to every
-    /// selected package and fails the whole run when none of them declares it,
-    /// so a run-wide request has to leave such a lane alone. Valid entries are
-    /// `flash` and `no-block`.
-    pub undeclared_toggles: Vec<String>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,
@@ -622,6 +613,15 @@ pub struct TestLaneConfig {
     pub owns: Vec<String>,
     pub prefix_args: Vec<String>,
     pub suffix_args: Vec<String>,
+    /// Toggles whose feature none of this lane's packages declares.
+    ///
+    /// `default_flash`/`default_no_block` say what a lane runs with by
+    /// default, which a caller may override. This says the lane cannot carry
+    /// the toggle at all: cargo applies an unqualified feature to every
+    /// selected package and fails the whole run when none of them declares it,
+    /// so a run-wide request has to leave such a lane alone. Valid entries are
+    /// `flash` and `no-block`.
+    pub undeclared_toggles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]

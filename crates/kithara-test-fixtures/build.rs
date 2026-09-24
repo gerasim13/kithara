@@ -370,7 +370,7 @@ fn main() {
     let out_dir =
         PathBuf::from(std::env::var_os("OUT_DIR").expect("invariant: cargo always sets OUT_DIR"));
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
-        .unwrap_or_else(|_| panic!("invariant: cargo always sets CARGO_CFG_TARGET_ARCH"));
+        .expect("invariant: cargo always sets CARGO_CFG_TARGET_ARCH");
     fs::write(
         out_dir.join("assets.rs"),
         codegen(&namespace, &resolved, &unavailable, target_arch == "wasm32"),

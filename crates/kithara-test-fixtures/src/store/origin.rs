@@ -1,7 +1,7 @@
 use std::{
     fmt::Write as _,
     fs::{self, File},
-    io::{self, Read as _, Write as _},
+    io::{self, Error, ErrorKind, Read as _, Write as _},
     net::{SocketAddr, TcpStream},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
@@ -68,8 +68,8 @@ fn runtime() -> io::Result<&'static Runtime> {
         None => None,
         Some(value) => {
             let value = value.to_str().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
+                Error::new(
+                    ErrorKind::InvalidInput,
                     format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
                 )
             })?;
@@ -85,39 +85,39 @@ fn runtime() -> io::Result<&'static Runtime> {
 
 fn parse_origin(raw: &str) -> io::Result<String> {
     let rest = raw.trim().strip_prefix("http://").ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         )
     })?;
     let rest = rest.strip_suffix('/').unwrap_or(rest);
     if rest.contains(['/', '?', '#', '@']) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         ));
     }
     let (host, port) = rest.rsplit_once(':').ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         )
     })?;
     if host != "127.0.0.1" {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         ));
     }
     let port: u16 = port.parse().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         )
     })?;
     if port == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             format!("{ORIGIN_ENV} must be an http://127.0.0.1 URL"),
         ));
     }
@@ -131,8 +131,8 @@ fn relative_path(path: &Path) -> io::Result<&Path> {
             .components()
             .all(|part| matches!(part, Component::Normal(_)))
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             "fixture path must remain under its store",
         ));
     }
@@ -145,14 +145,14 @@ fn complete(path: &Path) -> bool {
 
 fn cache_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if bytes.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
+        return Err(Error::new(
+            ErrorKind::InvalidData,
             "fixture origin returned an empty record",
         ));
     }
     let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             "fixture path must remain under its store",
         )
     })?;
@@ -161,10 +161,7 @@ fn cache_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         ".{}.tmp.{}",
         path.file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidData,
-                "fixture filename is not UTF-8"
-            ))?,
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "fixture filename is not UTF-8"))?,
         std::process::id()
     ));
     let write = (|| -> io::Result<()> {
@@ -184,10 +181,10 @@ fn get(origin: &str, relative: &Path) -> io::Result<Vec<u8>> {
     let encoded = encode_relative(relative)?;
     let host = origin
         .strip_prefix("http://")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "fixture origin is not HTTP"))?;
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "fixture origin is not HTTP"))?;
     let addr: SocketAddr = host.parse().map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             format!("fixture origin {origin} is not a socket address: {error}"),
         )
     })?;
@@ -221,14 +218,14 @@ fn encode_relative(relative: &Path) -> io::Result<String> {
     let mut encoded = String::new();
     for component in relative.components() {
         let Component::Normal(part) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
                 "fixture path must remain under its store",
             ));
         };
-        let part = part.to_str().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "fixture path is not UTF-8")
-        })?;
+        let part = part
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "fixture path is not UTF-8"))?;
         if !encoded.is_empty() {
             encoded.push('/');
         }
@@ -254,26 +251,26 @@ fn parse_body(origin: &str, response: &[u8]) -> io::Result<Vec<u8>> {
         .ok_or_else(|| {
             origin_unreachable(
                 origin,
-                &io::Error::new(io::ErrorKind::InvalidData, "HTTP response has no body"),
+                &Error::new(ErrorKind::InvalidData, "HTTP response has no body"),
             )
         })?;
     let headers = std::str::from_utf8(&response[..split]).map_err(|_| {
         origin_unreachable(
             origin,
-            &io::Error::new(io::ErrorKind::InvalidData, "HTTP headers are not UTF-8"),
+            &Error::new(ErrorKind::InvalidData, "HTTP headers are not UTF-8"),
         )
     })?;
     let status = headers.lines().next().unwrap_or_default();
     if status.contains(" 404 ") {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
+        return Err(Error::new(
+            ErrorKind::NotFound,
             format!("fixture origin {origin} has no such record"),
         ));
     }
     if !status.contains(" 200 ") {
         return Err(origin_unreachable(
             origin,
-            &io::Error::new(io::ErrorKind::InvalidData, format!("HTTP {status}")),
+            &Error::new(ErrorKind::InvalidData, format!("HTTP {status}")),
         ));
     }
     let mut body = response[split..].to_vec();
@@ -281,8 +278,8 @@ fn parse_body(origin: &str, response: &[u8]) -> io::Result<Vec<u8>> {
         if body.len() < length {
             return Err(origin_unreachable(
                 origin,
-                &io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
+                &Error::new(
+                    ErrorKind::UnexpectedEof,
                     format!("expected {length} bytes, received {}", body.len()),
                 ),
             ));
@@ -301,8 +298,8 @@ fn content_length(headers: &str) -> Option<usize> {
     })
 }
 
-fn origin_unreachable(origin: &str, error: &io::Error) -> io::Error {
-    io::Error::new(
+fn origin_unreachable(origin: &str, error: &Error) -> Error {
+    Error::new(
         error.kind(),
         format!(
             "fixture origin {origin} is unreachable ({error}); adb reverse is required for every Android fixture read"

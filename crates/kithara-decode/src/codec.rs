@@ -75,11 +75,6 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32>;
 
-    /// Reserve output storage before the decode quantum.
-    fn prepare_output(&self, _out: &mut SampleBuffer) -> DecodeResult<()> {
-        Ok(())
-    }
-
     /// Codec-owned presentation time of the most recent non-empty PCM output.
     /// `None` uses synchronous packet timing and infers leading strip from its duration.
     fn decoded_pts(&self) -> Option<Duration> {
@@ -118,6 +113,11 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// source rate needs an explicit tail drain.
     fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
         self.spec().sample_rate.get() != source_sample_rate
+    }
+
+    /// Reserve output storage before the decode quantum.
+    fn prepare_output(&self, _out: &mut SampleBuffer) -> DecodeResult<()> {
+        Ok(())
     }
 
     /// Seek priming requirements for `codec` — packets/frames/bytes the

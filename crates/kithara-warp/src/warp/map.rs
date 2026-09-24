@@ -31,61 +31,6 @@ impl WarpMap {
         }
     }
 
-    /// Freezes a recording projected onto a session grid using stamped alignment.
-    ///
-    /// # Errors
-    /// Returns the M3 projection error without replacing missing geometry.
-    pub fn projected(
-        source: BeatGridSnapshot,
-        target: BeatGridSnapshot,
-        alignment: BeatAlignment,
-        revision: WarpMapRevision,
-    ) -> Result<Self, GridProjectionError> {
-        let grid = BeatGridSnapshot::projection(source.clone(), target, alignment)?;
-        Ok(Self {
-            revision,
-            projection: Some(ProjectedMap { grid, source }),
-        })
-    }
-
-    /// The source axis of a projected map; identity maps have no fixed axis.
-    #[must_use]
-    pub fn source_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.source.axis())
-    }
-
-    /// The session axis of a projected map.
-    #[must_use]
-    pub fn output_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.grid.axis())
-    }
-
-    /// Absolute recording frame sounding at an output frame.
-    pub fn source_at(&self, output: SessionFrame) -> BeatGridQuery<AssetFrame> {
-        let Some(projection) = &self.projection else {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
-        };
-        projection.grid.source_at(MapPoint::new(
-            projection.grid.stamp(),
-            MapPosition::Session(output),
-        ))
-    }
-
-    /// Source frames per session output frame, including the sample-rate relation.
-    pub fn rate_at(&self, output: SessionFrame) -> BeatGridQuery<f64> {
-        let Some(projection) = &self.projection else {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
-        };
-        projection.grid.rate_at(MapPoint::new(
-            projection.grid.stamp(),
-            MapPosition::Session(output),
-        ))
-    }
-
     /// Session position of an absolute recording endpoint.
     pub fn output_at(&self, source: AssetFrame) -> BeatGridQuery<SessionFrame> {
         let Some(projection) = &self.projection else {
@@ -106,10 +51,65 @@ impl WarpMap {
             })
     }
 
+    /// The session axis of a projected map.
+    #[must_use]
+    pub fn output_axis(&self) -> Option<MapAxis> {
+        self.projection
+            .as_ref()
+            .map(|projection| projection.grid.axis())
+    }
+
+    /// Freezes a recording projected onto a session grid using stamped alignment.
+    ///
+    /// # Errors
+    /// Returns the M3 projection error without replacing missing geometry.
+    pub fn projected(
+        source: BeatGridSnapshot,
+        target: BeatGridSnapshot,
+        alignment: BeatAlignment,
+        revision: WarpMapRevision,
+    ) -> Result<Self, GridProjectionError> {
+        let grid = BeatGridSnapshot::projection(source.clone(), target, alignment)?;
+        Ok(Self {
+            revision,
+            projection: Some(ProjectedMap { grid, source }),
+        })
+    }
+
+    /// Source frames per session output frame, including the sample-rate relation.
+    pub fn rate_at(&self, output: SessionFrame) -> BeatGridQuery<f64> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.grid.rate_at(MapPoint::new(
+            projection.grid.stamp(),
+            MapPosition::Session(output),
+        ))
+    }
+
     /// Creates renderer-local progress at an exact discontinuity boundary.
     #[must_use]
     pub const fn reanchor(&self, source: u64, output: SessionFrame) -> WarpCursor {
         WarpCursor::new(self.revision, source, output)
+    }
+
+    /// Absolute recording frame sounding at an output frame.
+    pub fn source_at(&self, output: SessionFrame) -> BeatGridQuery<AssetFrame> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.grid.source_at(MapPoint::new(
+            projection.grid.stamp(),
+            MapPosition::Session(output),
+        ))
+    }
+
+    /// The source axis of a projected map; identity maps have no fixed axis.
+    #[must_use]
+    pub fn source_axis(&self) -> Option<MapAxis> {
+        self.projection
+            .as_ref()
+            .map(|projection| projection.source.axis())
     }
 }
 

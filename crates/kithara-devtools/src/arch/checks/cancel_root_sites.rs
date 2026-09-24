@@ -73,8 +73,8 @@ pub(super) fn configured_pattern_sites(
             scan_source(&content, patterns)
                 .into_iter()
                 .map(|(line, pattern)| PatternSite {
-                    location: format!("{rel_str}:{line}"),
                     pattern,
+                    location: format!("{rel_str}:{line}"),
                 }),
         );
     }

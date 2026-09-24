@@ -14,6 +14,7 @@ impl Consts {
     const CHANNELS: u16 = 2;
     const DOWNBEAT_MARKER_PEAK: i16 = 28_000;
     const DOWNBEAT_TONE_PEAK: i16 = 14_000;
+    const LONG_FRAMES: usize = 529_200;
     const MARKER_FRAMES: usize = 2_205;
     const MARKER_PEAK: i16 = 2_000;
     const MARKER_STARTS: [usize; 2] = [17_640, 35_280];
@@ -21,9 +22,8 @@ impl Consts {
     const PULSE_DURATION_MS: usize = 40;
     const SAMPLE_RATE: u32 = 44_100;
     const SECONDS_PER_MINUTE: f64 = 60.0;
-    const SOURCE_FRAMES: usize = 264_600;
     const SHORT_FRAMES: usize = 88_200;
-    const LONG_FRAMES: usize = 529_200;
+    const SOURCE_FRAMES: usize = 264_600;
     const TONE_HZ: f64 = 440.0;
     const TONE_PEAK: i16 = 16_000;
 }

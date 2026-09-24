@@ -36,8 +36,8 @@ pub const MAX_EVENTS: usize = 1 << 19;
 /// allocates nothing beyond the history itself.
 #[derive(Clone, Copy, Debug)]
 pub struct ProbeEvent {
-    pub target: &'static str,
     pub probe: &'static str,
+    pub target: &'static str,
     /// Source file of the product function the probe is attached to.
     pub file: Option<&'static str>,
     /// Source line of that function.
@@ -49,26 +49,26 @@ pub struct ProbeEvent {
 }
 
 impl ProbeEvent {
-    /// Every payload field this firing carried, in the order the probe named them.
-    pub fn fields(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
-        self.fields[..self.len].iter().copied()
-    }
-
     #[must_use]
     pub fn field(&self, name: &str) -> Option<u64> {
         self.fields[..self.len]
             .iter()
             .find_map(|(key, value)| (*key == name).then_some(*value))
     }
+
+    /// Every payload field this firing carried, in the order the probe named them.
+    pub fn fields(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
+        self.fields[..self.len].iter().copied()
+    }
 }
 
 struct State {
+    recorded: Option<Arc<Notify>>,
+    events: Vec<ProbeEvent>,
     /// Probe names seen by this process. Bounded by the probe call sites, and
     /// kept across scopes so each name is interned once.
     names: Vec<&'static str>,
-    events: Vec<ProbeEvent>,
     probes: Vec<ProbeTally>,
-    recorded: Option<Arc<Notify>>,
 }
 
 /// What the live scope saw of one probe: its latest firing and how many times
@@ -85,23 +85,6 @@ impl ProbeTally {
 }
 
 impl State {
-    fn intern(&mut self, probe: &str) -> &'static str {
-        if let Some(name) = self.names.iter().find(|name| **name == probe) {
-            return name;
-        }
-        let name: &'static str = Box::leak(probe.into());
-        self.names.push(name);
-        name
-    }
-
-    fn tally(&self, probe: &str) -> Option<&ProbeTally> {
-        self.probes.iter().find(|tally| tally.latest.probe == probe)
-    }
-
-    fn overflowed(&self) -> impl Iterator<Item = &ProbeTally> {
-        self.probes.iter().filter(|tally| tally.overflowed())
-    }
-
     fn history(&self) -> &[ProbeEvent] {
         let overflowed = self
             .overflowed()
@@ -130,6 +113,23 @@ impl State {
             .filter(|event| event.probe == probe)
             .copied()
             .collect()
+    }
+
+    fn intern(&mut self, probe: &str) -> &'static str {
+        if let Some(name) = self.names.iter().find(|name| **name == probe) {
+            return name;
+        }
+        let name: &'static str = Box::leak(probe.into());
+        self.names.push(name);
+        name
+    }
+
+    fn overflowed(&self) -> impl Iterator<Item = &ProbeTally> {
+        self.probes.iter().filter(|tally| tally.overflowed())
+    }
+
+    fn tally(&self, probe: &str) -> Option<&ProbeTally> {
+        self.probes.iter().find(|tally| tally.latest.probe == probe)
     }
 }
 
@@ -243,39 +243,6 @@ impl Scope {
         last(probe)
     }
 
-    /// Resolves once the firings recorded so far satisfy `holds`,
-    /// re-checking after every newly recorded firing.
-    ///
-    /// The wait runs under the hang watchdog, so a condition the product never
-    /// satisfies fails the test with what was recorded instead of parking it
-    /// until the runner kills the binary. The budget is real time, so the
-    /// caller runs under `flash(false)`: a virtual clock jumps the deadline
-    /// while the work it waits on runs on a real-time thread.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `holds` has not held within the watchdog budget.
-    #[crate::kithara::hang_watchdog(ctx = String)]
-    pub async fn wait_for<F>(&self, mut holds: F)
-    where
-        F: FnMut(&[ProbeEvent]) -> bool,
-    {
-        loop {
-            let recorded = self.recorded.notified();
-            if holds(&lock(&STATE).events) {
-                return;
-            }
-            if timeout(__hang_detector.remaining(), recorded)
-                .await
-                .is_err()
-            {
-                hang_tick!(Self::unsatisfied_wait());
-            } else {
-                hang_tick!();
-            }
-        }
-    }
-
     /// Describe a wait that ran out of budget: which probes it did see, so
     /// the failure names the missing firing.
     fn unsatisfied_wait() -> String {
@@ -318,6 +285,39 @@ impl Scope {
              recorded {} firings{overflow}, latest of each: {seen}",
             events.len()
         )
+    }
+
+    /// Resolves once the firings recorded so far satisfy `holds`,
+    /// re-checking after every newly recorded firing.
+    ///
+    /// The wait runs under the hang watchdog, so a condition the product never
+    /// satisfies fails the test with what was recorded instead of parking it
+    /// until the runner kills the binary. The budget is real time, so the
+    /// caller runs under `flash(false)`: a virtual clock jumps the deadline
+    /// while the work it waits on runs on a real-time thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `holds` has not held within the watchdog budget.
+    #[crate::kithara::hang_watchdog(ctx = String)]
+    pub async fn wait_for<F>(&self, mut holds: F)
+    where
+        F: FnMut(&[ProbeEvent]) -> bool,
+    {
+        loop {
+            let recorded = self.recorded.notified();
+            if holds(&lock(&STATE).events) {
+                return;
+            }
+            if timeout(__hang_detector.remaining(), recorded)
+                .await
+                .is_err()
+            {
+                hang_tick!(Self::unsatisfied_wait());
+            } else {
+                hang_tick!();
+            }
+        }
     }
 }
 
@@ -370,8 +370,8 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         };
         let metadata = event.metadata();
         let recorded_event = ProbeEvent {
-            target: metadata.target(),
             probe,
+            target: metadata.target(),
             file: metadata.file(),
             line: metadata.line(),
             thread: thread::current().id(),
@@ -408,8 +408,8 @@ struct ProbeVisitor {
 }
 
 struct FieldVisitor<'a> {
-    state: &'a mut State,
     visitor: &'a mut ProbeVisitor,
+    state: &'a mut State,
 }
 
 impl FieldVisitor<'_> {
@@ -425,6 +425,14 @@ impl FieldVisitor<'_> {
 impl Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
 
+    /// Session-axis frames arrive as `i64`; a negative one has no `u64`
+    /// reading, so it stays absent and the reader asking for it fails loudly.
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        if let Ok(value) = u64::try_from(value) {
+            self.push(field, value);
+        }
+    }
+
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "probe" {
             self.visitor.probe = Some(self.state.intern(value));
@@ -433,14 +441,6 @@ impl Visit for FieldVisitor<'_> {
 
     fn record_u64(&mut self, field: &Field, value: u64) {
         self.push(field, value);
-    }
-
-    /// Session-axis frames arrive as `i64`; a negative one has no `u64`
-    /// reading, so it stays absent and the reader asking for it fails loudly.
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        if let Ok(value) = u64::try_from(value) {
-            self.push(field, value);
-        }
     }
 }
 

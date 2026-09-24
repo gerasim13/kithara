@@ -18,27 +18,17 @@ pub struct ToolsConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ToolEntry {
-    /// Program to spawn. Empty means the role name itself.
-    pub program: String,
     /// What to tell an operator who does not have it.
     pub install_hint: String,
     /// Key in `.config/ci-pins.toml` `[cargo_tools]` pinning this role's
     /// version. Empty for a platform toolchain the machine owns rather than
     /// this repository.
     pub pin: String,
+    /// Program to spawn. Empty means the role name itself.
+    pub program: String,
 }
 
 impl ToolsConfig {
-    /// The program for `role`, falling back to the role name.
-    #[must_use]
-    pub fn program<'a>(&'a self, role: &'a str) -> &'a str {
-        self.roles
-            .get(role)
-            .map(|entry| entry.program.as_str())
-            .filter(|program| !program.is_empty())
-            .unwrap_or(role)
-    }
-
     /// What to print when `role` is missing, falling back to the caller's
     /// compiled hint when the config carries none.
     #[must_use]
@@ -55,6 +45,16 @@ impl ToolsConfig {
         self.roles.iter().filter_map(|(role, entry)| {
             (!entry.pin.is_empty()).then_some((role.as_str(), entry.pin.as_str()))
         })
+    }
+
+    /// The program for `role`, falling back to the role name.
+    #[must_use]
+    pub fn program<'a>(&'a self, role: &'a str) -> &'a str {
+        self.roles
+            .get(role)
+            .map(|entry| entry.program.as_str())
+            .filter(|program| !program.is_empty())
+            .unwrap_or(role)
     }
 }
 

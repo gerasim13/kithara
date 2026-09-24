@@ -44,23 +44,6 @@ where
         }
     }
 
-    fn handle_prefetch_requested(&self) {
-        if self.action_at_item_end() != ActionAtItemEnd::Advance {
-            return;
-        }
-        let Some(next) = self.peek_selectable_entry() else {
-            return;
-        };
-        if !matches!(next.status, TrackStatus::Consumed) {
-            return;
-        }
-        let Some(source) = self.tracks.source(next.id) else {
-            return;
-        };
-        self.set_status(next.id, TrackStatus::Pending);
-        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
-    }
-
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
@@ -209,6 +192,23 @@ where
             ActionAtItemEnd::Pause => self.pause(),
             ActionAtItemEnd::None => {}
         }
+    }
+
+    fn handle_prefetch_requested(&self) {
+        if self.action_at_item_end() != ActionAtItemEnd::Advance {
+            return;
+        }
+        let Some(next) = self.peek_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Consumed) {
+            return;
+        }
+        let Some(source) = self.tracks.source(next.id) else {
+            return;
+        };
+        self.set_status(next.id, TrackStatus::Pending);
+        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
     }
 
     pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {

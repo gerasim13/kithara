@@ -26,7 +26,7 @@ use config::IdiomsConfig;
 
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
+    exclude::apply_lint_excludes,
     project::ProjectConfig,
     report,
     scan::Scan,
@@ -181,9 +181,7 @@ fn apply_common_exclusions(
     if policy.keeps_source_findings() {
         return;
     }
-    apply_path_excludes(report, path_patterns);
-    apply_cfg_test_exclusion(report, workspace_root);
-    apply_module_excludes(report, module_patterns, workspace_root);
+    apply_lint_excludes(report, path_patterns, module_patterns, workspace_root);
 }
 
 /// Runs each selected check, returning its wall time and its violations in

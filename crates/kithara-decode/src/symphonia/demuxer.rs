@@ -152,7 +152,6 @@ impl SymphoniaDemuxer {
         let track_info = build_track_info(&track, &native_params)?;
         let time_base = track.time_base;
         Ok(Self {
-            format_reader: Packets::new(format_reader),
             track_id,
             track_info,
             #[cfg(feature = "symphonia")]
@@ -160,6 +159,7 @@ impl SymphoniaDemuxer {
             time_base,
             byte_pos_handle,
             byte_map,
+            format_reader: Packets::new(format_reader),
             resume_ts: 0,
             resume_pending: None,
             prepared: None,
@@ -238,20 +238,18 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
-    fn prepare_frame(&mut self) -> DecodeResult<()> {
-        if self.prepared.is_none() {
-            self.prepared = Some(self.read_frame()?.into());
-        }
-        Ok(())
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
     }
 
     fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         Ok(match self.prepared.take() {
             Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
-                data: self.format_reader.data(),
-                packet_desc: &[],
                 pts,
                 duration,
+                data: self.format_reader.data(),
+                packet_desc: &[],
             }),
             Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
             Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
@@ -259,9 +257,11 @@ impl Demuxer for SymphoniaDemuxer {
         })
     }
 
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.prepare_frame()?;
-        self.next_frame_prepared()
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_none() {
+            self.prepared = Some(self.read_frame()?.into());
+        }
+        Ok(())
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
@@ -660,11 +660,6 @@ mod tests {
         assert!(!packet_ends_at_or_before(packet.pts, packet.dur, 2_151));
     }
 
-    /// Tail withheld from the WAV fixture so the source publishes a length
-    /// shorter than the header's frame count, the way a variant publishes
-    /// only the segments whose sizes are already exact.
-    const WITHHELD_TAIL_BYTES: usize = 4 * 1024;
-
     /// Source modelling a reader that publishes an exact length and refuses
     /// any seek beyond it, the way the HLS session reader does once every
     /// segment size is known.
@@ -726,6 +721,11 @@ mod tests {
     }
 
     fn wav_demuxer(tone_wav: &[u8]) -> SymphoniaDemuxer {
+        /// Tail withheld from the WAV fixture so the source publishes a length
+        /// shorter than the header's frame count, the way a variant publishes
+        /// only the segments whose sizes are already exact.
+        const WITHHELD_TAIL_BYTES: usize = 4 * 1024;
+
         let mut bytes = tone_wav.to_vec();
         bytes.truncate(bytes.len() - WITHHELD_TAIL_BYTES);
         let source = PublishedEndSource::new(bytes);

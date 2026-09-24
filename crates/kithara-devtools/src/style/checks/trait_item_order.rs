@@ -36,7 +36,7 @@ impl Check for TraitItemOrder {
             fix_items(cfg, &rel, &src, &file.items, &mut rw, &mut outcome.skipped);
             if !rw.is_empty() {
                 let new_src = rw.finish()?;
-                std::fs::write(path, new_src)?;
+                ctx.scan.write(path, new_src)?;
                 outcome.writes += 1;
             }
         }

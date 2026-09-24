@@ -97,8 +97,8 @@ impl EventBridge {
                 let status = FfiTrackStatus::from(status.clone());
                 item.apply_track_status(&status);
                 observer.on_event(FfiPlayerEvent::TrackStatusChanged {
-                    item_id: *id,
                     status,
+                    item_id: *id,
                 });
             }
             QueueEvent::QueueEnded => {
@@ -1017,9 +1017,9 @@ mod tests {
             Ok(true) => WaitOutcome::Observed { lagged, seen },
             Ok(false) => WaitOutcome::Closed { lagged, seen },
             Err(_) => WaitOutcome::TimedOut {
-                budget_ms: timeout_ms,
                 lagged,
                 seen,
+                budget_ms: timeout_ms,
             },
         }
     }

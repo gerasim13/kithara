@@ -6,24 +6,24 @@ struct Consts;
 impl Consts {
     const CHANNELS: u16 = 2;
     const FRAMES: usize = 4;
-    const SOURCE_RATE: u32 = 44_100;
-    const WAV_BITS_PER_SAMPLE: u16 = 16;
-    const WAV_BYTES_PER_SAMPLE: u16 = Self::WAV_BITS_PER_SAMPLE / 8;
-    const WAV_DATA_OFFSET: u32 = 36;
-    const WAV_FMT_CHUNK_SIZE: u32 = 16;
-    const WAV_HEADER_SIZE: usize = 44;
-    const WAV_PCM_FORMAT: u16 = 1;
-    const WAV_FLOAT_FORMAT: u16 = 3;
     const POISON: [[f32; Self::FRAMES]; 2] = [
         [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
         [0.25, -0.25, 0.5, -0.5],
     ];
-    const TEST_DECAY: f32 = 400.0;
+    const SOURCE_RATE: u32 = 44_100;
     const TEST_BURST_SECONDS: f32 = 0.01;
+    const TEST_DECAY: f32 = 400.0;
     const WARP_BEATS: usize = 8;
     const WARP_CLICK_OFFSET: usize = 8_192;
     const WARP_NOMINAL_FRAMES: usize = 176_400;
     const WARP_NOMINAL_PERIOD: usize = 22_050;
+    const WAV_BITS_PER_SAMPLE: u16 = 16;
+    const WAV_BYTES_PER_SAMPLE: u16 = Self::WAV_BITS_PER_SAMPLE / 8;
+    const WAV_DATA_OFFSET: u32 = 36;
+    const WAV_FLOAT_FORMAT: u16 = 3;
+    const WAV_FMT_CHUNK_SIZE: u32 = 16;
+    const WAV_HEADER_SIZE: usize = 44;
+    const WAV_PCM_FORMAT: u16 = 1;
 }
 
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]

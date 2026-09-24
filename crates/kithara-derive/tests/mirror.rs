@@ -2,16 +2,16 @@ use kithara_derive::Mirror;
 use kithara_test_utils::kithara;
 
 struct Source {
-    input_name: u8,
     enabled: bool,
+    input_name: u8,
 }
 
 #[derive(Debug, Eq, Mirror, PartialEq)]
 #[mirror(from = Source)]
 struct Target {
+    enabled: bool,
     #[mirror(rename = input_name)]
     name: u8,
-    enabled: bool,
 }
 
 enum SourceEvent {

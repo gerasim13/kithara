@@ -1,5 +1,6 @@
 use std::{
     io,
+    io::Error,
     sync::{
         OnceLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -70,7 +71,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        self.reader.read_at(offset, buf).map_err(io::Error::other)
+        self.reader.read_at(offset, buf).map_err(Error::other)
     }
 }
 

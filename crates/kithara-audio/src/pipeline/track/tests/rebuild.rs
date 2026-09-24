@@ -84,8 +84,8 @@ impl Consts {
 
 pub(super) struct TestDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
-    id: u64,
     preparations: Arc<AtomicU64>,
+    id: u64,
 }
 
 impl TestDecoder {
@@ -105,16 +105,16 @@ impl Drop for TestDecoder {
 }
 
 impl Decoder for TestDecoder {
-    fn prepare_next_chunk(&mut self) {
-        self.preparations.fetch_add(1, Ordering::Relaxed);
-    }
-
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         Ok(DecoderChunkOutcome::Eof)
+    }
+
+    fn prepare_next_chunk(&mut self) {
+        self.preparations.fetch_add(1, Ordering::Relaxed);
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -199,8 +199,8 @@ impl Decoder for ProfileCountingDecoder {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 struct RouteSignalDecoder {
-    pcm: Arc<[f32]>,
     drops: Arc<Mutex<Vec<u64>>>,
+    pcm: Arc<[f32]>,
     gapless: Option<GaplessInfo>,
     remaining_chunks: Option<usize>,
     pools: Pools,
@@ -227,13 +227,13 @@ impl RouteSignalDecoder {
             _ => panic!("unprepared route sample rate: {sample_rate}"),
         };
         Self {
-            pcm: route_pcm[index].clone(),
             drops,
             gapless,
             id,
             pools,
             remaining_chunks,
             sample_rate,
+            pcm: route_pcm[index].clone(),
             next_frame: 0,
             timeline_gap: 0,
         }
@@ -524,8 +524,8 @@ impl VariantControl for TestControl {
 pub(super) struct WaitPark {
     armed: AtomicBool,
     condvar: Condvar,
-    entered: Notify,
     state: Mutex<WaitParkState>,
+    entered: Notify,
 }
 
 #[derive(Default)]

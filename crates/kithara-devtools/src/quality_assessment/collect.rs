@@ -25,8 +25,6 @@ use crate::{
 };
 
 const SCHEMA_VERSION: u32 = 2;
-const WORKSPACE_DEBT_THRESHOLD: u64 = 100;
-
 pub(super) struct Revision {
     pub(super) digest: Option<String>,
     pub(super) directory: String,
@@ -413,6 +411,8 @@ fn is_test_file(path: &Path) -> bool {
 }
 
 fn scaled_threshold(loc: u64, workspace_loc: u64, kind: &str) -> u64 {
+    const WORKSPACE_DEBT_THRESHOLD: u64 = 100;
+
     if kind == "workspace" || workspace_loc == 0 {
         return WORKSPACE_DEBT_THRESHOLD;
     }

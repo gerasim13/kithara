@@ -151,11 +151,6 @@ impl PlanarBuffer {
         Ok(())
     }
 
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
     /// Compact channel stride and release pooled capacity beyond the logical frames.
     /// This may reallocate and must run outside real-time rendering.
     pub fn shrink_to_fit(&mut self) {
@@ -171,6 +166,11 @@ impl PlanarBuffer {
         }
         self.samples.truncate(channels * frames);
         self.samples.shrink_to_fit();
+    }
+
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
     }
 
     /// Per-channel storage stride, including reserved frames beyond the logical end.

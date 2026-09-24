@@ -1,10 +1,11 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
+    io::{self, Error, ErrorKind, Read as _, Write as _},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
 
+use fs4::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -39,17 +40,6 @@ pub enum Refresh {
 }
 
 impl Refresh {
-    /// The selection [`REFRESH_ENV`] asks this build for.
-    ///
-    /// An unset or blank parameter reuses everything, `all` rebuilds the whole
-    /// revision, and anything else is a comma-separated list of accessor names
-    /// and producing function names.
-    #[must_use]
-    pub fn requested() -> Self {
-        let raw = std::env::var(REFRESH_ENV).unwrap_or_default();
-        Self::parse(&raw)
-    }
-
     #[must_use]
     fn parse(raw: &str) -> Self {
         let raw = raw.trim();
@@ -66,6 +56,17 @@ impl Refresh {
                 .map(str::to_owned)
                 .collect(),
         )
+    }
+
+    /// The selection [`REFRESH_ENV`] asks this build for.
+    ///
+    /// An unset or blank parameter reuses everything, `all` rebuilds the whole
+    /// revision, and anything else is a comma-separated list of accessor names
+    /// and producing function names.
+    #[must_use]
+    pub fn requested() -> Self {
+        let raw = std::env::var(REFRESH_ENV).unwrap_or_default();
+        Self::parse(&raw)
     }
 
     /// Whether the entry `func` registers as `name` must be produced again.
@@ -123,8 +124,8 @@ pub fn formatted_asset_id(func: &str, case: &str, format: &[u8]) -> String {
 pub fn root_from_env() -> io::Result<PathBuf> {
     let root = std::env::var_os(STORE_ENV).map(PathBuf::from);
     root.filter(|path| path.is_absolute()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
+        Error::new(
+            ErrorKind::InvalidInput,
             format!("set {STORE_ENV} to an absolute persistent directory shared by worktrees"),
         )
     })
@@ -150,10 +151,10 @@ pub fn runtime_root() -> io::Result<&'static Path> {
 /// Exact store files selected for relocation to another executor.
 #[derive(Debug, Serialize)]
 pub struct StoreManifest {
-    /// Absolute runtime store root selected by this process.
-    pub root: PathBuf,
     /// Explicit revision containing the selected files.
     pub revision: &'static str,
+    /// Absolute runtime store root selected by this process.
+    pub root: PathBuf,
     /// Sorted files, excluding producer locks and temporary writes.
     pub files: Vec<StoreFile>,
 }
@@ -183,8 +184,8 @@ fn manifest_at(root: &Path) -> io::Result<StoreManifest> {
             .components()
             .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             "fixture root must be absolute without traversal",
         ));
     }
@@ -196,16 +197,16 @@ fn manifest_at(root: &Path) -> io::Result<StoreManifest> {
             Some(Component::Normal(_))
         )
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             "fixture revision must be one path component",
         ));
     }
     let namespace = namespace(root, revision);
     for directory in [root, namespace.as_path()] {
         if !fs::symlink_metadata(directory)?.file_type().is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(Error::new(
+                ErrorKind::InvalidData,
                 format!(
                     "fixture directory is not a real directory: {}",
                     directory.display()
@@ -217,9 +218,9 @@ fn manifest_at(root: &Path) -> io::Result<StoreManifest> {
     collect_files(root, &namespace, &mut files)?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(StoreManifest {
-        root: root.to_path_buf(),
         revision,
         files,
+        root: root.to_path_buf(),
     })
 }
 
@@ -233,18 +234,18 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<StoreFile>) -> i
         } else if kind.is_file() {
             let name = entry.file_name();
             let name = name.to_str().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "fixture filename is not UTF-8")
+                Error::new(ErrorKind::InvalidData, "fixture filename is not UTF-8")
             })?;
             if name.ends_with(".lock") || name.contains(".tmp.") {
                 continue;
             }
-            let relative = path.strip_prefix(root).map_err(io::Error::other)?;
+            let relative = path.strip_prefix(root).map_err(Error::other)?;
             if !relative
                 .components()
                 .all(|part| matches!(part, Component::Normal(_)))
             {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
                     "fixture path escapes its store",
                 ));
             }
@@ -261,13 +262,13 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<StoreFile>) -> i
                 bytes += count as u64;
             }
             files.push(StoreFile {
+                bytes,
                 path: relative.to_path_buf(),
                 sha256: hex::encode(digest.finalize()),
-                bytes,
             });
         } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(Error::new(
+                ErrorKind::InvalidData,
                 format!(
                     "fixture entry is not a regular file or directory: {}",
                     path.display()
@@ -351,7 +352,7 @@ pub fn lock_entry(namespace: &Path, id: &str) -> io::Result<EntryLock> {
         .create(true)
         .truncate(false)
         .open(namespace.join(format!("{id}.lock")))?;
-    fs4::FileExt::lock(&file)?;
+    FileExt::lock(&file)?;
     Ok(EntryLock { _file: file })
 }
 
@@ -494,15 +495,14 @@ mod tests {
 
         assert!(
             matches!(
-                fs4::FileExt::try_lock(&contender),
+                FileExt::try_lock(&contender),
                 Err(fs4::TryLockError::WouldBlock)
             ),
             "the entry lock must exclude a second producer",
         );
 
         drop(held);
-        fs4::FileExt::try_lock(&contender)
-            .expect("the entry lock must release with its file handle");
+        FileExt::try_lock(&contender).expect("the entry lock must release with its file handle");
     }
 
     #[kithara::test(native, flash(false))]

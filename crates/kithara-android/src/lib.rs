@@ -13,8 +13,8 @@ mod buffer;
 mod error;
 #[cfg(target_os = "android")]
 mod http;
-// The media bindings carry `#[link(name = "mediandk")]`, which reaches the
-// link of every artifact that compiles them.
+/// The media bindings carry `#[link(name = "mediandk")]`, which reaches the
+/// link of every artifact that compiles them.
 #[cfg(target_os = "android")]
 pub mod media;
 #[cfg(target_os = "android")]

@@ -16,14 +16,14 @@ use crate::{
 pub struct MonoStreamConfig<B, S> {
     #[debug("{:?}", self.backend.name())]
     pub backend: B,
-    #[builder(default)]
-    pub options: ResamplerOptions,
+    pub source_sample_rate: NonZeroU32,
+    pub target_sample_rate: NonZeroU32,
     #[debug("<injected>")]
     pub pools: PoolRegion<S>,
     #[builder(default)]
+    pub options: ResamplerOptions,
+    #[builder(default)]
     pub quality: ResamplerQuality,
-    pub source_sample_rate: NonZeroU32,
-    pub target_sample_rate: NonZeroU32,
 }
 
 pub struct MonoStream<B>

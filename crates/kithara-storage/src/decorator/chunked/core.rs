@@ -153,11 +153,6 @@ pub struct AtomicChunked<D: DriverIo> {
     /// successful `commit`. `Drop` / `fail` use a still-set value to remove
     /// the orphaned temp file. Dropping the claim releases its lock.
     claim: Mutex<Option<TmpClaim>>,
-    /// Held shared by every read that mints a view and uses it, and exclusively
-    /// by `commit` from releasing the inner's mapping until the reopened inner
-    /// is in place — so no read lands on a released inner. Blocking waits stay
-    /// outside it: the commit they wait for needs it exclusively.
-    handover: RwLock<()>,
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
@@ -166,6 +161,11 @@ pub struct AtomicChunked<D: DriverIo> {
         doc = "Path the resource will land at on a successful commit."
     ))]
     canonical_path: PathBuf,
+    /// Held shared by every read that mints a view and uses it, and exclusively
+    /// by `commit` from releasing the inner's mapping until the reopened inner
+    /// is in place — so no read lands on a released inner. Blocking waits stay
+    /// outside it: the commit they wait for needs it exclusively.
+    handover: RwLock<()>,
 }
 
 impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
@@ -250,6 +250,12 @@ impl<D: DriverIo> AtomicChunked<D> {
         if let Some(claim) = claim {
             let _ = fs::remove_file(&claim.path);
         }
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.read_settled(ResourceRead::len)
     }
 
     /// First gap in available data starting at `from`, up to `limit`.
@@ -372,21 +378,15 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_settled(|view| view.read_into(buf))
     }
 
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.read_settled(ResourceRead::len)
+    /// Run a non-blocking read against a view that no commit is retiring.
+    fn read_settled<R>(&self, read: impl FnOnce(&ResourceReader<D>) -> R) -> R {
+        let _handover = self.handover.read();
+        read(&self.read_view())
     }
 
     /// Current runtime status.
     pub fn status(&self) -> ResourceStatus {
         self.read_settled(ResourceRead::status)
-    }
-
-    /// Run a non-blocking read against a view that no commit is retiring.
-    fn read_settled<R>(&self, read: impl FnOnce(&ResourceReader<D>) -> R) -> R {
-        let _handover = self.handover.read();
-        read(&self.read_view())
     }
 
     /// Wait until the given byte range is available.

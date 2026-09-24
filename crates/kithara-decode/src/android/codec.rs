@@ -26,12 +26,12 @@ use crate::{
 struct Consts;
 
 impl Consts {
+    const DRAIN_DEQUEUE_TIMEOUT_US: i64 = 1_000_000;
     const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
     /// Wait for a free input buffer before the codec counts as stuck.
     const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
-    const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
-    const DRAIN_DEQUEUE_TIMEOUT_US: i64 = 1_000_000;
     const NO_WAIT_US: i64 = 0;
+    const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
     const PCM16_SCALE: f32 = 32_768.0;
 }
 
@@ -53,9 +53,9 @@ pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
     spec: AudioSpec,
     track_info: DecoderTrackInfo,
-    codec: OwnedCodec,
     drain: DrainState,
     decoded_pts: Duration,
+    codec: OwnedCodec,
 }
 
 impl AndroidCodec {
@@ -90,10 +90,10 @@ impl AndroidCodec {
 
         Ok(Self {
             codec,
-            drain: DrainState::Feeding,
-            decoded_pts: Duration::ZERO,
             spec,
             pcm_encoding,
+            drain: DrainState::Feeding,
+            decoded_pts: Duration::ZERO,
             track_info: DecoderTrackInfo {
                 gapless: track.gapless,
                 ..DecoderTrackInfo::default()
@@ -154,6 +154,10 @@ impl FrameCodec for AndroidCodec {
         self.read_output(out, timeout)
     }
 
+    fn decoded_pts(&self) -> Option<Duration> {
+        Some(self.decoded_pts)
+    }
+
     fn flush(&mut self) -> DecodeResult<()> {
         self.codec.flush()?;
         self.drain = DrainState::Feeding;
@@ -163,10 +167,6 @@ impl FrameCodec for AndroidCodec {
 
     fn needs_eof_drain(&self, _source_sample_rate: u32) -> bool {
         true
-    }
-
-    fn decoded_pts(&self) -> Option<Duration> {
-        Some(self.decoded_pts)
     }
 
     fn priming(&self, codec: AudioCodec) -> CodecPriming {
@@ -213,6 +213,17 @@ impl AndroidCodec {
         }
     }
 
+    fn quantized_pts(&self, presentation_time_us: i64) -> DecodeResult<Duration> {
+        let timestamp = Duration::from_micros(
+            u64::try_from(presentation_time_us).map_err(DecodeError::backend)?,
+        );
+        let frame = self
+            .spec
+            .frame_at(timestamp)
+            .map_err(DecodeError::backend)?;
+        self.spec.duration_for(frame).map_err(DecodeError::backend)
+    }
+
     /// Appends every finished output buffer to `out`; only the first
     /// dequeue waits. Returns the frames `out` holds.
     fn read_output(&mut self, out: &mut SampleBuffer, timeout_us: i64) -> DecodeResult<u32> {
@@ -257,17 +268,6 @@ impl AndroidCodec {
             }
         }
         u32::try_from(out.len() / usize::from(self.spec.channels)).map_err(DecodeError::backend)
-    }
-
-    fn quantized_pts(&self, presentation_time_us: i64) -> DecodeResult<Duration> {
-        let timestamp = Duration::from_micros(
-            u64::try_from(presentation_time_us).map_err(DecodeError::backend)?,
-        );
-        let frame = self
-            .spec
-            .frame_at(timestamp)
-            .map_err(DecodeError::backend)?;
-        self.spec.duration_for(frame).map_err(DecodeError::backend)
     }
 }
 

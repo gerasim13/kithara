@@ -8,12 +8,102 @@ use kithara_platform::{
 type Job<T> = Box<dyn FnOnce(&mut T) + Send>;
 
 pub struct OffThread<T> {
-    jobs: Mutex<mpsc::Sender<Job<T>>>,
-    done: Mutex<Option<oneshot::Receiver<()>>>,
     name: &'static str,
+    done: Mutex<Option<oneshot::Receiver<()>>>,
+    jobs: Mutex<mpsc::Sender<Job<T>>>,
 }
 
 impl<T: 'static> OffThread<T> {
+    /// Runs `job` against `T` on the owner thread and awaits its result.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the owner thread has stopped accepting calls, or dies
+    /// before the job returns.
+    pub async fn call<R, F>(&self, job: F) -> R
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut T) -> R + Send + 'static,
+    {
+        let (answer, receiver) = oneshot::channel();
+        let request = Box::new(move |value: &mut T| {
+            drop(answer.send(job(value)));
+        });
+        if self.jobs.lock().send(request).is_err() {
+            panic!(
+                "OffThread owner thread `{}` stopped before accepting a call",
+                self.name
+            );
+        }
+        receiver.await.unwrap_or_else(|_| {
+            panic!(
+                "OffThread owner thread `{}` panicked before returning a call result",
+                self.name
+            )
+        })
+    }
+
+    /// Drops the job sender and waits for the owner to drop `T`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the owner thread dies before teardown completes.
+    pub async fn close(self) {
+        let name = self.name;
+        drop(self.jobs);
+        let done = self
+            .done
+            .lock()
+            .take()
+            .expect("OffThread completion receiver must remain present until close");
+        done.await.unwrap_or_else(|_| {
+            panic!("OffThread owner thread `{name}` panicked before teardown completed")
+        });
+    }
+
+    async fn serving<E, I, F>(name: &'static str, init: I, serve: F) -> Result<Self, E>
+    where
+        E: Send + 'static,
+        I: FnOnce() -> Result<T, E> + Send + 'static,
+        F: FnOnce(&mpsc::Receiver<Job<T>>, &mut T) + Send + 'static,
+    {
+        let (jobs, receiver) = mpsc::channel::<Job<T>>();
+        let (ready, ready_receiver) = oneshot::channel();
+        let (done, done_receiver) = oneshot::channel();
+        let runtime = Handle::current();
+
+        drop(spawn_named(name, move || {
+            let _runtime = runtime.enter();
+            let mut value = match init() {
+                Ok(value) => value,
+                Err(error) => {
+                    drop(ready.send(Err(error)));
+                    return;
+                }
+            };
+            if ready.send(Ok(())).is_err() {
+                return;
+            }
+            serve(&receiver, &mut value);
+            drop(value);
+            let _ = done.send(());
+        }));
+
+        match ready_receiver.await.unwrap_or_else(|_| {
+            panic!("OffThread owner thread `{name}` panicked during initialization")
+        }) {
+            Ok(()) => Ok(Self {
+                name,
+                jobs: Mutex::new(jobs),
+                done: Mutex::new(Some(done_receiver)),
+            }),
+            Err(error) => {
+                let _ = done_receiver.await;
+                Err(error)
+            }
+        }
+    }
+
     /// Runs `init` on the owner thread, so `T` does not need to be `Send`.
     ///
     /// The owner thread enters the caller's runtime for its whole life, the
@@ -72,96 +162,6 @@ impl<T: 'static> OffThread<T> {
             }
         })
         .await
-    }
-
-    async fn serving<E, I, F>(name: &'static str, init: I, serve: F) -> Result<Self, E>
-    where
-        E: Send + 'static,
-        I: FnOnce() -> Result<T, E> + Send + 'static,
-        F: FnOnce(&mpsc::Receiver<Job<T>>, &mut T) + Send + 'static,
-    {
-        let (jobs, receiver) = mpsc::channel::<Job<T>>();
-        let (ready, ready_receiver) = oneshot::channel();
-        let (done, done_receiver) = oneshot::channel();
-        let runtime = Handle::current();
-
-        drop(spawn_named(name, move || {
-            let _runtime = runtime.enter();
-            let mut value = match init() {
-                Ok(value) => value,
-                Err(error) => {
-                    drop(ready.send(Err(error)));
-                    return;
-                }
-            };
-            if ready.send(Ok(())).is_err() {
-                return;
-            }
-            serve(&receiver, &mut value);
-            drop(value);
-            let _ = done.send(());
-        }));
-
-        match ready_receiver.await.unwrap_or_else(|_| {
-            panic!("OffThread owner thread `{name}` panicked during initialization")
-        }) {
-            Ok(()) => Ok(Self {
-                jobs: Mutex::new(jobs),
-                done: Mutex::new(Some(done_receiver)),
-                name,
-            }),
-            Err(error) => {
-                let _ = done_receiver.await;
-                Err(error)
-            }
-        }
-    }
-
-    /// Runs `job` against `T` on the owner thread and awaits its result.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the owner thread has stopped accepting calls, or dies
-    /// before the job returns.
-    pub async fn call<R, F>(&self, job: F) -> R
-    where
-        R: Send + 'static,
-        F: FnOnce(&mut T) -> R + Send + 'static,
-    {
-        let (answer, receiver) = oneshot::channel();
-        let request = Box::new(move |value: &mut T| {
-            drop(answer.send(job(value)));
-        });
-        if self.jobs.lock().send(request).is_err() {
-            panic!(
-                "OffThread owner thread `{}` stopped before accepting a call",
-                self.name
-            );
-        }
-        receiver.await.unwrap_or_else(|_| {
-            panic!(
-                "OffThread owner thread `{}` panicked before returning a call result",
-                self.name
-            )
-        })
-    }
-
-    /// Drops the job sender and waits for the owner to drop `T`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the owner thread dies before teardown completes.
-    pub async fn close(self) {
-        let name = self.name;
-        drop(self.jobs);
-        let done = self
-            .done
-            .lock()
-            .take()
-            .expect("OffThread completion receiver must remain present until close");
-        done.await.unwrap_or_else(|_| {
-            panic!("OffThread owner thread `{name}` panicked before teardown completed")
-        });
     }
 }
 

@@ -63,8 +63,8 @@ pub(super) fn finish(handle: jlong) -> Option<Arc<Slot>> {
 }
 
 struct Calls {
-    slots: DashMap<jlong, Arc<Slot>>,
     next_handle: AtomicI64,
+    slots: DashMap<jlong, Arc<Slot>>,
 }
 
 /// One call between its start and the transport's terminal callback. The
@@ -85,12 +85,12 @@ impl Slot {
         self.lent().read = Some(buffer);
     }
 
-    pub(super) fn take_read(&self) -> Option<HostBuffer> {
-        self.lent().read.take().map(DirectBuffer::into_inner)
-    }
-
     fn lent(&self) -> MutexGuard<'_, Lent> {
         self.lent.lock()
+    }
+
+    pub(super) fn take_read(&self) -> Option<HostBuffer> {
+        self.lent().read.take().map(DirectBuffer::into_inner)
     }
 }
 
@@ -202,9 +202,9 @@ impl fmt::Debug for JniTransport {
 }
 
 struct JniCall {
-    read: BoundMethod,
-    cancel: BoundMethod,
     slot: Arc<Slot>,
+    cancel: BoundMethod,
+    read: BoundMethod,
 }
 
 impl JniCall {
@@ -241,17 +241,17 @@ impl JniCall {
 }
 
 impl HostCall for JniCall {
+    fn cancel(&self) {
+        if let Err(error) = with_attached_env(|env| self.cancel.call(env, &[]).map(drop)) {
+            tracing::debug!(%error, "cancelling an HTTP call failed");
+        }
+    }
+
     fn read(&self, buffer: HostBuffer) {
         if let Err(error) = with_attached_env(|env| self.lend(env, buffer)) {
             self.slot
                 .events
                 .fail(HostFailure::Protocol(error.to_string()));
-        }
-    }
-
-    fn cancel(&self) {
-        if let Err(error) = with_attached_env(|env| self.cancel.call(env, &[]).map(drop)) {
-            tracing::debug!(%error, "cancelling an HTTP call failed");
         }
     }
 }

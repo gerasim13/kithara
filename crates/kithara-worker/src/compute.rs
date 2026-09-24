@@ -248,9 +248,9 @@ mod tests {
     }
 
     struct ThreadProbe {
-        context: TaskContext,
-        steps: mpsc::Sender<Step>,
         ran: Arc<AtomicBool>,
+        steps: mpsc::Sender<Step>,
+        context: TaskContext,
         submitted: bool,
     }
 

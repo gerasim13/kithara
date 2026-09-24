@@ -37,12 +37,12 @@ impl KeyRequest {
 /// [`Debug`](fmt::Debug) implementation redacts every field.
 #[non_exhaustive]
 pub struct PreparedKeyRequest {
-    /// Final URL sent over the network.
-    pub url: Url,
     /// Policy-specific headers merged on top of the downloader headers.
     pub headers: HashMap<String, String>,
     /// Processor paired with this request's response.
     pub processor: KeyProcessor,
+    /// Final URL sent over the network.
+    pub url: Url,
 }
 
 impl fmt::Debug for PreparedKeyRequest {
@@ -61,9 +61,9 @@ impl PreparedKeyRequest {
     #[must_use]
     pub fn new(url: Url, headers: HashMap<String, String>, processor: KeyProcessor) -> Self {
         Self {
-            url,
             headers,
             processor,
+            url,
         }
     }
 }

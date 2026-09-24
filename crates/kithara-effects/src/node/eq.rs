@@ -48,8 +48,8 @@ pub struct MasterEqNode<S> {
 /// leaves the audio thread carrying the retired pair, so nothing is freed there.
 #[derive(Default)]
 pub(super) struct MasterEqLayout {
-    bands: Vec<MasterEqBand>,
     equalizers: Option<(IsolatorEq, IsolatorEq)>,
+    bands: Vec<MasterEqBand>,
 }
 
 enum LayoutUpdate {
@@ -171,11 +171,11 @@ where
 
 struct MasterEqProcessor<S> {
     params: MasterEqNode<S>,
+    crossover: MixDSP,
     sample_rate: NonZeroU32,
     active: Option<(IsolatorEq, IsolatorEq)>,
-    retiring: Option<(IsolatorEq, IsolatorEq)>,
-    crossover: MixDSP,
     layout: Option<LayoutUpdate>,
+    retiring: Option<(IsolatorEq, IsolatorEq)>,
 }
 
 impl<S> MasterEqProcessor<S>
@@ -200,26 +200,10 @@ where
         Self {
             params,
             active,
-            retiring: None,
             crossover,
+            retiring: None,
             layout: None,
             sample_rate: stream_info.sample_rate,
-        }
-    }
-
-    fn sync_gains(&mut self) {
-        for (i, band) in self.params.bands.iter().enumerate() {
-            if let Some((left, right)) = self.active.as_mut() {
-                left.set_gain(i, GainDb::from(band.gain_db));
-                right.set_gain(i, GainDb::from(band.gain_db));
-            }
-        }
-    }
-
-    fn take_layout(&mut self, layout: &mut MasterEqLayout) {
-        let incoming = mem::take(layout);
-        if let Some(previous) = self.layout.replace(LayoutUpdate::Pending(incoming)) {
-            *layout = previous.into_inner();
         }
     }
 
@@ -250,6 +234,22 @@ where
                 layout.bands.apply(patch);
             }
             (_, patch) => self.params.apply(MasterEqNodePatch(patch)),
+        }
+    }
+
+    fn sync_gains(&mut self) {
+        for (i, band) in self.params.bands.iter().enumerate() {
+            if let Some((left, right)) = self.active.as_mut() {
+                left.set_gain(i, GainDb::from(band.gain_db));
+                right.set_gain(i, GainDb::from(band.gain_db));
+            }
+        }
+    }
+
+    fn take_layout(&mut self, layout: &mut MasterEqLayout) {
+        let incoming = mem::take(layout);
+        if let Some(previous) = self.layout.replace(LayoutUpdate::Pending(incoming)) {
+            *layout = previous.into_inner();
         }
     }
 }
@@ -283,6 +283,24 @@ impl<S> AudioNodeProcessor for MasterEqProcessor<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    #[kithara::rtsan_forbid_blocking]
+    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, _extra: &mut ProcExtra) {
+        let mut dirty = false;
+        for mut event in events.drain() {
+            if let Some(layout) = event.downcast_mut::<MasterEqLayout>() {
+                self.take_layout(layout);
+            } else if let Some(patch) = MasterEqNode::<S>::patch_event(&event) {
+                self.apply_patch(patch);
+            } else {
+                continue;
+            }
+            dirty = true;
+        }
+        if dirty {
+            self.sync_gains();
+        }
+    }
+
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.sample_rate = stream_info.sample_rate;
         if let Some((left, right)) = self.active.as_mut() {
@@ -299,24 +317,6 @@ where
         {
             left.update_sample_rate(self.sample_rate.get());
             right.update_sample_rate(self.sample_rate.get());
-        }
-    }
-
-    #[kithara::rtsan_forbid_blocking]
-    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, _extra: &mut ProcExtra) {
-        let mut dirty = false;
-        for mut event in events.drain() {
-            if let Some(layout) = event.downcast_mut::<MasterEqLayout>() {
-                self.take_layout(layout);
-            } else if let Some(patch) = MasterEqNode::<S>::patch_event(&event) {
-                self.apply_patch(patch);
-            } else {
-                continue;
-            }
-            dirty = true;
-        }
-        if dirty {
-            self.sync_gains();
         }
     }
 

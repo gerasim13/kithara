@@ -19,7 +19,6 @@ schema_version = 1
 "crates/kithara-ffi/src/player/facade.rs" = 1
 "crates/kithara-net/src/client.rs" = 1
 "crates/kithara-net/src/traits.rs" = 1
-"crates/kithara-queue/src/queue/state.rs" = 1
 "crates/kithara-storage/src/unified.rs" = 1
 "crates/kithara-download/src/downloader.rs" = 1
 "crates/kithara/src/lib.rs" = 1
@@ -55,7 +54,6 @@ schema_version = 1
 "crates/kithara-app/src" = 1
 "crates/kithara-app/src/gui" = 1
 "crates/kithara-decode/src" = 1
-"crates/kithara-decode/src/android" = 1
 "crates/kithara-decode/src/symphonia" = 1
 "crates/kithara-drm/src" = 1
 "crates/kithara-ffi/src/native" = 1
@@ -86,7 +84,6 @@ schema_version = 1
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1
 
 [god_module]
-"crates/kithara-decode/src/android/ffi.rs" = 1
 "crates/kithara-decode/src/factory/probe.rs" = 1
 "crates/kithara-abr/src/event.rs" = 1
 "crates/kithara-play/src/api/event.rs" = 1
@@ -95,7 +92,6 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs" = 1
 
 [god_struct]
-"crates/kithara-ffi/src/native/inner.rs::NativeInner" = 1
 
 [god_trait]
 "crates/kithara-decode/src/mp4/scan.rs::Mp4Visitor" = 1
@@ -110,13 +106,11 @@ schema_version = 1
 "crates/kithara-decode/src/composed.rs" = 1
 "crates/kithara-ffi/src/core/item.rs" = 1
 "crates/kithara-net/src/client.rs" = 1
-"crates/kithara-queue/src/loader.rs" = 1
 "crates/kithara-stream/src/stream.rs" = 1
 
 [module_fan_out]
 "crates/kithara-abr/src/controller/core.rs" = 1
 "crates/kithara-abr/src/controller/tick.rs" = 1
-"crates/kithara-decode/src/android/codec.rs" = 1
 "crates/kithara-decode/src/android/media_extractor_demuxer.rs" = 1
 "crates/kithara-decode/src/apple/audio_file_demuxer.rs" = 1
 "crates/kithara-decode/src/apple/codec.rs" = 1
@@ -133,7 +127,6 @@ schema_version = 1
 "crates/kithara-download/src/batch.rs" = 1
 
 [multi_constructor]
-"crates/kithara-decode/src/android/error.rs:AndroidBackendError" = 1
 "crates/kithara-decode/src/error.rs:DecodeError" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:GaplessTrimmer" = 1
 "crates/kithara-abr/src/event.rs:VariantIndex" = 1
@@ -187,7 +180,6 @@ schema_version = 1
 
 [single_impl_size]
 "crates/kithara-abr/src/state/core.rs::impl AbrState" = 1
-"crates/kithara-decode/src/android/media_codec.rs::impl OwnedCodec" = 1
 "crates/kithara-decode/src/mp4/scan.rs::impl Mp4Scanner" = 1
 "crates/kithara-ffi/src/native/bridge/event_bridge.rs::impl EventBridge" = 1
 "crates/kithara-ffi/src/native/inner.rs::impl NativeInner" = 1
@@ -201,7 +193,6 @@ schema_version = 1
 
 [single_word_filenames]
 "crates/kithara-app/src/tracing_init.rs" = 1
-"crates/kithara-decode/src/android/media_codec.rs" = 1
 "crates/kithara-decode/src/android/media_extractor.rs" = 1
 "crates/kithara-decode/src/android/media_extractor_demuxer.rs" = 1
 "crates/kithara-decode/src/apple/audio_file.rs" = 1

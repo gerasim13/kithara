@@ -18,12 +18,6 @@ use crate::{
 
 const EXTENT: u64 = 64;
 const CHUNK_FRAMES: u64 = 16;
-const SOURCE_SAMPLE_RATE_FIELD: usize = 16;
-const EXTENT_FIELD: usize = 24;
-const CHUNK_FRAMES_FIELD: usize = 32;
-const PAYLOAD_END_FIELD: usize = 64;
-const LATEST_PAYLOAD_OFFSET_FIELD: usize = 72;
-
 fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
 }
@@ -348,6 +342,12 @@ fn update_rejects_stale_revision() {
 
 #[kithara::test]
 fn parse_rejects_fingerprint_axis_extent_and_chunk_drift() {
+    const SOURCE_SAMPLE_RATE_FIELD: usize = 16;
+
+    const EXTENT_FIELD: usize = 24;
+
+    const CHUNK_FRAMES_FIELD: usize = 32;
+
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
     let other_fingerprint = AnalysisFingerprint::new(Some("beat:other"), Some("wave:other"));
     assert!(matches!(
@@ -434,6 +434,10 @@ fn update_rejects_completed_chunk_regression() {
 
 #[kithara::test]
 fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
+    const PAYLOAD_END_FIELD: usize = 64;
+
+    const LATEST_PAYLOAD_OFFSET_FIELD: usize = 72;
+
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
     for cut in [0, HEADER_LEN - 1, bytes.len() - 1] {
         assert!(matches!(

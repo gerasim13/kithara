@@ -25,7 +25,7 @@ use config::StyleConfig;
 
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
+    exclude::apply_lint_excludes,
     project::ProjectConfig,
     report,
     scan::Scan,
@@ -222,10 +222,9 @@ fn run_checks(
             if check.uses_global_lint_excludes() {
                 let mut check_report = Report::default();
                 check_report.extend(violations);
-                apply_path_excludes(&mut check_report, &project.lint_exclude.paths);
-                apply_cfg_test_exclusion(&mut check_report, workspace_root);
-                apply_module_excludes(
+                apply_lint_excludes(
                     &mut check_report,
+                    &project.lint_exclude.paths,
                     &project.lint_exclude.modules,
                     workspace_root,
                 );
@@ -275,4 +274,39 @@ fn validate(args: &StyleArgs) -> Result<()> {
         bail!("--json and --report are mutually exclusive");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_fix_edits_the_text_the_previous_fix_left() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/demo/src");
+        fs::create_dir_all(&src).expect("mkdir");
+        let path = src.join("lib.rs");
+        fs::write(
+            &path,
+            "pub struct S {\n    b: u8,\n    a: u8,\n}\n\nimpl S {\n    fn b(&self) {}\n\n    fn a(&self) {}\n}\n",
+        )
+        .expect("write");
+        let config = StyleConfig::default();
+        let scan = Scan::new(dir.path());
+        let scope = Scope::default();
+        let ctx = Context {
+            workspace_root: dir.path(),
+            scan: &scan,
+            scope: &scope,
+            config: &config,
+        };
+        let filter = Some(HashSet::from(["struct_field_order", "trait_item_order"]));
+
+        run_fix(&registry(), &filter, &ctx, true).expect("fix");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read"),
+            "pub struct S {\n    a: u8,\n    b: u8,\n}\n\nimpl S {\n    fn a(&self) {}\n\n    fn b(&self) {}\n}\n",
+        );
+    }
 }

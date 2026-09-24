@@ -40,20 +40,20 @@ enum OfflineMsg<S> {
 }
 
 struct OfflineSessionTask<S> {
-    cmd_rx: Option<mpsc::Receiver<OfflineMsg<S>>>,
     max_block_frames: NonZeroU32,
+    cmd_rx: Option<mpsc::Receiver<OfflineMsg<S>>>,
+    state: Option<SessionState<OfflineStream, S>>,
     pools: PoolRegion<S>,
     position: u64,
-    state: Option<SessionState<OfflineStream, S>>,
 }
 
 pub(crate) struct OfflineTaskConfig<S> {
-    pub(crate) pools: PoolRegion<S>,
-    pub(crate) sample_rate: NonZeroU32,
-    pub(crate) max_block_frames: NonZeroU32,
-    pub(crate) declick_frames: NonZeroU32,
     pub(crate) declared_latency: Duration,
     pub(crate) limiter: LimiterConfig,
+    pub(crate) declick_frames: NonZeroU32,
+    pub(crate) max_block_frames: NonZeroU32,
+    pub(crate) sample_rate: NonZeroU32,
+    pub(crate) pools: PoolRegion<S>,
 }
 
 impl<S> OfflineSessionTask<S>

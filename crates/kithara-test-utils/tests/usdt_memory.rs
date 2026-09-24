@@ -24,11 +24,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 static ALLOCATOR: Counting = Counting;
 
 const THREADS: usize = 4;
-/// Firings per thread before measuring: fills the flight recorder's rings and
-/// every per-thread tracing buffer, which are bounded but not preallocated.
-const WARMUP: u64 = 20_000;
-/// Firings per thread measured: far past every bound the backend keeps.
-const FIRINGS: u64 = 1_000_000;
 /// Growth allowed once warm while nothing keeps history: allocator and
 /// ring-entry jitter, never a per-firing cost.
 const STEADY_BUDGET: usize = 256 * 1024;
@@ -53,6 +48,13 @@ fn fire(probe: &'static str, value: u64) {
 /// leave the measurement reading what was left to grow rather than what the
 /// history costs.
 fn hammer(warm_probe: Option<&'static str>, probe: &'static str) -> (usize, usize) {
+    /// Firings per thread before measuring: fills the flight recorder's rings and
+    /// every per-thread tracing buffer, which are bounded but not preallocated.
+    const WARMUP: u64 = 20_000;
+
+    /// Firings per thread measured: far past every bound the backend keeps.
+    const FIRINGS: u64 = 1_000_000;
+
     let warm = Barrier::new(THREADS + 1);
     let go = Barrier::new(THREADS + 1);
     let mut baseline = 0;

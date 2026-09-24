@@ -23,6 +23,17 @@ impl Check for PlatformLayerHygiene {
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        const ARC_EXPLANATION: &str = "\
+Summary: a consumer imports or names `std::sync::Arc` directly instead of using
+the canonical `kithara_platform::sync::Arc` surface.
+
+Why: all synchronization ownership must enter through kithara-platform so the
+workspace has one stable import path and backend selection remains centralized.
+The system ownership and wasm sync modules are the only sites that own the raw std type.
+
+Fix: import `kithara_platform::sync::Arc`. Do not add a parallel Arc alias or a
+second ownership type.";
+
         let cfg = &ctx.config.thresholds.platform_layer_hygiene;
         let mut violations = Vec::new();
 
@@ -346,17 +357,6 @@ or move the primitive-owning code into one of the implementation sub-trees if it
 genuinely belongs there.
 
 See `crates/kithara-platform/README.md` and `AGENTS.md`.";
-
-const ARC_EXPLANATION: &str = "\
-Summary: a consumer imports or names `std::sync::Arc` directly instead of using
-the canonical `kithara_platform::sync::Arc` surface.
-
-Why: all synchronization ownership must enter through kithara-platform so the
-workspace has one stable import path and backend selection remains centralized.
-The system ownership and wasm sync modules are the only sites that own the raw std type.
-
-Fix: import `kithara_platform::sync::Arc`. Do not add a parallel Arc alias or a
-second ownership type.";
 
 #[cfg(test)]
 mod tests {

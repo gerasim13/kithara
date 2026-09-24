@@ -15,8 +15,8 @@ use crate::{
 /// Captured transport intent and complete fade profile for one selection.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectTransition {
-    pub playback: SelectionPlayback,
     pub crossfade: CrossfadeSettings,
+    pub playback: SelectionPlayback,
 }
 
 impl<S> PlayerRuntime<S>
@@ -72,6 +72,17 @@ where
         };
         self.publish_current_track_snapshot(duration_seconds);
         self.start_playback(item_id);
+        self.apply_start_position();
+        Ok(true)
+    }
+
+    fn load_current_item_with(&self, crossfade: CrossfadeSettings) -> Result<bool, PlayError> {
+        let index = self.current_index();
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(false);
+        };
+        self.publish_current_track_snapshot(duration_seconds);
+        self.start_playback_with(item_id, crossfade);
         self.apply_start_position();
         Ok(true)
     }
@@ -272,17 +283,6 @@ where
                 ..CrossfadeSettings::default()
             },
         );
-    }
-
-    fn load_current_item_with(&self, crossfade: CrossfadeSettings) -> Result<bool, PlayError> {
-        let index = self.current_index();
-        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
-            return Ok(false);
-        };
-        self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback_with(item_id, crossfade);
-        self.apply_start_position();
-        Ok(true)
     }
 
     fn start_playback_with(&self, item_id: TrackId, settings: CrossfadeSettings) {

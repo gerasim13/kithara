@@ -71,17 +71,17 @@ pub(crate) struct ProfileSummary {
     pub(crate) on_cpu_ms: f64,
 }
 
-const WAIT_CLASSES: [(&str, &[&str]); 7] = [
-    ("condvar", &["psynch_cvwait", "pthread_cond"]),
-    ("lock", &["ulock_wait", "psynch_mutexwait", "pthread_mutex"]),
-    ("sleep", &["nanosleep", "semwait_signal", "usleep", "sleep"]),
-    ("kevent", &["kevent", "kqueue"]),
-    ("mach", &["mach_msg"]),
-    ("park", &["park"]),
-    ("channel", &["recv"]),
-];
-
 fn wait_class(leaf: &str) -> &'static str {
+    const WAIT_CLASSES: [(&str, &[&str]); 7] = [
+        ("condvar", &["psynch_cvwait", "pthread_cond"]),
+        ("lock", &["ulock_wait", "psynch_mutexwait", "pthread_mutex"]),
+        ("sleep", &["nanosleep", "semwait_signal", "usleep", "sleep"]),
+        ("kevent", &["kevent", "kqueue"]),
+        ("mach", &["mach_msg"]),
+        ("park", &["park"]),
+        ("channel", &["recv"]),
+    ];
+
     for (class, needles) in WAIT_CLASSES {
         if needles.iter().any(|needle| leaf.contains(needle)) {
             return class;
@@ -175,7 +175,9 @@ pub(crate) fn summarize(
 mod tests {
     use super::*;
 
-    const PROFILE: &str = r#"{
+    #[test]
+    fn classifies_on_and_off_cpu() {
+        const PROFILE: &str = r#"{
       "meta": { "interval": 1.0 },
       "threads": [{
         "name": "worker",
@@ -195,8 +197,6 @@ mod tests {
       }]
     }"#;
 
-    #[test]
-    fn classifies_on_and_off_cpu() {
         let summary = summarize(PROFILE, 10, "demo").expect("summarize gecko");
 
         assert!((summary.on_cpu_ms - 1.0).abs() < 1e-9);

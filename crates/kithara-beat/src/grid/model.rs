@@ -149,8 +149,8 @@ fn check_marker(
     match duration {
         Some(duration) if at > duration => Err(BeatGridError::PastDuration {
             ordinal,
-            seconds: at,
             duration,
+            seconds: at,
         }),
         _ => Ok(()),
     }

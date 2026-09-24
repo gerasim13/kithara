@@ -22,7 +22,7 @@ mod host;
 #[path = "../examples/gallery/sections.rs"]
 mod sections;
 
-// A sibling in `tests/` would be a test binary of its own, and this one carries
-// the gallery modules the checks are written against.
+/// A sibling in `tests/` would be a test binary of its own, and this one carries
+/// the gallery modules the checks are written against.
 #[path = "ui_buffers/checks.rs"]
 mod checks;

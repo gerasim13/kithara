@@ -1,4 +1,7 @@
-use std::{collections::HashSet, ops::Range};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
 use anyhow::Result;
 use glob::Pattern;
@@ -6,7 +9,13 @@ use syn::{File, ImplItem, Item, TraitItem, spanned::Spanned, visit, visit::Visit
 
 use super::{Check, Context};
 use crate::{
-    common::{fix::FixOutcome, violation::Violation, walker::relative_to},
+    common::{
+        exclude::apply_lint_excludes,
+        fix::FixOutcome,
+        project::ProjectConfig,
+        violation::{Report, Violation},
+        walker::relative_to,
+    },
     style::config::CommentHygieneConfig,
 };
 
@@ -17,6 +26,8 @@ pub(crate) struct CommentHygiene;
 impl Check for CommentHygiene {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.comment_hygiene;
+        let reported = reported_category_lines(ctx)?;
+        let unreported = HashSet::new();
         let excludes = compile_excludes(&cfg.exclude_paths);
         let mut outcome = FixOutcome::default();
         for path in ctx.scan.rs_files(ctx.scope)?.iter() {
@@ -34,9 +45,16 @@ impl Check for CommentHygiene {
             };
             let comments = scan_comments(&src);
             let macro_spans = collect_macro_spans(&file);
-            let new_src = apply_category_fix(&src, &comments, &macro_spans, &file, cfg);
+            let new_src = apply_category_fix(
+                &src,
+                &comments,
+                &macro_spans,
+                &file,
+                cfg,
+                reported.get(&rel).unwrap_or(&unreported),
+            );
             if let Some(new_src) = new_src {
-                std::fs::write(path, new_src)?;
+                ctx.scan.write(path, new_src)?;
                 outcome.writes += 1;
             }
         }
@@ -76,6 +94,47 @@ impl Check for CommentHygiene {
     }
 }
 
+/// First lines of the prose blocks the report shows, per file: the same
+/// blocks `run` reports once the workspace's lint excludes drop test code and
+/// excluded modules, so the fix removes nothing the report does not name.
+fn reported_category_lines(ctx: &Context<'_>) -> Result<HashMap<String, HashSet<usize>>> {
+    let cfg = &ctx.config.thresholds.comment_hygiene;
+    let excludes = compile_excludes(&cfg.exclude_paths);
+    let mut report = Report::default();
+    for path in ctx.scan.rs_files(ctx.scope)?.iter() {
+        let rel = relative_to(ctx.workspace_root, path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if path_excluded(&excludes, &rel) {
+            continue;
+        }
+        let (Some(src), Ok(file)) = (ctx.scan.source(path), ctx.scan.parse_file(path)) else {
+            continue;
+        };
+        let comments = scan_comments(&src);
+        let visible = visible_comments(&src, &comments, &collect_macro_spans(&file));
+        detect_category(cfg, &rel, &src, &visible, &mut report.violations);
+    }
+    let project = ProjectConfig::load(ctx.workspace_root)?;
+    apply_lint_excludes(
+        &mut report,
+        &project.lint_exclude.paths,
+        &project.lint_exclude.modules,
+        ctx.workspace_root,
+    );
+    let mut lines: HashMap<String, HashSet<usize>> = HashMap::new();
+    for violation in &report.violations {
+        let mut parts = violation.key.rsplitn(3, ':');
+        let (Some(_), Some(line), Some(rel)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if let Ok(line) = line.parse() {
+            lines.entry(rel.to_owned()).or_default().insert(line);
+        }
+    }
+    Ok(lines)
+}
+
 fn compile_excludes(patterns: &[String]) -> Vec<Pattern> {
     patterns
         .iter()
@@ -95,23 +154,31 @@ fn scan_file(
     out: &mut Vec<Violation>,
 ) {
     let comments = scan_comments(src);
-    let macro_spans = collect_macro_spans(file);
     let fn_spans = collect_fn_spans(file);
-    let license = leading_license_range(src, &comments);
-
-    let visible: Vec<&Comment> = comments
-        .iter()
-        .filter(|c| {
-            !inside_any(c.byte_range.start, &macro_spans)
-                && !license
-                    .as_ref()
-                    .is_some_and(|range| contains(range, &c.byte_range))
-        })
-        .collect();
+    let visible = visible_comments(src, &comments, &collect_macro_spans(file));
 
     detect_category(cfg, rel, src, &visible, out);
     detect_size(cfg, rel, &visible, out);
     detect_density(cfg, rel, &visible, &fn_spans, out);
+}
+
+/// The comments the checks judge: everything outside macro bodies and the
+/// leading license notice.
+fn visible_comments<'a>(
+    src: &str,
+    comments: &'a [Comment],
+    macro_spans: &[Range<usize>],
+) -> Vec<&'a Comment> {
+    let license = leading_license_range(src, comments);
+    comments
+        .iter()
+        .filter(|c| {
+            !inside_any(c.byte_range.start, macro_spans)
+                && !license
+                    .as_ref()
+                    .is_some_and(|range| contains(range, &c.byte_range))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -502,22 +569,8 @@ fn detect_category(
     comments: &[&Comment],
     out: &mut Vec<Violation>,
 ) {
-    let mut comments = comments.iter().copied().peekable();
-    while let Some(c) = comments.next() {
-        if is_standalone_plain_line(src, c) {
-            let mut previous_line = c.line_end;
-            while let Some(continuation) = comments.next_if(|next| {
-                is_standalone_plain_line(src, next) && next.line_start == previous_line + 1
-            }) {
-                previous_line = continuation.line_end;
-            }
-        }
-        if c.doc_style != DocStyle::None {
-            continue;
-        }
-        if has_allowed_marker(&c.body_trimmed, &cfg.allowed_inline_markers) {
-            continue;
-        }
+    for block in category_blocks(cfg, src, comments) {
+        let c = block[0];
         let key = format!("{rel}:{}:category", c.line_start);
         let preview = preview_body(&c.body_trimmed);
         let kind = match c.kind {
@@ -533,6 +586,38 @@ fn detect_category(
         );
         out.push(Violation::warn(ID, key, msg));
     }
+}
+
+/// The prose the documentation rule forbids, one entry per comment a reader
+/// sees: a standalone plain `//` line with the lines that continue it, or a
+/// lone trailing or block comment. A marker on the first line covers the
+/// whole block.
+fn category_blocks<'a>(
+    cfg: &CommentHygieneConfig,
+    src: &str,
+    comments: &[&'a Comment],
+) -> Vec<Vec<&'a Comment>> {
+    let mut out = Vec::new();
+    let mut comments = comments.iter().copied().peekable();
+    while let Some(c) = comments.next() {
+        let mut block = vec![c];
+        if is_standalone_plain_line(src, c) {
+            let mut previous_line = c.line_end;
+            while let Some(continuation) = comments.next_if(|next| {
+                is_standalone_plain_line(src, next) && next.line_start == previous_line + 1
+            }) {
+                previous_line = continuation.line_end;
+                block.push(continuation);
+            }
+        }
+        if c.doc_style != DocStyle::None
+            || has_allowed_marker(&c.body_trimmed, &cfg.allowed_inline_markers)
+        {
+            continue;
+        }
+        out.push(block);
+    }
+    out
 }
 
 fn is_standalone_plain_line(src: &str, comment: &Comment) -> bool {
@@ -781,44 +866,32 @@ impl Edit {
     }
 }
 
+/// Promote each prose block that sits above an item to a doc comment, and
+/// remove every other reported block whole: a comment survives only as
+/// documentation. `reported` holds the first lines of the blocks the report
+/// names, so code the report excludes keeps its comments.
 fn apply_category_fix(
     src: &str,
     comments: &[Comment],
     macro_spans: &[Range<usize>],
     file: &File,
     cfg: &CommentHygieneConfig,
+    reported: &HashSet<usize>,
 ) -> Option<String> {
-    let license = leading_license_range(src, comments);
     let converted = conversion_targets(src, comments, file, macro_spans, cfg);
     let promoted: HashSet<usize> = converted.iter().map(|at| at - 2).collect();
     let mut edits: Vec<Edit> = converted.into_iter().map(Edit::Convert).collect();
-    for c in comments {
-        if promoted.contains(&c.byte_range.start) {
+    let visible = visible_comments(src, comments, macro_spans);
+    for block in category_blocks(cfg, src, &visible) {
+        let first = block[0];
+        if !reported.contains(&first.line_start) || promoted.contains(&first.byte_range.start) {
             continue;
         }
-        if license
-            .as_ref()
-            .is_some_and(|range| contains(range, &c.byte_range))
-        {
-            continue;
-        }
-        if c.doc_style != DocStyle::None {
-            continue;
-        }
-        if has_allowed_marker(&c.body_trimmed, &cfg.allowed_inline_markers) {
-            continue;
-        }
-        if inside_any(c.byte_range.start, macro_spans) {
-            continue;
-        }
-        if !is_safe_to_autoremove(c) {
-            continue;
-        }
-        if is_standalone_line(src, c.byte_range.start) && has_standalone_neighbor(src, c, comments)
-        {
-            continue;
-        }
-        edits.push(Edit::Remove(removal_range(src, &c.byte_range)));
+        edits.extend(
+            block
+                .iter()
+                .map(|c| Edit::Remove(removal_range(src, &c.byte_range))),
+        );
     }
     if edits.is_empty() {
         return None;
@@ -847,75 +920,6 @@ fn is_standalone_line(src: &str, comment_start: usize) -> bool {
     src[line_start..comment_start]
         .bytes()
         .all(|b| b == b' ' || b == b'\t')
-}
-
-/// True when a standalone `target` sits directly above or below another
-/// standalone plain `//` line comment: the two form one prose paragraph, and
-/// deleting only one via the single-line autoremove heuristic would leave the
-/// other half dangling mid-sentence. Trailing (same-line-as-code) comments on
-/// neighboring lines are unrelated notes, not paragraph continuations, so
-/// they do not trigger this guard.
-fn has_standalone_neighbor(src: &str, target: &Comment, all: &[Comment]) -> bool {
-    all.iter().any(|other| {
-        other.kind == CommentKind::Line
-            && other.doc_style == DocStyle::None
-            && (other.line_start + 1 == target.line_start
-                || target.line_start + 1 == other.line_start)
-            && is_standalone_line(src, other.byte_range.start)
-    })
-}
-
-/// A comment is safe to delete via autofix only when its body looks like trivial
-/// restatement of nearby code, with no signal of external-contract documentation
-/// (spec references, byte-format annotations, identifier mentions, version refs).
-/// When in doubt, refuse: lost prose is irreversible — the user can always add a
-/// marker manually for cases the autofix skips.
-fn is_safe_to_autoremove(c: &Comment) -> bool {
-    if c.kind == CommentKind::Block {
-        return false;
-    }
-    if c.line_end != c.line_start {
-        return false;
-    }
-    let body = c.body_trimmed.as_str();
-    if body.is_empty() {
-        return true;
-    }
-    if body.chars().count() > 30 {
-        return false;
-    }
-    if has_value_signal(body) {
-        return false;
-    }
-    true
-}
-
-fn has_value_signal(body: &str) -> bool {
-    if body.chars().filter(char::is_ascii_uppercase).count() >= 2 {
-        return true;
-    }
-    if body.chars().any(|ch| ch.is_ascii_digit()) {
-        return true;
-    }
-    if body.contains('`') || body.contains('=') || body.contains('(') || body.contains(')') {
-        return true;
-    }
-    if body.chars().skip(1).any(|ch| ch == ':') {
-        return true;
-    }
-    let lower = body.to_ascii_lowercase();
-    if lower.starts_with("see ")
-        || lower.contains(" see ")
-        || lower.starts_with("per ")
-        || lower.contains(" per ")
-        || lower.contains(" ref ")
-        || lower.contains("rfc")
-        || lower.contains("spec")
-        || lower.contains("invariant")
-    {
-        return true;
-    }
-    false
 }
 
 fn removal_range(src: &str, comment: &Range<usize>) -> Range<usize> {
@@ -954,6 +958,17 @@ mod tests {
         let mut out = Vec::new();
         scan_file(&cfg, "fixture.rs", src, &file, &mut out);
         out
+    }
+
+    /// First lines of every prose block in `src`, as if the report kept them all.
+    fn all_reported(src: &str) -> HashSet<usize> {
+        let comments = scan_comments(src);
+        let macros = collect_macro_spans(&parse(src));
+        let visible = visible_comments(src, &comments, &macros);
+        category_blocks(&cfg(), src, &visible)
+            .iter()
+            .map(|block| block[0].line_start)
+            .collect()
     }
 
     fn keys(vs: &[Violation]) -> Vec<String> {
@@ -1075,7 +1090,10 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        assert!(apply_category_fix(src, &comments, &macros, &file, &cfg()).is_none());
+        assert!(
+            apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1238,7 +1256,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        apply_category_fix(src, &comments, &macros, &file, &cfg())
+        apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
     }
 
     #[test]
@@ -1289,10 +1307,10 @@ mod tests {
     }
 
     #[test]
-    fn a_prose_marker_above_an_item_is_left_for_a_human() {
+    fn a_prose_marker_above_an_item_is_removed_not_promoted() {
         let out = fixed("// WHY: the queue drains first\nfn f() {}\n");
 
-        assert!(out.is_none(), "got: {out:?}");
+        assert_eq!(out.as_deref(), Some("fn f() {}\n"));
     }
 
     #[test]
@@ -1308,7 +1326,8 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
+            .expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 1;\n}\n");
     }
 
@@ -1318,7 +1337,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &file, &cfg());
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src));
         assert!(out.is_none());
     }
 
@@ -1328,7 +1347,8 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
+            .expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 5;\n}\n");
     }
 
@@ -1339,12 +1359,19 @@ mod tests {
         let macros = collect_macro_spans(&file);
         let comments = scan_comments(src);
         let after_first =
-            apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("first pass");
+            apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
+                .expect("first pass");
         let comments_2 = scan_comments(&after_first);
         let file_2 = parse(&after_first);
         let macros_2 = collect_macro_spans(&file_2);
-        let after_second =
-            apply_category_fix(&after_first, &comments_2, &macros_2, &file_2, &cfg());
+        let after_second = apply_category_fix(
+            &after_first,
+            &comments_2,
+            &macros_2,
+            &file_2,
+            &cfg(),
+            &all_reported(&after_first),
+        );
         assert!(after_second.is_none(), "second pass should be a no-op");
     }
 
@@ -1354,7 +1381,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &file, &cfg());
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src));
         assert!(out.is_none());
     }
 
@@ -1364,7 +1391,8 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &all_reported(src))
+            .expect("fix");
         assert_eq!(
             out,
             "fn f() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n}\n"
@@ -1382,121 +1410,40 @@ mod tests {
         assert!(!path_excluded(&excludes, "crates/foo/src/lib.rs"));
     }
 
-    fn run_fix(src: &str) -> Option<String> {
+    #[test]
+    fn fix_removes_a_multi_line_prose_block_whole() {
+        let src = "fn f() {\n    // a long explanation that runs onto the next line, so\n    // wrap up\n    let x = 1;\n}\n";
+        assert_eq!(fixed(src).as_deref(), Some("fn f() {\n    let x = 1;\n}\n"));
+    }
+
+    #[test]
+    fn fix_removes_prose_whatever_it_mentions() {
+        let src = "fn f() {\n    // ES_Descriptor (tag, size) per RFC 6381, see `foo`\n    let x = 1;\n    /* quick note */\n    let y = 2;\n}\n";
+        assert_eq!(
+            fixed(src).as_deref(),
+            Some("fn f() {\n    let x = 1;\n    let y = 2;\n}\n")
+        );
+    }
+
+    #[test]
+    fn fix_keeps_a_block_the_report_excludes() {
+        let src = "fn f() {\n    // kept: the report drops this code\n    let x = 1;\n    // removed\n    let y = 2;\n}\n";
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        apply_category_fix(src, &comments, &macros, &file, &cfg())
-    }
-
-    #[test]
-    fn fix_preserves_esds_descriptor_annotation() {
-        let src = "fn f() {\n    // ES_Descriptor (tag, size)\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "ESDS-style byte-format annotation must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_oti_equals_annotation() {
-        let src = "fn f() {\n    // OTI = MPEG-4 Audio\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "spec reference with `=` must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_byte_size_note() {
-        let src = "fn f() {\n    // AvgBitrate (4 bytes)\n    let _ = 1;\n}\n";
-        assert!(run_fix(src).is_none(), "byte-size note must be preserved");
-    }
-
-    #[test]
-    fn fix_preserves_backtick_identifier_ref() {
-        let src = "fn f() {\n    // `foo` field\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "backtick identifier ref must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_long_explanation() {
-        let src = "fn f() {\n    // long explanation about why this dance is necessary\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "long comment (>30 chars) must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_rfc_reference() {
-        let src = "fn f() {\n    // see RFC 6381\n    let _ = 1;\n}\n";
-        assert!(run_fix(src).is_none(), "RFC reference must be preserved");
-    }
-
-    #[test]
-    fn fix_preserves_spec_word() {
-        let src = "fn f() {\n    // per spec\n    let _ = 1;\n}\n";
-        assert!(run_fix(src).is_none(), "spec mention must be preserved");
-    }
-
-    #[test]
-    fn fix_preserves_block_comment_always() {
-        let src = "fn f() {\n    /* foo */\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "block comments must never be autoremoved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_caps_word() {
-        let src = "fn f() {\n    // ESDS bytes\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "2+ consecutive caps must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_preserves_invariant_word() {
-        let src = "fn f() {\n    // holds invariant\n    let _ = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "`invariant` reference must be preserved"
-        );
-    }
-
-    #[test]
-    fn fix_still_removes_short_lowercase_prose() {
-        let src = "fn f() {\n    // initialize\n    let x = 1;\n}\n";
-        let out = run_fix(src).expect("fix");
-        assert_eq!(out, "fn f() {\n    let x = 1;\n}\n");
-    }
-
-    #[test]
-    fn fix_still_removes_trailing_short_lowercase() {
-        let src = "fn f() {\n    let x = 5; // unused\n}\n";
-        let out = run_fix(src).expect("fix");
-        assert_eq!(out, "fn f() {\n    let x = 5;\n}\n");
-    }
-
-    #[test]
-    fn fix_preserves_standalone_paragraph_continuation() {
-        let src = "fn f() {\n    // a long explanation that runs onto the next line, so\n    // wrap up\n    let x = 1;\n}\n";
-        assert!(
-            run_fix(src).is_none(),
-            "must not delete only the tail of a standalone multi-line paragraph"
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg(), &HashSet::from([4]));
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                "fn f() {\n    // kept: the report drops this code\n    let x = 1;\n    let y = 2;\n}\n"
+            )
         );
     }
 
     #[test]
     fn fix_still_removes_independent_trailing_comments_on_adjacent_lines() {
         let src = "fn f() {\n    let x = 1; // a\n    let y = 2; // b\n}\n";
-        let out = run_fix(src).expect("fix");
+        let out = fixed(src).expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 1;\n    let y = 2;\n}\n");
     }
 }

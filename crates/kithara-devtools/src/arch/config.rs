@@ -154,13 +154,13 @@ impl Default for MultiConstructorThreshold {
 pub(crate) struct FieldPassthroughThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
-    /// How far a passthrough chain is followed before the check gives up.
-    #[serde(default = "default_field_passthrough_max_depth")]
-    pub(crate) max_depth: usize,
     /// Types a field may be wrapped in without the wrapper counting as a level
     /// of its own.
     #[serde(default = "default_transparent_wrappers")]
     pub(crate) transparent_wrappers: Vec<String>,
+    /// How far a passthrough chain is followed before the check gives up.
+    #[serde(default = "default_field_passthrough_max_depth")]
+    pub(crate) max_depth: usize,
 }
 
 const fn default_field_passthrough_max_depth() -> usize {
@@ -565,6 +565,10 @@ pub(crate) struct NoLibStaticsThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PlatformLayerHygieneThreshold {
+    /// Source root whose files this check governs, workspace-relative and
+    /// trailing-slashed.
+    #[serde(default = "default_platform_root")]
+    pub(crate) root: String,
     /// Files sanctioned to name `std::sync::Arc` directly: the ownership
     /// primitive itself and the wasm shim that has no platform Arc to reach
     /// for.
@@ -578,10 +582,6 @@ pub(crate) struct PlatformLayerHygieneThreshold {
     /// Sub-paths that implement the abstraction rather than consume it.
     #[serde(default = "default_platform_impl_subtrees")]
     pub(crate) impl_subtrees: Vec<String>,
-    /// Source root whose files this check governs, workspace-relative and
-    /// trailing-slashed.
-    #[serde(default = "default_platform_root")]
-    pub(crate) root: String,
 }
 
 fn default_arc_owner_files() -> Vec<String> {

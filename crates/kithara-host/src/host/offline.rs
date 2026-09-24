@@ -119,12 +119,12 @@ where
             root,
             root_view,
             OfflineTaskConfig {
-                pools,
-                sample_rate,
-                max_block_frames,
-                declick_frames,
                 declared_latency,
                 limiter,
+                declick_frames,
+                max_block_frames,
+                sample_rate,
+                pools,
             },
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();

@@ -14,6 +14,12 @@ impl<'a> Reader<'a> {
         Self { bytes, cursor: 0 }
     }
 
+    /// Preallocate for `count` items without trusting an untrusted length.
+    #[must_use]
+    pub fn capacity_for(count: usize) -> usize {
+        count.min(MAX_PREALLOC)
+    }
+
     /// Succeed only if the whole blob was consumed.
     ///
     /// # Errors
@@ -50,6 +56,21 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Read a length prefix, rejecting a count whose fixed-size items cannot
+    /// fit in what is left. This is the bound that keeps a corrupt length from
+    /// driving an unbounded read loop.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the blob ends early or the count cannot fit in what is left.
+    pub fn read_count(&mut self, item_bytes: usize) -> Result<usize, BlobError> {
+        let count = self.read_len()?;
+        if count.saturating_mul(item_bytes) > self.remaining() {
+            return Err(BlobError::Corrupt);
+        }
+        Ok(count)
+    }
+
     /// # Errors
     ///
     /// Errors if fewer than four bytes are left.
@@ -80,6 +101,30 @@ impl<'a> Reader<'a> {
         let present = self.read_bool()?;
         let value = self.read_u64()?;
         Ok(present.then_some(value))
+    }
+
+    /// Read a `u64` that must be strictly greater than the previous one.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the blob ends early or the value does not exceed `previous`.
+    pub fn read_ordered(&mut self, previous: Option<u64>) -> Result<u64, BlobError> {
+        let value = self.read_u64()?;
+        if previous.is_some_and(|previous| previous >= value) {
+            Err(BlobError::Corrupt)
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// Read a length-prefixed `f32` series.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the blob ends early or the count exceeds what is left.
+    pub fn read_samples(&mut self) -> Result<Box<[f32]>, BlobError> {
+        let count = self.read_count(size_of::<f32>())?;
+        (0..count).map(|_| self.read_f32()).collect()
     }
 
     /// # Errors
@@ -133,51 +178,6 @@ impl<'a> Reader<'a> {
             .ok_or(BlobError::Corrupt)?;
         self.cursor += 1;
         Ok(value)
-    }
-
-    /// Read a length prefix, rejecting a count whose fixed-size items cannot
-    /// fit in what is left. This is the bound that keeps a corrupt length from
-    /// driving an unbounded read loop.
-    ///
-    /// # Errors
-    ///
-    /// Errors if the blob ends early or the count cannot fit in what is left.
-    pub fn read_count(&mut self, item_bytes: usize) -> Result<usize, BlobError> {
-        let count = self.read_len()?;
-        if count.saturating_mul(item_bytes) > self.remaining() {
-            return Err(BlobError::Corrupt);
-        }
-        Ok(count)
-    }
-
-    /// Read a length-prefixed `f32` series.
-    ///
-    /// # Errors
-    ///
-    /// Errors if the blob ends early or the count exceeds what is left.
-    pub fn read_samples(&mut self) -> Result<Box<[f32]>, BlobError> {
-        let count = self.read_count(size_of::<f32>())?;
-        (0..count).map(|_| self.read_f32()).collect()
-    }
-
-    /// Read a `u64` that must be strictly greater than the previous one.
-    ///
-    /// # Errors
-    ///
-    /// Errors if the blob ends early or the value does not exceed `previous`.
-    pub fn read_ordered(&mut self, previous: Option<u64>) -> Result<u64, BlobError> {
-        let value = self.read_u64()?;
-        if previous.is_some_and(|previous| previous >= value) {
-            Err(BlobError::Corrupt)
-        } else {
-            Ok(value)
-        }
-    }
-
-    /// Preallocate for `count` items without trusting an untrusted length.
-    #[must_use]
-    pub fn capacity_for(count: usize) -> usize {
-        count.min(MAX_PREALLOC)
     }
 
     /// Bytes not yet consumed.

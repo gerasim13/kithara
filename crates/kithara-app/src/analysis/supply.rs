@@ -71,18 +71,6 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
-    pub(crate) fn for_config(config: &AppResourceConfig) -> Self {
-        Self {
-            beat_grid: config.beat_grid().into(),
-            waveform: config.waveform().into(),
-        }
-    }
-
-    /// Whether the track was opened with nothing prepared.
-    pub(crate) const fn is_empty(&self) -> bool {
-        self.beat_grid.is_missing() && self.waveform.is_missing()
-    }
-
     /// The artifacts a pass is opened for: what this runtime can analyse at
     /// all, minus what the track already carries. A checkpoint does not narrow
     /// this — a resumed pass continues the very artifacts it was opened for.
@@ -97,6 +85,18 @@ impl Prepared {
             fingerprint.waveform().is_some() && self.waveform.is_missing(),
         );
         demand
+    }
+
+    pub(crate) fn for_config(config: &AppResourceConfig) -> Self {
+        Self {
+            beat_grid: config.beat_grid().into(),
+            waveform: config.waveform().into(),
+        }
+    }
+
+    /// Whether the track was opened with nothing prepared.
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.beat_grid.is_missing() && self.waveform.is_missing()
     }
 
     /// Whether the track needs nothing further: the pass ran its course and

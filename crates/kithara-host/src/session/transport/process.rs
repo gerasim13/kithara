@@ -1,3 +1,4 @@
+use core::mem;
 use std::{num::NonZeroU32, ops::Range};
 
 use firewheel::{
@@ -13,8 +14,6 @@ use super::commit::{
     TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
-
-const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
 
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
@@ -184,6 +183,8 @@ impl TransportCommitState {
         info: &ProcInfo,
         revision: TransportRevision,
     ) -> Result<(), TransportProcessError> {
+        const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
+
         if self
             .ignored_through_revision
             .is_some_and(|ignored| revision <= ignored)
@@ -248,33 +249,12 @@ impl TransportCommitState {
         Ok(())
     }
 
-    fn stage_events(&mut self, events: &mut ProcEvents) -> Result<(), TransportProcessError> {
-        for event in events.drain() {
-            let event = event
-                .downcast_ref::<TransportCommitEvent>()
-                .copied()
-                .ok_or(TransportProcessError::UnexpectedEvent)?;
-            match event {
-                TransportCommitEvent::Abort(revision) => {
-                    Self::set_once(&mut self.staged.abort, revision)?;
-                }
-                TransportCommitEvent::Apply(revision) => {
-                    Self::set_once(&mut self.staged.apply, revision)?;
-                }
-                TransportCommitEvent::Stage(stamp) => {
-                    Self::set_once(&mut self.staged.stage, stamp)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn apply_events(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
         let StagedCommitEvents {
             abort,
             apply,
             stage,
-        } = core::mem::take(&mut self.staged);
+        } = mem::take(&mut self.staged);
         if let Some(revision) = abort {
             self.apply_abort(revision)?;
         }
@@ -497,6 +477,27 @@ impl TransportCommitState {
     fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {
         if slot.replace(value).is_some() {
             return Err(TransportProcessError::DuplicateEvent);
+        }
+        Ok(())
+    }
+
+    fn stage_events(&mut self, events: &mut ProcEvents) -> Result<(), TransportProcessError> {
+        for event in events.drain() {
+            let event = event
+                .downcast_ref::<TransportCommitEvent>()
+                .copied()
+                .ok_or(TransportProcessError::UnexpectedEvent)?;
+            match event {
+                TransportCommitEvent::Abort(revision) => {
+                    Self::set_once(&mut self.staged.abort, revision)?;
+                }
+                TransportCommitEvent::Apply(revision) => {
+                    Self::set_once(&mut self.staged.apply, revision)?;
+                }
+                TransportCommitEvent::Stage(stamp) => {
+                    Self::set_once(&mut self.staged.stage, stamp)?;
+                }
+            }
         }
         Ok(())
     }

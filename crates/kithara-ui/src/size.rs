@@ -158,8 +158,8 @@ pub(crate) trait Snapshot {
 
 #[cfg(test)]
 pub(crate) struct SnapshotFixture {
-    hidden: bool,
     measured: Option<f32>,
+    hidden: bool,
 }
 
 #[cfg(test)]
@@ -173,8 +173,8 @@ impl SnapshotFixture {
 
     pub(crate) const fn measured(measured: Option<f32>) -> Self {
         Self {
-            hidden: false,
             measured,
+            hidden: false,
         }
     }
 }

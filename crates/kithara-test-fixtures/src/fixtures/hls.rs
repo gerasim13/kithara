@@ -1,4 +1,10 @@
-use std::{fs, io, path::Path, str::from_utf8, sync::OnceLock};
+use std::{
+    fs, io,
+    io::{Error, ErrorKind},
+    path::Path,
+    str::from_utf8,
+    sync::OnceLock,
+};
 
 use kithara_test_macros as kithara;
 
@@ -170,14 +176,14 @@ pub fn load_variant(input: &VariantInput) -> io::Result<Fmp4Package> {
     let asset = assets::hls_variants_catalog_with_native_gapless();
     let key = input.key();
     let artifact = catalog.variants.get(&key).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
+        Error::new(
+            ErrorKind::NotFound,
             format!("unregistered HLS fixture: {key}"),
         )
     })?;
     let relative_root = Path::new(asset.entry().path)
         .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HLS catalog has no namespace"))?;
+        .ok_or_else(|| Error::new(ErrorKind::NotFound, "HLS catalog has no namespace"))?;
     Ok(Fmp4Package {
         init_segment: fs::read(crate::store::file(&relative_root.join(&artifact.init))?)?,
         media_segments: artifact
@@ -200,8 +206,8 @@ pub fn load_wav(sample_rate: u32, channels: u16, frames: usize) -> io::Result<Ve
         (44_100, 2, 2_400_000) => assets::hls_raw_wav_web(),
         (44_100, 2, 2_160_000) => assets::hls_raw_wav_web_jitter(),
         shape => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
+            return Err(Error::new(
+                ErrorKind::NotFound,
                 format!("unregistered raw HLS WAV: {shape:?}"),
             ));
         }
@@ -216,8 +222,8 @@ pub fn load_wav(sample_rate: u32, channels: u16, frames: usize) -> io::Result<Ve
 /// Returns `NotFound` for an unregistered sample rate or channel count.
 pub fn load_header(sample_rate: u32, channels: u16) -> io::Result<Vec<u8>> {
     if (sample_rate, channels) != (44_100, 2) {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
+        return Err(Error::new(
+            ErrorKind::NotFound,
             format!("unregistered HLS WAV header: {sample_rate}/{channels}"),
         ));
     }
@@ -239,8 +245,8 @@ pub fn load_pcm(sample_rate: u32, channels: u16, frames: usize, wave: Wave) -> i
         (44_100, 2, 2_500_000, Wave::Sawtooth) => assets::hls_pcm_fifty(),
         (44_100, 2, 2_500_000, Wave::SawtoothDescending) => assets::hls_pcm_fifty_descending(),
         shape => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
+            return Err(Error::new(
+                ErrorKind::NotFound,
                 format!("unregistered raw HLS PCM: {shape:?}"),
             ));
         }
@@ -272,8 +278,8 @@ pub fn frame_samples(codec: kithara_stream::AudioCodec) -> io::Result<usize> {
         .get(&format!("{codec:?}"))
         .copied()
         .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
+            Error::new(
+                ErrorKind::NotFound,
                 format!("no prepared HLS frame size for {codec:?}"),
             )
         })

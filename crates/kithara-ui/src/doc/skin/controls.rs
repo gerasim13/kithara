@@ -43,24 +43,24 @@ pub struct KnobSkin {
 #[non_exhaustive]
 pub struct KnobPatch {
     pub body_border: Option<ColorRole>,
-    pub body_fill: Option<ColorRole>,
-    pub indicator_color: Option<ColorRole>,
-    pub track_color: Option<ColorRole>,
-    pub value_color: Option<ColorRole>,
-    pub size: Option<SizeSpec>,
-    pub label_text: Option<TextRoleSkin>,
     pub body_border_width: Option<f32>,
+    pub body_fill: Option<ColorRole>,
     pub body_ratio: Option<f32>,
     pub drag_range: Option<f32>,
+    pub indicator_color: Option<ColorRole>,
     pub indicator_width: Option<f32>,
     pub label_gap: Option<f32>,
     pub label_height: Option<f32>,
+    pub label_text: Option<TextRoleSkin>,
     pub neutral_angle: Option<f32>,
     pub outer_inset: Option<f32>,
+    pub size: Option<SizeSpec>,
     pub start_angle: Option<f32>,
     pub sweep_angle: Option<f32>,
     pub track_alpha: Option<f32>,
+    pub track_color: Option<ColorRole>,
     pub track_width: Option<f32>,
+    pub value_color: Option<ColorRole>,
     pub wheel_step: Option<f32>,
 }
 
@@ -98,10 +98,10 @@ pub struct CrossfaderSkin {
     pub rail_background: ColorRole,
     pub thumb_color: ColorRole,
     pub thumb_notch_color: ColorRole,
-    pub label_text: TextRoleSkin,
-    pub letter_text: TextRoleSkin,
     pub rail_frame: FrameSkin,
     pub size: SizeSpec,
+    pub label_text: TextRoleSkin,
+    pub letter_text: TextRoleSkin,
     pub ticks: TickSkin,
     pub arrow_gap: f32,
     pub arrow_size: f32,
@@ -122,25 +122,25 @@ pub struct CrossfaderSkin {
 #[non_exhaustive]
 pub struct CrossfaderPatch {
     pub arrow_color: Option<ColorRole>,
-    pub rail_background: Option<ColorRole>,
-    pub thumb_color: Option<ColorRole>,
-    pub thumb_notch_color: Option<ColorRole>,
-    pub label_text: Option<TextRoleSkin>,
-    pub letter_text: Option<TextRoleSkin>,
-    pub rail_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
-    pub ticks: Option<TickSkin>,
     pub arrow_gap: Option<f32>,
     pub arrow_size: Option<f32>,
     pub label_gap: Option<f32>,
+    pub label_text: Option<TextRoleSkin>,
+    pub letter_text: Option<TextRoleSkin>,
     pub padding_bottom: Option<f32>,
     pub padding_top: Option<f32>,
     pub padding_x: Option<f32>,
+    pub rail_background: Option<ColorRole>,
+    pub rail_frame: Option<FrameSkin>,
     pub rail_height: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub thumb_color: Option<ColorRole>,
     pub thumb_height: Option<f32>,
+    pub thumb_notch_color: Option<ColorRole>,
     pub thumb_notch_height: Option<f32>,
     pub thumb_notch_width: Option<f32>,
     pub thumb_width: Option<f32>,
+    pub ticks: Option<TickSkin>,
 }
 
 impl CrossfaderSkin {
@@ -190,16 +190,16 @@ pub struct VuStereoSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct VuStereoPatch {
-    pub size: Option<SizeSpec>,
     pub carriage_width: Option<f32>,
     pub channel_l_y: Option<f32>,
     pub channel_r_y: Option<f32>,
     pub danger_threshold: Option<f32>,
+    pub segment_count: Option<usize>,
     pub segment_gap: Option<f32>,
     pub segment_height: Option<f32>,
     pub segment_width: Option<f32>,
+    pub size: Option<SizeSpec>,
     pub warning_threshold: Option<f32>,
-    pub segment_count: Option<usize>,
 }
 
 impl VuStereoSkin {
@@ -242,18 +242,18 @@ pub struct VuVerticalSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct VuVerticalPatch {
-    pub thumb_color: Option<ColorRole>,
-    pub thumb_notch_color: Option<ColorRole>,
-    pub size: Option<SizeSpec>,
-    pub ticks: Option<TickSkin>,
     pub danger_threshold: Option<f32>,
     pub fader_width: Option<f32>,
     pub segment_gap: Option<f32>,
     pub segment_height: Option<f32>,
     pub segment_inset_x: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub thumb_color: Option<ColorRole>,
     pub thumb_height: Option<f32>,
+    pub thumb_notch_color: Option<ColorRole>,
     pub thumb_notch_height: Option<f32>,
     pub thumb_notch_offset: Option<f32>,
+    pub ticks: Option<TickSkin>,
     pub warning_threshold: Option<f32>,
 }
 
@@ -281,10 +281,10 @@ impl VuVerticalSkin {
 #[non_exhaustive]
 pub struct VisSkin {
     pub icon_color: ColorRole,
-    pub nav_fill: StateColors,
-    pub nav_text: TextRoleSkin,
     pub nav_frame: FrameSkin,
     pub size: SizeSpec,
+    pub nav_fill: StateColors,
+    pub nav_text: TextRoleSkin,
     pub footer_height: f32,
     pub footer_padding_x: f32,
     pub header_height: f32,
@@ -301,20 +301,20 @@ pub struct VisSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct VisPatch {
-    pub icon_color: Option<ColorRole>,
-    pub nav_fill: Option<StateColors>,
-    pub nav_text: Option<TextRoleSkin>,
-    pub nav_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub footer_height: Option<f32>,
     pub footer_padding_x: Option<f32>,
     pub header_height: Option<f32>,
+    pub icon_color: Option<ColorRole>,
     pub icon_size: Option<f32>,
     pub index_padding_x: Option<f32>,
     pub name_padding_x: Option<f32>,
     pub nav_cell_size: Option<f32>,
+    pub nav_fill: Option<StateColors>,
+    pub nav_frame: Option<FrameSkin>,
     pub nav_padding_x: Option<f32>,
     pub nav_padding_y: Option<f32>,
+    pub nav_text: Option<TextRoleSkin>,
+    pub size: Option<SizeSpec>,
 }
 
 impl VisSkin {
@@ -349,18 +349,18 @@ pub struct PortalMapSkin {
     pub target_color: ColorRole,
     pub tick_color: ColorRole,
     pub size: SizeSpec,
-    pub axis_inset_x: f32,
-    pub axis_offset_bottom: f32,
+    pub label: TextRoleSkin,
     pub arc_height_scale: f32,
     pub arc_top_inset: f32,
-    pub line_width: f32,
-    pub selected_line_width: f32,
-    pub marker_size: f32,
-    pub tick_height: f32,
-    pub tick_step: f32,
+    pub axis_inset_x: f32,
+    pub axis_offset_bottom: f32,
     pub label_offset_x: f32,
     pub label_offset_y: f32,
-    pub label: TextRoleSkin,
+    pub line_width: f32,
+    pub marker_size: f32,
+    pub selected_line_width: f32,
+    pub tick_height: f32,
+    pub tick_step: f32,
 }
 
 /// What a skin may restate of [`PortalMapSkin`].
@@ -369,25 +369,25 @@ pub struct PortalMapSkin {
 #[non_exhaustive]
 pub struct PortalMapPatch {
     pub arc_color: Option<ColorRole>,
+    pub arc_height_scale: Option<f32>,
     pub arc_selected_color: Option<ColorRole>,
+    pub arc_top_inset: Option<f32>,
     pub axis_color: Option<ColorRole>,
-    pub background_color: Option<ColorRole>,
-    pub master_color: Option<ColorRole>,
-    pub target_color: Option<ColorRole>,
-    pub tick_color: Option<ColorRole>,
-    pub size: Option<SizeSpec>,
     pub axis_inset_x: Option<f32>,
     pub axis_offset_bottom: Option<f32>,
-    pub arc_height_scale: Option<f32>,
-    pub arc_top_inset: Option<f32>,
-    pub line_width: Option<f32>,
-    pub selected_line_width: Option<f32>,
-    pub marker_size: Option<f32>,
-    pub tick_height: Option<f32>,
-    pub tick_step: Option<f32>,
+    pub background_color: Option<ColorRole>,
+    pub label: Option<TextRoleSkin>,
     pub label_offset_x: Option<f32>,
     pub label_offset_y: Option<f32>,
-    pub label: Option<TextRoleSkin>,
+    pub line_width: Option<f32>,
+    pub marker_size: Option<f32>,
+    pub master_color: Option<ColorRole>,
+    pub selected_line_width: Option<f32>,
+    pub size: Option<SizeSpec>,
+    pub target_color: Option<ColorRole>,
+    pub tick_color: Option<ColorRole>,
+    pub tick_height: Option<f32>,
+    pub tick_step: Option<f32>,
 }
 
 impl PortalMapSkin {
@@ -422,8 +422,8 @@ impl PortalMapSkin {
 pub struct RangeSkin {
     pub rail_background: ColorRole,
     pub selection_color: ColorRole,
-    pub size: SizeSpec,
     pub thumb_color: ColorRole,
+    pub size: SizeSpec,
     pub rail_height: f32,
     pub thumb_height: f32,
     pub thumb_width: f32,
@@ -435,10 +435,10 @@ pub struct RangeSkin {
 #[non_exhaustive]
 pub struct RangePatch {
     pub rail_background: Option<ColorRole>,
+    pub rail_height: Option<f32>,
     pub selection_color: Option<ColorRole>,
     pub size: Option<SizeSpec>,
     pub thumb_color: Option<ColorRole>,
-    pub rail_height: Option<f32>,
     pub thumb_height: Option<f32>,
     pub thumb_width: Option<f32>,
 }
@@ -476,8 +476,8 @@ pub struct ToggleSkin {
 #[non_exhaustive]
 pub struct TogglePatch {
     pub active: Option<FaceSkin>,
-    pub idle: Option<FaceSkin>,
     pub active_frame: Option<FrameSkin>,
+    pub idle: Option<FaceSkin>,
     pub inactive_frame: Option<FrameSkin>,
     pub size: Option<SizeSpec>,
     pub thumb_inset: Option<f32>,
@@ -516,8 +516,8 @@ pub struct CheckboxSkin {
 #[non_exhaustive]
 pub struct CheckboxPatch {
     pub active: Option<FaceSkin>,
-    pub idle: Option<FaceSkin>,
     pub active_frame: Option<FrameSkin>,
+    pub idle: Option<FaceSkin>,
     pub inactive_frame: Option<FrameSkin>,
     pub size: Option<SizeSpec>,
 }
@@ -537,11 +537,11 @@ impl CheckboxSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ReadoutSkin {
-    pub tones: ToneColors,
-    pub label: TextRoleSkin,
-    pub value: TextRoleSkin,
     pub frame: FrameSkin,
     pub size: SizeSpec,
+    pub label: TextRoleSkin,
+    pub value: TextRoleSkin,
+    pub tones: ToneColors,
     pub padding_x: f32,
     pub padding_y: f32,
     pub spacing: f32,
@@ -552,14 +552,14 @@ pub struct ReadoutSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ReadoutPatch {
-    pub tones: Option<ToneColors>,
-    pub label: Option<TextRoleSkin>,
-    pub value: Option<TextRoleSkin>,
     pub frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
+    pub label: Option<TextRoleSkin>,
     pub padding_x: Option<f32>,
     pub padding_y: Option<f32>,
+    pub size: Option<SizeSpec>,
     pub spacing: Option<f32>,
+    pub tones: Option<ToneColors>,
+    pub value: Option<TextRoleSkin>,
 }
 
 impl ReadoutSkin {
@@ -580,18 +580,18 @@ impl ReadoutSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ChipSkin {
-    pub deck_text: TextRoleSkin,
-    pub routing_text: TextRoleSkin,
-    pub active: FaceSkin,
-    pub idle: FaceSkin,
     /// What a pivot chip outlines itself with, whichever face it wears.
     pub pivot_border: ColorRole,
-    pub pivot_family_text: TextRoleSkin,
-    pub pivot_multiplier_text: TextRoleSkin,
+    pub active: FaceSkin,
+    pub idle: FaceSkin,
     pub active_frame: FrameSkin,
     pub inactive_frame: FrameSkin,
     pub pivot_frame: FrameSkin,
     pub size: SizeSpec,
+    pub deck_text: TextRoleSkin,
+    pub pivot_family_text: TextRoleSkin,
+    pub pivot_multiplier_text: TextRoleSkin,
+    pub routing_text: TextRoleSkin,
     pub padding_x: f32,
     pub padding_y: f32,
     pub pivot_family_padding_x: f32,
@@ -605,23 +605,23 @@ pub struct ChipSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ChipPatch {
-    pub deck_text: Option<TextRoleSkin>,
-    pub routing_text: Option<TextRoleSkin>,
     pub active: Option<FaceSkin>,
-    pub idle: Option<FaceSkin>,
-    pub pivot_border: Option<ColorRole>,
-    pub pivot_family_text: Option<TextRoleSkin>,
-    pub pivot_multiplier_text: Option<TextRoleSkin>,
     pub active_frame: Option<FrameSkin>,
+    pub deck_text: Option<TextRoleSkin>,
+    pub idle: Option<FaceSkin>,
     pub inactive_frame: Option<FrameSkin>,
-    pub pivot_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub padding_x: Option<f32>,
     pub padding_y: Option<f32>,
+    pub pivot_border: Option<ColorRole>,
     pub pivot_family_padding_x: Option<f32>,
     pub pivot_family_padding_y: Option<f32>,
+    pub pivot_family_text: Option<TextRoleSkin>,
+    pub pivot_frame: Option<FrameSkin>,
     pub pivot_multiplier_padding_x: Option<f32>,
     pub pivot_multiplier_padding_y: Option<f32>,
+    pub pivot_multiplier_text: Option<TextRoleSkin>,
+    pub routing_text: Option<TextRoleSkin>,
+    pub size: Option<SizeSpec>,
 }
 
 impl ChipSkin {
@@ -663,20 +663,20 @@ impl ChipSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ButtonSkin {
-    pub primary_text: TextRoleSkin,
-    pub text: TextRoleSkin,
     /// What a button that is present but not asking to be read draws its
     /// word and its mark in.
     pub dim_text_color: ColorRole,
-    pub fill: StateColors,
-    pub primary_fill: StateColors,
-    pub transport_fill: StateColors,
     /// A transport cell draws no border of its own; these sides say where the
     /// seam between neighbouring cells goes.
     pub transport_sides: FrameSides,
     pub frame: FrameSkin,
     pub primary_frame: FrameSkin,
     pub size: SizeSpec,
+    pub fill: StateColors,
+    pub primary_fill: StateColors,
+    pub transport_fill: StateColors,
+    pub primary_text: TextRoleSkin,
+    pub text: TextRoleSkin,
     pub icon_gap: f32,
     pub icon_size: f32,
     pub micro_icon_size: f32,
@@ -693,25 +693,25 @@ pub struct ButtonSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ButtonPatch {
-    pub primary_text: Option<TextRoleSkin>,
-    pub text: Option<TextRoleSkin>,
     pub dim_text_color: Option<ColorRole>,
     pub fill: Option<StateColors>,
-    pub primary_fill: Option<StateColors>,
-    pub transport_fill: Option<StateColors>,
-    pub transport_sides: Option<FrameSides>,
     pub frame: Option<FrameSkin>,
-    pub primary_frame: Option<FrameSkin>,
-    pub size: Option<SizeSpec>,
     pub icon_gap: Option<f32>,
     pub icon_size: Option<f32>,
     pub micro_icon_size: Option<f32>,
     pub micro_size: Option<f32>,
     pub padding_x: Option<f32>,
     pub padding_y: Option<f32>,
-    pub transport_icon_size: Option<f32>,
+    pub primary_fill: Option<StateColors>,
+    pub primary_frame: Option<FrameSkin>,
     pub primary_portion: Option<u16>,
+    pub primary_text: Option<TextRoleSkin>,
+    pub size: Option<SizeSpec>,
+    pub text: Option<TextRoleSkin>,
+    pub transport_fill: Option<StateColors>,
+    pub transport_icon_size: Option<f32>,
     pub transport_portion: Option<u16>,
+    pub transport_sides: Option<FrameSides>,
 }
 
 impl ButtonSkin {
@@ -744,6 +744,12 @@ impl ButtonSkin {
 #[non_exhaustive]
 pub struct NavSkin {
     pub header_icon_color: ColorRole,
+    pub idle_text_color: ColorRole,
+    pub marker_color: ColorRole,
+    /// What the row the reader is on paints behind itself, and the bar it
+    /// carries on its edge.
+    pub selected_fill: ColorRole,
+    pub text: TextRoleSkin,
     pub header_height: f32,
     pub header_icon_size: f32,
     pub header_text_size: f32,
@@ -753,12 +759,6 @@ pub struct NavSkin {
     pub marker_width: f32,
     pub pad_y: f32,
     pub text_pad_x: f32,
-    pub text: TextRoleSkin,
-    /// What the row the reader is on paints behind itself, and the bar it
-    /// carries on its edge.
-    pub selected_fill: ColorRole,
-    pub marker_color: ColorRole,
-    pub idle_text_color: ColorRole,
 }
 
 /// What a skin may restate of [`NavSkin`].
@@ -766,20 +766,20 @@ pub struct NavSkin {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct NavPatch {
-    pub header_icon_color: Option<ColorRole>,
     pub header_height: Option<f32>,
+    pub header_icon_color: Option<ColorRole>,
     pub header_icon_size: Option<f32>,
     pub header_text_size: Option<f32>,
     pub icon_gap: Option<f32>,
     pub icon_size: Option<f32>,
+    pub idle_text_color: Option<ColorRole>,
     pub item_height: Option<f32>,
+    pub marker_color: Option<ColorRole>,
     pub marker_width: Option<f32>,
     pub pad_y: Option<f32>,
-    pub text_pad_x: Option<f32>,
-    pub text: Option<TextRoleSkin>,
     pub selected_fill: Option<ColorRole>,
-    pub marker_color: Option<ColorRole>,
-    pub idle_text_color: Option<ColorRole>,
+    pub text: Option<TextRoleSkin>,
+    pub text_pad_x: Option<f32>,
 }
 
 impl NavSkin {
@@ -806,12 +806,12 @@ impl NavSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TabLargeSkin {
+    pub idle_text_color: ColorRole,
+    pub underline_color: ColorRole,
+    pub text: TextRoleSkin,
     pub height: f32,
     pub pad_x: f32,
     pub pad_y: f32,
-    pub text: TextRoleSkin,
-    pub idle_text_color: ColorRole,
-    pub underline_color: ColorRole,
     pub underline_width: f32,
 }
 
@@ -821,10 +821,10 @@ pub struct TabLargeSkin {
 #[non_exhaustive]
 pub struct TabLargePatch {
     pub height: Option<f32>,
+    pub idle_text_color: Option<ColorRole>,
     pub pad_x: Option<f32>,
     pub pad_y: Option<f32>,
     pub text: Option<TextRoleSkin>,
-    pub idle_text_color: Option<ColorRole>,
     pub underline_color: Option<ColorRole>,
     pub underline_width: Option<f32>,
 }

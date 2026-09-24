@@ -11,17 +11,17 @@ use std::{
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceSpan {
-    numerator: u128,
-    step: u64,
-    denominator: NonZeroU64,
-    #[field(get, copy)]
-    output_frames: u64,
     #[field(get, copy)]
     sample_rate: NonZeroU32,
-    #[field(get, copy, with)]
-    render_revision: u64,
+    denominator: NonZeroU64,
     #[field(get, copy, with)]
     mapping_revision: Option<NonZeroU64>,
+    numerator: u128,
+    #[field(get, copy)]
+    output_frames: u64,
+    #[field(get, copy, with)]
+    render_revision: u64,
+    step: u64,
 }
 
 impl SourceSpan {
@@ -46,18 +46,6 @@ impl SourceSpan {
         })
     }
 
-    /// Inclusive decoded-source frame, rounded down on the source lattice.
-    ///
-    /// # Panics
-    /// Panics if the private validated mapping invariant is violated.
-    #[must_use]
-    pub fn start(self) -> u64 {
-        // Constructors accept u64 endpoints, slicing stays inside them, and
-        // joining requires the exact boundary of another validated interval.
-        u64::try_from(self.numerator / u128::from(self.denominator.get()))
-            .expect("validated source mapping starts within u64")
-    }
-
     /// Exclusive decoded-source frame, rounded down on the source lattice.
     ///
     /// # Panics
@@ -69,21 +57,6 @@ impl SourceSpan {
                 / u128::from(self.denominator.get()),
         )
         .expect("validated source mapping ends within u64")
-    }
-
-    /// Slices relative output frames without rounding the retained source basis.
-    #[must_use]
-    pub fn for_output_range(self, range: Range<u64>) -> Option<Self> {
-        if range.start > range.end || range.end > self.output_frames {
-            return None;
-        }
-        Some(Self {
-            numerator: self
-                .numerator
-                .checked_add(u128::from(self.step) * u128::from(range.start))?,
-            output_frames: range.end - range.start,
-            ..self
-        })
     }
 
     /// Joins adjacent output intervals only when their exact mappings agree.
@@ -108,6 +81,33 @@ impl SourceSpan {
             output_frames,
             ..self
         })
+    }
+
+    /// Slices relative output frames without rounding the retained source basis.
+    #[must_use]
+    pub fn for_output_range(self, range: Range<u64>) -> Option<Self> {
+        if range.start > range.end || range.end > self.output_frames {
+            return None;
+        }
+        Some(Self {
+            numerator: self
+                .numerator
+                .checked_add(u128::from(self.step) * u128::from(range.start))?,
+            output_frames: range.end - range.start,
+            ..self
+        })
+    }
+
+    /// Inclusive decoded-source frame, rounded down on the source lattice.
+    ///
+    /// # Panics
+    /// Panics if the private validated mapping invariant is violated.
+    #[must_use]
+    pub fn start(self) -> u64 {
+        // Constructors accept u64 endpoints, slicing stays inside them, and
+        // joining requires the exact boundary of another validated interval.
+        u64::try_from(self.numerator / u128::from(self.denominator.get()))
+            .expect("validated source mapping starts within u64")
     }
 }
 

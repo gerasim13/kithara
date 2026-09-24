@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;
-use syn::{Expr, Fields, ImplItem, Item, ItemImpl, Lit, Stmt, visit::Visit};
+use syn::{Expr, Fields, ImplItem, Item, ItemImpl, Lit, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -54,16 +54,16 @@ fn check_source(source: &str) -> Vec<(String, usize)> {
         })
         .collect();
     let mut visitor = SerializeVisitor {
-        findings: Vec::new(),
         unit_structs,
+        findings: Vec::new(),
     };
     visitor.visit_file(&file);
     visitor.findings
 }
 
 struct SerializeVisitor {
-    findings: Vec<(String, usize)>,
     unit_structs: BTreeSet<String>,
+    findings: Vec<(String, usize)>,
 }
 
 impl<'ast> Visit<'ast> for SerializeVisitor {
@@ -84,7 +84,7 @@ impl<'ast> Visit<'ast> for SerializeVisitor {
             self.findings
                 .push((name, implementation.impl_token.span.start().line));
         }
-        syn::visit::visit_item_impl(self, implementation);
+        visit::visit_item_impl(self, implementation);
     }
 }
 

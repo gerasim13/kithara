@@ -108,8 +108,8 @@ fn make_media_seg(idx: u32, size: SegmentSize, scope: &TestAssetScope) -> Segmen
     Segment::Media(MediaSegment {
         url,
         resource_id,
-        state: SegmentSlotState::missing(),
         size,
+        state: SegmentSlotState::missing(),
         content: SegmentContent::Plain,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
@@ -1577,14 +1577,7 @@ fn a_planned_segment_is_owed_not_escalated() {
     );
 }
 
-/// Segments in the fixture an exact-seek dispatch is measured on. The
-/// landing sits short of the last one so "the prefix through the landing"
-/// and "every segment" are different answers.
-const EXACT_SEEK_SEGMENTS: u32 = 5;
 const EXACT_SEEK_LANDING: u32 = 2;
-const EXACT_SEEK_SEGMENT_BYTES: u64 = 256;
-const EXACT_SEEK_INIT_BYTES: u64 = 64;
-
 /// Register an exact-seek demand on `EXACT_SEEK_LANDING`, then report the URL
 /// of every fetch one plan emits. The fetch queue is left empty on purpose:
 /// with no body planned, the only thing a dispatch can emit is a size probe,
@@ -1595,6 +1588,15 @@ fn exact_seek_probe_urls(
     container: Option<ContainerFormat>,
     sizes_known: bool,
 ) -> Vec<Url> {
+    /// Segments in the fixture an exact-seek dispatch is measured on. The
+    /// landing sits short of the last one so "the prefix through the landing"
+    /// and "every segment" are different answers.
+    const EXACT_SEEK_SEGMENTS: u32 = 5;
+
+    const EXACT_SEEK_SEGMENT_BYTES: u64 = 256;
+
+    const EXACT_SEEK_INIT_BYTES: u64 = 64;
+
     let ctx = test_ctx(10);
     let segments: Vec<Segment> = (0..EXACT_SEEK_SEGMENTS)
         .map(|idx| {
@@ -1613,9 +1615,9 @@ fn exact_seek_probe_urls(
     let v = VariantParts {
         segments,
         init,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec,
         container,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     }
     .into_variant(0, &ctx);
     let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(EXACT_SEEK_LANDING);

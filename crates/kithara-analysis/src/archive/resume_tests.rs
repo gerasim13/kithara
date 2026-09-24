@@ -14,11 +14,8 @@ use crate::{
     tests::fixtures::beat_detector,
 };
 
-const CHANNELS: u16 = 2;
 const CHUNK_FRAMES: u64 = 128;
 const EXTENT: u64 = 4 * CHUNK_FRAMES;
-const SAMPLE_RATE: u32 = 64;
-
 fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
     let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
         .with_waveform(8)
@@ -30,6 +27,8 @@ fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, 
 }
 
 fn rate() -> NonZeroU32 {
+    const SAMPLE_RATE: u32 = 64;
+
     NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero")
 }
 
@@ -38,6 +37,8 @@ fn chunk_frames() -> NonZeroU64 {
 }
 
 fn decoded(pools: &Pools, at: u64, pcm: &[f32]) -> AudioChunk {
+    const CHANNELS: u16 = 2;
+
     let start = usize::try_from(at).expect("fixture frame fits usize") * usize::from(CHANNELS);
     let count =
         usize::try_from(CHUNK_FRAMES).expect("fixture length fits usize") * usize::from(CHANNELS);

@@ -1,6 +1,7 @@
 use std::{mem, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
+use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
@@ -310,6 +311,63 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    pub(super) fn accept_projected_output(
+        &mut self,
+        projection: super::renderer_projection::ProjectedQuantum,
+    ) {
+        if let Some(plan) = self.projection.prepared.take() {
+            let same = self
+                .projection
+                .active
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &plan));
+            if !same {
+                debug_assert!(self.projection.retired.is_none());
+                self.projection.retired = self.projection.active.replace(plan);
+            }
+        }
+        self.projection.cursor = Some(projection.end);
+        self.projection.output_frames = projection
+            .output_offset
+            .saturating_add(projection.output_frames);
+    }
+
+    fn finish_flush(
+        &mut self,
+        mut output: Option<AudioChunk>,
+        complete: bool,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
+        let rejected = output.as_mut().and_then(|chunk| {
+            let projection = self.projected_tail_cursor(chunk.frames())?;
+            self.trim_projected_eof(chunk, projection).err()
+        });
+        if let Some(error) = rejected {
+            warn!(%error, "projected EOF identity is uncovered");
+            self.defer_scratch(output.map(|chunk| chunk.samples));
+            return None;
+        }
+        let output = match output {
+            Some(output) if output.frames() == 0 => {
+                self.defer_scratch(Some(output.samples));
+                None
+            }
+            output => output,
+        };
+        if let Some(output) = output.as_ref() {
+            self.commit_render(snapshot, output);
+        }
+        if complete {
+            self.backend_transition_pending = false;
+            self.active = false;
+            self.pending_meta = None;
+            self.source_frames_admitted = 0;
+            self.primed_source_debt = 0;
+            self.reset_pending = true;
+        }
+        output
+    }
+
     /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         let snapshot = self.context.load();
@@ -363,42 +421,6 @@ where
         };
         let output = self.emit(None, held_source_frames);
         self.finish_flush(output, complete, snapshot)
-    }
-
-    fn finish_flush(
-        &mut self,
-        mut output: Option<AudioChunk>,
-        complete: bool,
-        snapshot: Option<crate::RenderSnapshot>,
-    ) -> Option<AudioChunk> {
-        let rejected = output.as_mut().and_then(|chunk| {
-            let projection = self.projected_tail_cursor(chunk.frames())?;
-            self.trim_projected_eof(chunk, projection).err()
-        });
-        if let Some(error) = rejected {
-            warn!(%error, "projected EOF identity is uncovered");
-            self.defer_scratch(output.map(|chunk| chunk.samples));
-            return None;
-        }
-        let output = match output {
-            Some(output) if output.frames() == 0 => {
-                self.defer_scratch(Some(output.samples));
-                None
-            }
-            output => output,
-        };
-        if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output);
-        }
-        if complete {
-            self.backend_transition_pending = false;
-            self.active = false;
-            self.pending_meta = None;
-            self.source_frames_admitted = 0;
-            self.primed_source_debt = 0;
-            self.reset_pending = true;
-        }
-        output
     }
 
     /// Prepare deferred renderer state for the current source format.
@@ -551,27 +573,6 @@ where
             self.accept_projected_output(projection);
         }
         ControlFlow::Continue(output)
-    }
-
-    pub(super) fn accept_projected_output(
-        &mut self,
-        projection: super::renderer_projection::ProjectedQuantum,
-    ) {
-        if let Some(plan) = self.projection.prepared.take() {
-            let same = self
-                .projection
-                .active
-                .as_ref()
-                .is_some_and(|active| kithara_platform::sync::Arc::ptr_eq(active, &plan));
-            if !same {
-                debug_assert!(self.projection.retired.is_none());
-                self.projection.retired = self.projection.active.replace(plan);
-            }
-        }
-        self.projection.cursor = Some(projection.end);
-        self.projection.output_frames = projection
-            .output_offset
-            .saturating_add(projection.output_frames);
     }
 
     /// Discard renderer state after a source discontinuity.

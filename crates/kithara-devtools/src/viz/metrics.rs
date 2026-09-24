@@ -11,8 +11,6 @@ use super::{
 
 mod topology;
 
-pub(crate) const METRICS_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MetricsScopeKind {
@@ -137,6 +135,8 @@ impl<'a> MetricsAnalyzer<'a> {
 }
 
 fn analyze(request: &MetricsRequest<'_>, contours: &ContourIndex) -> ArchitectureMetrics {
+    const METRICS_SCHEMA_VERSION: u32 = 1;
+
     let subjects = primary_contours(request);
     let external = external_contours(request, &subjects);
     let selected = subjects

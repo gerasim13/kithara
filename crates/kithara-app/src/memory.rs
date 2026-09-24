@@ -21,13 +21,13 @@ pub const DEFAULT_LIMIT_BYTES: usize = 4 << 30;
 /// together on every allocation, and a reader that finds them apart has to
 /// work out for itself that they belong to the same ceiling.
 struct Counters {
-    /// Live heap bytes.
-    live: AtomicUsize,
-    /// Ceiling in bytes; `0` lets the process allocate without a bound.
-    limit: AtomicUsize,
     /// Set by the allocation that crossed the ceiling, so the reporting path —
     /// which allocates while it formats — does not re-enter itself.
     tripped: AtomicBool,
+    /// Ceiling in bytes; `0` lets the process allocate without a bound.
+    limit: AtomicUsize,
+    /// Live heap bytes.
+    live: AtomicUsize,
 }
 
 static COUNTERS: Counters = Counters {

@@ -29,8 +29,6 @@ use tempfile::tempdir;
 use xor::xor_processor;
 
 const ROOT: &str = "processed-asset";
-const DRM_ROOT: &str = "processed-drm-asset";
-
 /// Stream `data` through a Pending writer and commit it.
 fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
     let AcquisitionResult::Pending(w) = acq else {
@@ -251,6 +249,8 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_bytes() {
+    const DRM_ROOT: &str = "processed-drm-asset";
+
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {

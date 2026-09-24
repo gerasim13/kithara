@@ -17,10 +17,10 @@ use syn::{
     visit::{self, Visit},
 };
 
-use super::{Check, Context, derivable_support::deletion_range};
+use super::{Check, Context};
 use crate::common::{
     exclude::{attrs_have_cfg_test, item_attrs},
-    fix::SourceRewriter,
+    fix::{SourceRewriter, deletion_range},
     scope::Scope,
     violation::Violation,
     walker::relative_to,

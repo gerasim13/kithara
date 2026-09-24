@@ -4,8 +4,8 @@ use crate::{observer::ItemObserver, types::FfiItemEvent};
 
 #[derive(Default)]
 struct Registrations {
-    next_id: u64,
     entries: Vec<(u64, Arc<dyn ItemObserver>)>,
+    next_id: u64,
 }
 
 #[derive(Default)]

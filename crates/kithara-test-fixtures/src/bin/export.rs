@@ -1,5 +1,6 @@
 use std::{
     fs, io,
+    io::{Error, ErrorKind},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -32,23 +33,23 @@ fn export(name: &str, out: &Path) -> io::Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let manifest = store::manifest()?;
-            let bytes = serde_json::to_vec_pretty(&manifest).map_err(io::Error::other)?;
+            let bytes = serde_json::to_vec_pretty(&manifest).map_err(Error::other)?;
             fs::write(out, bytes)
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
+            Err(Error::new(
+                ErrorKind::Unsupported,
                 "fixture manifests require a native filesystem",
             ))
         }
     } else {
         let asset = by_name(name).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
+            Error::new(
+                ErrorKind::NotFound,
                 format!("no generated asset is named `{name}`"),
             )
         })?;
-        fs::write(out, asset.try_bytes().map_err(io::Error::other)?)
+        fs::write(out, asset.try_bytes().map_err(Error::other)?)
     }
 }

@@ -24,13 +24,6 @@ use tracing_subscriber::{
 /// shared ring within milliseconds.
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 512;
-/// How far back a repeat folds into the entry already in the ring.
-///
-/// Steady-state volume arrives as a short cycle of a few distinct lines — a
-/// fetch settling, then the two accounting lines it triggers — so a window a
-/// few cycles wide collapses it where a last-line check would not, and a red
-/// test's dump keeps the rare transitions that led to the failure.
-const DEDUP_WINDOW: usize = 16;
 /// Fields a repeat is allowed to differ in and still fold.
 ///
 /// Every probe event carries a monotonic sequence, so comparing whole lines
@@ -153,6 +146,14 @@ impl<S: Subscriber> Layer<S> for RingLayer {
 }
 
 fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
+    /// How far back a repeat folds into the entry already in the ring.
+    ///
+    /// Steady-state volume arrives as a short cycle of a few distinct lines — a
+    /// fetch settling, then the two accounting lines it triggers — so a window a
+    /// few cycles wide collapses it where a last-line check would not, and a red
+    /// test's dump keeps the rare transitions that led to the failure.
+    const DEDUP_WINDOW: usize = 16;
+
     let line = clamp(line);
     let key = clamp(key);
     let mut ring = lock(ring);
