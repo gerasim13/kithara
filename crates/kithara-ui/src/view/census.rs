@@ -228,6 +228,9 @@ impl Census {
     }
 
     /// Notes every binding one control site carries.
+    ///
+    /// A popover dismisses itself on its own path, so the state it reads for whether it stands open
+    /// is the same state that dismissal shuts.
     pub(crate) fn note_site(&mut self, site: ControlSite<'_>, origin: &SourceUri) {
         for binding in [
             site.read,

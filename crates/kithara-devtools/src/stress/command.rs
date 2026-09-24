@@ -410,6 +410,8 @@ fn keep_attempt_report(report: &Path, directory: &Path, attempt: usize) -> Resul
         .map(|_| ())
 }
 
+/// The build lease is held for the lane so the host's build-cache budget leaves these artifacts
+/// alone while the lane is still executing them.
 fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()> {
     let config = &ctx.config.stress;
     let mode = config.mode(mode_name)?;

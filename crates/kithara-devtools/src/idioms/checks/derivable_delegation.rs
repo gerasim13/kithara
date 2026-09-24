@@ -1038,6 +1038,8 @@ fn impl_has_blocking_attr(attrs: &[syn::Attribute], blocking: &[String]) -> bool
     attrs_match_config(attrs, blocking)
 }
 
+/// delegate 0.13.5 forwards other attrs verbatim, but these names are interpreted as its method
+/// DSL.
 fn method_is_supported(
     src: &str,
     method: &syn::ImplItemFn,

@@ -35,6 +35,9 @@ where
     /// The caller runs this inside [`Layout::apply_commit`](
     /// offsets::Layout::apply_commit)'s write-lock so a reader never
     /// observes a new size against a stale offset table.
+    ///
+    /// Settling a `None` init slot is a no-op: only a `Some(Init)` slot is ever fetched, so a stray
+    /// settle cannot resurrect an absent init entry.
     pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
         match planned {
             PlannedFetch::Init => {

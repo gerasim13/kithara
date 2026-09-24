@@ -662,6 +662,9 @@ fn complete_additions(
     }
 }
 
+/// `thiserror::Error` reads `#[from]` itself, on the field rather than the variant, and writes the
+/// conversion from it; a second derive of `From` is what the compiler refuses, so the enum takes
+/// the spelling its own derive already understands.
 fn complete_from(
     src: &str,
     item: &Item,

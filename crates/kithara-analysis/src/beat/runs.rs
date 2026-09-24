@@ -286,6 +286,8 @@ where
         self.taken.iter().any(|region| region.start >= range.end)
     }
 
+    /// The charge follows what the run still holds, so the hold budget bounds the bytes as well as
+    /// the frames.
     pub(super) fn release(&mut self, opens_at: impl Fn(usize) -> usize) {
         let ratio = self.ratio;
         for run in &mut self.runs {
@@ -405,6 +407,8 @@ where
         Ok(())
     }
 
+    /// A run read to its end holds only its resampler, which the blob does not carry; the tail
+    /// still inside a live resampler reads back as silence.
     pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
         // A run read to its end holds only its resampler, which the blob
         // does not carry.

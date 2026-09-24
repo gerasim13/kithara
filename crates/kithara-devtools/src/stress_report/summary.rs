@@ -522,6 +522,8 @@ pub(crate) fn validate_inventory(json: &str) -> Result<()> {
     parse_inventory(json).map(|_| ())
 }
 
+/// A target excluded by the project's `default-filter` is inventoried with this status and none of
+/// its cases; the suite is dropped whole rather than filtered case by case.
 fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
     let inventory: Inventory = serde_json::from_str(json).context("parse stress inventory JSON")?;
     if inventory.rust_suites.is_empty() {
@@ -900,6 +902,9 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
 ///
 /// Retried passes are named separately. No exit code and no failure row carries
 /// them, so without that line the sentence over the table reads as a clean lane.
+///
+/// The attempt column is only printed when there is more than one attempt to tell apart; a lane
+/// that repeats inside a single launch would otherwise print the same value on every row.
 pub(crate) fn append_attempt_reports(
     out: &mut String,
     records: &AttemptRecords,

@@ -84,6 +84,9 @@ impl FlashSleep {
 impl Future for FlashSleep {
     type Output = ();
 
+    /// Resolves only when the engine grants this waiter, never from a bare clock read past the
+    /// deadline, so another advance that jumps the clock past this deadline cannot resolve it
+    /// early.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if let Some(handle) = self.handle.as_ref() {
             if handle.granted() {
@@ -193,6 +196,8 @@ pub enum Yield {
 impl Future for Yield {
     type Output = ();
 
+    /// Both `Yield` variants are `Unpin`, so the compiler rejects this code if a variant gains a
+    /// `!Unpin` field, keeping the safe `Pin::new` projection sound.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         // WHY: `Yield` is `Unpin` (every field of both variants is), so the safe `get_mut`/`Pin::new` projection is available, and the
         // compiler rejects this code if a variant gains a `!Unpin` field.
@@ -273,6 +278,8 @@ pub fn virtual_park_timeout(duration: Duration) {
     crate::thread::park_timeout_virtual(duration);
 }
 
+/// Folds seconds and subsec nanoseconds via `u64` arithmetic rather than a `u128` intermediate,
+/// avoiding a cast.
 pub(super) fn duration_to_nanos(d: Duration) -> u64 {
     // WHY: Fold via `u64` seconds + `u32` subsec - no `u128` intermediate, no cast.
     const NANOS_PER_SEC: u64 = 1_000_000_000;
@@ -396,6 +403,8 @@ pin_project! {
 impl<F: Future> Future for WithAmbient<F> {
     type Output = F::Output;
 
+    /// The ambient guard is a named binding so it drops after `fut.poll` returns, restoring the
+    /// worker thread's previous ambient value across the poll.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
         // WHY: The guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the worker thread's previous ambient.
@@ -428,6 +437,8 @@ pin_project! {
 impl<F: Future> Future for FlashDynamic<F> {
     type Output = F::Output;
 
+    /// The mode guard is a named binding so it drops after `fut.poll` returns, restoring the
+    /// previous flash mode across the poll.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
         // WHY: The `_g` guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the previous mode.

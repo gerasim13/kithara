@@ -26,6 +26,10 @@ impl RunEnvironment {
     ///
     /// Returns an error when a raw path is absolute, or when the build
     /// directory is not one the run can hand a child.
+    ///
+    /// The build directory is set last, so no lane can override this key; it must be absolute,
+    /// since an inherited value points at a directory shared with the whole host and a stress run
+    /// lasts hours.
     pub(super) fn new(
         raw_dir: &Path,
         build_dir: &Path,

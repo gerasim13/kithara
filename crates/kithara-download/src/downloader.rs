@@ -109,6 +109,9 @@ impl Downloader {
     ///
     /// Adopts `config.client` (a clone of the caller's [`HttpClient`])
     /// and the shared [`AbrController`] from `config.abr_settings`.
+    ///
+    /// Composed/standalone seam: a `Some` parent makes this token its child; `None` makes it its
+    /// own root. The loop, peer scopes, and the shared ABR controller all derive from this token.
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -248,6 +251,9 @@ impl Downloader {
         task::spawn_on(&handle, async move { this.run(rx).await });
     }
 
+    /// Runs the download loop on a dedicated Web Worker: the decoder blocks the engine worker in
+    /// `wait_range` via `Atomics.wait`, so a `spawn_local` loop on that same worker would never be
+    /// polled and its fetches would never complete the bytes the blocking read waits for.
     #[cfg(target_arch = "wasm32")]
     fn spawn_run(
         _inner: &DownloaderInner,

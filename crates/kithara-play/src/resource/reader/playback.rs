@@ -286,6 +286,8 @@ impl Resource {
         Self::open(config, Some(observer)).await
     }
 
+    /// Captures the per-track cancel token before `build_*_config` consumes `config`; the same
+    /// token is cloned by identity into both the inner stream and the audio path.
     async fn open<S, B>(
         config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,

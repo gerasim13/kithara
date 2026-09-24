@@ -493,6 +493,9 @@ impl Pass<'_> {
 
     /// Walk one inline module, which reads the level around it only when it
     /// opens itself to those names.
+    ///
+    /// Whatever the module reads out of the level around it keeps that name alive there, whether or
+    /// not the module is walked further.
     fn module(&mut self, item: &ItemMod, stack: &mut Vec<Level>) {
         let Some((_, items)) = &item.content else {
             return;
@@ -1074,6 +1077,8 @@ impl<'ast> Visit<'ast> for PathVisitor<'ast> {
         self.under_cfg(attrs, |this| visit::visit_item(this, item));
     }
 
+    /// A `macro_rules!` body is expanded wherever the macro is called, so this file's own imports
+    /// do not travel there and cannot shorten paths inside it.
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
         // A `macro_rules!` body is expanded wherever the macro is called, and
         // this file's imports do not travel there.

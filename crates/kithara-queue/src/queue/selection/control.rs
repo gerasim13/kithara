@@ -71,6 +71,9 @@ where
         Ok(())
     }
 
+    /// Serializes the whole select against a concurrent `spawn_apply_after_load` completion so
+    /// marking the prior pending attempt `Cancelled` and a loading track's apply never interleave,
+    /// which would let the superseded track barge in.
     pub(in crate::queue) fn select_with(
         &self,
         id: TrackId,
@@ -119,6 +122,9 @@ where
         self.select_with(id, transition, reason, playback)
     }
 
+    /// `is_playing` is a session flag, not a verdict on the current item: the render thread queues
+    /// the natural end but clears the flag only at the next `process`, so a repeat-one advance must
+    /// re-select the item that just ended despite the flag.
     pub(in crate::queue) fn select_with_reason_locked(
         &self,
         id: TrackId,

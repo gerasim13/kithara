@@ -75,6 +75,9 @@ where
         Ok(self.demand_segment_at_offset(self.header_byte_range()?.start))
     }
 
+    /// The plan covers one segment behind the landing regardless of container: a demuxer parks at
+    /// the packet boundary at or before the landing time, so when the landing is a segment start,
+    /// the first packet read begins in the prior segment.
     pub(crate) fn prepare_reader(
         &self,
         profile: ReaderProfile,
@@ -143,6 +146,9 @@ where
         })
     }
 
+    /// A window this session waits on but has nothing queued for is the shape of a stall: nothing
+    /// is in flight or planned, and only another readiness poll re-drives the peer, which the
+    /// consumer cannot make while blocked here.
     pub(crate) fn reader_is_ready(
         &self,
         preparation: &VariantReaderPreparation,

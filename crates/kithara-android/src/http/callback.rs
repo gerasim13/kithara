@@ -98,6 +98,7 @@ fn header_pairs(
         .collect()
 }
 
+/// Bounds the local reference frame for any header count.
 fn string_at(
     env: &mut Env<'_>,
     array: &JObjectArray<'_, JString<'_>>,

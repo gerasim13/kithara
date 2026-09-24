@@ -36,6 +36,9 @@ impl<N: Net> RetryNet<N> {
         }
     }
 
+    /// Promotes a transient error to a terminal `RetryExhausted` once a non-zero retry budget has
+    /// been spent, so downstream (HLS settle, readers) treats it as a give-up rather than a
+    /// transient signal.
     async fn retry_loop<F, Fut, T>(&self, mut op: F) -> Result<T, NetError>
     where
         F: FnMut() -> Fut,

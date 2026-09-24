@@ -259,6 +259,9 @@ impl BlockNode for CompiledNode {
 ///
 /// # Errors
 /// Returns [`UiDocError`] when loading, parsing, expansion, or validation fails.
+///
+/// Layers over the application's own declarations, so a document may bind to what the host answers
+/// for itself without every application registering it.
 pub fn compile(
     entry: &str,
     resolver: &dyn SourceResolver,
@@ -409,6 +412,9 @@ struct Compiler<'a> {
 }
 
 impl Compiler<'_> {
+    /// Names each state at the scope where it is declared: at the top of the document when no
+    /// module instance contains it, or scoped to the screen when the layout owns every instance.
+    /// Only the page the screen currently stands at is compiled.
     fn build(
         &mut self,
         node: &LayoutNode,
@@ -641,6 +647,9 @@ impl Compiler<'_> {
 }
 
 /// What every module of this layout does with nothing touching it.
+///
+/// Which branch stands is settled by the room this walk cannot see, so the layout's motion folds
+/// over every branch rather than just the base.
 fn motion_of_layout(node: &CompiledNode) -> Unprompted {
     match node {
         CompiledNode::Split { children, .. } => children

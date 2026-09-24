@@ -194,6 +194,9 @@ fn append_streams(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
     truncated
 }
 
+/// A Rust panic puts the same header in both `message` and the body's first line; keeping both
+/// would spend the retained signature on repeating the header instead of the assertion's own
+/// values.
 fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
     let kind = node
         .attribute("type")

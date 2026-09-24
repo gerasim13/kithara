@@ -205,6 +205,9 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
+    ///
+    /// MP4 and M4A are container-only formats, so the `stsd` sample-entry tag is sniffed to choose
+    /// the actual codec backend.
     pub fn create_with_probe<R, B, S>(
         source: R,
         hint: Option<&str>,
@@ -458,6 +461,8 @@ where
     }
 }
 
+/// A plain CBR MP3's resource length is the only record it keeps of its own duration, and the
+/// handle already carries that length for the streaming open.
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn build_apple_standalone_decoder<B, S>(
     mut source: BoxedSource,

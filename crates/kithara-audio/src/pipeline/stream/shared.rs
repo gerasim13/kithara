@@ -184,6 +184,9 @@ impl<T: StreamType> SharedStream<T> {
         // WHY: Byte-space polls answered by the narrow probe, never the control mutex: RT-safe on the forbid-blocking produce core.
         to self.probe {
             /// Overall source readiness at current position.
+            ///
+            /// Byte-space polls are answered by the narrow probe rather than the control mutex,
+            /// keeping them RT-safe on the forbid-blocking produce core.
             pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range — same
             /// contract as [`Self::phase`].

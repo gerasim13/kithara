@@ -127,6 +127,8 @@ where
         remaining.div_ceil(partitions)
     }
 
+    /// Backends require a non-empty output, so a sub-frame source span stays pending until its
+    /// cumulative exact output reaches one full frame; EOF rounds the final residual once.
     pub(super) fn output_frames(
         source_frames: usize,
         stretch: f64,

@@ -36,6 +36,8 @@ where
         self.wait_range_with(range, |_| {})
     }
 
+    /// A fresh unsized `#EXT-X-MAP` still reserves offset zero, so serving media there would
+    /// overwrite the required container header.
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let uses_seek_alias = self.seek_alias_at(offset).is_some();

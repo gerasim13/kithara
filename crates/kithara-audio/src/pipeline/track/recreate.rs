@@ -100,6 +100,9 @@ fn apply_recreate_next<T: StreamType>(
     }
 }
 
+/// Rebuild continues from the PCM already admitted to the final producer port, not raw decode
+/// progress or the consumer's lagging position: the resume target applies only until it appears in
+/// that output.
 fn finish_format_boundary_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
 ) -> RecreateOutcome {

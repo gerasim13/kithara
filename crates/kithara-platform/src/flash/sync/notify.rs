@@ -60,6 +60,8 @@ impl Notify {
         }
     }
 
+    /// Grants and wakes one parked waiter; with none parked, stores a permit instead (tokio
+    /// semantics).
     pub fn notify_one(&self) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_notify(cvid),
@@ -102,6 +104,9 @@ pub struct Notified<'a> {
 impl Future for Notified<'_> {
     type Output = ();
 
+    /// Resolution is grant-driven: a waiter resolves only when `notify_one`/`notify_all` sets its
+    /// flag, never from a bare re-check, so a spurious re-poll before that grant stays parked
+    /// instead of resolving early or racing a lost wakeup.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         match &self.state {
             NotifiedState::Done => return Poll::Ready(()),
@@ -164,6 +169,9 @@ impl Future for Notified<'_> {
 }
 
 impl Drop for Notified<'_> {
+    /// Removes only this future's own entry by grant-flag identity, so `notify_one` cannot steal a
+    /// wake from a still-parked peer via an already-dropped future; a grant observed only after
+    /// drop is handed to the next waiter or stored as a permit.
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {
             NotifiedState::Engine(handle) => system::cancel_async_wait(&handle),

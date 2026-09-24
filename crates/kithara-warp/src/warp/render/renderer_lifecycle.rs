@@ -140,6 +140,9 @@ where
     /// Assemble an output chunk from `scratch`, preserving the exact source
     /// start and the latest decoder frontier. `replacement` is retained for
     /// shell-side preparation before the next checked tick.
+    ///
+    /// A non-empty output always carries the live source spec, since the default metadata sentinel
+    /// has zero channels and cannot reach the resampler.
     fn emit(
         &mut self,
         replacement: Option<SampleBuffer>,
@@ -641,6 +644,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// EOF silence supplies DSP lookahead only; it never extends the recording geometry.
     fn flush_resident_request(
         &mut self,
         snapshot: Option<crate::RenderSnapshot>,

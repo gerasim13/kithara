@@ -165,6 +165,8 @@ pub(crate) enum RouteRestartStatus {
     Ready,
 }
 
+/// Zero sample rate remains a valid backend-default request; the grid axis's sample rate is always
+/// concrete, so it substitutes for zero rather than propagating it.
 pub(crate) fn prepare_route_restart<T, S>(
     state: &mut SessionState<T, S>,
     sample_rate: u32,
@@ -360,6 +362,8 @@ fn queue_stamp<T, S>(
     Ok(())
 }
 
+/// Marks the stream for restart directly rather than routing through a message, since the session
+/// owns stream restarts and a message would strand the transport behind a stream nobody rearms.
 fn update_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     let Err(error) = state.ctx.as_mut().ok_or(SessionError::NoContext)?.update() else {
         return Ok(());
@@ -390,6 +394,9 @@ fn abort_commit<T, S>(
     deliver_abort(state)
 }
 
+/// Leaves a pending abort delivery untouched when the stream is stopped, since Firewheel only
+/// flushes queued events while running; the next refresh retries an update that would otherwise
+/// deliver nothing.
 fn deliver_abort<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     update_context(state)?;
     // WHY: Firewheel only flushes queued events while a stream runs, so an update that succeeds on a stopped stream has delivered
@@ -454,6 +461,8 @@ fn refresh_observation<T, S>(
     Ok(observation)
 }
 
+/// Treats the graph's reported pending revision as authoritative for whether an abort happened,
+/// regardless of whether this side's own delivery bookkeeping had caught up.
 fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportCommitResult) {
     let revision = completion.revision();
     if state

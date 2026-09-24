@@ -42,6 +42,7 @@ unsafe impl<T> Send for Mutex<T> {}
 unsafe impl<T> Sync for Mutex<T> {}
 
 // WHY: crate-internal: condvar needs the raw guard
+/// The inner guard is `pub(crate)` because the condvar implementation needs the raw guard.
 pub struct MutexGuard<'a, T>(pub(crate) Guard<'a, T>);
 
 impl<T> Deref for MutexGuard<'_, T> {

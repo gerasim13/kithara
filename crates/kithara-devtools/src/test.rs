@@ -160,6 +160,9 @@ fn run_touched(project: &ProjectConfig, root: &Path, request: &TestRequest) -> R
     Ok(())
 }
 
+/// Reports build time before the verdict rather than after it: a red lane is exactly when the
+/// build's share of the wall clock needs explaining, and reporting after an early return would
+/// print the number only for lanes that passed.
 fn run_lane(
     project: &ProjectConfig,
     root: &Path,

@@ -57,6 +57,8 @@ fn matrix() -> Vec<u8> {
     bytes
 }
 
+/// An unknown sample entry works in this fixture, since the timescale is read from `mdhd`; the
+/// codec box itself never has to be decodable.
 fn init_segment() -> Vec<u8> {
     let mut mvhd = Vec::new();
     mvhd.extend_from_slice(&0u32.to_be_bytes());

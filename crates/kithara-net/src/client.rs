@@ -289,6 +289,10 @@ impl RawHttp {
     /// (no chunk within `inactivity_timeout`) or transient body error it
     /// re-fetches `bytes=base_start+consumed-end` up to the retry policy, then
     /// surfaces a terminal error. A resume is always a partial (206) request.
+    ///
+    /// On a `206` response the body already starts at the requested offset (skip 0); on `200` the
+    /// server ignored the Range and resent from the start, so the already-consumed prefix is
+    /// dropped.
     fn wrap_resumable(
         &self,
         first: crate::ByteStream,
@@ -575,6 +579,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
+    /// Issues a full GET; a resume re-fetches `bytes=consumed-` from base offset 0.
     #[kithara::measure]
     async fn stream(
         &self,

@@ -286,6 +286,7 @@ impl AvailabilityIndex {
         self.inner.pending_durability.insert(path);
     }
 
+    /// The write side performs the frees that the produce-core's reads left parked.
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
         if range.start >= range.end {
             return;

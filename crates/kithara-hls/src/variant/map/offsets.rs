@@ -126,6 +126,9 @@ impl Frame {
     /// exact byte size. Non-exact placeholders may contribute to routing
     /// geometry, but until this holds `total_bytes` is not the authoritative
     /// stream end and must not be used to mint EOF.
+    ///
+    /// Treats an init-only or empty stream as complete: with no served segments, the offset table
+    /// alone bounds the stream.
     fn sizes_complete(&self, segments: &[Segment]) -> bool {
         let start = self.served_from as usize;
         let end = (self.served_until as usize).min(segments.len());

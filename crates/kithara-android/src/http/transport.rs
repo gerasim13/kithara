@@ -31,6 +31,8 @@ static CALLS: LazyLock<Calls> = LazyLock::new(|| Calls {
 });
 
 /// Wrap the Kotlin `transport` and install it into `kithara-net`.
+///
+/// The callback class is found from the installing call, whose class loader can see it.
 pub(super) fn install(
     env: &mut Env<'_>,
     transport: &JObject<'_>,
@@ -154,6 +156,8 @@ impl JniTransport {
 }
 
 impl HostTransport for JniTransport {
+    /// From here, the Kotlin call owns the slot: its terminal callback removes it, and the slot
+    /// keeps the lent body until then.
     fn start(
         &self,
         request: HostRequest,
@@ -184,6 +188,8 @@ impl HostTransport for JniTransport {
 }
 
 /// Stop a call Kithara could not bind, so its terminal callback settles the slot.
+///
+/// A failed bind may leave its exception pending, so this clears it before cancelling.
 fn cancel_unbound(env: &mut Env<'_>, call: &JObject<'_>) {
     // A failed bind may leave its exception pending.
     env.exception_clear();
@@ -228,6 +234,7 @@ impl JniCall {
         })
     }
 
+    /// The transport may answer before `read` returns, so the buffer is lent first.
     fn lend(&self, env: &mut Env<'_>, buffer: HostBuffer) -> Result<(), AndroidBackendError> {
         let buffer = DirectBuffer::new(env, buffer)?;
         let argument = env
@@ -272,6 +279,7 @@ fn new_string<'local>(
         .map_err(AndroidBackendError::jni("jni-new-string"))
 }
 
+/// Bounds the local reference frame for any header count.
 fn string_array<'local>(
     env: &mut Env<'local>,
     pairs: &[(String, String)],

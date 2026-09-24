@@ -189,6 +189,9 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
+    /// A failed node can be removed before another deferred pass, so this keeps a teardown flush
+    /// for cancellation, unregistration, or partial setup that drops the source without a completed
+    /// produce pass.
     fn drop(&mut self) {
         // WHY: A failed node can be removed before another deferred pass.
         if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
@@ -323,6 +326,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// A reader starved on the outgoing variant keeps advancing an already-requested transition;
+    /// the transition itself owns whether that source remains part of the promotion proof.
     fn progress_variant_transition(&mut self) {
         // WHY: A reader starved on the outgoing variant keeps advancing an already requested transition. The transition itself owns whether
         // that source remains part of the promotion proof.
@@ -599,6 +604,8 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         self.resume.commit_source_end(source_end, epoch);
     }
 
+    /// This is the epoch the current decode belongs to, stored when a seek is applied and stamped
+    /// on every chunk it produces.
     fn decode_epoch(&self) -> u64 {
         // WHY: The epoch the current decode belongs to - stored when a seek is applied (`ApplyingSeek` / `try_apply_seek`), and the same
         // value stamped on produced chunks (`decode_one_step`).
@@ -652,6 +659,8 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         track::dispatch(self)
     }
 
+    /// The storage committed-read fast path lazily allocates this thread's `arc_swap` debt node on
+    /// its first load, so this call pays that cost up front instead of on the first real read.
     fn warm_up(&mut self) {
         // WHY: The storage committed-read fast path (`MemDriver::committed_len` / `read_committed` behind an `arc_swap::ArcSwapOption`)
         // lazily `Box`-allocates this thread's `arc_swap` debt node on its FIRST load.

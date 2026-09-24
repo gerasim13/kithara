@@ -204,6 +204,10 @@ where
         self.abr_publisher.clone()
     }
 
+    /// Lets the `on_slow` hook wake `poll_next` when an in-flight fetch stalls past `soft_timeout`,
+    /// so `reconcile_escape` runs without an incidental reader-progress wake. The task yields to
+    /// the scheduler after each delivery, since a producer can publish another edge mid-poll,
+    /// letting Flash observe quiescence instead of draining `Notify` permits in one poll.
     pub(crate) fn activate(
         self: &Arc<Self>,
         coord: Arc<HlsCoord<S>>,
@@ -305,6 +309,8 @@ where
         *guard = None;
     }
 
+    /// A wake that finds no waker is silently dropped; the caller has no way to tell that apart
+    /// from a wake that landed and produced nothing.
     fn wake_poll(&self) {
         let waker = self
             .state
@@ -338,6 +344,9 @@ where
         self.cancel.clone()
     }
 
+    /// `reader_idx`/`download_head` are prefix endpoints into `durations`: `idx == len` is the
+    /// valid "at/after the last segment" endpoint and sums the full slice, while `idx > len` is
+    /// impossible and surfaces as `None` rather than being silently clamped.
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         let current = self.abr.current_variant_index();
         let durations: Vec<Duration> = self
@@ -375,6 +384,9 @@ where
         self.variants.lock().clone()
     }
 
+    /// The ABR controller runs off the real-time produce core: the peer owns fetch dispatch while
+    /// the audio worker owns the exact incoming-session plan, so publishing a decision wakes both
+    /// consumers.
     fn wake(&self) {
         let signal = self.state.lock().as_ref().map(|state| state.coord.signal());
         // The ABR controller is off the RT produce core. The peer owns fetch
@@ -392,6 +404,9 @@ impl<S> Peer for HlsPeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// The active session feeds the speaker while the incoming one is only preparation, so the
+    /// active session is served first and a single slot is reserved for the incoming one, so a
+    /// switch can never starve the audio currently playing.
     #[kithara::probe]
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let outcome = match self.poll_state_phase(cx) {
@@ -530,6 +545,10 @@ where
     /// segment-boundary commit → eviction drain). The guard drops at
     /// the end of the function so dispatch + broadcast run lock-free in
     /// the caller.
+    ///
+    /// Reconciles the ABR escape flag under the guard as an atomic-only step; a rising edge wants a
+    /// controller re-tick, which reads `peer.progress()` and re-locks state, so that is deferred
+    /// until after the guard drops.
     fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase<S> {
         let mut guard = self.state.lock();
         let Some(state) = guard.as_mut() else {

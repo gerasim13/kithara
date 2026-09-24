@@ -11,6 +11,9 @@ use crate::{
 };
 
 impl DriverIo for MemDriver {
+    /// Publishes the snapshot and frees the working buffer atomically under the state lock, so a
+    /// concurrent `read_at` never observes a freed buffer as if it held data. A zero-length commit
+    /// publishes no snapshot, matching the mmap `Empty` contract.
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut state = self.state.lock();
         let end = final_len.unwrap_or(state.len).min(state.len);
@@ -56,6 +59,9 @@ impl DriverIo for MemDriver {
         None
     }
 
+    /// Repopulates the working buffer from the committed snapshot so a re-download can rewrite
+    /// incrementally on top of the prior generation, while the snapshot stays published for
+    /// lock-free reads until the next `commit` swaps it.
     fn reactivate(&self) -> StorageResult<()> {
         // Repopulate the working buffer from the committed snapshot so the
         // re-download can rewrite incrementally on top of the prior generation
@@ -82,6 +88,9 @@ impl DriverIo for MemDriver {
         Ok(())
     }
 
+    /// Reads the working buffer first while a generation is in flight, since the writer's own
+    /// read-back must observe the current bytes, not the stale published snapshot; once `commit`
+    /// frees the buffer, the snapshot becomes authoritative.
     #[kithara::measure]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock();

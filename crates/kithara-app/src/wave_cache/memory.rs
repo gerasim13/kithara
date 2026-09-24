@@ -94,6 +94,7 @@ impl TrackAnalysisCache {
         Some(progress)
     }
 
+    /// The probe is side-effect-free and runs first, since opening a missing key would create it.
     fn load_disk(
         &mut self,
         target: &AnalysisTarget,
@@ -126,6 +127,8 @@ impl TrackAnalysisCache {
         progress
     }
 
+    /// An analysis with no meaningful slots would otherwise be served as emptiness forever on later
+    /// hits, so it is skipped rather than memoized in either tier.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
         // An analysis with no meaningful slots would be served forever as

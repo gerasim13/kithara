@@ -24,6 +24,8 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Releases the natural-end hold on every loaded track in the slot, including ones this seek
+    /// does not move, since the re-base is slot-wide.
     fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
         if seek_epoch != self.playback.seek_epoch.load(Ordering::SeqCst) {
             return;

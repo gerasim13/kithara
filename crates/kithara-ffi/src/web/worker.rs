@@ -80,6 +80,10 @@ macro_rules! clog {
 /// Inserts and owns one [`FfiQueue`] member in the canonical Host (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction), spawns
 /// a periodic `tick` loop, then drives the command channel.
+///
+/// `keep_worker_alive` is required: without it the Worker's spawn closure returns immediately since
+/// it only spawns async tasks, and `wasm_safe_thread` then closes the Worker, killing the command
+/// and tick loops.
 pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,

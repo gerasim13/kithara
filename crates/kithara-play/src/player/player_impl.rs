@@ -43,6 +43,9 @@ impl<S> Deref for PlayerImpl<S> {
 
 impl<S> PlayerImpl<S> {
     /// Create a new player with the given configuration.
+    ///
+    /// The player owns one persistent track-geometry grid for its whole life: loading, replacing,
+    /// or releasing a track states a later revision rather than changing the group's topology.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         if config.response_budget_frames.is_some() && config.warp.render_quantum_frames().is_none()

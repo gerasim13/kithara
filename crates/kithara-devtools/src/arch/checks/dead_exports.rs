@@ -879,6 +879,9 @@ impl RefCollector<'_> {
         })
     }
 
+    /// A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the generated mock keeps
+    /// the trait alive even though the names differ, so the stripped base name is counted too.
+    /// Over-counting only suppresses a flag, never causes a false deletion.
     fn record(&mut self, name: String) {
         // A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the
         // generated mock keeps the trait alive even though the names differ.

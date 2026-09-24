@@ -410,6 +410,9 @@ fn read_box_size(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u64> {
 /// The box walk itself belongs to `kithara-mp4`; what stays here is the
 /// projection of its samples onto the buffer-relative view the demuxer
 /// slices frames out of.
+///
+/// The frame vector is presized and filled by hand, since collecting into a `Result<Vec<_>>` would
+/// lose the exact capacity, and a segment must cost exactly one allocation.
 pub(crate) fn parse_segment_frames(
     init: &Fmp4InitInfo,
     segment_bytes: &[u8],

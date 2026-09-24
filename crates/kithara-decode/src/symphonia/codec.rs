@@ -293,6 +293,8 @@ impl FrameCodec for SymphoniaCodec {
         Ok(())
     }
 
+    /// AAC (including HE-AAC seen as `AacLc`) requests 2 access units of SBR/PS QMF pre-roll after
+    /// flush.
     fn priming(&self, codec: AudioCodec) -> CodecPriming {
         // WHY: AAC (incl. HE-AAC seen as AacLc) requests 2 AU of SBR/PS QMF pre-roll
         // after flush.

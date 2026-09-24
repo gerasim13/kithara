@@ -200,6 +200,8 @@ fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> S
     post_seek = u64::from(matches!(context, WaitContext::PostSeek(_))),
     position = stream.position()
 )]
+/// `Seeking` here means the landing bytes are absent while the source flushes for this very seek,
+/// so it says nothing about progress and is reported as `Waiting` instead.
 pub(crate) fn source_phase_for_wait_context<T: StreamType>(
     stream: &SharedStream<T>,
     context: &WaitContext,

@@ -99,6 +99,9 @@ impl<T> Sender<T> {
     ///
     /// # Errors
     /// Returns `Err(value)` when the receiver has already dropped.
+    ///
+    /// Takes the receiver's waker under the same lock it parks under, so storing the value and
+    /// waking it stay atomic with respect to a receiver poll.
     pub fn send(mut self, value: T) -> Result<(), T> {
         let Some(shared) = self.shared.take() else {
             return Err(value);
@@ -126,6 +129,7 @@ impl<T> Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// Wakes the receiver so its next poll observes the sender as dropped.
     fn drop(&mut self) {
         if let Some(shared) = self.shared.take() {
             let mut inner = shared.inner.lock();
@@ -155,6 +159,8 @@ pub struct Receiver<T> {
 impl<T> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
+    /// Stores its waker under the lock, after re-checking value and alive state, so a concurrent
+    /// send or sender-drop either observes the waker or has not yet stored what this poll missed.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         // WHY: Re-poll bookkeeping: an engine wait resolves only when granted; a real wait always re-checks the value/alive state below (a
@@ -194,6 +200,8 @@ impl<T> Future for Receiver<T> {
 }
 
 impl<T> Drop for Receiver<T> {
+    /// Drops its stored waker on a real park exit, so a late `send` does not wake an
+    /// already-dropped future; the slot holds at most this receiver's waker.
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock();
         inner.receiver_alive = false;

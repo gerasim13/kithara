@@ -109,6 +109,8 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
+    /// The track geometry the player publishes now belongs to this load: the prepared grid, on the
+    /// axis the engine decodes onto, spans the length this load states.
     pub(crate) fn enqueue_to_processor(
         &self,
         index: usize,
@@ -161,6 +163,9 @@ impl<S> PlayerRuntime<S> {
     }
 
     /// Remove all items, release the active slot, and stop the engine.
+    ///
+    /// Also clears any held start position, since the item it targeted no longer exists once the
+    /// queue is gone.
     pub fn remove_all_items(&self)
     where
         S: HasPool<f32>,

@@ -76,6 +76,9 @@ impl Semaphore {
     /// Return one permit and wake a single parked acquirer (it re-checks the
     /// count and takes the permit). One freed permit wakes one acquirer, exactly
     /// like the `mpsc` `space` group.
+    ///
+    /// Takes the waker under the same lock a park uses, so the count bump and the wake stay atomic
+    /// with respect to a concurrent park.
     fn release(&self) {
         let mut inner = self.inner.lock();
         inner.permits += 1;
@@ -128,6 +131,8 @@ impl Unpin for AcquireOwned {}
 impl Future for AcquireOwned {
     type Output = Result<OwnedSemaphorePermit, AcquireError>;
 
+    /// Registers the waiter while holding the count lock, so a concurrent `release` (same lock,
+    /// then signal) cannot slip its wake between this check and the park.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         // WHY: Engine wait resolves only when granted; a real wait re-checks the count below (a spurious wake just re-parks). Clear the
@@ -168,6 +173,8 @@ impl Future for AcquireOwned {
 }
 
 impl Drop for AcquireOwned {
+    /// Removes only its own waker on drop, so a `release` cannot wake an already-dropped acquirer;
+    /// mirrors the same drop-race guard in `mpsc`'s `Send::drop`.
     fn drop(&mut self) {
         match self.pending.take() {
             // WHY: Remove EXACTLY our own waker so a release does not wake a dropped acquirer (mirrors `mpsc` `Send::drop`; the

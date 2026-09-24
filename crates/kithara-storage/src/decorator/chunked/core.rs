@@ -198,6 +198,10 @@ impl<D: DriverIo> AtomicChunked<D> {
     ///
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
+    ///
+    /// Sealing skips the driver's own snapshot since it would map the temp file the rename retires;
+    /// the inner mapping is released before the file moves because Windows refuses to resize or
+    /// rename a mapped file, and the factory reopens on the canonical path.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let Some(claim) = self.claim.lock().take() else {
             return self.inner.load().commit_in_place(final_len);

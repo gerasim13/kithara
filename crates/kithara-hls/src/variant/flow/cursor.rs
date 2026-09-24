@@ -28,6 +28,8 @@ where
         self.flow.reader.wait_end()
     }
 
+    /// Clears any parked read before applying a seek, since it belonged to the position the seek is
+    /// abandoning.
     pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
         if !self.flow.reader.is_seek_active() {
             self.retire_seek_projection_if_moved(pos);

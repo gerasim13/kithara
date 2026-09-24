@@ -283,6 +283,8 @@ impl StreamCore {
         ))
     }
 
+    /// Anchors each grain to every audible source span, including calls served entirely from an
+    /// already synthesised native output chunk.
     pub(super) fn schedule_anchored(&mut self, end_of_input: bool) -> Result<(), ElasticError> {
         if self.cue_grain_pending {
             self.cue_grain_pending = false;

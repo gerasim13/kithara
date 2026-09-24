@@ -138,6 +138,7 @@ pub(crate) fn sync_frame<B: ReadBytes>(reader: &mut B) -> Result<u32> {
     Ok(sync)
 }
 
+/// Frame-size factors follow ISO-11172-3 section 2.4.3.1.
 pub(crate) fn parse_frame_header(header: u32) -> Result<FrameHeader> {
     const LAYER1_FACTOR: u32 = 12;
     const LAYER1_SLOT_SIZE: usize = 4;

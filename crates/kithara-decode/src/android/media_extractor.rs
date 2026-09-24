@@ -141,6 +141,8 @@ impl AndroidMediaExtractor {
         })
     }
 
+    /// Native seeks floor microsecond timestamps onto the PCM grid, and advancing to fetch the next
+    /// sample can block on streaming input.
     fn prepare_sample(&mut self) -> DecodeResult<()> {
         match self.cursor {
             SampleCursor::Current => Ok(()),
@@ -235,6 +237,7 @@ impl AndroidMediaExtractor {
         Ok(Some((landed_at, landed_byte)))
     }
 
+    /// Track selection can cache EOF at the init boundary.
     pub(crate) fn select_audio_track(&mut self) -> DecodeResult<(TrackFormatInfo, OwnedFormat)> {
         for i in 0..self.inner.track_count() {
             let (info, format) = self.track_info(i)?;

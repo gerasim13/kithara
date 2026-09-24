@@ -139,6 +139,8 @@ fn encode_track(
     })
 }
 
+/// `FFmpeg` emits one native AAC priming access unit before the source frames, which the total frame
+/// count must subtract.
 fn encode(spec: VariantSpec) -> EncodedVariant {
     let frame_samples = EncoderFactory::frame_samples(spec.codec).unwrap_or_else(|error| {
         panic!(

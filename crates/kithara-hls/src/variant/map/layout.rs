@@ -22,6 +22,8 @@ where
         self.eof_at_with(offset, || {})
     }
 
+    /// Logs once per stream: which geometry the offset was judged against is the one fact worth
+    /// having when a track ends early.
     pub(in crate::variant) fn eof_at_published(&self, offset: u64, total: u64) -> bool {
         let eof = total > 0 && offset >= total && self.eof_ready();
         if eof {
@@ -111,6 +113,8 @@ where
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
     }
 
+    /// Resets under the layout's write lock so the seek tail's freeze retirement and the sizes
+    /// parked behind it land atomically with the fresh frame.
     pub(super) fn reset_layout_to_full_range(&self) {
         if self.layout_seek_invariant() {
             return;

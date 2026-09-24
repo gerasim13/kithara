@@ -20,6 +20,9 @@ use crate::{
 };
 
 impl DriverIo for MmapDriver {
+    /// A re-download writes the new generation to a temp file so it never aliases the
+    /// still-published committed snapshot; commit flushes that temp generation's dirty pages before
+    /// dropping the map and renaming, so the republished mmap sees them.
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 
@@ -113,6 +116,10 @@ impl DriverIo for MmapDriver {
         Some(&self.path)
     }
 
+    /// Leaves an already-active mapping alone as long as its file still exists; otherwise
+    /// re-downloads into a fresh temp file, dropping any stale temp a cancelled rewrite left, while
+    /// keeping the committed snapshot published so in-flight readers keep serving the prior
+    /// generation zero-copy.
     fn reactivate(&self) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 
@@ -188,6 +195,9 @@ impl DriverIo for MmapDriver {
     /// mapping is what serves readers until that reopen lands. A zero-length
     /// or already-published resource has nothing to keep alive and takes the
     /// ordinary commit path.
+    ///
+    /// Flushes only the written prefix rather than the whole mapping, since the reservation beyond
+    /// `final_len` is untouched and syncing it would cost more than the re-map this seal avoids.
     fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
         if final_len == Some(0) {
             return self.commit(final_len);

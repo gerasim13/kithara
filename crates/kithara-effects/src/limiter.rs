@@ -277,6 +277,8 @@ impl PeakLimiter {
         self.shared_valid = false;
     }
 
+    /// Releases before clamping: the reverse order lets the recovered gain overshoot the ceiling
+    /// for one frame.
     #[inline]
     fn step(&mut self, peak: f32) -> f32 {
         let required = if peak > self.ceiling {

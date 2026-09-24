@@ -77,6 +77,9 @@ impl RenderPass {
     }
 
     /// Render audio for all active tracks into the output buffers.
+    ///
+    /// Frames are clamped rather than grown, since growing a pooled buffer here would allocate on
+    /// the audio thread; frames past the clamp are already silence-filled.
     pub(crate) fn render_audio(
         &mut self,
         context: Option<&RenderContext>,

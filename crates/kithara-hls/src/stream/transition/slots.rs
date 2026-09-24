@@ -198,6 +198,8 @@ where
         self.discard_incoming(&mut state, false);
     }
 
+    /// Logging here is the only witness that a variant switch ended via `abort_intent` without ever
+    /// committing, since no tick source re-derives that pending decision afterward.
     #[kithara::probe(abort_intent)]
     pub(super) fn discard_incoming(&self, state: &mut TransitionState<S>, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
@@ -471,6 +473,8 @@ where
         self.active_session().take_prefetch_resume()
     }
 
+    /// Defers the peer wake until this lock is released: `wake_peer` needs the peer's state lock,
+    /// which the peer holds across `prepare_for_seek` while blocked on this transition lock.
     pub(in crate::stream) fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,

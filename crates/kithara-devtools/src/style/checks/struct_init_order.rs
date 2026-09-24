@@ -131,6 +131,9 @@ struct FixVisitor<'a, 'src> {
 }
 
 impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
+    /// A reordered struct literal's nested literals travel inside the moved blocks, so touching
+    /// them now would stage overlapping edits; the caller's fix loop revisits them on the next
+    /// pass.
     fn visit_expr_struct(&mut self, e: &'ast ExprStruct) {
         let order = expected_order(
             self.cfg,
@@ -490,6 +493,9 @@ fn classify(cfg: &StructInitOrderConfig, fv: &FieldValue) -> InitKey {
     }
 }
 
+/// Mirrors the autofix safety model: a `..base` rest, or a shorthand field read by an earlier
+/// explicit initializer, makes reordering to declaration order a use-after-move, so detection
+/// refuses these the same way the fix does.
 fn check_expr_struct(rel: &str, e: &ExprStruct, order: ExpectedOrder, out: &mut Vec<Violation>) {
     if e.fields.len() < 2 {
         return;
@@ -579,6 +585,8 @@ struct IdentScanner<'a> {
 }
 
 impl<'ast> Visit<'ast> for IdentScanner<'_> {
+    /// `Visit` does not parse macro bodies, so a `vec![x.clone()]` read of a shorthand field is
+    /// invisible to `visit_path`; the raw token stream is scanned instead.
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         // `Visit` does not parse macro bodies, so a `vec![x.clone()]` read
         // of a shorthand field is invisible to `visit_path`. Scan the raw

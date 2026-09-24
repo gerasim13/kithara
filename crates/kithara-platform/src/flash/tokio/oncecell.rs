@@ -90,6 +90,9 @@ impl<T> OnceCell<T> {
     /// # Errors
     /// Propagates the initializer's error; the cell stays uninitialized so a
     /// later call can retry.
+    ///
+    /// If `f().await` is cancelled or panics before completing, the abandon guard releases the init
+    /// state and wakes parked waiters, so no waiter is stranded.
     pub async fn get_or_try_init<E, F, Fut>(&self, f: F) -> Result<&T, E>
     where
         F: FnOnce() -> Fut,
@@ -210,6 +213,8 @@ impl<T> Unpin for AwaitChange<'_, T> {}
 impl<T> Future for AwaitChange<'_, T> {
     type Output = ();
 
+    /// Registers the waiter while holding the init lock, so a concurrent `finish_init` (same lock,
+    /// then signal) cannot slip its wake between this check and the park.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
         match this.pending.as_ref() {
@@ -255,6 +260,8 @@ impl<T> Future for AwaitChange<'_, T> {
 }
 
 impl<T> Drop for AwaitChange<'_, T> {
+    /// Removes only its own waker on drop; leaving a stale one would just cost one spurious wake,
+    /// but exact removal keeps the waker list tight.
     fn drop(&mut self) {
         match self.pending.take() {
             // WHY: Remove EXACTLY our own waker so a `finish_init` does not wake a dropped future (leaving a stale waker is harmless here - it

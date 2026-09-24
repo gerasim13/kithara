@@ -95,6 +95,10 @@ where
     }
 
     /// Start playback from the configured default-rate target.
+    ///
+    /// Announces the current item only once a slot is loaded; announcing while the load is still in
+    /// flight would mark the index current early and make a later select skip re-enqueuing the
+    /// arriving resource.
     pub fn play(&self) {
         let rate = self.core.warp.stretch().speed();
 
@@ -222,6 +226,9 @@ where
     /// [`crossfade_duration`](Self::crossfade_duration). Pass `0.0` for an
     /// immediate cut (no fade); matches `AVQueuePlayer`'s manual-selection
     /// idiom.
+    ///
+    /// Reselecting the already-current item is valid even though its resource was consumed by the
+    /// load that made it current: the resource now lives in the processor as the playing track.
     pub fn select_item_with_crossfade(
         &self,
         index: usize,

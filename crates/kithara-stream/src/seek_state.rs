@@ -243,6 +243,9 @@ impl SeekControl for SeekState {
     ///
     /// Uses a double-check to guard against the race where a new
     /// `begin` fires between our epoch load and flushing store.
+    ///
+    /// Does not clear `seek_target_ns` here; it remains the record of the most recent seek target
+    /// across completion.
     fn complete(&self, epoch: u64) {
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             return;

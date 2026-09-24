@@ -107,6 +107,8 @@ impl WaveformAnalyzer {
         self.bands.get(&index).copied()
     }
 
+    /// The caller hands only windows whose span overlaps the clipped range, so that range is never
+    /// empty and needs no second overlap test.
     pub(super) fn scatter<S>(
         &mut self,
         pools: &PoolRegion<S>,
@@ -163,6 +165,7 @@ impl WaveformAnalyzer {
         u64::try_from(self.fft_input.len()).unwrap_or(0)
     }
 
+    /// Zeroes the DC bin so a constant offset never colors the low band.
     fn window_bands(&self) -> [f32; Band::COUNT] {
         // Zero the DC bin so a constant offset never colors the low band.
         let bins = &self.fft_output[1..];

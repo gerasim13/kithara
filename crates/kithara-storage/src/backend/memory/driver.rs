@@ -69,6 +69,8 @@ impl fmt::Debug for MemDriver {
 impl Driver for MemDriver {
     type Options = MemOptions;
 
+    /// Zero-length committed data publishes no snapshot, matching the mmap `Empty` contract where
+    /// `committed_len()` returns `None`.
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
         let MemOptions {
             initial_data,

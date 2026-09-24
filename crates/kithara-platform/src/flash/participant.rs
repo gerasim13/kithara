@@ -35,6 +35,9 @@ pin_project! {
 impl<F: Future> Future for Participating<F> {
     type Output = F::Output;
 
+    /// A duplicate or stale wake is ignored: an already parked or done task stays pending without
+    /// re-polling. The OS thread is marked inside an async poll for the inner poll's duration, so a
+    /// blocking wait taken from within it counts as bridged.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
         this.gate.store_runtime_waker(cx.waker());

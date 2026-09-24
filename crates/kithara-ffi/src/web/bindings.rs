@@ -4,10 +4,13 @@ use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 // WHY: wasm-ld synthesizes `__heap_base` and `__heap_end` only when the module does not define them.
+/// wasm-ld synthesizes `__heap_base` and `__heap_end` only when the module does not define them.
 #[used]
 #[unsafe(export_name = "__heap_end")]
 static HEAP_END: u8 = 0;
 
+/// Registers the wasm-bindgen output name so worker threads that import `<shim>.js` for `initSync`
+/// load the right shim; auto-detection mis-picks a co-loaded `.js` such as coi-serviceworker.
 #[cfg_attr(target_family = "wasm", allow(unreachable_pub))]
 #[wasm_bindgen(start)]
 pub fn setup() -> Result<(), JsValue> {

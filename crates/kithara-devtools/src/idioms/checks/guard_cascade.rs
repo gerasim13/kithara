@@ -123,6 +123,8 @@ fn block_ends_with_terminator(cfg: &GuardCascadeConfig, b: &Block) -> bool {
     }
 }
 
+/// `break`/`continue` are loop control, not a guard ladder protecting a happy path, so they do not
+/// count as guard terminators.
 fn is_terminator_expr(cfg: &GuardCascadeConfig, e: &Expr) -> bool {
     match e {
         // `break`/`continue` are loop control, not a guard ladder protecting

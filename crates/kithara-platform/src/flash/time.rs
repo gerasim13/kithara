@@ -69,6 +69,8 @@ pin_project! {
 impl<F: Future> Future for FlashTimeout<F> {
     type Output = Result<F::Output, TimeoutError>;
 
+    /// Polls the inner future before the sleep, so a ready result wins a tie against a
+    /// simultaneously expired timeout.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
         this.sleep.as_mut().arm(cx);

@@ -233,6 +233,9 @@ impl<S> Drop for DownloadClaim<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Logs at debug rather than warn: a cancelled or superseded fetch drops its claim on every
+    /// seek and variant switch, so this fires by the thousands in healthy stress runs, not just
+    /// incidents.
     fn drop(&mut self) {
         if self.settled {
             return;
@@ -327,6 +330,9 @@ where
         signal.fire();
     }
 
+    /// Dropping after a newer epoch's writer commits is race-safe (skipped once state is
+    /// `Committed`). The work returns to the plan unstamped, since stamping would fail the next
+    /// writer's first `write_at`.
     fn settle_cancelled(self, bytes_written: u64) {
         let Self {
             handle,
@@ -373,6 +379,9 @@ where
         }
     }
 
+    /// An uncommitted writer is dropped (race-safe cleanup) and the on-disk length adopted if a
+    /// newer epoch already committed. Otherwise the segment is requeued onto the plan so a peer
+    /// refetches it.
     fn settle_failure(self, e: &NetError) {
         let Self {
             handle,
@@ -437,6 +446,8 @@ where
         }
     }
 
+    /// Reads `final_len` back off the committed reader rather than trusting `bytes_written`, since
+    /// PKCS7 unpadding shrinks DRM segments below their announced size.
     fn settle_success(self, bytes_written: u64) {
         let Self {
             handle,

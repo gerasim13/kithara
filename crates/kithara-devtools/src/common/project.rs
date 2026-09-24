@@ -804,6 +804,8 @@ impl StressConfig {
             .with_context(|| format!("stress mode `{name}` is not configured"))
     }
 
+    /// A lane names the directory its evidence lands in, so listing one twice would let the second
+    /// run overwrite the first and report half of what it did.
     pub(crate) fn validate(&self) -> Result<()> {
         require_value("stress.lane", &self.lane)?;
         require_value("stress.backend", &self.backend)?;
@@ -957,6 +959,8 @@ impl StressConfig {
         Ok(())
     }
 
+    /// A command lane selects nothing through the test runner, so features meant for that runner
+    /// would be read by no one; this is stated rather than silently ignored.
     fn validate_mode(name: &str, mode: &StressModeConfig) -> Result<()> {
         let mut features = BTreeSet::new();
         for feature in &mode.features {

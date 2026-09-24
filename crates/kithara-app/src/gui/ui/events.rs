@@ -66,6 +66,8 @@ pub(super) fn route(instance: &str) -> Option<Route> {
     }
 }
 
+/// A match guard would read more clearly here, but `if let` guards are not available at the crate's
+/// MSRV.
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     let target = route(instance)?;
@@ -208,6 +210,9 @@ fn bar_control(control: &str, action: &ControlAction) -> Option<Message> {
 
 /// The app menu owns its own surface and hands everything else to the host:
 /// window mode, the air, and the layout its rows name by deck count.
+///
+/// A grid cell reaches the host through its own include, so the module name is always the path's
+/// first segment.
 fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) -> Option<Message> {
     if !matches!(action, ControlAction::Activate) {
         return None;

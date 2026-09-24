@@ -90,6 +90,8 @@ impl AppleAudioFile {
         Self::open_inner(source, hint, size, true)
     }
 
+    /// `read_packet_count` and `read_max_packet_size` force a full-file scan for VBR formats with
+    /// no on-disk packet index, such as FLAC.
     fn open_inner(
         source: BoxedSource,
         hint: Option<u32>,
@@ -245,6 +247,9 @@ impl AppleAudioFile {
     /// `Ok(Some((bytes_written, packet_desc)))` or `Ok(None)` at EOF.
     /// Use for codecs whose decoder needs per-packet descriptors
     /// (MP3 / ALAC).
+    ///
+    /// A not-ready streamed read is masked by `AudioFile` as either a graceful EOF or a truncated
+    /// packet with a stashed callback error, for compressed formats.
     pub(crate) fn read_packet(
         &mut self,
         starting_packet: u64,

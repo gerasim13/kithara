@@ -210,6 +210,8 @@ where
         committed
     }
 
+    /// A committed resource of unknown length counts as unbounded, so it cannot stay in a
+    /// byte-bounded cache.
     fn committed_bytes(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> Option<u64> {
         let CacheEntry::Resource { reader, .. } = entry else {
             return None;
@@ -284,6 +286,9 @@ where
             .count()
     }
 
+    /// The victim is chosen by fewest hits, with ties falling to the least-recently-used end, since
+    /// iteration yields most- to least-recently-used and a later equal candidate is the better
+    /// victim.
     fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
         let key = cache
             .iter()
@@ -430,6 +435,8 @@ where
     type IndexRes = A::IndexRes;
     type ReadyRes = CachedReader<A::ReadyRes>;
 
+    /// Reactivating an in-flight slot mints a fresh-generation writer, and its current-generation
+    /// reader view is cached so concurrent opens block on the new generation's gate.
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,

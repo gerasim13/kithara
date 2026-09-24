@@ -9,6 +9,8 @@ use crate::{
 };
 
 impl<D: DriverIo> ResourceCore<D> {
+    /// Takes a lock-free fast path once the resource is committed: a committed resource exposes an
+    /// immutable snapshot, so reads go straight to it with no state mutex.
     #[kithara::measure]
     pub(super) fn read_at_inner(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {
@@ -89,6 +91,8 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
+    /// A write that replaces a generation a produce-core read may still own pays the frees that
+    /// read parked, transferring the ownership cost to the write side.
     #[kithara::measure]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {

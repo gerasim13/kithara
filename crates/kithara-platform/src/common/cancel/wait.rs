@@ -60,6 +60,9 @@ struct Fields<'a> {
     done: &'a mut bool,
 }
 
+/// Registers first, since cancel may have fired between the earlier `is_cancelled` check and
+/// registration; `register` returns `None` when already fired, which this resolves immediately
+/// rather than leaving parked.
 fn poll_cancelled(f: &mut Fields<'_>, cx: &mut Context<'_>) -> Poll<()> {
     if *f.done {
         return Poll::Ready(());

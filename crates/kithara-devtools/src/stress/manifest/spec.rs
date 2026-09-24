@@ -477,6 +477,9 @@ impl Manifest {
         );
     }
 
+    /// A job's result covers every lane in it at once, so a red job means one lane failed, not
+    /// necessarily this one; a lane that passed inside a failed job legitimately has a zero exit
+    /// code.
     fn validate_timing(
         &self,
         expected: &ExpectedProvenance,

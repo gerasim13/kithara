@@ -491,6 +491,8 @@ impl super::core::ActiveDecode {
     }
 }
 
+/// Nothing exists past the cut on either side here: the outgoing ran out of source at the frontier,
+/// and the incoming ran out at or before it.
 fn promotion_readiness(
     active: &DecoderGeneration,
     blender: &GaplessBlender,
@@ -628,6 +630,8 @@ fn hard_cut_at(incoming_first: u64, incoming_next: u64) -> PromotionReadiness {
     })
 }
 
+/// An exhausted outgoing can never establish or advance a frontier, so every case waiting on it
+/// below is a dead end; the switch degrades to a hard cut instead of wedging forever.
 fn resolve_frontier(
     active: &DecoderGeneration,
     frontier: OutgoingFrontier,
@@ -646,6 +650,8 @@ fn resolve_frontier(
     }
 }
 
+/// The join PCM would have to come from past the final decode head, which does not exist, so this
+/// cuts at the frontier instead of demanding PCM the outgoing can never produce.
 fn same_spec_join(
     active: &DecoderGeneration,
     blender: &GaplessBlender,
@@ -819,6 +825,8 @@ fn incoming_origin(
     )
 }
 
+/// The seam moves by exactly the AAC-LC default priming when the incoming track's gapless metadata
+/// is missing, since `origin` alone cannot say which case it is.
 fn incoming_origin_from(
     active_profile: kithara_decode::GaplessProfile,
     active_gap: u64,

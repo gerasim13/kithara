@@ -114,6 +114,8 @@ impl ResumeCursor {
         }
     }
 
+    /// A route change keeps the container, so the rebuilt demuxer must start where the container
+    /// itself starts, not at the byte the resume time maps to.
     pub(crate) fn route_change<T: StreamType>(
         &mut self,
         ctx: &RouteCtx<'_, T>,

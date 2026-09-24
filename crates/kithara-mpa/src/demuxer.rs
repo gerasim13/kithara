@@ -632,6 +632,9 @@ fn read_mpeg_frame_inner(
 }
 
 /// Reads an MPEG frame and checks if the next frame begins after the packet.
+///
+/// Resumes scanning one byte into the rejected candidate, so the same position is not selected
+/// again.
 fn read_mpeg_frame_strict_into(
     reader: &mut MediaSourceStream<'_>,
     packet: &mut [u8],

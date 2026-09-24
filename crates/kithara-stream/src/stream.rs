@@ -384,6 +384,10 @@ impl<T: StreamType> Stream<T> {
         self.try_read_with(buf, WaitMode::Probe)
     }
 
+    /// Awaits only the unit holding the read cursor, never a wider range, since segmented readiness
+    /// is all-or-nothing and a slow tail would otherwise block a read the resident head could
+    /// already satisfy. If the resource is evicted between `wait_range` and `read_at`, it
+    /// re-acquires immediately without parking.
     #[kithara::measure]
     #[kithara::hang_watchdog]
     fn try_read_with(
@@ -639,6 +643,9 @@ pub fn format_change_segment_range(vc: Option<&dyn VariantControl>) -> StreamRes
 impl<T: StreamType> Read for Stream<T> {
     /// Blocks off the real-time path until bytes, EOF, a seek, a variant change, or an error.
     /// Timeout and stall policy remain owned by the source.
+    ///
+    /// On an evicted `Retry` range, wakes the peer to trigger a re-fetch and re-loops, so the next
+    /// attempt parks in the event-driven `wait_range`.
     #[kithara::flash(true)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
@@ -691,6 +698,9 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Seek for Stream<T> {
+    /// Off the real-time path, discovers the length for an `End`-relative seek by priming, since
+    /// `probe_seek` cannot and errors instead. The cursor is published before priming so the peer,
+    /// which aims from the cursor, targets the new position rather than the stale one.
     #[kithara::measure]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let current = self.source.position();

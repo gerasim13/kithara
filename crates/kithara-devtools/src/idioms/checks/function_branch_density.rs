@@ -154,6 +154,8 @@ impl<'ast> Visit<'ast> for BranchCounter {
         visit::visit_expr_loop(self, node);
     }
 
+    /// A `match` lowers to a jump table, not an if/else-if ladder, so variant dispatch counts as
+    /// one branch; each arm guard is a sequential conditional and counts separately.
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
         // A `match` lowers to a jump table / balanced decision tree, not an
         // `if/else-if` ladder: variant dispatch is one control-flow decision
@@ -173,6 +175,9 @@ impl<'ast> Visit<'ast> for BranchCounter {
         visit::visit_expr_match(self, node);
     }
 
+    /// `?` lowers to a discriminant test plus a cold early-return that LLVM marks unlikely, so
+    /// error-plumbing is not counted as hot-path branch pressure; data-dependent control flow
+    /// inside the fallible expression is still counted by descent.
     fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
         // `?` lowers to a discriminant test + cold early-return. LLVM marks
         // the Err/None arm `unlikely` and the branch predictor nails a

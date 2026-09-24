@@ -40,6 +40,9 @@ impl<T> Sender<T> {
     /// # Errors
     ///
     /// Returns [`SendError`] if the receiver has been dropped.
+    ///
+    /// Notifies after releasing the queue lock; since a receiver always registers its wait under
+    /// that lock before parking, this cannot land before the waiter is registered.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         let mut queue = self.0.queue.lock();
         if !self.0.receiver_alive.load(Ordering::Acquire) {
@@ -62,6 +65,8 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// Takes the queue lock before notifying on the last sender's drop, serializing with a receiver
+    /// registering its waiter under the same lock so the disconnect is never missed.
     fn drop(&mut self) {
         if self.0.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
             // WHY: Last sender gone. Take the queue lock so this serializes with a receiver registering its waiter under the same lock, then

@@ -52,6 +52,9 @@ impl CasAnchorCell {
             .is_ok()
     }
 
+    /// Bails early under a writer's demand gate instead of spinning, then validates a fenced,
+    /// version-sandwiched snapshot: an unchanged version and matching generation reject torn reads
+    /// or entries a concurrent `clear` retired.
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
@@ -84,6 +87,8 @@ impl CasAnchorCell {
         })
     }
 
+    /// Wraps around 2^64 generations, treated as practically unreachable; 0 stays reserved to mean
+    /// absent.
     fn next_gen(&self) -> u64 {
         let generation = self
             .next_gen
@@ -102,6 +107,9 @@ impl CasAnchorCell {
     /// Multi-writer publish. Acquires the version with a CAS (even -> odd); a
     /// racing writer retries. `active` and the body are written under the lock,
     /// so two writers' publishes serialize and never lost-update each other.
+    ///
+    /// Stores `active` as 0 before writing `segment`/`anchor`, hiding the entry from `load` until
+    /// the write completes, so a stale `take_if(old)` cannot observe a torn update.
     pub(super) fn set(&self, segment: u32, anchor: u64) {
         let held = loop {
             let cur = self.version.load(Ordering::Acquire);

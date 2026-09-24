@@ -94,6 +94,8 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    /// The last sender marks the channel closed and signals under the gate, so a receiver
+    /// re-checking during teardown resolves `RecvError` instead of parking forever.
     fn drop(&mut self) {
         // WHY: The last sender closes the channel: mark `closed` under the gate and signal, so a receiver that re-checks during teardown
         // still resolves `RecvError` rather than parking forever.
@@ -132,6 +134,9 @@ impl<T> Sender<T> {
     /// # Errors
     /// Returns the value back when no receivers remain (matched against
     /// `tokio`'s `send` shape, which the callers map away with `.ok()`/`let _`).
+    ///
+    /// Bumps the version and drains the wakers while holding the gate, so a concurrent `changed`
+    /// either observes the new version or is woken.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         // WHY: Bump the version and drain the wakers WHILE holding the gate so a concurrent `changed` either sees the new version or is
         // woken below.
@@ -271,6 +276,8 @@ pub struct Changed<'a, T> {
 impl<T> Future for Changed<'_, T> {
     type Output = Result<(), RecvError>;
 
+    /// Holds the gate across the version read and the waiter registration, so a concurrent `send`
+    /// is either observed here or wakes the waiter just registered.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = &mut *self.get_mut().rx;
         // WHY: Engine wait resolves only when granted; a real wait re-checks the version below (a spurious wake just re-parks). Clear the
@@ -385,6 +392,8 @@ impl<T> Drop for Changed<'_, T> {
     }
 }
 
+/// Removes only its own waker, so a signal cannot wake an already-dropped future; mirrors the same
+/// guard in `broadcast` and `mpsc`.
 fn cancel_pending<T>(rx: &mut Receiver<T>) {
     match rx.pending.take() {
         // WHY: Remove EXACTLY our own waker so a signal does not wake a dropped future (mirrors `broadcast`/`mpsc`).

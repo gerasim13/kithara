@@ -103,6 +103,9 @@ where
         }
     }
 
+    /// A replacement fetch may only start once the peer is woken: it parks on its own waker while a
+    /// fetch is in flight, so a superseded fetch that does not wake it would leave it parked with
+    /// nothing left to complete it.
     fn build_fetch_cmd(&self, inner: &Arc<FileInner<S>>, plan: FetchPlan<S>) -> FetchCmd {
         let FetchPlan {
             cancel: writer_cancel,

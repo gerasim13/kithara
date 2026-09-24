@@ -17,6 +17,9 @@ impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Reads the membership mirror rather than the queue lock, since this runs on the produce core
+    /// inside `phase_at`, where a blocking lock would spin into `sched_yield` under planner
+    /// contention in a real-time context.
     pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
         // WHY: Runs on the produce core inside `phase_at`: the membership mirror, not the queue lock - a blocking lock here spins into
         // `sched_yield` in a real-time context under planner contention.
@@ -116,6 +119,8 @@ where
         self.range_ready_with(range, || {})
     }
 
+    /// Treats an incomplete total as only a lower bound: treating it as EOF would admit a
+    /// zero-width ready range before an unsized segment arrives.
     fn range_ready_published_with(&self, range: &Range<u64>, after_total: impl FnOnce()) -> bool {
         let total = self.total_bytes();
         after_total();

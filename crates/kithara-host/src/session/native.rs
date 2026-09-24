@@ -81,6 +81,8 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     }
 }
 
+/// Disconnects queued callers before `PlayerRuntime::drop` takes its admission gate, since
+/// otherwise each side can wait on the other.
 fn complete_shutdown<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     state: SessionState<T, S>,

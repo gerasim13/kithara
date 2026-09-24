@@ -594,6 +594,8 @@ impl Cells {
             .collect()
     }
 
+    /// Each round only adds cells and covers the last, so the climb terminates at the first size
+    /// that asks for no more room than it already occupies — the widest set the container holds.
     pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
         let Some(axis) = measure else {
             return self.need(None);

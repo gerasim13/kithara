@@ -157,6 +157,8 @@ where
     spawn(counted(f))
 }
 
+/// Uses the consumer-registered shim name (`set_wasm_shim_name`) when set, falling back to
+/// `wasm_safe_thread`'s Performance-API auto-detection otherwise.
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,

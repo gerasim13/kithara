@@ -225,6 +225,8 @@ where
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
+    /// Wakes a reader parked on the pre-seek range so it re-probes against the new position and
+    /// flush gate after a seek repositions the active variant.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
@@ -336,6 +338,8 @@ where
         }
     }
 
+    /// On the RT path this is a single wake-free probe that never parks. Off-RT it blocks on the
+    /// readiness gate, event-driven, until the range resolves, a segment fails, or cancel fires.
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,

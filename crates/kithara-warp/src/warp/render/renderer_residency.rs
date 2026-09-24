@@ -33,6 +33,7 @@ pub(super) struct SourceResidency {
 }
 
 impl SourceResidency {
+    /// Only the portion before the physical recording is known silence.
     pub(super) fn append(
         &mut self,
         meta: AudioChunkInfo,
@@ -292,6 +293,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }))
     }
 
+    /// Sizes terminal DSP silence only; it does not extend the map. Padding is materialized solely
+    /// by flush after the decoder reports EOF.
     fn prepare_finite_resident_projection(
         &mut self,
         plan: &WarpPlan,
@@ -386,6 +389,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.prepare_resident_request(request, meta, remaining)
     }
 
+    /// Latency is expressed once at the engine boundary; the map itself already converts source
+    /// frames per session output frame.
     pub(super) fn prepare_resident_projection(
         &mut self,
         plan: &WarpPlan,

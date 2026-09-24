@@ -71,6 +71,10 @@ where
     /// the owed window (the playing segment and the next) ride
     /// `tokens.lookahead`, which a variant transition retires to free
     /// downloader capacity without touching what playback waits on.
+    ///
+    /// A construction bound is a hard debt: fetches up to it must land for the build to finish, so
+    /// look-ahead-only caps step aside within that window; a popped entry already requeued by a
+    /// concurrent claim's drop is never double-planned.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,

@@ -336,6 +336,8 @@ where
         self.repaint
     }
 
+    /// Applies the interaction's own value immediately so the control draws what it just authored;
+    /// the host's snapped and gapped answer for the same change only lands a frame later.
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
         let indexed =
             self.interaction

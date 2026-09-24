@@ -35,6 +35,8 @@ impl<T: StreamType> Read for OffsetReader<T> {
 }
 
 impl<T: StreamType> Seek for OffsetReader<T> {
+    /// The decoder runs on the produce core, so seeking goes through the real-time `probe_seek`
+    /// rather than `prime_seek_range`, which is forbidden on that path.
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         // WHY: The decoder runs on the produce core, so seek through the real-time `probe_seek` (no `prime_seek_range` spin on the forbid
         // path).

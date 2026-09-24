@@ -184,6 +184,8 @@ where
         self.with_open_result(|queue| queue.seek_player_inner(seconds))
     }
 
+    /// Resumes seeking after the last track plays to natural EOF and the navigation cursor runs off
+    /// the end, leaving `current()` at `None`.
     fn seek_player_inner(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         // WHY: Superpowered-style resume after end-of-queue: once the last track played to natural EOF the nav cursor ran off the end
         // (`current()` is `None`).

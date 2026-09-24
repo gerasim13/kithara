@@ -60,6 +60,8 @@ impl<F: Future> Future for PermitPoll<F> {
 impl<F: Future> Future for Watched<F> {
     type Output = F::Output;
 
+    /// The CPU snapshot can be up to 1 ms stale, which is safe given the 25 ms strict and 3000 ms
+    /// blanket budgets it is checked against.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         if mode::is_off() {

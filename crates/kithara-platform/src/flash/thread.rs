@@ -23,6 +23,9 @@ impl Default for GateBackend {
 }
 
 impl GateBackend {
+    /// A gate park is a backstop under the gate's edge: the signal releases it, while the timeout
+    /// only guards a missed edge from wedging the waiter, at the cost of one clock hop per poll
+    /// interval.
     #[inline]
     pub(crate) fn park_timeout(&self, duration: Duration) {
         match self {
@@ -187,6 +190,8 @@ pub fn paced_backoff(duration: Duration) {
 /// that deadline OR a peer [`unpark`]s this thread. The wait consumes no real
 /// wall-clock: when every participant is parked the engine jumps the virtual clock to
 /// the earliest deadline.
+///
+/// Outside `flash`, this is a true wall-clock park, invisible to the quiescence engine.
 #[inline]
 #[track_caller]
 pub fn park_timeout(duration: Duration) {

@@ -52,6 +52,7 @@ impl Schedule {
         widest.as_ref().map(|gap| aim(gap, window))
     }
 
+    /// Region centres spread early work before scanning leftovers.
     pub(crate) fn next(
         &self,
         coverage: &RangeSet<u64>,

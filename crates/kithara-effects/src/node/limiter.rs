@@ -78,6 +78,9 @@ impl AudioNodeProcessor for LimiterProcessor {
         self.limiter = Self::build_limiter(stream_info.sample_rate, self.config);
     }
 
+    /// Resets the limiter's detector history on a silence block; otherwise it would carry the audio
+    /// from before the silence into whatever starts after it, and telling it the stream broke keeps
+    /// the next onset judged as an onset.
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,

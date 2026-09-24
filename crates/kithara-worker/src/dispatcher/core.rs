@@ -42,6 +42,9 @@ pub(super) fn run_loop(
 
 /// One scheduling pass: settle the roster the commands left behind, produce
 /// work from it, and report what the pass achieved.
+///
+/// Leaves no terminal slot behind for the next pass to park on, and preserves the existing order of
+/// whatever slots remain.
 pub(super) fn run_pass(
     slots: &mut Vec<Slot>,
     needs_reorder: &mut bool,

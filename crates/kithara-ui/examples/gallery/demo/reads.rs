@@ -533,6 +533,9 @@ impl DemoReads {
 }
 
 impl Reads for DemoReads {
+    /// Answers scope-specific fields (menu, context, quality, clock) before generic ones, since
+    /// those axes are genuinely per-window, per-module, or per-row. The gallery hosts a single
+    /// virtual deck, so every `@scope` suffix resolves to the same state and is dropped.
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         // The menu axes are genuinely per-window, per-module and per-row, so
         // they answer the scoped key before it is dropped below.

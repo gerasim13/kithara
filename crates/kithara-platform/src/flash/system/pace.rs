@@ -55,6 +55,9 @@ impl FlashInner {
 
     /// Mark ONE real I/O operation in flight. The first op anchors the pace to
     /// the current (real, virtual) instant and spawns the pacer thread lazily.
+    ///
+    /// Spawns the pacer with a raw `std::thread`, never `spawn_named`, so the pacer itself stays
+    /// invisible to the engine and does not pin the clock it exists to advance.
     pub(in crate::flash) fn real_io_enter(&self) {
         self.pacer.spawn.call_once(|| {
             let owner = self

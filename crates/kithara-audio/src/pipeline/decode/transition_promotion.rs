@@ -52,6 +52,8 @@ impl ActiveDecode {
         )
     }
 
+    /// A finished incoming may trim to an empty tail: the end-of-track hard cut proves nothing
+    /// exists past the cut, and an empty tail is exactly consistent with that proof.
     pub(crate) fn prepare_promotion(&mut self) -> Option<PreparedPromotion> {
         let (transition, span) = {
             let IncomingDecode::Priming {

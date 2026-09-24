@@ -306,6 +306,8 @@ fn insert_quality_endpoints(registry: &mut DemoRegistry) {
     );
 }
 
+/// These endpoints are bound by name in the document shader; since the page is a capture fixture,
+/// they hold fixed values rather than animating.
 pub(crate) fn registry() -> impl EndpointRegistry {
     let mut registry = DemoRegistry::default();
     insert_deck_endpoints(&mut registry);

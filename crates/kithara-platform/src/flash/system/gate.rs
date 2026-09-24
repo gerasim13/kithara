@@ -125,6 +125,9 @@ impl Wake for TaskGate {
         self.wake_by_ref();
     }
 
+    /// Re-acquires the slot the park released before the real poll runs, so the wake-to-poll window
+    /// stays counted and the clock cannot advance past this task; already-runnable/done states
+    /// no-op.
     fn wake_by_ref(self: &Arc<Self>) {
         loop {
             match self.state().load() {

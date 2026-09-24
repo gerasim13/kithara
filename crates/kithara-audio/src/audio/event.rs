@@ -216,6 +216,7 @@ impl ReaderOutputWake {
 }
 
 impl WakeSignal for ReaderOutputWake {
+    /// A pre-push emptiness snapshot can race a consumer that is draining the ring.
     fn flush_deferred(&self) {
         self.emit.flush();
         if self.pending.swap(false, Ordering::AcqRel) {

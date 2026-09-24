@@ -21,6 +21,7 @@ where
     decode(curve, periods, tempo, pools).map(|(beats, _)| beats)
 }
 
+/// Decoding starts as if a beat fell just before the first frame.
 fn decode<S>(
     curve: &[f32],
     periods: &[f32],

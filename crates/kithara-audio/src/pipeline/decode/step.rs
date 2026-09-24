@@ -18,6 +18,9 @@ use crate::{
     },
 };
 
+/// Surfacing EOF while a switch is in flight but the output hold is not yet engaged would latch
+/// `AtEof` and abort the pending intent, so this parks as a transition wait instead and finalizes
+/// one tick later.
 #[kithara::measure(label = "audio.decode.step")]
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(

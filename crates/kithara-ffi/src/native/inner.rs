@@ -65,6 +65,7 @@ fn default_net_options() -> NetOptions {
     NetOptions::builder().is_insecure(INSECURE).build()
 }
 
+/// A caller-provided salt remains fixed for legacy FFI compatibility.
 fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
     let processor = rule.processor;
     // A caller-provided salt remains fixed for legacy FFI compatibility.

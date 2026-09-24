@@ -41,6 +41,9 @@ impl BeatPredictor {
     /// Predict beats from a full mel spectrogram `[1, T, 128]`.
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.
+    ///
+    /// Sentinel initialization lets every frame be overwritten by some chunk, and chunks are
+    /// processed in reverse order so earlier ones are written last and win in overlapping regions.
     pub(crate) fn predict<S>(
         &self,
         mel: &Tensor,

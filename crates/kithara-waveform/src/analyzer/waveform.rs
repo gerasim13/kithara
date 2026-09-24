@@ -60,6 +60,9 @@ impl WaveformAnalyzer {
     ///
     /// Returns [`PoolError`] when the FFT or window buffers do not fit the
     /// shared region budget.
+    ///
+    /// Divides each band's summed energy by its bin count so a wide band does not outweigh a narrow
+    /// one by sheer bin count, making every band an energy density comparable across bands.
     pub fn new<S>(
         sample_rate: u32,
         params: AnalysisParams,
@@ -152,6 +155,8 @@ impl WaveformAnalyzer {
         result
     }
 
+    /// Selects the windows overlapping `[at, end)`: those where `k*hop < end` and `k*hop + size >
+    /// at`.
     fn push_mono<S>(
         &mut self,
         pools: &PoolRegion<S>,

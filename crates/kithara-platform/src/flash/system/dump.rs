@@ -59,6 +59,8 @@ fn pins_quiescence(entry: &Entry, reg: &Registry) -> bool {
 /// the task waiting), plus every recorded engine primitive. Uses `try_lock` so a
 /// dump from a panic/abort path can never itself hang on a held `core` lock.
 impl fmt::Display for FlashInner {
+    /// Diagnostic dump: marks each parked entry that currently pins the quiescence clock, and
+    /// backtraces only print for a pinning waiter when `KITHARA_FLASH_SYNC_BT` was set.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let now = self.clock.now_nanos();
         let Ok(s) = self.core.try_lock() else {

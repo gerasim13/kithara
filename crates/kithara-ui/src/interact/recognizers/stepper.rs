@@ -39,6 +39,9 @@ impl Stepper {
         self.drag.is_some()
     }
 
+    /// Measures travel against the event position, never the hit, since a host that expresses the
+    /// hit locally puts the two in different coordinate spaces; mixing them would jump by the
+    /// surface's offset from the window corner.
     pub(crate) fn on_input(
         &mut self,
         input: Input<'_>,

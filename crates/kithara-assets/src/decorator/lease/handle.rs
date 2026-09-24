@@ -136,6 +136,7 @@ where
 {
     type Reader = LeaseReader<W::Reader, L>;
 
+    /// Sweeping here would delete partial bytes that are still owned by the successor.
     fn abandon(mut self) {
         self.inner.abandon();
         // WHY: Sweeping here would delete partial bytes still owned by the successor.
@@ -174,6 +175,8 @@ where
         ))
     }
 
+    /// Explicit failure stays observable through `resource_state`; only silent abandonment removes
+    /// a partial resource.
     fn fail(mut self, reason: String) {
         self.inner.fail(reason.clone());
         if let Some(live) = &self.cleanup.live {

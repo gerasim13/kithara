@@ -176,6 +176,10 @@ where
     }
 
     /// Open a ready-to-use asset store.
+    ///
+    /// The pending-resource index, eviction router, and memory-cache invalidation hook are
+    /// consumer-driven siblings of `availability`, wired here without additional observer or
+    /// decorator threading.
     #[must_use]
     pub fn open(config: AssetStoreConfig<S>) -> Self {
         let AssetStoreConfig {
@@ -343,6 +347,9 @@ struct DiskStoreSetup<S> {
 
 /// Assemble the disk decorator chain: evict over the disk store, processing
 /// over that, the memory cache over that, leases on top.
+///
+/// Disk bytes survive LRU displacement, so the disk store needs no invalidation hook, unlike memory
+/// bytes.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_disk_backend<S>(setup: DiskStoreSetup<S>) -> StoreBackendInner<S>
 where

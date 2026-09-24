@@ -223,6 +223,8 @@ impl Core {
         })
     }
 
+    /// No `pinning_async` veto: a paced target exists only while a real I/O op is in flight, where
+    /// the pin must not suppress it (see `try_advance`).
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
         // WHY: No `pinning_async` veto: a paced target exists only while an op is in flight, and there the pin must not suppress it - see
         // `try_advance`.
@@ -256,6 +258,10 @@ impl Core {
     /// it never fires `indef`, which has no deadline. Fires nothing unless
     /// every participant is parked (`active == 0`) and at least one timed
     /// waiter exists.
+    ///
+    /// Quiescence requires both the sync and async participant counts at zero, except async slots
+    /// no thread can currently poll (`pinning_async`), which do not block the advance while a paced
+    /// op is in flight.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
         // WHY: While an op is in flight the advance below is capped at real pace, and a capped advance is what a wall clock does to a
         // mid-poll task anyway.
@@ -406,6 +412,9 @@ impl FlashInner {
     /// slip between reading the clock and inserting. A pending `unpark` (one that
     /// arrived while this thread was running) is consumed here and returns
     /// immediately without parking or touching `active`.
+    ///
+    /// If a wake already landed before parking, returns without touching credit accounting, since
+    /// the thread never entered a wait.
     pub(in crate::flash) fn park_timed_unparkable(
         &self,
         d: crate::flash::Duration,

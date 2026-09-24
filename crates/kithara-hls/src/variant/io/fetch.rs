@@ -16,6 +16,10 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Builds a fetch command whose completion settles the claim under its cancellation epoch.
+    ///
+    /// A concurrent cache commit supplies the authoritative on-disk length. The writer fires
+    /// byte-arrival wakes before terminal settle, since stalled-escape reconciliation and the audio
+    /// worker have no reader progress to notice otherwise.
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,

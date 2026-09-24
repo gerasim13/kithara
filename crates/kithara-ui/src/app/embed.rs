@@ -136,6 +136,9 @@ where
     }
 
     /// Advances one frame's worth of animation.
+    ///
+    /// Advances the clock before ticking the app, so what this frame draws reflects the time this
+    /// frame stands at rather than the previous one.
     pub fn frame(&mut self, elapsed: Duration) {
         // Before the refresh, so what this frame draws is the time this frame
         // stands at rather than the one before it.
@@ -223,6 +226,8 @@ where
         self.settle();
     }
 
+    /// The pointer leaving the window ends every hover beneath it; without this the control it left
+    /// would keep drawing itself lit.
     fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
         let at = self.pointer;
         let scale = self.scale;
@@ -442,6 +447,9 @@ where
     Application: App,
 {
     /// Mounts the screen the cache is showing, in place of the tree standing.
+    ///
+    /// Drops state the newly shown screen does not name, rather than keeping it to answer for a
+    /// state this document does not have.
     fn mount_shown(&mut self) -> Result<(), RunError> {
         // A state belongs to the document that named it. What the screen now
         // shown does not name is gone rather than kept to answer for a state

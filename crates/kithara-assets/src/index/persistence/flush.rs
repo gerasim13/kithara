@@ -123,6 +123,8 @@ pub struct FlushHub {
 impl FlushHub {
     /// Create a hub without a background worker. Mutators flush
     /// synchronously through [`Self::flush_now`].
+    ///
+    /// `cancel` is a caller-owned child token; dropping the hub cancels it to stop the worker.
     #[must_use]
     pub fn new(cancel: CancelToken, policy: FlushPolicy) -> Arc<Self> {
         // NOTE: `cancel` is a caller-owned child token; `Drop` cancels it to stop the worker.
@@ -140,6 +142,9 @@ impl FlushHub {
         })
     }
 
+    /// A durable flush also re-flushes a source the worker last wrote non-durably, since that
+    /// worker's flush may have cleared its dirty flag after persisting a possibly-stale pre-commit
+    /// state.
     pub(super) fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
         let alive: Vec<Arc<dyn Flushable>> = {
             let mut g = self.sources.lock();

@@ -252,6 +252,8 @@ fn intern_binding_parts(
     })
 }
 
+/// A state with no scope map has no identity beyond the name given under its module instance, so
+/// its key is its own id.
 pub(crate) fn intern_binding(
     interner: &mut Interner,
     binding: &BindingRef,

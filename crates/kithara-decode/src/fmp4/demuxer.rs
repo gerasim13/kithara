@@ -289,6 +289,8 @@ where
         }
     }
 
+    /// The seek target backs off by the SBR/PS pre-roll warmup before locating the covering
+    /// segment.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         // WHY: back off to `target - warmup` for SBR/PS pre-roll.
         let seek_target =

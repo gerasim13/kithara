@@ -68,6 +68,9 @@ impl WorkerSlot {
 /// `policy.debounce` (bypassed once `op_count` reaches
 /// `force_every_n_ops`) before draining dirty sources. Exits on cancel
 /// after a final flush, or when the hub has been dropped.
+///
+/// The wait is event-driven with no bounded poll: `signal()` sets pending state and notifies, and
+/// shutdown both cancels and notifies, so a periodic re-check is unnecessary.
 fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &FlushPolicy) {
     loop {
         let mut guard = wait.state.lock();

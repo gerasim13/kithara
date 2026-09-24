@@ -25,6 +25,8 @@ impl<S> VariantPlaylist<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Reuses the master key when a single-rendition master doubles as the media playlist, so both
+    /// point at one cache entry instead of minting a second.
     pub(crate) fn for_variant(
         cache: &PlaylistCache<S>,
         scope: &AssetScope<S>,

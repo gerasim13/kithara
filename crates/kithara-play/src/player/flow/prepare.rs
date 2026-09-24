@@ -17,6 +17,8 @@ impl<S> ConfigPrep<'_, S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Before attachment no deadline can be checked without the real output shape, so buffer depths
+    /// sized to the render quantum and response budget overwrite whatever `audio:` configured.
     fn prepare<B>(&self, config: ResourceConfig<S, B>) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,

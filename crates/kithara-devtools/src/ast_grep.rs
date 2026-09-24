@@ -143,6 +143,9 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
     }
 }
 
+/// Runs a second pass for hard-correctness rules that must also see tests: the main scan applies
+/// `[lint_exclude].paths` (production-only), so each `scan_all` rule is re-run standalone with no
+/// exclude globs, replacing its prod-only group.
 fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let project = &ctx.config;
 

@@ -236,6 +236,8 @@ fn merge(reports: Vec<Report>) -> BTreeMap<String, Merged> {
     merged
 }
 
+/// The filter is stated rather than dropped: it is the reason this sweep can be green, so what it
+/// removed has to stay visible.
 fn verdict(reports: &BTreeMap<String, Merged>, root: &Path, deny: bool) -> Result<()> {
     let mut broken = Vec::new();
     let mut orphaned = Vec::new();

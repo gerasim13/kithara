@@ -30,6 +30,8 @@ use crate::pipeline::{
 pub(crate) struct Decoding;
 
 impl Track<Decoding> {
+    /// Reading into a not-ready byte parks in `WaitingForSource` rather than re-running the full
+    /// decode each tick, since the wait state re-checks the read-ahead window cheaply.
     pub(crate) fn step<T: StreamType>(
         self,
         src: &mut StreamAudioSource<T>,

@@ -142,6 +142,9 @@ where
 {
     type Reader = ProcessedReader<W::Reader, S>;
 
+    /// Disarming without failing avoids reaching the successor's readers: the readiness gate is
+    /// shared with this generation, and the cancel that triggered this is tearing only this
+    /// generation down.
     fn abandon(mut self) {
         self.inner.abandon();
         // Disarm without failing: the readiness gate is shared with readers of

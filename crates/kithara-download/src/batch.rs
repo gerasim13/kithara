@@ -405,6 +405,9 @@ struct DeliveryContext<'a> {
 
 /// Route a fetch result to its target and publish the matching
 /// `DownloaderEvent` on `bus` (if any).
+///
+/// Collects the body on the downloader's possibly-separate worker so only `Send` bytes cross back
+/// to the caller; the raw HTTP body stream is `!Send` on wasm.
 #[kithara::probe(request_id)]
 async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     let DeliveryContext {

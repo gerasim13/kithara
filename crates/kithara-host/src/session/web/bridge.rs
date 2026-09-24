@@ -29,6 +29,9 @@ pub(super) fn reset_bridge_state() {
     });
 }
 
+/// The one tick point that feeds the web stream's clock timestamps and notices a terminated
+/// worklet, since Firewheel no longer owns the backend and nothing else polls the stream on the
+/// session's behalf.
 pub(crate) fn tick_and_poll_remote<S>(
     state: &WebSessionState<S>,
     rx: &mpsc::Receiver<HostCmdMsg<S>>,

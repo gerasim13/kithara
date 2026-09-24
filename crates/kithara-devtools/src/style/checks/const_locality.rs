@@ -190,6 +190,9 @@ fn crate_key_for(workspace_root: &Path, file: &Path) -> String {
     String::new()
 }
 
+/// A const is only "local to one fn" when every reference to its name is an expression-position use
+/// inside a single fn/method body in the const's own module; any other reference makes the locality
+/// claim unprovable, so analysis stays conservative and skips it.
 fn analyze_file(rel: &str, file: &syn::File, external: &HashSet<&str>) -> Vec<Finding> {
     let mut consts: Vec<ConstSite> = Vec::new();
     collect_consts(&file.items, 0, &mut Vec::new(), &mut consts);

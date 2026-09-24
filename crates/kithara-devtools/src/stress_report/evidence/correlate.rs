@@ -346,6 +346,9 @@ fn attempt_id(case: &CaseTiming, run_id: Option<&str>) -> String {
     )
 }
 
+/// The panic header arrives twice, once in nextest's `message` attribute and once repeated in the
+/// body, so the first body line after it is a duplicate, not the payload; skipping it keeps the
+/// assertion's own message and values.
 fn failure_signature(
     case: &CaseTiming,
     evidence: &StressEvidenceConfig,

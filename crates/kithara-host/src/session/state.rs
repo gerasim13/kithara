@@ -390,6 +390,8 @@ fn ensure_stream_ready<T, S>(
     Ok(())
 }
 
+/// Converts the fade through `Duration` rather than casting directly, since Firewheel takes the
+/// fade in seconds while the frame count is the session's own unit.
 fn create_firewheel_context<T, S>(
     state: &mut SessionState<T, S>,
     sample_rate: u32,

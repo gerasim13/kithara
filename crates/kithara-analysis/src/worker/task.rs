@@ -331,6 +331,8 @@ where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    /// The source cannot deliver the position the schedule planned against, so it bounds where the
+    /// run ends however long it claims to be.
     fn reschedule(&mut self, window: Option<u64>) -> TickResult {
         self.retire();
         let Some(at) = self.choose(window) else {
@@ -376,6 +378,8 @@ where
         TickResult::Progress
     }
 
+    /// Retirement follows what the run itself decoded, not what the pass covered while it ran: a
+    /// producer folds ranges from anywhere and would otherwise keep the run alive forever.
     fn retire(&mut self) {
         let Some(run) = self.run.take() else {
             return;
@@ -388,6 +392,9 @@ where
         }
     }
 
+    /// Covered audio ends a run only once it reaches its own gap, since ending earlier would retire
+    /// the gap unread. Overshooting the target with nothing gained means this source cannot reach
+    /// the schedule's gap.
     fn run_over(&self, run_frames: Option<u64>) -> bool {
         let Some(run) = &self.run else {
             return true;
@@ -435,6 +442,8 @@ where
         self.decode(builder, detector)
     }
 
+    /// The decode path refines the duration upward as it goes, so re-reading it on each tick lets a
+    /// later, more accurate value replace the earlier estimate.
     pub(crate) fn tick(
         &mut self,
         builder: &AnalyzerBuilder<B, S>,

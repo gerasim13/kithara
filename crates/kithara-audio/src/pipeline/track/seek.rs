@@ -160,6 +160,8 @@ impl Track<ApplyingSeek> {
 pub(crate) struct AwaitingResume;
 
 impl Track<AwaitingResume> {
+    /// Resuming restores the canonical `ResumeState` so the decode loop's post-seek trim can see
+    /// it, and treats `Eof` like `Ready` since only the decode path finalizes `AtEof`.
     pub(crate) fn step<T: StreamType>(
         self,
         src: &mut StreamAudioSource<T>,

@@ -48,6 +48,9 @@ where
 
 /// Rewind `source`, read only the startup prefix needed for metadata that
 /// must be available before decode startup, then rewind again for the demuxer.
+///
+/// A Xing/Info frame count is authoritative; without one, duration comes from a CBR stream's byte
+/// length. `read_cbr_duration` refuses VBR streams. See `CONTEXT.md`, "MP3 duration".
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 pub(crate) fn scoped_startup_probe<S>(
     source: &mut dyn DecoderInput,

@@ -48,6 +48,9 @@ fn walk(dir: &Path, declared: &mut HashSet<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// A `#[path]` resolves against the directory of the file carrying it, not against the directory
+/// the module would own. A crate or module root owns its own directory; any other file owns the
+/// directory named after it.
 fn collect(file: &Path, text: &str, declared: &mut HashSet<PathBuf>) {
     let Some(dir) = file.parent() else { return };
     for line in text.lines() {

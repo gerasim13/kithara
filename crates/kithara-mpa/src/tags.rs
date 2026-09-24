@@ -63,6 +63,7 @@ pub(crate) fn try_read_info_tag(buf: &[u8], header: &FrameHeader) -> Option<Xing
     try_read_info_tag_inner(buf, header).ok().flatten()
 }
 
+/// The stored CRC is not itself part of the checksum it validates.
 fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<XingInfoTag>> {
     /// The full LAME extension size.
     const LAME_EXT_LEN: u64 = 36;

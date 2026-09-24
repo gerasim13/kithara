@@ -40,6 +40,8 @@ pub(super) fn request_headers(
     pairs
 }
 
+/// Rejects a response whose `Content-Encoding` survived, since that names a coding the host's HTTP
+/// client left undecoded.
 pub(super) fn response_headers(
     pairs: Vec<(String, String)>,
     status: u16,

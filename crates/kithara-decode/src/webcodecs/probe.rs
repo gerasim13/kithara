@@ -103,6 +103,8 @@ pub(crate) fn supported(codec: AudioCodec) -> bool {
         .is_some_and(|support| support.supports(codec))
 }
 
+/// The promise resolves to an `AudioDecoderSupport` dictionary, a plain JS object with no
+/// prototype, so `instanceof`-based `dyn_into` always fails; the value is cast unchecked instead.
 async fn probe(codec: AudioCodec) -> bool {
     let Some(codec_string) = codec_string(codec) else {
         return false;

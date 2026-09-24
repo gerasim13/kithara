@@ -114,6 +114,9 @@ where
 ///
 /// Same ambient propagation and quiescence accounting as [`spawn_blocking`],
 /// but queued onto the captured runtime handle.
+///
+/// Reserves the `active` slot before the pool queues the closure, covering the queue wait; the
+/// slot's `Drop` returns the reservation if the pool never runs it.
 pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,

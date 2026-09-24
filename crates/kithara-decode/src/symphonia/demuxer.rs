@@ -264,6 +264,9 @@ impl Demuxer for SymphoniaDemuxer {
         Ok(())
     }
 
+    /// Parks before the target by the larger of priming warmup or one codec packet, so the trim
+    /// guard lands on a packet boundary; the resulting seek is the authoritative resume point and
+    /// clears any pending strand recovery.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
         // WHY: park before target by max(priming warmup, one codec packet) so the trim
@@ -325,6 +328,9 @@ fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i
 }
 
 impl SymphoniaDemuxer {
+    /// A read interrupted at a not-ready boundary can strand bytes `MediaSourceStream` already
+    /// consumed into a packet that was then discarded, advancing its read position without emitting
+    /// the packet.
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
     fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
@@ -544,6 +550,8 @@ const fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
     )
 }
 
+/// The typed payload behind `Interrupted` is lost by the time it reaches here, so only its variant
+/// name can be logged.
 fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     match err {
         SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => DecodeError::SeekOutOfRange {

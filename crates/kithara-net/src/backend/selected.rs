@@ -24,6 +24,8 @@ pub(crate) use self::wasm::{
 };
 
 impl From<BackendError> for NetError {
+    /// Non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream
+    /// close can resume; a fatal `Decode` here is reserved for a local sink write failure.
     fn from(e: BackendError) -> Self {
         if e.is_timeout() {
             return Self::Timeout;

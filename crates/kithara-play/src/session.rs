@@ -366,6 +366,8 @@ mod handle {
             Ok(())
         }
 
+        /// An instance may prepare resources before Host insertion, so the pending policy defaults
+        /// to the RT-safe production path; explicit offline dispatchers override it once bound.
         #[must_use]
         pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             // An instance may prepare resources before Host insertion. The

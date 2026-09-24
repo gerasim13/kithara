@@ -92,6 +92,8 @@ fn suppress_macos_system_logs() {
 #[cfg(not(target_os = "macos"))]
 fn suppress_macos_system_logs() {}
 
+/// Early startup failures are printed with `eprintln!`, not `tracing::error!` or a returned error:
+/// tracing is not yet configured, and `Debug` formatting would drop the readable message.
 fn main() -> AppResult {
     suppress_macos_system_logs();
 

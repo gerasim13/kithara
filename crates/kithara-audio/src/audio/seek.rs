@@ -43,6 +43,8 @@ impl SeekHandle {
 }
 
 impl SeekBegin for SeekHandle {
+    /// The gate is rearmed before the epoch is published, since the worker may complete preload
+    /// immediately.
     fn begin(&self, position: Duration) -> SeekOutcome {
         if let Some(prepare) = &self.seek_prepare {
             prepare.prepare();

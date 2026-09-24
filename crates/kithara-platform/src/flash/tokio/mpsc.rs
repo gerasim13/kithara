@@ -168,6 +168,8 @@ pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     )
 }
 
+/// Takes the receiver's real waker under the same lock it parks under (a no-op on the flash path),
+/// so the push and the wake stay atomic with respect to a concurrent `recv`.
 pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), SendError<T>> {
     let mut inner = shared.inner.lock();
     if !inner.receiver_alive {
@@ -192,6 +194,9 @@ fn take_one_space_waker<T>(backend: Backend, inner: &mut Inner<T>) -> Vec<Waker>
     }
 }
 
+/// Wakes one sender per freed slot, not only on the full-to-not-full edge — draining several slots
+/// first would strand the rest and deadlock. The waker is registered under lock to avoid a missed
+/// wakeup.
 fn poll_recv_inner<T>(
     shared: &Shared<T>,
     pending: &mut Option<Parked>,
@@ -246,6 +251,7 @@ fn poll_recv_inner<T>(
     Poll::Pending
 }
 
+/// Wakes one parked sender per freed slot, mirroring `poll_recv_inner`.
 fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
     let mut inner = shared.inner.lock();
     let bounded = shared.capacity.is_some();
@@ -268,6 +274,7 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
     }
 }
 
+/// Wakes every sender blocked on capacity so each observes the receiver's closed state.
 fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     let mut inner = shared.inner.lock();
     inner.receiver_alive = false;
@@ -284,6 +291,7 @@ fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     }
 }
 
+/// Wakes the receiver so its next poll observes the closed channel as `None`.
 pub(super) fn drop_sender<T>(shared: &Shared<T>) {
     let mut inner = shared.inner.lock();
     inner.senders -= 1;
@@ -358,11 +366,15 @@ pub struct Send<'a, T> {
 
 // WHY: The queued value is plain data we move out via `take` - never structurally pinned - so the future is `Unpin` for any payload
 // (lets `poll` use `get_mut`).
+/// The queued value is moved out via `take`, never structurally pinned, so this `Send` future is
+/// `Unpin` for any payload — letting `poll` use `get_mut`.
 impl<T> Unpin for Send<'_, T> {}
 
 impl<T> Future for Send<'_, T> {
     type Output = Result<(), SendError<T>>;
 
+    /// Registers the waiter while holding the queue lock, so a concurrent `recv` that frees a slot
+    /// under the same lock cannot slip its wake between this capacity check and the park.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         // WHY: Engine wait resolves only when granted; a real wait always re-checks capacity/alive below (a spurious wake re-parks). Clear
@@ -415,6 +427,8 @@ impl<T> Future for Send<'_, T> {
 }
 
 impl<T> Drop for Send<'_, T> {
+    /// Removes only its own waker on drop, so a freed slot cannot wake an already-dropped sender
+    /// and steal the wakeup from a still-blocked peer.
     fn drop(&mut self) {
         match self.pending.take() {
             Some(Parked::Real(waker)) => {

@@ -129,6 +129,8 @@ impl DedicatedSlot {
 }
 
 impl Drop for DedicatedSlot {
+    /// An unconsumed reservation returns the raw `active` count directly on drop, since no thread
+    /// ever claimed the slot as credit; this release may itself be the quiescent edge.
     fn drop(&mut self) {
         // WHY: Unconsumed reservation: no thread ever claimed the slot as its credit, so return the raw `active` reservation (and the named
         // count) directly - the release may itself be the quiescent edge.
@@ -265,6 +267,9 @@ impl WaitGuard<'_> {
 }
 
 impl Drop for WaitGuard<'_> {
+    /// Asserting here during a mid-unwind drop (a panic between mint and settle) would double-panic
+    /// into an abort and mask the root panic, so the guard only debug-asserts that unwinding is in
+    /// progress.
     fn drop(&mut self) {
         // WHY: Mid-unwind the guard legitimately drops unconsumed (a panic between mint and settle - e.g. inside `WakeBatch::fire` or
         // `Token::wait`); asserting there would double-panic into an abort and mask the root panic.

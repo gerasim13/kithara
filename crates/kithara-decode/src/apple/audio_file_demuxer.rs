@@ -125,6 +125,9 @@ impl AppleAudioFileDemuxer {
         })
     }
 
+    /// Streaming opens skip the packet-count scan MP3 and FLAC would need, taking duration and
+    /// buffer size from header metadata instead; FLAC also needs the real file size for correct EOF
+    /// and seek behavior.
     fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
@@ -349,6 +352,9 @@ impl Demuxer for AppleAudioFileDemuxer {
         Ok(())
     }
 
+    /// Apple's own packet-to-byte mapping is preferred so `landed_byte` matches the offset its
+    /// packet read seeks to; a size-less open rejects it, so the streamed MP3 path falls back to a
+    /// linear estimate.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
         let spec = self.audio_spec()?;
@@ -408,6 +414,9 @@ impl Demuxer for AppleAudioFileDemuxer {
 }
 
 impl AppleAudioFileDemuxer {
+    /// Data not ready surfaces as `Pending`, never `Err`, since an `Err` is classified as
+    /// `Interrupted` upstream and retried hot instead of parking the worker; the packet cursor is
+    /// left unadvanced.
     fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         if self
             .total_packets

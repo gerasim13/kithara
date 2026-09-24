@@ -260,6 +260,10 @@ pub(super) mod lifecycle {
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
+    ///
+    /// Reserves a successor before stopping, since backends may defer processor drop after
+    /// `stop_stream` and teardown must not depend on the RT `stream_stopped` callback reaching this
+    /// handle.
     pub(in crate::session) fn shutdown_if_idle<T, S>(
         state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {

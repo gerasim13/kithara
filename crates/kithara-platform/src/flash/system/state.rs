@@ -57,6 +57,8 @@ impl AtomicTaskState {
         Self::unpack(self.0.swap(new as u8, Ordering::AcqRel))
     }
 
+    /// Only `TaskState` discriminants are ever stored in the cell backing this value; any other
+    /// byte pattern is unreachable.
     fn unpack(v: u8) -> TaskState {
         match v {
             0 => TaskState::Parked,
