@@ -5616,6 +5616,7 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",

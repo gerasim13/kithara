@@ -28,6 +28,7 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, derive_more::Debug, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -36,19 +37,19 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// Max concurrent background prefetch loads. Default: 3.
-    #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
+    #[config(value, builder(default = DEFAULT_MAX_CONCURRENT_LOADS))]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    #[patch(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip))]
     #[debug(skip)]
     pub cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
-    #[patch(skip)]
+    #[config(skip = "injected asset store", patch(skip))]
     #[debug(skip)]
     pub store: Option<AssetStore<S>>,
 
@@ -56,12 +57,12 @@ where
     /// takes the runtime current where the queue is built; an embedding
     /// that drives the queue from threads without one (FFI hosts) passes
     /// its own.
-    #[patch(skip)]
+    #[config(skip = "injected runtime", patch(skip))]
     #[debug(skip)]
     pub runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
-    #[patch(skip)]
+    #[config(skip = "owned player", patch(skip))]
     #[debug(skip)]
     pub player: PlayerImpl<S>,
 
@@ -71,30 +72,29 @@ where
     /// the value already reaches 10 setter and 14 read call sites as a bare
     /// `f32`, and converting the type would only churn those for a
     /// formatting preference.
-    #[builder(default = DEFAULT_PREFETCH_DURATION)]
+    #[config(value, builder(default = DEFAULT_PREFETCH_DURATION))]
     pub prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
-    #[builder(default = false)]
-    #[patch(skip)]
+    #[config(value, builder(default = false), patch(skip))]
     pub should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
-    #[builder(default = 100)]
+    #[config(value, builder(default = 100))]
     pub max_history_size: usize,
 
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub playback_order: PlaybackOrder,
 
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub action_at_item_end: ActionAtItemEnd,
 
-    #[builder(default)]
+    #[config(nested, builder(default))]
     pub crossfade_settings: CrossfadeSettings,
 }
 
