@@ -1,7 +1,6 @@
 use delegate::delegate;
 use kithara_events::EventBus;
 use kithara_warp::StretchControls;
-use tracing::{debug, warn};
 
 use super::PlayerConfig;
 use crate::{
@@ -75,11 +74,14 @@ impl<S> PlayerConfig<S> {
         slot: Option<SlotId>,
         set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
         bus: &EventBus,
-    ) {
-        self.muted.store(muted);
+    ) -> Result<(), PlayError> {
         let effective = if muted { 0.0 } else { self.volume() };
-        apply_effective_volume(effective, slot, set_slot_volume);
+        if let Some(slot) = slot {
+            set_slot_volume(slot, effective)?;
+        }
+        self.muted.store(muted);
         bus.publish(PlayerEvent::MuteChanged { muted });
+        Ok(())
     }
 
     pub(crate) fn set_prefetch_duration(
@@ -102,28 +104,16 @@ impl<S> PlayerConfig<S> {
         slot: Option<SlotId>,
         set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
         bus: &EventBus,
-    ) {
+    ) -> Result<(), PlayError> {
         let clamped = volume.clamp(0.0, 1.0);
+        if !self.is_muted()
+            && let Some(slot) = slot
+        {
+            set_slot_volume(slot, clamped)?;
+        }
         self.volume.store(clamped);
-        if !self.is_muted() {
-            apply_effective_volume(clamped, slot, set_slot_volume);
-        }
         bus.publish(PlayerEvent::VolumeChanged { volume: clamped });
-    }
-}
-
-fn apply_effective_volume(
-    volume: f32,
-    slot: Option<SlotId>,
-    set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
-) {
-    if let Some(slot_id) = slot {
-        debug!(volume, ?slot_id, "applying effective volume to slot");
-        if let Err(error) = set_slot_volume(slot_id, volume) {
-            warn!(?error, volume, "failed to set slot volume");
-        }
-    } else {
-        debug!(volume, "apply_effective_volume: no slot allocated yet");
+        Ok(())
     }
 }
 
@@ -171,5 +161,36 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(config.values().crossfade_duration, 2.0);
+    }
+
+    #[kithara::test]
+    fn rejected_slot_volume_leaves_live_values_unchanged() {
+        let config = config();
+        let slot = SlotId::new(1);
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe::<PlayerEvent>();
+        let rejected = |_: SlotId, _: f32| Err(PlayError::SlotChannelFull { slot });
+
+        assert!(matches!(
+            config.set_volume(0.4, Some(slot), rejected, &bus),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert_eq!(config.values().volume, 1.0);
+
+        assert!(matches!(
+            config.set_muted(true, Some(slot), rejected, &bus),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert!(!config.values().muted);
+        assert!(events.try_recv().is_err());
+
+        config
+            .set_volume(0.4, None, rejected, &bus)
+            .expect("an idle player retains its next-slot volume");
+        assert_eq!(config.values().volume, 0.4);
+        assert!(matches!(
+            events.try_recv().map(|event| event.event),
+            Ok(PlayerEvent::VolumeChanged { volume }) if volume == 0.4
+        ));
     }
 }

@@ -118,12 +118,14 @@ impl<S> PlayerRuntime<S> {
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
         let slot = self.slot();
-        self.core.config.set_muted(
+        if let Err(error) = self.core.config.set_muted(
             muted,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
-        );
+        ) {
+            warn!(?error, muted, "mute update rejected");
+        }
     }
 
     /// Set prefetch lead time in seconds.
@@ -176,12 +178,14 @@ impl<S> PlayerRuntime<S> {
     /// Set volume, clamped to `0.0..=1.0`.
     pub fn set_volume(&self, volume: f32) {
         let slot = self.slot();
-        self.core.config.set_volume(
+        if let Err(error) = self.core.config.set_volume(
             volume,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
-        );
+        ) {
+            warn!(?error, volume, "volume update rejected");
+        }
     }
 
     delegate::delegate! {
