@@ -12,8 +12,9 @@ use kithara_test_utils::kithara;
 
 use super::rebuild::{
     Consts, RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
-    route_signal_source_with_finite_incoming, route_signal_source_with_gapless,
-    route_signal_source_with_gapless_eof, route_signal_source_with_gaps,
+    route_signal_source_with_finite_incoming, route_signal_source_with_finite_sides,
+    route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
+    route_signal_source_with_gaps,
 };
 use crate::{
     DecoderChangeCause, DecoderEvent,
@@ -112,6 +113,20 @@ async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: Varia
         yield_now().await;
         fixture.source.flush_deferred();
         if fixture.source.decode.incoming_is_priming(transition) {
+            return;
+        }
+        hang_tick!();
+    }
+}
+
+/// Settle on whichever way the transition resolved, so the oracle reads the verdict and never a
+/// tick count. A switch that neither promotes nor aborts is itself the failure the watchdog names.
+#[kithara::hang_watchdog]
+async fn wait_for_transition_settled(fixture: &mut RouteFixture) {
+    loop {
+        yield_now().await;
+        fixture.source.flush_deferred();
+        if fixture.control.promote_calls() != 0 || fixture.control.aborted_transition().is_some() {
             return;
         }
         hang_tick!();
@@ -678,6 +693,69 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(fixture.control.aborted_transition(), None);
+    assert_eq!(
+        fixture
+            .source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index),
+        Some(1)
+    );
+}
+
+/// A variant switch outlives the gap between the two sides reporting that they ran out.
+///
+/// The plan pins the incoming landing at the decode head of the moment it was made, and the head
+/// keeps moving while the reader is fetched. Both variants of one track end on the same frame, so
+/// an incoming let in late stages right up to the frontier and reports its end first; the outgoing
+/// reports its own only on its next decode. Abandoning the switch inside that window discards a
+/// click the listener already made.
+#[kithara::test(tokio)]
+async fn an_incoming_finishing_on_the_frontier_outlives_the_exhaustion_gap(route_pcm: RoutePcm) {
+    const TOTAL_CHUNKS: usize = 8;
+    const LANDING_CHUNKS: usize = 4;
+
+    let mut fixture = route_signal_source_with_finite_sides(
+        &route_pcm,
+        Consts::SAMPLE_RATE,
+        TOTAL_CHUNKS,
+        TOTAL_CHUNKS,
+    )
+    .await;
+    for _ in 0..LANDING_CHUNKS {
+        let TrackStep::Produced(_) = fixture.source.step_track() else {
+            panic!("the outgoing must publish up to the landing the plan pins");
+        };
+    }
+    let landing =
+        u64::try_from(LANDING_CHUNKS * Consts::ROUTE_CHUNK_FRAMES).expect("landing fits u64");
+    assert_eq!(
+        fixture.source.resume.decode_head(0),
+        Some((landing, Consts::SAMPLE_RATE))
+    );
+
+    fixture.control.set_exact_plan(incoming_plan_at(landing));
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+    fixture.source.flush_deferred();
+
+    for _ in LANDING_CHUNKS..TOTAL_CHUNKS {
+        let TrackStep::Produced(_) = fixture.source.step_track() else {
+            panic!("the outgoing must reach its last frame before the incoming is let in");
+        };
+    }
+    let frontier =
+        u64::try_from(TOTAL_CHUNKS * Consts::ROUTE_CHUNK_FRAMES).expect("fixture media fits u64");
+    assert_eq!(
+        fixture.source.resume.decode_head(0),
+        Some((frontier, Consts::SAMPLE_RATE))
+    );
+
+    fixture.control.set_exact_reader_ready();
+    wait_for_transition_settled(&mut fixture).await;
+
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(
         fixture
             .source
