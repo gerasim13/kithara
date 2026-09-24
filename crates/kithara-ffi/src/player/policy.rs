@@ -18,7 +18,10 @@ impl AudioPlayer {
     pub fn return_to_previous_item(&self) -> Result<(), FfiError> {
         self.inner.return_to_previous_item()
     }
+}
 
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
+impl AudioPlayer {
     /// Set the queue traversal order.
     ///
     /// # Errors
@@ -34,10 +37,7 @@ impl AudioPlayer {
     pub fn set_action_at_item_end(&self, action: FfiActionAtItemEnd) -> Result<(), FfiError> {
         self.inner.set_action_at_item_end(action)
     }
-}
 
-#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
-impl AudioPlayer {
     /// Set the profile captured by future transitions.
     ///
     /// # Errors

@@ -630,6 +630,9 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
+    /**
+     * Current requested action when an item ends.
+     */
     func actionAtItemEnd()  -> FfiActionAtItemEnd
 
     /**
@@ -693,6 +696,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws
 
+    /**
+     * Current requested mute state.
+     */
     func isMuted()  -> Bool
 
     func itemCount()  -> UInt32
@@ -703,6 +709,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
     func play()
 
+    /**
+     * Current requested queue traversal order.
+     */
     func playbackOrder()  -> FfiPlaybackOrder
 
     /**
@@ -781,6 +790,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func setEqLayout(layout: [FfiEqBandConfig]) throws
 
+    /**
+     * Submit a mute change to the owning player.
+     */
     func setMuted(muted: Bool)
 
     func setObserver(observer: PlayerObserver)
@@ -797,6 +809,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func setRepeatMode(mode: FfiRepeatMode) throws
 
+    /**
+     * Submit a volume change to the owning player.
+     */
     func setVolume(volume: Float)
 
     /**
@@ -854,6 +869,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
 
+    /**
+     * Current requested output volume.
+     */
     func volume()  -> Float
 
     /**
@@ -1024,6 +1042,9 @@ public convenience init(config: FfiPlayerConfig)throws  {
 
 
 
+    /**
+     * Current requested action when an item ends.
+     */
 open func actionAtItemEnd() -> FfiActionAtItemEnd  {
     return try!  FfiConverterTypeFfiActionAtItemEnd_lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_action_at_item_end(
@@ -1137,6 +1158,9 @@ open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try ru
 }
 }
 
+    /**
+     * Current requested mute state.
+     */
 open func isMuted() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_is_muted(
@@ -1175,6 +1199,9 @@ open func play()  {try! rustCall() {
 }
 }
 
+    /**
+     * Current requested queue traversal order.
+     */
 open func playbackOrder() -> FfiPlaybackOrder  {
     return try!  FfiConverterTypeFfiPlaybackOrder_lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_playback_order(
@@ -1327,6 +1354,9 @@ open func setEqLayout(layout: [FfiEqBandConfig])throws   {try rustCallWithError(
 }
 }
 
+    /**
+     * Submit a mute change to the owning player.
+     */
 open func setMuted(muted: Bool)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_muted(
             self.uniffiCloneHandle(),
@@ -1367,6 +1397,9 @@ open func setRepeatMode(mode: FfiRepeatMode)throws   {try rustCallWithError(FfiC
 }
 }
 
+    /**
+     * Submit a volume change to the owning player.
+     */
 open func setVolume(volume: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
             self.uniffiCloneHandle(),
@@ -1466,6 +1499,9 @@ open func updatePeakBitrate(wifiBps: Double, cellularBps: Double)  {try! rustCal
 }
 }
 
+    /**
+     * Current requested output volume.
+     */
 open func volume() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_volume(
@@ -10069,7 +10105,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 13245) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 20498) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
@@ -10093,7 +10129,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 21561) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 12244) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 52406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_item_count() != 38778) {
@@ -10108,7 +10144,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_play() != 3044) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 46526) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 42500) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_playing_rate() != 25490) {
@@ -10144,7 +10180,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 25575) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 55090) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
@@ -10156,7 +10192,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 57111) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
@@ -10177,7 +10213,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_update_peak_bitrate() != 31643) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 57713) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 33255) {

@@ -271,7 +271,7 @@ pub enum FfiRepeatMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiPlaybackOrder {
     Sequential,
     Shuffle,
@@ -279,7 +279,7 @@ pub enum FfiPlaybackOrder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiActionAtItemEnd {
     Advance,
     Pause,

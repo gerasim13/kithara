@@ -1,4 +1,4 @@
-import api, { AudioPlayer as UniAudioPlayer, AudioPlayerItem, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost, tickHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, AudioPlayerItem, defaultHostConfig, FfiActionAtItemEnd, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, FfiPlaybackOrder, initializeHost, tickHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
@@ -119,6 +119,35 @@ async function main() {
   }
   generatedPlayer.setMuted(false);
   await liveValues;
+  const queuePolicyApplied = new Promise<void>((resolve, reject) => {
+    const seen: string[] = [];
+    const timeout = setTimeout(() => reject(new Error(`worker did not apply queue policy: ${seen.join(",")}`)), 10_000);
+    const observe = ({ data }: MessageEvent) => {
+      if (data.kind === "PlaybackOrderChanged") seen.push(`order:${data.order}`);
+      if (data.kind === "ActionAtItemEndChanged") seen.push(`action:${data.action}`);
+      if (seen.length !== 2) return;
+      events.removeEventListener("message", observe);
+      clearTimeout(timeout);
+      if (seen.join(",") === "order:Shuffle,action:Pause") resolve();
+      else reject(new Error(`worker applied wrong queue policy: ${seen.join(",")}`));
+    };
+    events.addEventListener("message", observe);
+  });
+  generatedPlayer.setPlaybackOrder(FfiPlaybackOrder.Shuffle);
+  generatedPlayer.setActionAtItemEnd(FfiActionAtItemEnd.Pause);
+  if (generatedPlayer.playbackOrder() !== FfiPlaybackOrder.Shuffle || generatedPlayer.actionAtItemEnd() !== FfiActionAtItemEnd.Pause) {
+    throw new Error("generated queue policy readback did not retain accepted values");
+  }
+  let invalidQueuePolicy = false;
+  try {
+    generatedPlayer.setPlaybackOrder(FfiPlaybackOrder.Unknown);
+  } catch (error) {
+    invalidQueuePolicy = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidQueuePolicy || generatedPlayer.playbackOrder() !== FfiPlaybackOrder.Shuffle) {
+    throw new Error("invalid queue policy changed the generated readback");
+  }
+  await queuePolicyApplied;
   const url = `${location.origin}/tone.wav`;
   const loadedTrack = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("generated player did not load the HTTP track")), 10_000);

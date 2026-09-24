@@ -41,13 +41,6 @@ impl AudioPlayer {
         }))
     }
 
-    pub fn playback_order(&self) -> FfiPlaybackOrder {
-        self.inner.playback_order()
-    }
-    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
-        self.inner.action_at_item_end()
-    }
-
     /// Currently playing item (if any). Resolves the queue's current
     /// track id against the player's Swift-owned item registry so
     /// callers get back the same `AudioPlayerItem` instance they passed
@@ -260,6 +253,16 @@ impl AudioPlayer {
 
 #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayer {
+    /// Current requested queue traversal order.
+    pub fn playback_order(&self) -> FfiPlaybackOrder {
+        self.inner.playback_order()
+    }
+
+    /// Current requested action when an item ends.
+    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        self.inner.action_at_item_end()
+    }
+
     /// Current requested mute state.
     pub fn is_muted(&self) -> bool {
         self.inner.is_muted()
