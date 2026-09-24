@@ -30,6 +30,10 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
+    # The only way into `host:provision`. It writes to the machine every lane
+    # runs on, so it takes the default branch alone: a review ref carries code
+    # no one has reviewed yet.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_PROVISION == "1"
     # Asking for a platform is only possible on a run that carries variables,
     # and a push carries none. This is that door: "Run pipeline" with
     # `KITHARA_PLATFORMS` set. It is deliberately narrow — without the variable
@@ -97,6 +101,10 @@ dispatch:platforms:
     # quarantine sha identifies the verifier run, so it answers first.
     - if: $KITHARA_QUARANTINE_SHA
       when: never
+    # A provisioning run rebuilds the Linux image, and a platform matrix beside
+    # it would move the same tag underneath the roll-out.
+    - if: $KITHARA_PROVISION == "1"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
 
@@ -108,6 +116,18 @@ dispatch:main:
     KITHARA_PIPELINE_KIND: main
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Its own kind rather than a flag on `main`: a variable the run was started
+# with does not reach the child, and a kind no lane rule names leaves the host
+# to the roll-out alone.
+dispatch:provision:
+  extends: .dispatch
+  interruptible: false
+  variables:
+    KITHARA_CACHE_TRUST: trusted
+    KITHARA_PIPELINE_KIND: provision
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_PROVISION == "1"
 
 dispatch:quarantine:
   extends: .dispatch

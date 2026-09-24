@@ -45,9 +45,10 @@ is present and reloads its agents; a Linux host builds the images its profile
 asks for and installs its units. Every step is idempotent — an image that is
 already there is only retagged — so a run costs seconds when nothing moved.
 
-Neither pipeline runs it on a push. On GitLab it is `host:provision`, which
-takes `KITHARA_PROVISION=1` on a `main`, `nightly` or `release` run; on GitHub
-it is the `Host` workflow, started by hand. Provisioning writes to the machine
+Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
+only by a pipeline started on the default branch with `KITHARA_PROVISION=1`;
+that run carries nothing else. On GitHub it is the `Host` workflow, started by
+hand. Provisioning writes to the machine
 every lane depends on, and a merge-request or quarantine ref carries code no
 one has reviewed yet.
 
