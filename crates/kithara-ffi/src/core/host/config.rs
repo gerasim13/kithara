@@ -1,10 +1,13 @@
 use super::FfiHostConfig;
-use crate::{FfiLimiterConfig, types::FfiError};
+use crate::{FfiLimiterConfig, pools::FfiPools, types::FfiError};
 
 impl Default for FfiHostConfig {
     fn default() -> Self {
         Self {
-            sample_rate_hint: 44_100,
+            sample_rate_hint: kithara::host::HostConfig::<FfiPools>::builder()
+                .build()
+                .sample_rate()
+                .get(),
             output_block_frames: None,
             limiter: FfiLimiterConfig::default(),
         }
@@ -54,7 +57,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::pools::FfiPools;
 
     #[kithara::test]
     fn rejects_zero_host_dimensions_without_initializing_resources() {
