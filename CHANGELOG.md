@@ -92,6 +92,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **ui**: Keep the workspace hack for desktop builds only
+- **android**: Keep the desktop UI stack out of the workspace-hack base
 - **file**: Stop reading the whole track to index it, and own the walk in kithara-mp4 ([#414](https://github.com/zvuk/kithara/pull/414))
 - Settle two CI flakes at their causes ([#415](https://github.com/zvuk/kithara/pull/415))
 - **audio**: Preserve consumer readiness notifications ([#418](https://github.com/zvuk/kithara/pull/418))
@@ -160,6 +162,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **stream**: Cap resampled-path position writes at the duration budget ([#96](https://github.com/zvuk/kithara/pull/96))
 - **apple**: Pass seek completion closure in demo after wrapper API change ([#93](https://github.com/zvuk/kithara/pull/93))
 
+
+## [0.0.1-alpha4](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha4) - 2026-07-01
+
+### Added
+
+- **net**: NSURLSession HTTP backend (`client-apple`) for Apple targets ([#89](https://github.com/zvuk/kithara/pull/89)).
+- **assets**: `AssetStore::subscribe_eviction` returns an `EvictionSubscription` guard that routes evictions per asset root ([#88](https://github.com/zvuk/kithara/pull/88)).
+
+### Changed
+
+- **Breaking** — **assets**: one non-generic `AssetStore` serves both file and HLS; per-resource processing travels per acquire as `ProcessCtx`, and the `HlsStore` wrapper with its eviction registry is gone ([#88](https://github.com/zvuk/kithara/pull/88)).
+- **apple**: smaller iOS framework — feature narrowing, a mobile build profile (`panic=abort`, strip, `opt-level=z`, LTO, `build-std`), and no `uniffi-bindgen` in the device static library; the symbol audit reports no Symphonia or fdk-aac symbols ([#89](https://github.com/zvuk/kithara/pull/89)).
+- **hls**: a segment owns its file and its typed size, resolved on demand ([#89](https://github.com/zvuk/kithara/pull/89)).
+- **decode**: `DecodeError` carries typed fields instead of formatted strings ([#89](https://github.com/zvuk/kithara/pull/89)).
+
+### Fixed
+
+- **wasm**: the threaded holders compile on wasm32 again, and the release `wasm-opt` pass enables threads and bulk memory ([#89](https://github.com/zvuk/kithara/pull/89)).
+
+## [0.0.1-alpha3](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha3) - 2026-06-21
+
+### Added
+
+- **assets**: one application-wide `AssetStore` shares a single download between concurrent consumers of a URL ([#72](https://github.com/zvuk/kithara/pull/72)).
+- **audio**: waveform analysis (`Envelope`, `PeakAccumulator`) and a pre-resampler time-stretch slot ([#72](https://github.com/zvuk/kithara/pull/72)); a `StretchBackend` seam with timestretch, signalsmith and bungee adapters ([#79](https://github.com/zvuk/kithara/pull/79)).
+- **beat**: beat slicing and neural beat tracking ([#79](https://github.com/zvuk/kithara/pull/79)).
+- **app**: DJ Studio deck with a colored frequency waveform, zoom, pan, click-to-seek and a beat-grid overlay; analysis publishes the waveform first and the beat grid when it is ready ([#72](https://github.com/zvuk/kithara/pull/72), [#79](https://github.com/zvuk/kithara/pull/79), [#81](https://github.com/zvuk/kithara/pull/81)).
+- **ffi**: one cross-platform `AudioPlayer` over native and wasm back ends ([#73](https://github.com/zvuk/kithara/pull/73)).
+- **apple**, **android**: SDK packaging through `xtask`, with refreshed Swift and Kotlin examples ([#80](https://github.com/zvuk/kithara/pull/80)).
+
+### Changed
+
+- **Breaking** — typestate re-architecture across storage, assets, audio, HLS, ABR, queue, net and FFI: illegal transitions no longer compile ([#73](https://github.com/zvuk/kithara/pull/73)).
+- **audio**: the worker produce core and `process()` run without blocking under RealtimeSanitizer; committed storage reads are lock-free ([#73](https://github.com/zvuk/kithara/pull/73)).
+- **hls**: segment size estimation reads the asset store first and probes only cache misses ([#79](https://github.com/zvuk/kithara/pull/79)).
+- **assets**: cache file names derive from the asset scope instead of signed URLs ([#80](https://github.com/zvuk/kithara/pull/80)).
+
+### Fixed
+
+- **storage**: the read watchdog resets on progress, so a slow first byte no longer panics the worker ([#72](https://github.com/zvuk/kithara/pull/72)).
+- **hls**: an urgent down-switch no longer deadlocks at a segment boundary, and a variant change waits for an in-flight seek ([#73](https://github.com/zvuk/kithara/pull/73)).
+- **hls**: end of stream is held while segment sizes are incomplete, so an immediate seek no longer auto-advances ([#80](https://github.com/zvuk/kithara/pull/80)).
+- **decode**: seeks no longer strand Symphonia read-ahead at a not-ready segment boundary or leave stale fdk-aac overlap ([#80](https://github.com/zvuk/kithara/pull/80)).
+- **audio**: the playback worker parks instead of busy-spinning on its read-ahead window, and a mid-playback recreate resumes from the decode head ([#80](https://github.com/zvuk/kithara/pull/80)).
+
+## [0.0.1-alpha2](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha2) - 2026-05-28
+
+Metadata and documentation release; no runtime behavior changes ([#71](https://github.com/zvuk/kithara/pull/71)).
+
+### Changed
+
+- Per-crate keywords, categories and descriptions for crates.io, with crates.io and docs.rs badges in every crate README.
+- Architecture moved to `ARCHITECTURE.md`; build, test and mobile packaging moved to `CONTRIBUTING.md`.
+- `Package.swift` points at a rebuilt `KitharaFFIInternal.xcframework` whose decode back end is Apple-only.
 
 ## [0.0.1-alpha1](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha1) - 2026-05-19
 

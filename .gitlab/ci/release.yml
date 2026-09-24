@@ -66,6 +66,8 @@ release:wasm:
     paths:
       - kithara-wasm-pages.zip
       - kithara-wasm-pages.zip.sha256
+      - kithara-web-docs.zip
+      - kithara-web-docs.zip.sha256
 
 release:android:
   extends:

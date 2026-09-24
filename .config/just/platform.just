@@ -1,7 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# WASM artifacts: check, build, or size-check. The browser tests are Rust
+# WASM artifacts: check, build, size-check, or doc. The browser tests are Rust
 # tests and live in `just test wasm`.
 [positional-arguments]
 wasm MODE="check" *ARGS:
@@ -31,8 +31,11 @@ wasm MODE="check" *ARGS:
       size-check)
         just _xtask wasm size-check "$@"
         ;;
+      doc)
+        just _xtask wasm doc
+        ;;
       *)
-        echo "unknown wasm mode: $mode (use check|build|size-check); tests are `just test wasm`"
+        echo "unknown wasm mode: $mode (use check|build|size-check|doc); tests are `just test wasm`"
         exit 2
         ;;
     esac
@@ -204,13 +207,20 @@ apple MODE="xcframework" *ARGS:
         fi
         ;;
       doc)
-        just _xtask apple docgen
+        # A hosting base renders the archive for a static site that serves it
+        # under that path; without one it stays an archive Xcode opens.
+        hosting=()
+        if [[ $# -gt 0 ]]; then
+          hosting=(--transform-for-static-hosting --hosting-base-path "$1")
+        fi
+        just _xtask apple docgen || exit 1
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
             --target Kithara --target KitharaRx \
             --enable-experimental-combined-documentation \
-            --output-path ./docs-build/Kithara.doccarchive
+            --output-path ./docs-build/Kithara.doccarchive \
+            ${hosting[@]+"${hosting[@]}"}
         ;;
       release)
         just _xtask apple release
