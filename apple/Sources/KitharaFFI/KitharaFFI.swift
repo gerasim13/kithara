@@ -1040,6 +1040,21 @@ public convenience init(config: FfiPlayerConfig)throws  {
     }
 
 
+    /**
+     * Create a native player with optional queue settings.
+     *
+     * # Errors
+     * Returns an error when the player or queue settings are invalid.
+     */
+public static func newWithQueueSettings(config: FfiPlayerConfig, queueSettings: FfiQueueSettings)throws  -> AudioPlayer  {
+    return try  FfiConverterTypeAudioPlayer_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_constructor_audioplayer_new_with_queue_settings(
+        FfiConverterTypeFfiPlayerConfig_lower(config),
+        FfiConverterTypeFfiQueueSettings_lower(queueSettings),$0
+    )
+})
+}
+
 
 
     /**
@@ -4944,6 +4959,137 @@ public func FfiConverterTypeFfiPlayerSnapshot_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) -> RustBuffer {
     return FfiConverterTypeFfiPlayerSnapshot.lower(value)
+}
+
+
+/**
+ * Optional queue settings applied before the player joins its host.
+ */
+public struct FfiQueueSettings: Equatable, Hashable {
+    /**
+     * Max concurrent background prefetch loads. Default: 3.
+     */
+    public let maxConcurrentLoads: UInt32?
+    /**
+     * Lead time in seconds before EOF at which the next queued track is
+     * preloaded into the audio processor. Default: 3.5.
+     */
+    public let prefetchDuration: Float?
+    /**
+     * Whether the queue starts playback by itself once the first track
+     * appended to a queue with nothing selected finishes loading. Off by
+     * default: the embedding decides when playback starts. A document cannot
+     * name it, because starting playback is the embedding's choice.
+     */
+    public let shouldAutoplay: Bool?
+    /**
+     * Entries the navigation history keeps. Only explicit selections and
+     * auto-advances land there, so the default is a listening session's
+     * worth of back-steps; the queue's own track list is unbounded.
+     */
+    public let maxHistorySize: UInt32?
+    /**
+     * Initial queue traversal order; subsequent changes belong to navigation.
+     */
+    public let playbackOrder: FfiPlaybackOrder?
+    /**
+     * Initial action when the current item ends.
+     */
+    public let actionAtItemEnd: FfiActionAtItemEnd?
+    /**
+     * Initial transition settings for the next item.
+     */
+    public let crossfadeSettings: FfiCrossfadeSettings?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Max concurrent background prefetch loads. Default: 3.
+         */maxConcurrentLoads: UInt32?,
+        /**
+         * Lead time in seconds before EOF at which the next queued track is
+         * preloaded into the audio processor. Default: 3.5.
+         */prefetchDuration: Float?,
+        /**
+         * Whether the queue starts playback by itself once the first track
+         * appended to a queue with nothing selected finishes loading. Off by
+         * default: the embedding decides when playback starts. A document cannot
+         * name it, because starting playback is the embedding's choice.
+         */shouldAutoplay: Bool?,
+        /**
+         * Entries the navigation history keeps. Only explicit selections and
+         * auto-advances land there, so the default is a listening session's
+         * worth of back-steps; the queue's own track list is unbounded.
+         */maxHistorySize: UInt32?,
+        /**
+         * Initial queue traversal order; subsequent changes belong to navigation.
+         */playbackOrder: FfiPlaybackOrder?,
+        /**
+         * Initial action when the current item ends.
+         */actionAtItemEnd: FfiActionAtItemEnd?,
+        /**
+         * Initial transition settings for the next item.
+         */crossfadeSettings: FfiCrossfadeSettings?) {
+        self.maxConcurrentLoads = maxConcurrentLoads
+        self.prefetchDuration = prefetchDuration
+        self.shouldAutoplay = shouldAutoplay
+        self.maxHistorySize = maxHistorySize
+        self.playbackOrder = playbackOrder
+        self.actionAtItemEnd = actionAtItemEnd
+        self.crossfadeSettings = crossfadeSettings
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiQueueSettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiQueueSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiQueueSettings {
+        return
+            try FfiQueueSettings(
+                maxConcurrentLoads: FfiConverterOptionUInt32.read(from: &buf),
+                prefetchDuration: FfiConverterOptionFloat.read(from: &buf),
+                shouldAutoplay: FfiConverterOptionBool.read(from: &buf),
+                maxHistorySize: FfiConverterOptionUInt32.read(from: &buf),
+                playbackOrder: FfiConverterOptionTypeFfiPlaybackOrder.read(from: &buf),
+                actionAtItemEnd: FfiConverterOptionTypeFfiActionAtItemEnd.read(from: &buf),
+                crossfadeSettings: FfiConverterOptionTypeFfiCrossfadeSettings.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiQueueSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt32.write(value.maxConcurrentLoads, into: &buf)
+        FfiConverterOptionFloat.write(value.prefetchDuration, into: &buf)
+        FfiConverterOptionBool.write(value.shouldAutoplay, into: &buf)
+        FfiConverterOptionUInt32.write(value.maxHistorySize, into: &buf)
+        FfiConverterOptionTypeFfiPlaybackOrder.write(value.playbackOrder, into: &buf)
+        FfiConverterOptionTypeFfiActionAtItemEnd.write(value.actionAtItemEnd, into: &buf)
+        FfiConverterOptionTypeFfiCrossfadeSettings.write(value.crossfadeSettings, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiQueueSettings_lift(_ buf: RustBuffer) throws -> FfiQueueSettings {
+    return try FfiConverterTypeFfiQueueSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiQueueSettings_lower(_ value: FfiQueueSettings) -> RustBuffer {
+    return FfiConverterTypeFfiQueueSettings.lower(value)
 }
 
 
@@ -9473,6 +9619,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -9513,6 +9683,30 @@ fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeAudioPlayerItem.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiCrossfadeSettings: FfiConverterRustBuffer {
+    typealias SwiftType = FfiCrossfadeSettings?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiCrossfadeSettings.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiCrossfadeSettings.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -9593,6 +9787,30 @@ fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiActionAtItemEnd: FfiConverterRustBuffer {
+    typealias SwiftType = FfiActionAtItemEnd?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiActionAtItemEnd.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiActionAtItemEnd.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiAudioCodecKind: FfiConverterRustBuffer {
     typealias SwiftType = FfiAudioCodecKind?
 
@@ -9633,6 +9851,30 @@ fileprivate struct FfiConverterOptionTypeFfiContainerKind: FfiConverterRustBuffe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiContainerKind.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiPlaybackOrder: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPlaybackOrder?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiPlaybackOrder.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiPlaybackOrder.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -10259,6 +10501,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new_with_queue_settings() != 30182) {
         return InitializationResult.apiChecksumMismatch
     }
 
