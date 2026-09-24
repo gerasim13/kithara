@@ -165,7 +165,10 @@ pub(crate) fn settle_failed(state: &Mutex<ItemView>, observer: &dyn ItemObserver
 /// - [`Self::uuid_i64`] — caller-facing queue-item id. When
 ///   [`FfiItemConfig::uuid_i64`] is absent it falls back to the
 ///   legacy UUIDv5-derived handle.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Object)
+)]
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AudioPlayerItem {
@@ -204,7 +207,7 @@ pub struct AudioPlayerItem {
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayerItem {
     /// Create a new item with frozen preferences. Reserves a fresh
     /// private queue id from the process-wide counter. Caller-supplied
@@ -213,7 +216,7 @@ impl AudioPlayerItem {
     /// Loading starts automatically when the item is inserted into an
     /// [`crate::player::AudioPlayer`].
     #[must_use]
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         let live = config.is_live_stream;
         let queue_id = TrackId::allocate();
@@ -235,7 +238,10 @@ impl AudioPlayerItem {
             state: Arc::new(Mutex::new(ItemView::new(live))),
         })
     }
+}
 
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl AudioPlayerItem {
     /// Caller-facing content id. Mirrors the iOS
     /// `AudioPlayerItemProtocol.audioId: TrackId`.
     pub const fn audio_id(&self) -> TrackId {

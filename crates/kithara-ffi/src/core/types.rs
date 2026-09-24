@@ -125,7 +125,10 @@ pub struct FfiKeyRule {
 /// FFI-friendly per-item configuration. All fields immutable after
 /// [`crate::item::AudioPlayerItem::new`].
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     /// Optional caller-facing content id. When absent, the item exposes
@@ -956,7 +959,7 @@ pub struct FfiItemLoadResult {
 
 /// FFI-friendly ABR mode.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiAbrMode {
     Auto,
     Manual { variant_index: u32 },

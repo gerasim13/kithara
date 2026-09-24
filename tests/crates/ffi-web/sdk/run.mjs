@@ -12,9 +12,43 @@ const [directory, executable, expectedPrefix = "PASS main+worker", expectedSuffi
 const root = await realpath(directory);
 const profile = await mkdtemp(join(tmpdir(), "kithara-sdk-"));
 const types = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm" };
+const samples = 44_100;
+const tone = Buffer.alloc(44 + samples * 2);
+tone.write("RIFF", 0);
+tone.writeUInt32LE(tone.length - 8, 4);
+tone.write("WAVEfmt ", 8);
+tone.writeUInt32LE(16, 16);
+tone.writeUInt16LE(1, 20);
+tone.writeUInt16LE(1, 22);
+tone.writeUInt32LE(samples, 24);
+tone.writeUInt32LE(samples * 2, 28);
+tone.writeUInt16LE(2, 32);
+tone.writeUInt16LE(16, 34);
+tone.write("data", 36);
+tone.writeUInt32LE(samples * 2, 40);
+for (let index = 0; index < samples; index++) {
+  tone.writeInt16LE(Math.round(Math.sin(index * 2 * Math.PI * 440 / samples) * 8192), 44 + index * 2);
+}
 const server = createServer(async (request, response) => {
   try {
     const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
+    if (pathname === "/tone.wav") {
+      const match = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
+      const start = match ? Number(match[1]) : 0;
+      const end = match && match[2] ? Math.min(Number(match[2]), tone.length - 1) : tone.length - 1;
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= tone.length) {
+        response.writeHead(416, { "Content-Range": `bytes */${tone.length}` });
+        response.end();
+        return;
+      }
+      response.writeHead(match ? 206 : 200, {
+        "Content-Type": "audio/wav", "Accept-Ranges": "bytes",
+        "Content-Length": end - start + 1,
+        ...(match ? { "Content-Range": `bytes ${start}-${end}/${tone.length}` } : {}),
+      });
+      response.end(tone.subarray(start, end + 1));
+      return;
+    }
     const path = await realpath(join(root, pathname === "/" ? "index.html" : pathname));
     assert(path.startsWith(root + sep), "path outside SDK fixture");
     const content = await readFile(path);

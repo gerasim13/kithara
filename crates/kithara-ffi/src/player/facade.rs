@@ -41,26 +41,6 @@ impl AudioPlayer {
         }))
     }
 
-    /// Append an item to the tail of the queue. AVQueuePlayer-style
-    /// counterpart of [`Self::insert`], which follows the iOS protocol
-    /// shape (`after == nil` ⇒ head).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`FfiError`] when the source URL cannot be resolved into
-    /// a queue-owned `kithara::play::Source` — same failure surface as
-    /// [`Self::insert`].
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::needless_pass_by_value,
-            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
-        )
-    )]
-    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
-        self.inner.append(&item)
-    }
-
     pub fn playback_order(&self) -> FfiPlaybackOrder {
         self.inner.playback_order()
     }
@@ -124,18 +104,6 @@ impl AudioPlayer {
 
     pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         self.inner.items()
-    }
-
-    pub fn pause(&self) {
-        self.inner.pause();
-    }
-
-    pub fn play(&self) {
-        self.inner.play();
-    }
-
-    pub fn rate(&self) -> f32 {
-        self.inner.rate()
     }
 
     /// Remove an item from the queue.
@@ -308,6 +276,38 @@ impl AudioPlayer {
 
 #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayer {
+    /// Append an item to the tail of the queue. AVQueuePlayer-style
+    /// counterpart of [`Self::insert`], which follows the iOS protocol
+    /// shape (`after == nil` ⇒ head).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the source URL cannot be resolved into
+    /// a queue-owned `kithara::play::Source` — same failure surface as
+    /// [`Self::insert`].
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
+        self.inner.append(&item)
+    }
+
+    pub fn pause(&self) {
+        self.inner.pause();
+    }
+
+    pub fn play(&self) {
+        self.inner.play();
+    }
+
+    pub fn rate(&self) -> f32 {
+        self.inner.rate()
+    }
+
     /// Target playback speed used by `play()`. When the player is
     /// playing, the live `rate()` equals this value; on pause it falls
     /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`

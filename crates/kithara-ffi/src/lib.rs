@@ -11,10 +11,10 @@
 #[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 uniffi::setup_scaffolding!();
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 use kithara::events::TrackId;
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 uniffi::custom_type!(TrackId, u64, { remote });
 
 mod core;

@@ -1,4 +1,4 @@
-import api, { AudioPlayer as UniAudioPlayer, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost, tickHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, AudioPlayerItem, defaultHostConfig, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, initializeHost, tickHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
@@ -98,6 +98,27 @@ async function main() {
     throw new Error("invalid crossfade changed the player owner");
   }
   await workerApplied;
+  const url = `${location.origin}/tone.wav`;
+  const loadedTrack = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("generated player did not load the HTTP track")), 10_000);
+    events.onmessage = ({ data }) => {
+      if (data.kind !== "TrackStatusChanged") return;
+      if (data.status === 4) {
+        clearTimeout(timeout);
+        reject(new Error(`HTTP track failed: ${data.reason}`));
+      } else if (data.status === 3) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+  });
+  const item = new AudioPlayerItem({ url, abrMode: undefined, audioId: undefined, headers: undefined, uuidI64: undefined, isLiveStream: false, preferredPeakBitrate: 0, preferredPeakBitrateExpensive: 0 });
+  generatedPlayer.append(item);
+  await loadedTrack;
+  generatedPlayer.play();
+  if (generatedPlayer.playingRate() !== 0.75) throw new Error("loaded player lost the requested rate");
+  generatedPlayer.pause();
+  item.uniffiDestroy();
   clearInterval(pump);
   events.close();
   if (!(generatedPlayer instanceof UniAudioPlayer)) throw new Error("generated player has no owned handle");
@@ -116,7 +137,7 @@ async function main() {
   if (player.eqGain(0) !== 0) throw new Error("EQ reset did not update readback");
   player.free();
   if (memory.buffer.byteLength > 64 * 1024 * 1024) throw new Error("Wasm memory bound exceeded");
-  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and worker-applied crossfade mutation; memory=${memory.buffer.byteLength}`;
+  document.body.textContent = `PASS product-host defaults validation lifecycle EQ and HTTP track loading; memory=${memory.buffer.byteLength}`;
 }
 
 main().catch(error => { document.body.textContent = `FAIL ${error.stack ?? error}`; });
