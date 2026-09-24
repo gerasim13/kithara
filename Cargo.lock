@@ -5016,6 +5016,7 @@ dependencies = [
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-stream",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5662,6 +5663,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-encode",
  "kithara-output",
  "kithara-platform",

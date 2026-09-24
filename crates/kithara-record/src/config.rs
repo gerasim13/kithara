@@ -31,10 +31,12 @@ impl Defaults {
 }
 
 /// Configuration for one independently playable recording part.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct RecordingConfig {
     #[builder(default = default_encode_config())]
+    #[config(nested)]
     encode: EncodeConfig,
 }
 
@@ -111,4 +113,25 @@ where
     /// Encoding and container profile for every independently playable part.
     #[builder(default = RecordingConfig::builder().build())]
     pub(crate) recording: RecordingConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::RecordingConfig;
+
+    #[kithara::test(native, flash(false))]
+    fn recording_recipe_snapshot_tracks_measured_sample_rate() {
+        let mut config = RecordingConfig::builder().build();
+        let initial = kithara_config::Config::values(&config);
+        assert_eq!(initial.encode.sample_rate, 48_000);
+        assert_eq!(initial.encode.channels, 2);
+
+        config.set_sample_rate(44_100);
+        let measured = kithara_config::Config::values(&config);
+        assert_eq!(measured.encode.sample_rate, 44_100);
+        assert_eq!(measured.encode.codec, initial.encode.codec);
+        assert_eq!(measured.encode.container, initial.encode.container);
+    }
 }
