@@ -1229,6 +1229,14 @@ mod tests {
     }
 
     #[kithara::test]
+    fn ffi_crossfade_default_matches_domain_and_round_trips() {
+        let domain = CrossfadeSettings::default();
+        let wire = FfiCrossfadeSettings::default();
+        assert_eq!(wire, FfiCrossfadeSettings::from(domain));
+        assert_eq!(CrossfadeSettings::try_from(wire).unwrap(), domain);
+    }
+
+    #[kithara::test]
     fn ffi_crossfade_settings_reject_every_invalid_float_class() {
         for settings in [
             FfiCrossfadeSettings {

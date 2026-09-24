@@ -96,6 +96,12 @@ pub struct FfiCrossfadeSettings {
     pub position: f32,
 }
 
+impl Default for FfiCrossfadeSettings {
+    fn default() -> Self {
+        kithara::play::CrossfadeSettings::default().into()
+    }
+}
+
 impl From<kithara::play::CrossfadeSettings> for FfiCrossfadeSettings {
     fn from(value: kithara::play::CrossfadeSettings) -> Self {
         let values = kithara_config::Config::values(&value);

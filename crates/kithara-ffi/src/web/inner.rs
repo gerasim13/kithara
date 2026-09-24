@@ -66,12 +66,7 @@ impl Default for WasmInner {
             routes: Routes::new(Arc::clone(&queue_view)),
             queue_view,
             volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
-            crossfade_settings: Mutex::new(FfiCrossfadeSettings {
-                duration: Self::DEFAULT_CROSSFADE_SECONDS,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            }),
+            crossfade_settings: Mutex::new(FfiCrossfadeSettings::default()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
@@ -91,8 +86,6 @@ fn store_f32(a: &AtomicU32, v: f32) {
 }
 
 impl WasmInner {
-    /// Default crossfade window in seconds, matching the worker default.
-    const DEFAULT_CROSSFADE_SECONDS: f32 = kithara::play::DEFAULT_CROSSFADE_DURATION;
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = kithara::play::DEFAULT_PLAYING_RATE;
     /// Default output volume, matching the legacy wasm player.

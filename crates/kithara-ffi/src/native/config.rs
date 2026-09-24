@@ -36,12 +36,7 @@ impl FfiPlayerConfig {
             store: Arc::new(FfiAssetStore::for_test()),
             playback_order: FfiPlaybackOrder::Sequential,
             action_at_item_end: FfiActionAtItemEnd::Advance,
-            crossfade_settings: FfiCrossfadeSettings {
-                duration: 1.0,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            },
+            crossfade_settings: FfiCrossfadeSettings::default(),
         }
     }
 }
