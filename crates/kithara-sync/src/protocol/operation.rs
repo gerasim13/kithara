@@ -83,6 +83,25 @@ pub enum SyncOperation<G: SyncGroup> {
         /// caller can still reach up to the first one it can no longer use.
         window: Range<SessionFrame>,
     },
+    /// Moves a member that already sounds through an applied map to an exact
+    /// recording cue, entering the group's beats inside a window after its
+    /// presented frontier while the applied map keeps sounding.
+    Relocate {
+        /// Stable member grid being relocated.
+        target: BeatGridId,
+        /// Exact Track load being relocated.
+        load: LoadGeneration,
+        /// Exact committed session transport state.
+        transport: TransportRevision,
+        /// Exact recording frame the member continues from, pickup and
+        /// fractional beat phase included.
+        cue: AssetFrame,
+        /// Boundary the member's applied map presented last.
+        frontier: PresentationFrontier,
+        /// Session frames the activation may land on: from the first one the
+        /// caller can still reach up to the first one it can no longer use.
+        window: Range<SessionFrame>,
+    },
     /// Commits a new tempo on a group that owns its own beat timeline.
     Tempo {
         /// Stable group grid receiving the tempo.
@@ -106,6 +125,7 @@ impl<G: SyncGroup> SyncOperation<G> {
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
             | Self::Prepare { target, .. }
+            | Self::Relocate { target, .. }
             | Self::Tempo { target, .. } => *target,
         }
     }
