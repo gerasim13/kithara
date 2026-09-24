@@ -6059,6 +6059,7 @@ dependencies = [
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
