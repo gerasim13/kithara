@@ -260,10 +260,10 @@ impl Drop for Cancel {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    pub(super) fn shell(script: &str) -> Child {
+    pub(in crate::child) fn shell(script: &str) -> Child {
         spawn(
             Command::new("sh")
                 .args(["-c", script])

@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn rss_limit_stops_only_the_owned_process_group() {
-        let mut unrelated = super::super::tests::shell("sleep 30");
+        let mut unrelated = super::super::process::tests::shell("sleep 30");
         let result = super::super::run_bounded(
             std::process::Command::new("sh").args(["-c", "sleep 30 & wait"]),
             None,
