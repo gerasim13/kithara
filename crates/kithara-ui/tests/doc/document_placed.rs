@@ -15,7 +15,7 @@ use kithara_ui::{
     module::MeasureAxis,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
-        Clock, InputOwner, ReadValue, Reads,
+        Clock, InputOwner, ReadValue, Reads, Snap,
         document::{
             Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
             render,
@@ -29,10 +29,8 @@ use kithara_ui::{
 /// One placement, as the host was handed it.
 #[derive(Debug, PartialEq)]
 struct Mounted {
-    /// The magnet as the host receives it: where it may pull to, and how near
-    /// the drag has to come. `Snap` is not built outside the toolkit, so the
-    /// test reads the two things it carries.
-    snap: Option<(Vec<Pt>, f32)>,
+    /// The magnet as the host receives it.
+    snap: Option<Snap>,
     at: Pt,
     path: String,
     carried: bool,
@@ -92,10 +90,7 @@ impl Host for Spy<'_> {
             path: self.ui.resolve(placement.path).to_owned(),
             at: placement.at,
             carried: placement.write.is_some(),
-            snap: placement
-                .snap
-                .as_ref()
-                .map(|snap| (snap.to.clone(), snap.within)),
+            snap: placement.snap,
         });
         child
     }
@@ -252,6 +247,41 @@ fn one(children: &str, reads: &Points, path: &str) -> Mounted {
     mounted.swap_remove(found)
 }
 
+/// Where a placement's magnet may pull to, and how near the drag has to come.
+fn pull(placement: Mounted) -> Option<(Vec<Pt>, f32)> {
+    placement.snap.map(|snap| (snap.to, snap.within))
+}
+
+/// The magnet a carried sprite is handed when it names `targets`, each
+/// placed where the document writes it.
+fn magnet(targets: &[(&str, Pt)], within: f32) -> Snap {
+    let docks = targets
+        .iter()
+        .map(|(id, at)| {
+            format!(
+                r#"Placed(id: "{id}", at: ({:?}, {:?}), child: Knob(id: "{id}-mark")),"#,
+                at.x, at.y
+            )
+        })
+        .collect::<String>();
+    let names = targets
+        .iter()
+        .map(|(id, _)| format!("{id:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let scene = format!(
+        r#"{docks}
+        Placed(id: "carry", at: (16.0, 32.0),
+            read: Model(id: "scene.one"),
+            write: Parameter(id: "scene.one"),
+            magnet: (to: [{names}], within: {within:?}),
+            child: Knob(id: "sprite"))"#
+    );
+    one(&scene, &UNANSWERED, "page/carry")
+        .snap
+        .unwrap_or_else(|| panic!("a sprite with a magnet must be handed one"))
+}
+
 /// A dock and a sprite that snaps onto it, which is the smallest scene that
 /// has something to pull and something to pull to.
 const SCENE: &str = r#"
@@ -299,7 +329,7 @@ fn a_placement_with_nowhere_to_write_is_not_carried() {
 
 #[kithara::test]
 fn a_placement_without_a_magnet_takes_no_snap() {
-    assert_eq!(one(SCENE, &UNANSWERED, "page/dock").snap, None);
+    assert_eq!(pull(one(SCENE, &UNANSWERED, "page/dock")), None);
 }
 
 /// A magnet names placements, and what reaches the host is where those
@@ -307,7 +337,7 @@ fn a_placement_without_a_magnet_takes_no_snap() {
 #[kithara::test]
 fn a_magnet_reaches_the_host_as_the_points_it_names() {
     assert_eq!(
-        one(SCENE, &UNANSWERED, "page/carry").snap,
+        pull(one(SCENE, &UNANSWERED, "page/carry")),
         Some((vec![Pt { x: 200.0, y: 100.0 }], 64.0))
     );
 }
@@ -333,7 +363,7 @@ fn a_magnet_follows_the_target_it_names() {
     };
 
     assert_eq!(
-        one(MOVING_TARGET, &reads, "page/carry").snap,
+        pull(one(MOVING_TARGET, &reads, "page/carry")),
         Some((vec![Pt { x: 300.0, y: 8.0 }], 64.0))
     );
 }
@@ -352,7 +382,47 @@ fn a_magnet_naming_several_targets_hands_over_all_of_them() {
             child: Knob(id: "sprite"))"#;
 
     assert_eq!(
-        one(THREE, &UNANSWERED, "page/carry").snap,
+        pull(one(THREE, &UNANSWERED, "page/carry")),
         Some((vec![Pt { x: 400.0, y: 0.0 }, Pt { x: 0.0, y: 0.0 }], 64.0))
     );
+}
+
+/// Two targets in reach are not a tie: the nearer one takes the drag.
+#[kithara::test]
+fn the_nearest_target_in_reach_takes_the_point() {
+    let snap = magnet(
+        &[
+            ("near", Pt { x: 0.0, y: 0.0 }),
+            ("far", Pt { x: 40.0, y: 0.0 }),
+        ],
+        64.0,
+    );
+
+    assert_eq!(snap.take(Pt { x: 30.0, y: 0.0 }), Pt { x: 40.0, y: 0.0 });
+}
+
+/// A target farther than the reach leaves the point where the drag ended.
+#[kithara::test]
+fn a_target_out_of_reach_leaves_the_point() {
+    let snap = magnet(&[("dock", Pt { x: 0.0, y: 0.0 })], 16.0);
+    let at = Pt { x: 100.0, y: 0.0 };
+
+    assert_eq!(snap.take(at), at);
+}
+
+/// The reach is met at its own value, not only under it.
+#[kithara::test]
+fn a_target_at_the_reach_still_takes_the_point() {
+    let snap = magnet(&[("dock", Pt { x: 0.0, y: 0.0 })], 16.0);
+
+    assert_eq!(snap.take(Pt { x: 16.0, y: 0.0 }), Pt { x: 0.0, y: 0.0 });
+}
+
+/// A magnet naming nothing that stands leaves every drag alone.
+#[kithara::test]
+fn a_magnet_without_targets_leaves_the_point() {
+    let snap = magnet(&[], 64.0);
+    let at = Pt { x: 7.0, y: 9.0 };
+
+    assert_eq!(snap.take(at), at);
 }

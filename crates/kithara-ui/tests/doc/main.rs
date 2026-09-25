@@ -6,6 +6,7 @@ mod builtin_presets;
 mod common;
 mod compile;
 mod document_group;
+mod document_measured;
 mod document_object;
 mod document_placed;
 mod document_wave;
