@@ -13,10 +13,13 @@ struct KitharaPlayerTests {
         let legacy = FfiHlsSourceSettings(downloadBatchSize: 6)
         let configured = FfiHlsSourceSettings(sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
         let bounded = FfiHlsSourceSettings(lookAheadBytes: 0, sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
+        let attempts = FfiHlsSourceSettings(lookAheadBytes: 0, sizeProbeMethod: .rangeGet, acquireAttemptBudget: 1, downloadBatchSize: 6)
         #expect(legacy.downloadBatchSize == 6)
         #expect(legacy.sizeProbeMethod == nil)
         #expect(configured.sizeProbeMethod == .rangeGet)
         #expect(bounded.lookAheadBytes == 0)
+        #expect(bounded.acquireAttemptBudget == nil)
+        #expect(attempts.acquireAttemptBudget == 1)
     }
 
     @Test("File source settings preserve the reader-event initializer")

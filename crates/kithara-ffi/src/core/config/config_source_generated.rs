@@ -88,6 +88,13 @@ pub struct FfiHlsSourceSettings {
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
     pub size_probe_method: Option<FfiSizeProbeMethod>,
+    /// Acquire attempts a planned segment slot gets before the dispatch
+    /// settles it terminally. A requeue is re-dispatched on the peer's next
+    /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
+    /// by a live sibling writer is exempt — that holder always settles and
+    /// releases, so its retry resolves on its own.
+    /// Accepted range: 0..=255.
+    pub acquire_attempt_budget: Option<u32>,
     /// Max segments to download per step. Three keep the fetcher busy across
     /// one round-trip without planning further ahead than a look-ahead cap
     /// would allow anyway.
@@ -110,6 +117,19 @@ impl TryFrom<FfiHlsSourceSettings> for kithara_hls::HlsConfigPatch {
         }
         if let Some(input) = value.size_probe_method {
             patch.size_probe_method = Some(input.try_into()?);
+        }
+        if let Some(input) = value.acquire_attempt_budget {
+            if input > 255 {
+                return Err(crate::types::FfiError::InvalidArgument {
+                    reason: "HlsConfig.acquire_attempt_budget must be in 0..=255".into(),
+                });
+            }
+            patch.acquire_attempt_budget =
+                Some(
+                    u8::try_from(input).map_err(|_| crate::types::FfiError::InvalidArgument {
+                        reason: "HlsConfig.acquire_attempt_budget exceeds u8".into(),
+                    })?,
+                );
         }
         if let Some(input) = value.download_batch_size {
             if input == 0 || input > 64 {

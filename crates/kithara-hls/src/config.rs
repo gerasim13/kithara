@@ -170,7 +170,7 @@ where
     /// by a live sibling writer is exempt — that holder always settles and
     /// releases, so its retry resolves on its own.
     #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
-    #[config(value)]
+    #[config(value, sdk(max = 255))]
     pub acquire_attempt_budget: u8,
     /// Max segments to download per step. Three keep the fetcher busy across
     /// one round-trip without planning further ahead than a look-ahead cap

@@ -357,56 +357,7 @@ fn render_source_record(
     output.push_str("#[cfg_attr(\n    any(feature = \"uniffi\", feature = \"uniffi-web\"),\n    derive(uniffi::Record)\n)]\n");
     writeln!(output, "pub struct {record} {{")?;
     for field in &fields {
-        ensure!(
-            field.role == "value" && !field.docs.is_empty(),
-            "SDK source field {}.{} needs a documented value",
-            registration.owner,
-            field.name
-        );
-        for line in &field.docs {
-            writeln!(output, "    /// {}", ffi_doc_line(line))?;
-        }
-        match compact(&field.rust_type).as_str() {
-            "usize" => {
-                let maximum = field.sdk_max.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "SDK source field {}.{} needs a maximum",
-                        registration.owner,
-                        field.name
-                    )
-                })?;
-                writeln!(output, "    /// Accepted range: 1..={maximum}.")?;
-                writeln!(output, "    pub {}: Option<u32>,", field.name)?;
-            }
-            "SizeProbeMethod" if registration.package == "kithara-hls" => {
-                ensure!(
-                    field.sdk_max.is_none(),
-                    "size probe method has no numeric maximum"
-                );
-                writeln!(
-                    output,
-                    "    pub {}: Option<FfiSizeProbeMethod>,",
-                    field.name
-                )?;
-            }
-            "Option<u64>" => {
-                let maximum = field.sdk_max.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "SDK source field {}.{} needs a maximum",
-                        registration.owner,
-                        field.name
-                    )
-                })?;
-                writeln!(output, "    /// Accepted range: 0..={maximum} bytes.")?;
-                writeln!(output, "    pub {}: Option<u64>,", field.name)?;
-            }
-            _ => bail!(
-                "unsupported SDK source field {}.{}: {}",
-                registration.owner,
-                field.name,
-                field.rust_type
-            ),
-        }
+        render_source_field(output, registration, field)?;
     }
     output.push_str("}\n");
     writeln!(
@@ -428,6 +379,30 @@ fn render_source_record(
             field.name
         )?;
         match compact(&field.rust_type).as_str() {
+            "u8" => {
+                let maximum = field.sdk_max.unwrap_or_default();
+                writeln!(output, "            if input > {maximum} {{")?;
+                output.push_str(
+                    "                return Err(crate::types::FfiError::InvalidArgument {\n",
+                );
+                writeln!(
+                    output,
+                    "                    reason: \"{}.{} must be in 0..={maximum}\".into(),",
+                    registration.owner, field.name
+                )?;
+                output.push_str("                });\n            }\n");
+                writeln!(
+                    output,
+                    "            patch.{} =\n                Some(\n                    u8::try_from(input).map_err(|_| crate::types::FfiError::InvalidArgument {{",
+                    field.name
+                )?;
+                writeln!(
+                    output,
+                    "                        reason: \"{}.{} exceeds u8\".into(),",
+                    registration.owner, field.name
+                )?;
+                output.push_str("                    })?,\n                );\n");
+            }
             "usize" => {
                 let maximum = field.sdk_max.unwrap_or_default();
                 writeln!(output, "            if input == 0 || input > {maximum} {{")?;
@@ -474,6 +449,72 @@ fn render_source_record(
         output.push_str("        }\n");
     }
     output.push_str("        Ok(patch)\n    }\n}\n");
+    Ok(())
+}
+
+fn render_source_field(
+    output: &mut String,
+    registration: &Registration,
+    field: &RegisteredField,
+) -> Result<()> {
+    ensure!(
+        field.role == "value" && !field.docs.is_empty(),
+        "SDK source field {}.{} needs a documented value",
+        registration.owner,
+        field.name
+    );
+    for line in &field.docs {
+        writeln!(output, "    /// {}", ffi_doc_line(line))?;
+    }
+    let kind = compact(&field.rust_type);
+    match kind.as_str() {
+        "u8" | "usize" => {
+            let maximum = field.sdk_max.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SDK source field {}.{} needs a maximum",
+                    registration.owner,
+                    field.name
+                )
+            })?;
+            if kind == "u8" {
+                ensure!(
+                    maximum <= u32::from(u8::MAX),
+                    "SDK source u8 maximum exceeds 255"
+                );
+            }
+            let minimum = if kind == "u8" { 0 } else { 1 };
+            writeln!(output, "    /// Accepted range: {minimum}..={maximum}.")?;
+            writeln!(output, "    pub {}: Option<u32>,", field.name)?;
+        }
+        "SizeProbeMethod" if registration.package == "kithara-hls" => {
+            ensure!(
+                field.sdk_max.is_none(),
+                "size probe method has no numeric maximum"
+            );
+            writeln!(
+                output,
+                "    pub {}: Option<FfiSizeProbeMethod>,",
+                field.name
+            )?;
+        }
+        "Option<u64>" => {
+            let maximum = field.sdk_max.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SDK source field {}.{} needs a maximum",
+                    registration.owner,
+                    field.name
+                )
+            })?;
+            writeln!(output, "    /// Accepted range: 0..={maximum} bytes.")?;
+            writeln!(output, "    pub {}: Option<u64>,", field.name)?;
+        }
+        _ => bail!(
+            "unsupported SDK source field {}.{}: {}",
+            registration.owner,
+            field.name,
+            field.rust_type
+        ),
+    }
     Ok(())
 }
 
@@ -864,7 +905,8 @@ mod tests {
             ),
         ] {
             let probe = if owner == "HlsConfig" {
-                " /// Probe method.\n #[config(value, sdk)] size_probe_method: SizeProbeMethod, \
+                " /// Acquire attempts.\n #[config(value, sdk(max = 255))] acquire_attempt_budget: u8, \
+                 /// Probe method.\n #[config(value, sdk)] size_probe_method: SizeProbeMethod, \
                  /// Look-ahead limit.\n #[config(value, sdk(max = 8388608))] look_ahead_bytes: Option<u64>"
             } else {
                 " /// Look-ahead limit.\n #[config(value, sdk(max = 8388608))] look_ahead_bytes: Option<u64>"
@@ -883,6 +925,8 @@ mod tests {
         assert!(generated.contains("pub reader_event_capacity: Option<u32>"));
         assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));
         assert!(generated.contains("pub download_batch_size: Option<u32>"));
+        assert!(generated.contains("pub acquire_attempt_budget: Option<u32>"));
+        assert!(generated.contains("patch.acquire_attempt_budget = Some(u8::try_from(input)"));
         assert!(generated.contains("pub size_probe_method: Option<FfiSizeProbeMethod>"));
         assert!(generated.contains("pub look_ahead_bytes: Option<u64>"));
         assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));

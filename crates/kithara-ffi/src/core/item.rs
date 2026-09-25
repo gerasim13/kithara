@@ -755,6 +755,7 @@ mod tests {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
                     look_ahead_bytes: Some(0),
+                    acquire_attempt_budget: Some(1),
                     download_batch_size: Some(6),
                     size_probe_method: Some(crate::FfiSizeProbeMethod::RangeGet),
                 }),
@@ -773,6 +774,10 @@ mod tests {
             hls.source.as_ref().unwrap().hls.look_ahead_bytes,
             Some(Some(0))
         );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.acquire_attempt_budget,
+            Some(1)
+        );
 
         for settings in [
             FfiSourceSettings {
@@ -786,6 +791,7 @@ mod tests {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
                     look_ahead_bytes: None,
+                    acquire_attempt_budget: None,
                     download_batch_size: Some(6),
                     size_probe_method: None,
                 }),
@@ -819,6 +825,7 @@ mod tests {
                     file: None,
                     hls: Some(crate::FfiHlsSourceSettings {
                         look_ahead_bytes: None,
+                        acquire_attempt_budget: None,
                         download_batch_size: None,
                         size_probe_method: Some(crate::FfiSizeProbeMethod::Unknown),
                     }),
@@ -833,6 +840,19 @@ mod tests {
                     file: None,
                     hls: Some(crate::FfiHlsSourceSettings {
                         look_ahead_bytes: Some(8_388_609),
+                        ..Default::default()
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        acquire_attempt_budget: Some(256),
                         ..Default::default()
                     }),
                 },

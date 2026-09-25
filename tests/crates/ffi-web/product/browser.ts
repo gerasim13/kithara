@@ -197,9 +197,19 @@ async function main() {
     invalidSource = FfiError.InvalidArgument.instanceOf(error);
   }
   if (!invalidSource) throw new Error("unknown HLS size probe method was accepted");
+  invalidSource = false;
+  try {
+    AudioPlayerItem.newWithSourceSettings(
+      { ...itemConfig, url: `${location.origin}/live.m3u8` },
+      { file: undefined, hls: { acquireAttemptBudget: 256 } },
+    );
+  } catch (error) {
+    invalidSource = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidSource) throw new Error("out-of-range HLS acquire budget was accepted");
   const hlsItem = AudioPlayerItem.newWithSourceSettings(
     { ...itemConfig, url: `${location.origin}/live.m3u8` },
-    { file: undefined, hls: { lookAheadBytes: 0n, downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
+    { file: undefined, hls: { lookAheadBytes: 0n, acquireAttemptBudget: 1, downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
   ) as AudioPlayerItem;
   hlsItem.uniffiDestroy();
   const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { lookAheadBytes: 0n, readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;

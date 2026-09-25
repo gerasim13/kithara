@@ -4152,6 +4152,15 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
      */
     public let sizeProbeMethod: FfiSizeProbeMethod?
     /**
+     * Acquire attempts a planned segment slot gets before the dispatch
+     * settles it terminally. A requeue is re-dispatched on the peer's next
+     * poll, so this counts dispatch rounds, not wall-clock time. A tmp held
+     * by a live sibling writer is exempt — that holder always settles and
+     * releases, so its retry resolves on its own.
+     * Accepted range: 0..=255.
+     */
+    public let acquireAttemptBudget: UInt32?
+    /**
      * Max segments to download per step. Three keep the fetcher busy across
      * one round-trip without planning further ahead than a look-ahead cap
      * would allow anyway.
@@ -4175,6 +4184,14 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
          * exact prefix offsets.
          */sizeProbeMethod: FfiSizeProbeMethod?,
         /**
+         * Acquire attempts a planned segment slot gets before the dispatch
+         * settles it terminally. A requeue is re-dispatched on the peer's next
+         * poll, so this counts dispatch rounds, not wall-clock time. A tmp held
+         * by a live sibling writer is exempt — that holder always settles and
+         * releases, so its retry resolves on its own.
+         * Accepted range: 0..=255.
+         */acquireAttemptBudget: UInt32?,
+        /**
          * Max segments to download per step. Three keep the fetcher busy across
          * one round-trip without planning further ahead than a look-ahead cap
          * would allow anyway.
@@ -4182,6 +4199,7 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
          */downloadBatchSize: UInt32?) {
         self.lookAheadBytes = lookAheadBytes
         self.sizeProbeMethod = sizeProbeMethod
+        self.acquireAttemptBudget = acquireAttemptBudget
         self.downloadBatchSize = downloadBatchSize
     }
 
@@ -4203,6 +4221,7 @@ public struct FfiConverterTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
             try FfiHlsSourceSettings(
                 lookAheadBytes: FfiConverterOptionUInt64.read(from: &buf),
                 sizeProbeMethod: FfiConverterOptionTypeFfiSizeProbeMethod.read(from: &buf),
+                acquireAttemptBudget: FfiConverterOptionUInt32.read(from: &buf),
                 downloadBatchSize: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
@@ -4210,6 +4229,7 @@ public struct FfiConverterTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
     public static func write(_ value: FfiHlsSourceSettings, into buf: inout [UInt8]) {
         FfiConverterOptionUInt64.write(value.lookAheadBytes, into: &buf)
         FfiConverterOptionTypeFfiSizeProbeMethod.write(value.sizeProbeMethod, into: &buf)
+        FfiConverterOptionUInt32.write(value.acquireAttemptBudget, into: &buf)
         FfiConverterOptionUInt32.write(value.downloadBatchSize, into: &buf)
     }
 }
