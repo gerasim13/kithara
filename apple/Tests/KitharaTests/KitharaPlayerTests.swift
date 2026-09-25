@@ -171,6 +171,42 @@ struct KitharaPlayerTests {
         #expect(player.actionAtItemEnd == .pause)
     }
 
+    @Test("generated queue settings reach the player owner")
+    func generatedQueueSettingsReachOwner() throws {
+        let settings = FfiQueueSettings(
+            maxConcurrentLoads: 4,
+            prefetchDuration: 2,
+            shouldAutoplay: false,
+            maxHistorySize: 25,
+            playbackOrder: .shuffle,
+            actionAtItemEnd: .pause,
+            crossfadeSettings: FfiCrossfadeSettings(
+                duration: 1.5,
+                curve: .linear,
+                depth: 0.5,
+                position: 0.3
+            )
+        )
+        let player = try KitharaPlayer(config: .init(), queueSettings: settings)
+        #expect(player.playbackOrder == .shuffle)
+        #expect(player.actionAtItemEnd == .pause)
+        #expect(player.crossfadeSettings.duration == 1.5)
+        #expect(throws: FfiError.self) {
+            try KitharaPlayer(
+                config: .init(),
+                queueSettings: FfiQueueSettings(
+                    maxConcurrentLoads: 0,
+                    prefetchDuration: nil,
+                    shouldAutoplay: nil,
+                    maxHistorySize: nil,
+                    playbackOrder: nil,
+                    actionAtItemEnd: nil,
+                    crossfadeSettings: nil
+                )
+            )
+        }
+    }
+
     @Test("crossfade settings reject invalid values")
     func crossfadeSettingsRejectInvalidValues() throws {
         #expect(throws: KitharaError.self) {

@@ -373,25 +373,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         guard let eqBandCount = UInt32(exactly: config.eqBandCount) else {
             preconditionFailure("EQ band count must be non-negative and fit in UInt32")
         }
-        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
-            FfiKeyRule(
-                processor: KeyProcessorBridge(processor: rule.processor),
-                headers: rule.headers,
-                queryParams: rule.queryParams,
-                salt: rule.salt,
-                domains: rule.domains
-            )
-        }
-        let ffiConfig = FfiPlayerConfig(
-            store: config.store,
-            keyOptions: FfiKeyOptions(rules: ffiRules),
-            eqBandCount: eqBandCount,
-            authToken: config.authToken,
-            playingRate: config.playingRate,
-            playbackOrder: config.playbackOrder.ffi,
-            actionAtItemEnd: config.actionAtItemEnd.ffi,
-            crossfadeSettings: config.crossfadeSettings.ffi
-        )
+        let ffiConfig = Self.makeFfiConfig(config, eqBandCount: eqBandCount)
         do {
             try ensureDefaultHost()
         } catch {
@@ -402,7 +384,47 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         } catch {
             preconditionFailure("validated player configuration was rejected: \(error)")
         }
+        connectObserver()
+    }
 
+    /// Create a player with generated queue settings validated by Rust.
+    /// Values also present in `Config` are overridden by `queueSettings`.
+    public init(config: Config, queueSettings: FfiQueueSettings) throws {
+        guard let eqBandCount = UInt32(exactly: config.eqBandCount) else {
+            throw FfiError.InvalidArgument(reason: "EQ band count must fit in UInt32")
+        }
+        let ffiConfig = Self.makeFfiConfig(config, eqBandCount: eqBandCount)
+        try ensureDefaultHost()
+        self._inner = try AudioPlayer.newWithQueueSettings(
+            config: ffiConfig,
+            queueSettings: queueSettings
+        )
+        connectObserver()
+    }
+
+    private static func makeFfiConfig(_ config: Config, eqBandCount: UInt32) -> FfiPlayerConfig {
+        let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
+            FfiKeyRule(
+                processor: KeyProcessorBridge(processor: rule.processor),
+                headers: rule.headers,
+                queryParams: rule.queryParams,
+                salt: rule.salt,
+                domains: rule.domains
+            )
+        }
+        return FfiPlayerConfig(
+            store: config.store,
+            keyOptions: FfiKeyOptions(rules: ffiRules),
+            eqBandCount: eqBandCount,
+            authToken: config.authToken,
+            playingRate: config.playingRate,
+            playbackOrder: config.playbackOrder.ffi,
+            actionAtItemEnd: config.actionAtItemEnd.ffi,
+            crossfadeSettings: config.crossfadeSettings.ffi
+        )
+    }
+
+    private func connectObserver() {
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
         _eventCancellable = _eventSubject.sink { [weak self] event in
