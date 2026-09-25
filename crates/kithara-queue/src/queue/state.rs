@@ -350,9 +350,9 @@ pub(crate) mod tests {
         time::{Duration, Instant, timeout},
     };
     use kithara_play::{
-        AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq,
-        SlotId, bridge::slot_channels,
+        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
+        Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
+        bridge::slot_channels, player::Player,
     };
     use kithara_test_utils::kithara;
 
@@ -469,14 +469,12 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_preserves_the_resident_players_canonical_grid() {
+    fn queue_preserves_the_resident_players_sync_group() {
         let player = player();
-        let grid_id = player.id();
-        let snapshot = player.snapshot();
+        let grid_id = player.sync_attachment().id();
         let queue = Queue::new(QueueConfig::builder().player(player).build());
 
-        assert_eq!(queue.id(), grid_id);
-        assert_eq!(queue.snapshot(), snapshot);
+        assert_eq!(queue.sync_attachment().id(), grid_id);
     }
 
     #[kithara::test]

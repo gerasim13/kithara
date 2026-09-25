@@ -12,13 +12,14 @@ use kithara_test_utils::kithara;
 use kithara_warp::{BeatGridId, WarpPlan};
 
 use super::{
-    TestGroup,
-    modes::{Group, synced_deck},
+    TestGrid, TestGroup,
+    modes::{Group, rate, synced_deck},
     preparation::{asset_grid, attach_grid, cue, window},
 };
 use crate::{
-    LoadGeneration, ReceiptSink, StagePort, SyncAdmission, SyncCapability, SyncError,
-    SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncOperation, SyncReceipt,
+    ExecutedGroup, LoadGeneration, ReceiptSink, StagePort, SyncAdmission, SyncAttachment,
+    SyncCapability, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup,
+    SyncOperation, SyncReceipt,
 };
 
 /// The first session frame no caller can use.
@@ -97,7 +98,7 @@ impl ReceiptSink for Owner {
 }
 
 struct Fixture {
-    group: Group,
+    group: ExecutedGroup<Group>,
     track: BeatGridId,
     executor: SyncExecutor<Port>,
     heard: mpsc::UnboundedReceiver<SyncReceipt>,
@@ -108,9 +109,7 @@ impl Fixture {
     /// A synced deck whose loaded track the executor stages, reporting to
     /// an owner that answers with `answer`.
     fn new(answer: Answer, gate: Option<blocking::Receiver<()>>) -> Self {
-        let mut group = synced_deck();
         let track = BeatGridId::allocate().expect("grid id");
-        let _ = attach_grid(&mut group, asset_grid(track, 960_000, 24_000));
         let (heard_tx, heard) = mpsc::unbounded_channel();
         let owner = Owner {
             answer,
@@ -128,7 +127,7 @@ impl Fixture {
             }),
         );
         Self {
-            group,
+            group: ExecutedGroup::new(deck_holding(track), executor.execution()),
             track,
             executor,
             heard,
@@ -140,8 +139,8 @@ impl Fixture {
     /// its lane is staged.
     async fn prepare(&mut self, frame: u64) -> (SyncExecutionStamp, oneshot::Receiver<()>) {
         let admission = self
-            .executor
-            .transact(&mut self.group, cue_at(self.track, frame))
+            .group
+            .transact(cue_at(self.track, frame))
             .expect("the cue is admitted");
         let SyncAdmission::Prepared(preparation) = admission else {
             panic!("expected a preparation, got {admission:?}");
@@ -153,6 +152,13 @@ impl Fixture {
     async fn next_receipt(&mut self) -> SyncReceipt {
         self.heard.recv().await.expect("the owner hears a receipt")
     }
+}
+
+/// A synced deck holding the geometry of `track`.
+fn deck_holding(track: BeatGridId) -> Group {
+    let mut deck = synced_deck();
+    let _ = attach_grid(&mut deck, asset_grid(track, 960_000, 24_000));
+    deck
 }
 
 fn cue_at(track: BeatGridId, frame: u64) -> SyncOperation<TestGroup> {
@@ -209,9 +215,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
 
 #[kithara::test(tokio)]
 async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
-    let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
-    let _ = attach_grid(&mut group, asset_grid(track, 960_000, 24_000));
     let (heard, _) = mpsc::unbounded_channel();
     let unbound = Owner {
         answer: Answer::Record,
@@ -219,18 +223,18 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
         gate: Mutex::new(None),
         heard,
     };
-    let refused = |executor: &SyncExecutor<Port>, group: &mut Group| {
-        executor
-            .transact(group, cue_at(track, 24_000))
+    let refused = |executor: &SyncExecutor<Port>| {
+        ExecutedGroup::new(deck_holding(track), executor.execution())
+            .transact(cue_at(track, 24_000))
             .expect_err("the executor refuses the cue")
             .error()
             .clone()
     };
 
     let orphan = SyncExecutor::<Port>::new(track, None, CancelToken::root());
-    assert_eq!(refused(&orphan, &mut group), SyncError::OwnerUnavailable);
+    assert_eq!(refused(&orphan), SyncError::OwnerUnavailable);
     let detached = SyncExecutor::<Port>::new(track, Some(Arc::new(unbound)), CancelToken::root());
-    assert_eq!(refused(&detached, &mut group), SyncError::OwnerUnavailable);
+    assert_eq!(refused(&detached), SyncError::OwnerUnavailable);
 
     let (heard, _) = mpsc::unbounded_channel();
     let owner = Owner {
@@ -242,9 +246,36 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
     let unstageable = SyncExecutor::<Port>::new(track, Some(Arc::new(owner)), CancelToken::root());
     unstageable.load(1, None);
     assert_eq!(
-        refused(&unstageable, &mut group),
+        refused(&unstageable),
         SyncError::CapabilityUnavailable {
             capability: SyncCapability::Alignment,
         }
     );
+}
+
+/// A group built from a player's attachment owns the track geometry as its
+/// only member from birth, so no load has to change its topology.
+#[kithara::test]
+fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
+    let deck = BeatGridId::allocate().expect("grid id");
+    let track = BeatGridId::allocate().expect("grid id");
+    let executor = SyncExecutor::<Port>::new(track, None, CancelToken::root());
+    let group = SyncAttachment::new(
+        deck,
+        rate(48_000),
+        Box::new(TestGrid(asset_grid(track, 960_000, 24_000))),
+        executor.execution(),
+    )
+    .into_group::<TestGroup>();
+
+    let topology = group.topology().expect("an attached group has a topology");
+    assert_eq!(topology.group_grid().id(), deck);
+    let [member] = topology.members().as_ref() else {
+        panic!("the group owns exactly its track grid");
+    };
+    assert!(
+        member.group_topology().is_none(),
+        "a track grid is an ordinary member, not a nested group"
+    );
+    assert_eq!(member.grid().id(), track);
 }

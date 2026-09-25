@@ -301,9 +301,7 @@ mod tests {
     use kithara_assets::AssetStore;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
-    use kithara_sync::SyncGroup;
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGridState, MapAxis};
 
     use super::{super::PlayerImpl, *};
     use crate::{
@@ -462,37 +460,6 @@ mod tests {
             lifecycle.begin_close(),
             Ok(CloseAdmission::AlreadyClosed)
         ));
-    }
-
-    /// The player's group carries its track geometry as a member from birth:
-    /// that is the publication a session reads, and it exists before any
-    /// track is loaded so no load has to change the topology.
-    #[kithara::test]
-    fn a_player_publishes_its_track_geometry_as_its_own_member() {
-        let player = player();
-
-        let topology = SyncGroup::topology(&player).expect("a fresh player has a topology");
-
-        let [member] = topology.members().as_ref() else {
-            panic!("a player owns exactly its own track grid");
-        };
-        assert!(
-            member.group_topology().is_none(),
-            "a track grid is an ordinary member, not a nested group"
-        );
-        assert_ne!(
-            member.grid().id(),
-            topology.group_grid().id(),
-            "the geometry a player holds is a grid of its own"
-        );
-        assert!(
-            matches!(member.grid().axis(), MapAxis::Asset(_)),
-            "a track grid is asset-native: it states the recording, not the session"
-        );
-        assert!(
-            matches!(member.grid().state(), BeatGridState::Unavailable(_)),
-            "a player holding no track states no geometry"
-        );
     }
 
     #[kithara::test]

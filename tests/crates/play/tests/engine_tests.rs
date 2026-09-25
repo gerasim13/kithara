@@ -8,9 +8,9 @@ use kithara::{
     platform::sync::Arc,
     play::{
         Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SlotId,
+        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SlotId, player::Player,
     },
-    warp::{BeatGrid, BeatGridId},
+    warp::BeatGridId,
 };
 use kithara_integration_tests::test_defaults::Consts as Shared;
 
@@ -59,7 +59,7 @@ fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>>
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
-    let instance_id = player.id();
+    let instance_id = player.sync_attachment().id();
     let owner = host.insert(player).expect("insert fixture player instance");
     assert_eq!(owner.id(), instance_id);
     owner

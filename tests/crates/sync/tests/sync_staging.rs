@@ -4,8 +4,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    host::PlayerMember,
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::Player},
     signal::{SessionFrame, TransportRevision},
     sync::{
         AlignmentSource, LoadGeneration, SyncAdmission, SyncError, SyncGroup, SyncIntent,
@@ -306,14 +307,15 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
 #[kithara::test(native, tokio, multi_thread, serial, flash(false))]
 async fn a_player_outside_any_session_refuses_a_staged_preparation() {
     let track = BeatGridId::allocate().expect("fixture grid id");
-    let mut player = PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .sample_rate(NonZeroU32::new(48_000).expect("fixture rate"))
             .track_grid_id(track)
             .build(),
     );
-    let refused = player
+    let mut deck = player.sync_attachment().into_group::<PlayerMember>();
+    let refused = deck
         .transact(SyncOperation::Prepare {
             target: track,
             load: LoadGeneration::first(),

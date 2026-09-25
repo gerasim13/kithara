@@ -6,7 +6,7 @@ use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
     time::Duration,
 };
-use kithara_play::{PlayError, player::PlayerMember};
+use kithara_play::PlayError;
 use kithara_sync::GroupState;
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
@@ -21,6 +21,7 @@ use super::{
     OfflineSessionClient,
     backend::{BackendConfig, OfflineStream},
 };
+use crate::PlayerMember;
 
 pub(super) const CHANNELS: usize = 2;
 

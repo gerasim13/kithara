@@ -1,38 +1,18 @@
-use std::fmt;
-
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
-use kithara_sync::{
-    ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncReceipt,
-    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
-};
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+use kithara_sync::SyncAttachment;
 
-use super::{
-    super::{PlaybackView, PlayerImpl, PlayerRuntime},
-    PlayerMember,
-};
+use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};
-
-impl fmt::Debug for PlayerMember {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PlayerMember")
-            .field("grid_id", &self.id())
-            .finish_non_exhaustive()
-    }
-}
 
 /// Canonical object-safe protocol implemented by a standalone player and its
 /// orchestration decorators.
 ///
 /// Queue-specific item, EQ, volume, and event APIs remain on their concrete
 /// facade. This contract contains only playback operations shared by every
-/// host member plus the synchronization-group protocol.
-pub trait Player:
-    BeatGrid + SyncGroup<NestedGroup = PlayerMember> + MaybeSend + MaybeSync + 'static
-{
+/// host member; synchronization attaches through [`Self::sync_attachment`].
+pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
@@ -53,6 +33,10 @@ pub trait Player:
 
     /// Commit the host-applied deck level after a validated graph batch.
     fn set_host_level(&self, level: f32);
+
+    /// The synchronization group this player's owner builds for it: the
+    /// player's track geometry and the executor of its staged lanes.
+    fn sync_attachment(&self) -> SyncAttachment;
 
     /// Advance control-plane and audio-backend work.
     fn tick(&self) -> Result<(), PlayError>;
@@ -78,58 +62,6 @@ pub trait PlayerControlSource: Player {
 
     /// Prepare the attached graph and slot before exposing musical controls.
     fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
-
-    /// Transfers only the sendable Host-owned part of a wasm player.
-    #[cfg(target_arch = "wasm32")]
-    #[doc(hidden)]
-    fn take_host_member(&mut self) -> Result<PlayerMember, PlayError>;
-}
-
-impl<S> BeatGrid for PlayerImpl<S>
-where
-    S: Send + Sync + 'static,
-{
-    delegate::delegate! {
-        to self.sync {
-            fn id(&self) -> BeatGridId;
-            fn snapshot(&self) -> BeatGridSnapshot;
-        }
-    }
-}
-
-impl<S> SyncGroup for PlayerImpl<S>
-where
-    S: Send + Sync + 'static,
-{
-    type NestedGroup = PlayerMember;
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(&self.sync)
-    }
-
-    fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition {
-        let transition = self.sync.apply_staged(staged);
-        self.runtime.core.staging.follow_transition(&transition);
-        transition
-    }
-
-    fn transact(
-        &mut self,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        self.runtime
-            .core
-            .staging
-            .transact(&mut self.sync, operation)
-    }
-
-    delegate::delegate! {
-        to self.sync {
-            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
-            fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
-        }
-    }
 }
 
 impl<S> Player for PlayerImpl<S>
@@ -173,6 +105,15 @@ where
         }
     }
 
+    fn sync_attachment(&self) -> SyncAttachment {
+        SyncAttachment::new(
+            self.grid_id,
+            self.sample_rate,
+            Box::new(self.runtime.core.track_grid.clone()),
+            self.runtime.core.staging.execution(),
+        )
+    }
+
     fn tick(&self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)
     }
@@ -199,17 +140,5 @@ where
 
     fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
         control.prepare()
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn take_host_member(&mut self) -> Result<PlayerMember, PlayError> {
-        let sync = self.sync.take().ok_or_else(|| {
-            PlayError::Internal("player synchronization ownership was already transferred".into())
-        })?;
-        Ok(PlayerMember::new(
-            sync,
-            self.runtime.core.engine.master_volume(),
-            self.runtime.core.staging.clone(),
-        ))
     }
 }

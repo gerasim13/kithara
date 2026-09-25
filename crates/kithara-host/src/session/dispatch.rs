@@ -5,7 +5,7 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{PlayError, StreamShape, player::PlayerMember};
+use kithara_play::{PlayError, StreamShape};
 use kithara_sync::{
     SyncCapability, SyncError, SyncGroup, SyncOperation, SyncReceipt, SyncRejected,
     SyncStatusSnapshot, TopologyOperation,
@@ -24,7 +24,7 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::api::HostLevel;
+use crate::{PlayerMember, api::HostLevel};
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
