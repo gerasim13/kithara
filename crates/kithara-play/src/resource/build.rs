@@ -202,10 +202,12 @@ mod tests {
     fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/song.mp3");
         config.file.reader_event_capacity = Some(512);
+        config.file.look_ahead_bytes = Some(Some(0));
 
         let built = config.build_file_config(&worker(), None);
 
         assert_eq!(built.stream().reader_event_capacity, 512);
+        assert_eq!(built.stream().look_ahead_bytes, Some(0));
     }
 
     /// The per-call `hint` still lands as the file source's extension: it is

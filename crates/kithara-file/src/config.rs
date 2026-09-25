@@ -76,7 +76,9 @@ where
     #[config(value)]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    #[config(value)]
+    /// `None` permits fetching the whole file. `Some(0)` fetches only through
+    /// the current read request.
+    #[config(value, sdk(max = 8388608))]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
     #[patch(skip)]

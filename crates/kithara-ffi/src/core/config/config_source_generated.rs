@@ -33,6 +33,11 @@ impl TryFrom<FfiSizeProbeMethod> for kithara_hls::SizeProbeMethod {
     derive(uniffi::Record)
 )]
 pub struct FfiFileSourceSettings {
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    /// `None` permits fetching the whole file. `Some(0)` fetches only through
+    /// the current read request.
+    /// Accepted range: 0..=8388608 bytes.
+    pub look_ahead_bytes: Option<u64>,
     /// Ring depth for the decode-core to shell reader-event hand-off. A decode
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
@@ -46,6 +51,14 @@ impl TryFrom<FfiFileSourceSettings> for kithara_file::FileConfigPatch {
 
     fn try_from(value: FfiFileSourceSettings) -> Result<Self, Self::Error> {
         let mut patch = Self::default();
+        if let Some(input) = value.look_ahead_bytes {
+            if input > 8388608 {
+                return Err(crate::types::FfiError::InvalidArgument {
+                    reason: "FileConfig.look_ahead_bytes must be in 0..=8388608".into(),
+                });
+            }
+            patch.look_ahead_bytes = Some(Some(input));
+        }
         if let Some(input) = value.reader_event_capacity {
             if input == 0 || input > 4096 {
                 return Err(crate::types::FfiError::InvalidArgument {

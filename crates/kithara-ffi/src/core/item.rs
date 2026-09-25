@@ -733,6 +733,7 @@ mod tests {
             FfiItemConfig::for_test("https://example.com/song.mp3"),
             FfiSourceSettings {
                 file: Some(crate::FfiFileSourceSettings {
+                    look_ahead_bytes: Some(0),
                     reader_event_capacity: Some(512),
                 }),
                 hls: None,
@@ -742,6 +743,10 @@ mod tests {
         assert_eq!(
             file.source.as_ref().unwrap().file.reader_event_capacity,
             Some(512)
+        );
+        assert_eq!(
+            file.source.as_ref().unwrap().file.look_ahead_bytes,
+            Some(Some(0))
         );
 
         let hls = AudioPlayerItem::new_with_source_settings(
@@ -772,6 +777,7 @@ mod tests {
         for settings in [
             FfiSourceSettings {
                 file: Some(crate::FfiFileSourceSettings {
+                    look_ahead_bytes: None,
                     reader_event_capacity: Some(4097),
                 }),
                 hls: None,
@@ -793,6 +799,19 @@ mod tests {
                 Err(crate::types::FfiError::InvalidArgument { .. })
             ));
         }
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/song.mp3"),
+                FfiSourceSettings {
+                    file: Some(crate::FfiFileSourceSettings {
+                        look_ahead_bytes: Some(8_388_609),
+                        ..Default::default()
+                    }),
+                    hls: None,
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
         assert!(matches!(
             AudioPlayerItem::new_with_source_settings(
                 FfiItemConfig::for_test("https://example.com/live.m3u8"),

@@ -202,7 +202,7 @@ async function main() {
     { file: undefined, hls: { lookAheadBytes: 0n, downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
   ) as AudioPlayerItem;
   hlsItem.uniffiDestroy();
-  const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;
+  const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { lookAheadBytes: 0n, readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;
   generatedPlayer.append(item);
   await loadedTrack;
   // firewheel-web-audio resumes its warmed-up AudioContext on a user gesture.

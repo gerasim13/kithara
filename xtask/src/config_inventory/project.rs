@@ -389,7 +389,7 @@ fn render_source_record(
                     field.name
                 )?;
             }
-            "Option<u64>" if registration.package == "kithara-hls" => {
+            "Option<u64>" => {
                 let maximum = field.sdk_max.ok_or_else(|| {
                     anyhow::anyhow!(
                         "SDK source field {}.{} needs a maximum",
@@ -867,7 +867,7 @@ mod tests {
                 " /// Probe method.\n #[config(value, sdk)] size_probe_method: SizeProbeMethod, \
                  /// Look-ahead limit.\n #[config(value, sdk(max = 8388608))] look_ahead_bytes: Option<u64>"
             } else {
-                ""
+                " /// Look-ahead limit.\n #[config(value, sdk(max = 8388608))] look_ahead_bytes: Option<u64>"
             };
             registered.extend(
                 registrations(
@@ -881,6 +881,7 @@ mod tests {
         }
         let generated = render_source(&registered).unwrap();
         assert!(generated.contains("pub reader_event_capacity: Option<u32>"));
+        assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));
         assert!(generated.contains("pub download_batch_size: Option<u32>"));
         assert!(generated.contains("pub size_probe_method: Option<FfiSizeProbeMethod>"));
         assert!(generated.contains("pub look_ahead_bytes: Option<u64>"));

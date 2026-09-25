@@ -19,6 +19,15 @@ struct KitharaPlayerTests {
         #expect(bounded.lookAheadBytes == 0)
     }
 
+    @Test("File source settings preserve the reader-event initializer")
+    func fileSourceSettingsInitializer() {
+        let legacy = FfiFileSourceSettings(readerEventCapacity: 512)
+        let bounded = FfiFileSourceSettings(lookAheadBytes: 0, readerEventCapacity: 512)
+        #expect(legacy.readerEventCapacity == 512)
+        #expect(legacy.lookAheadBytes == nil)
+        #expect(bounded.lookAheadBytes == 0)
+    }
+
     init() throws {
         try TestHost.initialize()
     }

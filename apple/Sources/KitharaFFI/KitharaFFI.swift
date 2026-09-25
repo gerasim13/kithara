@@ -4055,6 +4055,13 @@ public func FfiConverterTypeFfiEqBandConfig_lower(_ value: FfiEqBandConfig) -> R
  */
 public struct FfiFileSourceSettings: Equatable, Hashable {
     /**
+     * Max bytes the downloader may be ahead of the reader before it pauses.
+     * `None` permits fetching the whole file. `Some(0)` fetches only through
+     * the current read request.
+     * Accepted range: 0..=8388608 bytes.
+     */
+    public let lookAheadBytes: UInt64?
+    /**
      * Ring depth for the decode-core to shell reader-event hand-off. A decode
      * pass emits at most one progress event per decoded chunk, so the default
      * bounds the worst-case post-seek skip burst without blocking the decode
@@ -4067,12 +4074,19 @@ public struct FfiFileSourceSettings: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
+         * Max bytes the downloader may be ahead of the reader before it pauses.
+         * `None` permits fetching the whole file. `Some(0)` fetches only through
+         * the current read request.
+         * Accepted range: 0..=8388608 bytes.
+         */lookAheadBytes: UInt64?,
+        /**
          * Ring depth for the decode-core to shell reader-event hand-off. A decode
          * pass emits at most one progress event per decoded chunk, so the default
          * bounds the worst-case post-seek skip burst without blocking the decode
          * core.
          * Accepted range: 1..=4096.
          */readerEventCapacity: UInt32?) {
+        self.lookAheadBytes = lookAheadBytes
         self.readerEventCapacity = readerEventCapacity
     }
 
@@ -4092,11 +4106,13 @@ public struct FfiConverterTypeFfiFileSourceSettings: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFileSourceSettings {
         return
             try FfiFileSourceSettings(
+                lookAheadBytes: FfiConverterOptionUInt64.read(from: &buf),
                 readerEventCapacity: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiFileSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt64.write(value.lookAheadBytes, into: &buf)
         FfiConverterOptionUInt32.write(value.readerEventCapacity, into: &buf)
     }
 }
