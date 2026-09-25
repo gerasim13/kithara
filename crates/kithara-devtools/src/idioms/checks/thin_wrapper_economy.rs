@@ -1044,11 +1044,7 @@ fn apply_edits(source: &str, edits: &[Edit]) -> Result<String> {
 }
 
 fn format_source(workspace_root: &Path, source: &str) -> Result<String> {
-    let toolchain = std::env::var("KITHARA_NIGHTLY_TOOLCHAIN")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "nightly".to_owned());
+    let toolchain = crate::util::nightly_toolchain();
     let mut child = Command::new("rustup")
         .args(["run", toolchain.as_str(), "rustfmt"])
         .args(["--emit", "stdout", "--edition", "2024", "--config-path"])

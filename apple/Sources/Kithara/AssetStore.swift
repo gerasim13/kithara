@@ -31,9 +31,15 @@ public typealias AssetLayout = FfiAssetLayout
 /// Query parameters included in cache identity for exact, `*.domain`, or `*`
 /// domain matches.
 public struct CacheIdentityRule: Sendable {
+    /// Hosts the rule applies to: an exact host, `*.domain` for its
+    /// subdomains, or `*` for every host.
     public let domains: [String]
+    /// Names of the query parameters that stay part of the cache identity of
+    /// a URL on a matching host.
     public let queryParameters: [String]
 
+    /// Creates a rule keeping `queryParameters` in the cache identity of URLs
+    /// on `domains`.
     public init(domains: [String], queryParameters: [String]) {
         self.domains = domains
         self.queryParameters = queryParameters

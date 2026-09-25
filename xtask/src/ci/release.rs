@@ -190,7 +190,7 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     }
     // Dokka reads the Kotlin the archive above generated, so the documentation
     // is rendered here rather than in a job that would have to build it again.
-    android::render_docs()?;
+    android::render_docs(process)?;
     package_docs(process, ctx, ext, "android")
 }
 
