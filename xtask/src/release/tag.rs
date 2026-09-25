@@ -7,6 +7,7 @@ use super::{
     artifact::sha256,
     changelog,
     git::{Remote, command, committer, git, output, token},
+    github, gitlab,
 };
 use crate::config::ReleaseConfig;
 
@@ -29,8 +30,10 @@ pub(super) fn validate_version(version: &str) -> Result<()> {
 /// framework's checksum and renders the changelog on top of `source`, the
 /// commit the release jobs built, and answer with that commit. No branch
 /// moves: the tag alone reaches the stamp commit. A re-run finds the tag it
-/// made and pushes it wherever it is missing; a tag another build made stops
-/// the release.
+/// made and pushes it wherever it is missing. A tag another build made is
+/// replaced, releases and all, while `registered` — the release's crates
+/// crates.io already holds at `version` — is empty, and stops the release once
+/// it is not: the registry keeps what it took, so that release is final.
 pub(super) fn ensure(
     cfg: &ReleaseConfig,
     tools: &ToolsConfig,
@@ -38,6 +41,7 @@ pub(super) fn ensure(
     source: &str,
     version: &str,
     artifacts: &Path,
+    registered: impl FnOnce() -> Result<Vec<String>>,
 ) -> Result<String> {
     validate_version(version)?;
     let tag = tag_of(version);
@@ -66,7 +70,7 @@ pub(super) fn ensure(
         found.push(tag_commit(&listing, &tag));
     }
 
-    let commit = match agreed(&tag, &remotes, &found)? {
+    let existing = match agreed(&tag, &remotes, &found)? {
         Some(commit) => {
             for (remote, at) in remotes.iter().zip(&found) {
                 if at.is_some() && !present(root, &commit) {
@@ -86,11 +90,22 @@ pub(super) fn ensure(
                 command(root).args(["show", &format!("{commit}:{}", cfg.manifest)]),
                 None,
             )?;
-            stamp_matches(&parents, &manifest, source, version, &checksum)
-                .with_context(|| format!("{tag} belongs to another build"))?;
-            println!("[tag] {tag} already stamps {source}");
-            commit
+            let matched = stamp_matches(&parents, &manifest, source, version, &checksum);
+            match existing_tag(&tag, matched, registered)? {
+                Existing::Reuse => {
+                    println!("[tag] {tag} already stamps {source}");
+                    Some(commit)
+                }
+                Existing::Replace => {
+                    retract(cfg, root, &remotes, &mut found, &tag)?;
+                    None
+                }
+            }
         }
+        None => None,
+    };
+    let commit = match existing {
+        Some(commit) => commit,
         None => stamp(cfg, tools, root, source, version, &checksum)?,
     };
 
@@ -106,6 +121,60 @@ pub(super) fn ensure(
         }
     }
     Ok(commit)
+}
+
+/// What becomes of a tag the remotes already carry.
+#[derive(Debug, PartialEq, Eq)]
+enum Existing {
+    Reuse,
+    Replace,
+}
+
+/// A tag that stamps this build is reused. One another build made is replaced
+/// until crates.io holds a crate at its version; after that it stops the run.
+fn existing_tag(
+    tag: &str,
+    matched: Result<()>,
+    registered: impl FnOnce() -> Result<Vec<String>>,
+) -> Result<Existing> {
+    let Err(mismatch) = matched else {
+        return Ok(Existing::Reuse);
+    };
+    let held = registered()?;
+    if !held.is_empty() {
+        return Err(mismatch.context(format!(
+            "{tag} belongs to another build, and crates.io already holds {}; that release is final",
+            held.join(", ")
+        )));
+    }
+    println!("[tag] {tag} belongs to another build ({mismatch:#}); replacing it");
+    Ok(Existing::Replace)
+}
+
+/// Take the release under `tag` down on both remotes, then the tag itself,
+/// here and wherever `found` lists it, so the stamp that replaces it is pushed
+/// everywhere and the changelog no longer sees the old one.
+fn retract(
+    cfg: &ReleaseConfig,
+    root: &Path,
+    remotes: &[Remote],
+    found: &mut [Option<String>],
+    tag: &str,
+) -> Result<()> {
+    github::retract(&cfg.github_repo, tag)?;
+    gitlab::retract(cfg, tag)?;
+    for (remote, at) in remotes.iter().zip(found.iter_mut()) {
+        if at.take().is_some() {
+            println!("[tag] removing {tag} from {}...", remote.name);
+            output(
+                remote
+                    .git(root)?
+                    .args(["push", &remote.url, &format!(":refs/tags/{tag}")]),
+                None,
+            )?;
+        }
+    }
+    git(root, &["update-ref", "-d", &format!("refs/tags/{tag}")]).map(drop)
 }
 
 /// The commit the release tags: `source` with the stamped manifest and the
@@ -321,6 +390,31 @@ mod tests {
         );
         assert_eq!(tag_commit("", "v0.0.2"), None);
         assert_eq!(tag_commit("aaa\trefs/tags/v0.0.20\n", "v0.0.2"), None);
+    }
+
+    #[test]
+    fn a_tag_of_this_build_is_reused_without_asking_the_registry() {
+        let existing = existing_tag("v0.0.2", Ok(()), || panic!("registry consulted")).unwrap();
+
+        assert_eq!(existing, Existing::Reuse);
+    }
+
+    #[test]
+    fn a_tag_of_another_build_is_replaced_while_no_crate_is_published() {
+        let existing =
+            existing_tag("v0.0.2", Err(anyhow::anyhow!("other build")), || Ok(vec![])).unwrap();
+
+        assert_eq!(existing, Existing::Replace);
+    }
+
+    #[test]
+    fn a_tag_of_another_build_is_final_once_a_crate_is_published() {
+        let error = existing_tag("v0.0.2", Err(anyhow::anyhow!("other build")), || {
+            Ok(vec!["kithara-derive".to_string()])
+        })
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("kithara-derive"), "{error:#}");
     }
 
     #[test]

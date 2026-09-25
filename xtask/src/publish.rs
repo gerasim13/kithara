@@ -103,6 +103,21 @@ pub(crate) fn release_crates(version: &str) -> Result<Vec<String>> {
     crates_at_version(locate_versions(&order)?, version)
 }
 
+/// The crates among `crates` that crates.io already holds at `version`. The
+/// registry never takes a version back, so a release any of them reached is
+/// final.
+pub(crate) fn registered(ctx: &Ctx, crates: &[String], version: &str) -> Result<Vec<String>> {
+    let publish = KitharaExt::from_ctx(ctx)?.publish;
+    let http_timeout_secs = resolve_http_timeout_secs(&publish)?;
+    let mut held = Vec::new();
+    for name in crates {
+        if registry_has(name, Some(version), &publish.user_agent, http_timeout_secs)? {
+            held.push(name.clone());
+        }
+    }
+    Ok(held)
+}
+
 fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result<Vec<String>> {
     let mut behind: Vec<_> = versions
         .iter()
