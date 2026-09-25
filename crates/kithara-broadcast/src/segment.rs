@@ -139,14 +139,7 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};
-    use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
-
-    mod consts {
-        pub(super) const PAYLOAD: usize = 200;
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-        pub(super) const UNITS_PER_TARGET: usize = 188;
-        pub(super) const UNIT_DURATION: u32 = 1_024;
-    }
+    use crate::{adts::AdtsPacker, config::BroadcastConfig, consts, id3::TimestampTag};
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
@@ -157,7 +150,7 @@ mod tests {
     }
 
     fn frame_bytes(units: usize) -> usize {
-        TimestampTag::LEN + units * (AdtsPacker::HEADER_LEN + consts::PAYLOAD)
+        TimestampTag::LEN + units * (AdtsPacker::HEADER_LEN + consts::SEGMENT_PAYLOAD)
     }
 
     fn start_ts(segment: &Segment) -> u64 {
@@ -169,7 +162,7 @@ mod tests {
 
     fn unit() -> EncodedAccessUnit {
         EncodedAccessUnit {
-            bytes: vec![0x5A; consts::PAYLOAD],
+            bytes: vec![0x5A; consts::SEGMENT_PAYLOAD],
             is_sync: true,
             duration: consts::UNIT_DURATION,
             dts: 0,
@@ -225,7 +218,7 @@ mod tests {
                 start_ts(&pair[0])
                     + TimestampTag::mpeg_timestamp(
                         u64::from(pair[0].duration_ts),
-                        consts::SAMPLE_RATE
+                        consts::ID3_SAMPLE_RATE
                     ),
                 "the next segment starts where the previous one ended"
             );
@@ -244,7 +237,7 @@ mod tests {
 
         assert_eq!(
             start_ts(&next),
-            TimestampTag::mpeg_timestamp(u64::from(closed.duration_ts), consts::SAMPLE_RATE),
+            TimestampTag::mpeg_timestamp(u64::from(closed.duration_ts), consts::ID3_SAMPLE_RATE),
             "a gap in the intake does not move the encoded time base"
         );
     }

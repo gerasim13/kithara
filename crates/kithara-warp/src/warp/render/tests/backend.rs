@@ -1,10 +1,8 @@
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::{
-    consts,
-    playback::{render, vinyl},
-};
+use super::playback::{render, vinyl};
+use crate::consts;
 
 #[kithara::test]
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]

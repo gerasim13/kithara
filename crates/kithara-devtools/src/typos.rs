@@ -4,15 +4,10 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::{
-    Ctx,
+    Ctx, consts,
     util::{check_tool, ensure_clean_tree},
     verdict::NotClean,
 };
-
-mod consts {
-    pub(super) const CONFIG_PATH: &str = ".config/typos.toml";
-    pub(super) const INSTALL_HINT: &str = "cargo install typos-cli";
-}
 
 #[derive(Debug, Args)]
 pub struct TyposArgs {
@@ -33,7 +28,9 @@ pub(crate) fn run(args: &TyposArgs, ctx: &Ctx) -> Result<()> {
     check_tool(
         program,
         &["--version"],
-        ctx.config.tools.install_hint("typos", consts::INSTALL_HINT),
+        ctx.config
+            .tools
+            .install_hint("typos", consts::TYPOS_INSTALL_HINT),
     )?;
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "typos")?;

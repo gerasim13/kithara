@@ -1,7 +1,7 @@
 use kithara_platform::time::Duration;
 
 use super::HangDump;
-use crate::kithara;
+use crate::{consts, kithara};
 
 #[kithara::test]
 fn no_context_serializes_to_null() {
@@ -523,11 +523,6 @@ mod panic_dump_tests {
             "a control-flow unwind must not be recorded as evidence"
         );
     }
-}
-
-mod consts {
-    pub(super) const LOOP_BREAK_COUNT_2: i32 = 2;
-    pub(super) const LOOP_BREAK_COUNT_3: i32 = 3;
 }
 
 #[kithara::test]

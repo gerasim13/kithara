@@ -861,17 +861,8 @@ mod output_rate_tests {
         AppleCodec, build_pcm_output_format, output_frame_capacity, resolve_output_sample_rate,
     };
     use crate::{
-        codec::FrameCodec, demuxer::TrackInfo, fmp4::parsing::parse_init, test_pools::pools,
+        codec::FrameCodec, consts, demuxer::TrackInfo, fmp4::parsing::parse_init, test_pools::pools,
     };
-
-    mod consts {
-        pub(super) const ALT_RATE: u32 = 48_000;
-        pub(super) const DOWNSAMPLE_CAPACITY: u32 = 942;
-        pub(super) const INPUT_FRAMES: u32 = 1024;
-        pub(super) const SOURCE_RATE: u32 = 44_100;
-        pub(super) const TEST_CHANNELS: u16 = 2;
-        pub(super) const UPSAMPLE_CAPACITY: u32 = 1116;
-    }
 
     fn aac_lc_track(aac_init: &[u8]) -> TrackInfo {
         let init_bytes = aac_init;
@@ -975,19 +966,11 @@ mod aac_lc_decode_tests {
     use super::{AppleCodec, ceil_resampled_frames, output_frame_capacity};
     use crate::{
         codec::FrameCodec,
+        consts,
         demuxer::TrackInfo,
         fmp4::parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
         test_pools::{TestPools, pools},
     };
-
-    mod consts {
-        pub(super) const COMMON_TARGET_RATE: u32 = 48_000;
-        pub(super) const HIGH_TARGET_RATE: u32 = 96_000;
-        pub(super) const MAX_EOF_DRAIN_CALLS: usize = 8;
-        pub(super) const MAX_SRC_DELAY_FRAMES: u32 = 1024;
-        pub(super) const OUTPUT_LENGTH_TOLERANCE_FRAMES: u64 = 1;
-        pub(super) const RESAMPLED_TEST_PACKETS: usize = 16;
-    }
 
     fn track_from_init(init: &Fmp4InitInfo) -> TrackInfo {
         let extra_data = init.config.as_ref().to_vec();

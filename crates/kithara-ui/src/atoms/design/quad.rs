@@ -80,7 +80,7 @@ mod tests {
     };
 
     /// The boxes and the ink the checks below are drawn with.
-    mod fixture {
+    mod consts {
         use super::{Rect, Rgba};
 
         /// The box both frame checks draw into.
@@ -121,7 +121,7 @@ mod tests {
     #[kithara::test]
     fn a_border_sits_inside_the_box_it_frames() {
         let mut list = DrawListBuilder::default();
-        border(&mut list, fixture::BOX, framed(2.0), fixture::INK);
+        border(&mut list, consts::BOX, framed(2.0), consts::INK);
 
         assert!(matches!(
             list.finish().commands(),
@@ -145,10 +145,10 @@ mod tests {
         let mut list = DrawListBuilder::default();
         quad(
             &mut list,
-            fixture::BOX,
+            consts::BOX,
             framed(0.0),
-            fixture::INK,
-            fixture::INK,
+            consts::INK,
+            consts::INK,
         );
 
         assert!(matches!(list.finish().commands(), [DrawCmd::Fill { .. }]));
@@ -156,7 +156,7 @@ mod tests {
 
     fn ruled(x: f32, width: f32) -> Rect {
         let mut list = DrawListBuilder::default();
-        rule(&mut list, fixture::COLUMN, x, width, fixture::INK);
+        rule(&mut list, consts::COLUMN, x, width, consts::INK);
         let commands = list.finish().commands().to_vec();
         match commands.as_slice() {
             [
@@ -194,6 +194,6 @@ mod tests {
     fn a_rule_runs_the_height_of_the_box_it_marks() {
         let drawn = ruled(10.3, 1.0);
 
-        assert_eq!((drawn.y, drawn.h), (fixture::COLUMN.y, fixture::COLUMN.h));
+        assert_eq!((drawn.y, drawn.h), (consts::COLUMN.y, consts::COLUMN.h));
     }
 }

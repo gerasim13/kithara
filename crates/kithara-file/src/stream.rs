@@ -18,6 +18,7 @@ use url::Url;
 use crate::{
     FileError, FileEvent,
     config::{FileConfig, FileSrc},
+    consts,
     coord::FileCoord,
     error::SourceError,
     session::{
@@ -27,11 +28,6 @@ use crate::{
 
 /// Marker type for file streaming.
 pub struct File<S>(PhantomData<fn() -> S>);
-
-mod consts {
-    pub(super) const DEFAULT_EXTENSION: &str = "bin";
-    pub(super) const MAX_EXTENSION_LEN: usize = 16;
-}
 
 struct RemoteFileOpen {
     coord: Arc<FileCoord>,

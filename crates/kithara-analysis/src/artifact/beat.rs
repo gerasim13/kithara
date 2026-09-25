@@ -2,17 +2,10 @@ use std::mem::size_of;
 
 use kithara_platform::sync::Arc;
 
-use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
-
-mod consts {
-    use super::size_of;
-
-    pub(super) const FRAME_BYTES: usize = size_of::<u64>() + size_of::<u32>() + size_of::<f32>();
-    pub(super) const LEN_PREFIX_BYTES: usize = size_of::<u64>();
-    pub(super) const LIST_COUNT: usize = 3;
-    pub(super) const SEGMENT_BYTES: usize = size_of::<u64>() * 2 + size_of::<f64>();
-    pub(super) const VERSION: u32 = 2;
-}
+use crate::{
+    blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
+    consts,
+};
 
 /// One artifact marker: its source frame, and the confidence the detector
 /// reported for it - `None` where analysis placed it by extrapolation and no
@@ -169,22 +162,7 @@ mod bytes_tests {
     use kithara_test_utils::kithara;
 
     use super::{BeatArtifact, BlobError, FitRegion};
-    use crate::blob::to_bytes;
-
-    const V2_FIXTURE: &[u8] = &[
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5e, 0x40, // 120 BPM
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, // frame 0
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
-        0x22, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 22_050
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, // start 0
-        0x44, 0xac, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // end 44_100
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, // ratio 1
-    ];
+    use crate::{blob::to_bytes, consts};
 
     fn sample() -> BeatArtifact {
         BeatArtifact::with_regions(
@@ -215,7 +193,8 @@ mod bytes_tests {
 
     #[kithara::test]
     fn frozen_v2_fixture_decodes_and_reencodes_identically() {
-        let artifact = BeatArtifact::try_from(V2_FIXTURE).expect("frozen v2 artifact decodes");
+        let artifact =
+            BeatArtifact::try_from(consts::V2_FIXTURE).expect("frozen v2 artifact decodes");
 
         assert_eq!(artifact.bpm(), 120.0);
         assert_eq!(artifact.beats(), [0, 22_050]);
@@ -226,7 +205,7 @@ mod bytes_tests {
 
         let mut encoded = Vec::new();
         artifact.write_to(&mut encoded);
-        assert_eq!(encoded, V2_FIXTURE);
+        assert_eq!(encoded, consts::V2_FIXTURE);
     }
 
     #[kithara::test]

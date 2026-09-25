@@ -12,13 +12,7 @@ use super::{
     digest::TreeDigest,
     layout::{self, validate_relative},
 };
-use crate::config::XtaskCacheConfig;
-
-mod consts {
-    pub(super) const BUILD_RECIPE: u32 = 1;
-    pub(super) const CACHE_SCHEMA: u32 = 1;
-    pub(super) const MANIFEST_LIMIT: usize = 1024 * 1024;
-}
+use crate::{config::XtaskCacheConfig, consts};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -440,7 +434,7 @@ mod tests {
     use anyhow::Result;
 
     use super::{CacheManifest, Freshness};
-    use crate::config::XtaskCacheConfig;
+    use crate::{config::XtaskCacheConfig, consts};
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, XtaskCacheConfig)> {
         let temp = tempfile::tempdir()?;
@@ -530,7 +524,7 @@ handler = "format-edited-paths"
     fn oversized_manifest_is_rejected_before_deserialization() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("manifest.json");
-        fs::write(&path, vec![b' '; super::consts::MANIFEST_LIMIT + 1])?;
+        fs::write(&path, vec![b' '; consts::MANIFEST_LIMIT + 1])?;
 
         assert!(CacheManifest::read(&path).is_err());
         Ok(())

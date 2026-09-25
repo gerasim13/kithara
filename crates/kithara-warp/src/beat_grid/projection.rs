@@ -278,23 +278,15 @@ mod tests {
         BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, consts,
     };
-
-    mod consts {
-        pub(super) const BEATS: i64 = 400;
-        pub(super) const HOST_BPM: f64 = 100.0;
-        pub(super) const QUEUE_TEMPOS: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-        pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
-    }
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")
     }
 
     fn beat_frames(bpm: f64) -> f64 {
-        f64::from(consts::SAMPLE_RATE) * consts::SECONDS_PER_MINUTE / bpm
+        f64::from(consts::SAMPLE_RATE) * consts::PROJECTION_SECONDS_PER_MINUTE / bpm
     }
 
     fn source(bpm: f64) -> BeatGridSnapshot {
@@ -333,7 +325,7 @@ mod tests {
         let anchor = SessionAnchor::new(
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
-            consts::HOST_BPM / consts::SECONDS_PER_MINUTE,
+            consts::HOST_BPM / consts::PROJECTION_SECONDS_PER_MINUTE,
             sample_rate(),
         )
         .expect("invariant: fixture tempo is invertible");

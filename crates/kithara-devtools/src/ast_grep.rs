@@ -670,6 +670,65 @@ impl Clone for Widget {
     }
 
     #[test]
+    fn module_consts_rule_rejects_private_constants_outside_a_consts_module() {
+        let source = r#"
+const LOOSE: u32 = 1;
+pub(crate) const SHARED: u32 = 2;
+
+mod nested {
+    pub(super) const INNER: u32 = 3;
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.module-consts-in-crate-consts.yml", source),
+            3
+        );
+    }
+
+    #[test]
+    fn module_consts_rule_keeps_consts_modules_public_api_and_scoped_constants() {
+        let source = r#"
+pub const EXPORTED: u32 = 1;
+const _: () = ();
+
+mod consts {
+    pub(super) const GATED: u32 = 2;
+}
+
+struct Band;
+
+impl Band {
+    const LOW: u32 = 3;
+}
+
+fn local() -> u32 {
+    const STEP: u32 = 4;
+    STEP
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.module-consts-in-crate-consts.yml", source),
+            0
+        );
+    }
+
+    #[test]
+    fn module_consts_rule_skips_the_crate_consts_file() {
+        let source = "pub(crate) const SHARED: u32 = 1;\n";
+
+        assert_eq!(
+            rule_hits_at(
+                "style.module-consts-in-crate-consts.yml",
+                "crates/kithara-audio/src/consts.rs",
+                source,
+            ),
+            0
+        );
+    }
+
+    #[test]
     fn a_reported_hit_names_the_line_an_editor_calls_it() {
         let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
         let mut by_rule = BTreeMap::new();

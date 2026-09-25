@@ -8,13 +8,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::{DeckLayout, ViewCache, WindowEdge},
-    scope::{MICRO_DECK, deck_index, eq_band},
+    scope::{consts::MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
     deck::{DeckId, EqMode},
     gui::{
         app::Kithara,
-        deck::{DeckMsg, TEMPO_STEP, TempoPercent},
+        deck::{DeckMsg, TempoPercent, consts::TEMPO_STEP},
         message::Message,
         mix::MixMsg,
     },

@@ -1,19 +1,7 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 
-mod consts {
-    use super::Coefficients;
-
-    pub(super) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    pub(super) const NYQUIST_FACTOR: f32 = 2.0;
-    pub(super) const PASSTHROUGH: Coefficients<f32> = Coefficients {
-        a1: 0.0,
-        a2: 0.0,
-        b0: 1.0,
-        b1: 0.0,
-        b2: 0.0,
-    };
-}
+use crate::consts;
 
 struct Section(DirectForm1<f32>);
 

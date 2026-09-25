@@ -9,13 +9,41 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "cfg_density";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "cfg_density";
+
+    pub(super) const EXPLANATION: &str = "\
+    Summary: Too many `#[cfg(...)]` gates scattered across individual items.
+
+    Why: Repeated cfg attributes are noisy, error-prone (easy to forget one
+    branch), and make the file hard to read. Grouping gated code into
+    dedicated modules with a single `#[cfg]` on the `mod` declaration is
+    cleaner and more maintainable.
+
+    Bad:
+        #[cfg(not(target_arch = \"wasm32\"))]
+        use std::env;
+        #[cfg(not(target_arch = \"wasm32\"))]
+        fn native_only() { ... }
+        #[cfg(target_arch = \"wasm32\")]
+        fn wasm_only() { ... }
+
+    Good:
+        #[cfg(not(target_arch = \"wasm32\"))]
+        mod native;
+        #[cfg(target_arch = \"wasm32\")]
+        mod wasm;
+
+    Resolve: move gated production items into dedicated platform or feature
+    modules and gate each module once. Test-only item ranges are excluded
+    automatically.";
+}
 
 pub(crate) struct CfgDensity;
 
 impl Check for CfgDensity {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -40,52 +68,26 @@ impl Check for CfgDensity {
             if count >= cfg.deny {
                 violations.push(
                     Violation::deny(
-                        ID,
+                        consts::ID,
                         &key,
                         format!("{count} #[cfg] attributes (deny threshold {})", cfg.deny),
                     )
-                    .with_explanation(EXPLANATION),
+                    .with_explanation(consts::EXPLANATION),
                 );
             } else if count >= cfg.warn {
                 violations.push(
                     Violation::warn(
-                        ID,
+                        consts::ID,
                         &key,
                         format!("{count} #[cfg] attributes (warn threshold {})", cfg.warn),
                     )
-                    .with_explanation(EXPLANATION),
+                    .with_explanation(consts::EXPLANATION),
                 );
             }
         }
         Ok(violations)
     }
 }
-
-const EXPLANATION: &str = "\
-Summary: Too many `#[cfg(...)]` gates scattered across individual items.
-
-Why: Repeated cfg attributes are noisy, error-prone (easy to forget one
-branch), and make the file hard to read. Grouping gated code into
-dedicated modules with a single `#[cfg]` on the `mod` declaration is
-cleaner and more maintainable.
-
-Bad:
-    #[cfg(not(target_arch = \"wasm32\"))]
-    use std::env;
-    #[cfg(not(target_arch = \"wasm32\"))]
-    fn native_only() { ... }
-    #[cfg(target_arch = \"wasm32\")]
-    fn wasm_only() { ... }
-
-Good:
-    #[cfg(not(target_arch = \"wasm32\"))]
-    mod native;
-    #[cfg(target_arch = \"wasm32\")]
-    mod wasm;
-
-Resolve: move gated production items into dedicated platform or feature
-modules and gate each module once. Test-only item ranges are excluded
-automatically.";
 
 fn count_cfg_attributes(source: &str) -> usize {
     let test_lines = cfg_test_lines(source);

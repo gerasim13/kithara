@@ -17,7 +17,7 @@ use crate::session::{
     offline::{OfflineSessionClient, OfflineTaskConfig},
 };
 
-mod defaults {
+mod consts {
     use super::NonZeroU32;
 
     pub(super) const BLOCK_FRAMES: NonZeroU32 = match NonZeroU32::new(512) {
@@ -55,9 +55,9 @@ impl<S> HostConfig<S> {
     #[builder(finish_fn = build)]
     pub fn offline(
         #[builder(start_fn)] pools: PoolRegion<S>,
-        #[builder(default = defaults::SAMPLE_RATE)] sample_rate: NonZeroU32,
-        #[builder(default = defaults::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
-        #[builder(default = defaults::BLOCK_FRAMES)] declick_frames: NonZeroU32,
+        #[builder(default = consts::SAMPLE_RATE)] sample_rate: NonZeroU32,
+        #[builder(default = consts::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
+        #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
@@ -245,7 +245,7 @@ where
                 "offline session reported a zero output rate".into(),
             ))
         })?;
-        let spec = AudioSpec::new(defaults::CHANNELS, rate);
+        let spec = AudioSpec::new(consts::CHANNELS, rate);
         self.session
             .offline_runtime_mut()
             .ok_or(OfflineRenderError::SessionModeUnavailable)?
@@ -298,7 +298,7 @@ mod tests {
         let mut host =
             Host::<TestPools>::new(HostConfig::builder().build()).expect("fixture realtime Host");
         let request = OfflineRenderRequest::builder()
-            .spec(AudioSpec::new(defaults::CHANNELS, defaults::SAMPLE_RATE))
+            .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
             .frames(0..1)
             .build();
         let cancel = CancelScope::new(None);

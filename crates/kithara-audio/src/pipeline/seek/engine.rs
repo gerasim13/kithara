@@ -10,7 +10,7 @@ use kithara_stream::{PlayheadWrite, SeekControl, SeekObserve, SourceSeekAnchor, 
 use tracing::{trace, warn};
 
 use crate::{
-    AudioLaneEvent, SeekLifecycleStage,
+    AudioLaneEvent, SeekLifecycleStage, consts,
     pipeline::{
         decode::{
             core::ActiveDecode,
@@ -76,10 +76,6 @@ pub(crate) enum SeekTransition {
         context: WaitContext,
         reason: WaitingReason,
     },
-}
-
-mod consts {
-    pub(super) const ANCHOR_RESOLUTION: &str = "seek anchor resolution failed";
 }
 
 impl SeekEngine {

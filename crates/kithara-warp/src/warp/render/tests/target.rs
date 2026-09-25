@@ -10,8 +10,8 @@ use kithara_test_utils::kithara;
 
 use super::{StretchControls, WarpConfig, spec};
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use super::{chunk, consts, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
-use crate::test_pools::pools_with_budget as test_pools;
+use super::{chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
+use crate::{consts, test_pools::pools_with_budget as test_pools};
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]

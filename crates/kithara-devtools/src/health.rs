@@ -11,20 +11,10 @@ use anyhow::{Context, Result};
 use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
-
-mod consts {
-    /// Substrings that mark an environment-level failure rather than a real
-    /// regression — typically a missing tool or unpublished baseline.
-    /// When any of these appear in the stage log on non-zero exit the stage
-    /// is reported as SKIP instead of FAIL.
-    pub(super) const ENV_SKIP_MARKERS: &[&str] = &[
-        "no such command:",
-        "command not found",
-        "not found in registry",
-        "Library not loaded",
-    ];
-}
+use crate::{
+    common::{project::ProjectConfig, timestamp::utc_timestamp},
+    consts,
+};
 
 #[derive(Debug, Args)]
 pub struct HealthArgs {}

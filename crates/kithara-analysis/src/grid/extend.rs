@@ -112,9 +112,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::extend_over;
-    use crate::BeatArtifact;
-
-    const RATE: u32 = 44_100;
+    use crate::{BeatArtifact, consts};
 
     fn grid(beats: Vec<u64>) -> BeatArtifact {
         let downbeats = beats.iter().step_by(4).map(detected).collect();
@@ -128,7 +126,11 @@ mod tests {
     #[kithara::test]
     fn an_extrapolated_marker_claims_nothing_and_a_detected_one_keeps_its_answer() {
         let detected = vec![0, 22_050, 44_100, 66_150];
-        let out = extend_over(grid(detected.clone()), 10 * u64::from(RATE), RATE);
+        let out = extend_over(
+            grid(detected.clone()),
+            10 * u64::from(consts::EXTEND_RATE),
+            consts::EXTEND_RATE,
+        );
 
         assert!(
             out.beats().len() > detected.len(),
@@ -154,7 +156,11 @@ mod tests {
     fn a_short_run_of_markers_covers_the_whole_extent() {
         // Four beats near the start of a ten-second track.
         let detected = vec![0, 22_050, 44_100, 66_150];
-        let out = extend_over(grid(detected.clone()), 10 * u64::from(RATE), RATE);
+        let out = extend_over(
+            grid(detected.clone()),
+            10 * u64::from(consts::EXTEND_RATE),
+            consts::EXTEND_RATE,
+        );
 
         for beat in &detected {
             assert!(
@@ -180,7 +186,11 @@ mod tests {
     #[kithara::test]
     fn markers_before_the_first_detection_are_filled_in() {
         // The first covered piece starts two seconds in.
-        let out = extend_over(grid(vec![88_200, 110_250]), 5 * u64::from(RATE), RATE);
+        let out = extend_over(
+            grid(vec![88_200, 110_250]),
+            5 * u64::from(consts::EXTEND_RATE),
+            consts::EXTEND_RATE,
+        );
         assert!(
             out.beats().first().is_some_and(|first| *first < 88_200),
             "the run before the first detection must be filled: {:?}",
@@ -191,7 +201,11 @@ mod tests {
     #[kithara::test]
     fn a_gap_between_detections_is_divided_evenly() {
         // Two detected pieces four beats apart.
-        let out = extend_over(grid(vec![0, 22_050, 110_250, 132_300]), 132_300, RATE);
+        let out = extend_over(
+            grid(vec![0, 22_050, 110_250, 132_300]),
+            132_300,
+            consts::EXTEND_RATE,
+        );
         assert_eq!(
             out.beats(),
             &[0, 22_050, 44_100, 66_150, 88_200, 110_250, 132_300],
@@ -202,11 +216,15 @@ mod tests {
     #[kithara::test]
     fn a_grid_with_nothing_to_go_on_is_left_alone() {
         let empty = BeatArtifact::new(120.0, Vec::new(), Vec::new());
-        assert!(extend_over(empty, 441_000, RATE).beats().is_empty());
+        assert!(
+            extend_over(empty, 441_000, consts::EXTEND_RATE)
+                .beats()
+                .is_empty()
+        );
 
         let zero_tempo = BeatArtifact::new(0.0, vec![(100, Some(0.9))], Vec::new());
         assert_eq!(
-            extend_over(zero_tempo, 441_000, RATE).beats(),
+            extend_over(zero_tempo, 441_000, consts::EXTEND_RATE).beats(),
             &[100],
             "a single marker without a tempo cannot be spread"
         );

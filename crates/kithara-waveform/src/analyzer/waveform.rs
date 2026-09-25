@@ -362,14 +362,10 @@ mod tests {
     use crate::{
         AnalysisParams, Band,
         bucket::Bucket,
+        consts,
         resume::{WaveformPartialResume, WaveformResume},
         test_pools::{TestPools, pools},
     };
-
-    mod consts {
-        pub(super) const EPS: f32 = 1e-6;
-        pub(super) const SR: u32 = 44_100;
-    }
 
     struct Pass {
         pools: kithara_bufpool::PoolRegion<TestPools>,

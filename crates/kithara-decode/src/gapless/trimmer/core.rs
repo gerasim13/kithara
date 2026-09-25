@@ -4,39 +4,13 @@ use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    ChunkRetire, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
+    ChunkRetire, GaplessInfo, GaplessTailCompensation, consts,
+    gapless::heuristic::SilenceTrimParams,
 };
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
 pub type GaplessOutput = SmallVec<[AudioChunk; 2]>;
 type TailBuffer = SmallVec<[AudioChunk; 4]>;
-
-mod consts {
-    /// Length of the click-suppression fade-in applied after every
-    /// heuristic trim (silence or codec-priming). 3 ms is short
-    /// enough to be inaudible as a transient but long enough to mask
-    /// the level discontinuity at the trim boundary.
-    pub(super) const FADE_IN_DURATION_MS: u64 = 3;
-
-    /// Length of the click-suppression fade-out applied to the very
-    /// end of the buffered audio after a heuristic trailing-silence
-    /// trim. Mirror of `FADE_IN_DURATION_MS` for the trailing side;
-    /// same reasoning (mask any sub-sample boundary mismatch left by
-    /// the trim search).
-    pub(super) const FADE_OUT_DURATION_MS: u64 = 3;
-
-    /// Window length (in milliseconds) used by the trailing silence
-    /// search. Per-sample threshold tests false-positive on zero-
-    /// crossings of any periodic signal — at 800 Hz a sine passes
-    /// below `1e-3` for ~3 frames every cycle, which the old
-    /// algorithm classified as silence and ate into audible content.
-    /// A 10 ms window contains many full cycles of typical audio and
-    /// integrates over them to get a stable energy estimate; it also
-    /// averages out lossy-codec quantisation noise floors (AAC
-    /// commonly sits around -50..-60 dB in quiet regions) so a real
-    /// silent suffix is recognised reliably.
-    pub(super) const TRAILING_SILENCE_WINDOW_MS: u64 = 10;
-}
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
 #[derive(Debug, Default, fieldwork::Fieldwork)]

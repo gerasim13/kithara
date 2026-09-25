@@ -237,17 +237,22 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    const WALL: Duration = Duration::from_millis(50);
+    use crate::consts;
 
     #[kithara::test(native, flash(false))]
     fn classify_splits_cpu_spin_blocked_and_unclassified() {
-        assert_eq!(classify(WALL, Some(Duration::from_millis(49))), "CPU spin");
         assert_eq!(
-            classify(WALL, Some(Duration::from_millis(2))),
+            classify(consts::WALL, Some(Duration::from_millis(49))),
+            "CPU spin"
+        );
+        assert_eq!(
+            classify(consts::WALL, Some(Duration::from_millis(2))),
             "blocked wait (lock/sleep/IO)"
         );
-        assert_eq!(classify(WALL, None), "unclassified (no thread CPU clock)");
+        assert_eq!(
+            classify(consts::WALL, None),
+            "unclassified (no thread CPU clock)"
+        );
     }
 
     #[kithara::test(native, flash(false))]

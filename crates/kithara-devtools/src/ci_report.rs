@@ -12,23 +12,9 @@ use serde_json::Value;
 use crate::{
     Ctx,
     common::project::{HealthConfig, ProjectConfig},
+    consts,
     quality_assessment::lcom,
 };
-
-/// Names the producing tools own. They are contracts with those tools rather
-/// than policy, so they stay here while how much of each to carry lives in
-/// `.config/xtask.toml` under `[ci_report]`.
-mod consts {
-    pub(super) const ASSESSMENT_DIRECTORY: &str = "quality-assessment";
-    pub(super) const ASSESSMENT_MANIFEST: &str = "manifest.json";
-    pub(super) const CRAP_DIRECTORY: &str = "cargo-crap";
-    pub(super) const CRAP_REPORT: &str = "report.md";
-    pub(super) const METRICS: &str = "metrics.json";
-    pub(super) const SIMILARITY_ARTIFACT: &str = "similarity-report";
-    pub(super) const SIMILARITY_REPORT: &str = "report.md";
-    /// Where the health report stops being a verdict and starts being logs.
-    pub(super) const STAGE_DETAILS: &str = "## Stage details";
-}
 
 #[derive(Debug, Args)]
 pub struct CiReportArgs {

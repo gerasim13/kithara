@@ -25,6 +25,7 @@ use super::super::{
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
+use crate::consts;
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -79,11 +80,6 @@ where
         }
     }
 }
-
-const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(rate) => rate,
-    None => unreachable!(),
-};
 
 pub(crate) struct FixtureSession;
 
@@ -154,7 +150,7 @@ fn attach_player_with_id<T, S>(
             .worker(worker)
             .session(SessionBinding::new(
                 Arc::new(FixtureSession),
-                FIXTURE_SAMPLE_RATE,
+                consts::FIXTURE_SAMPLE_RATE,
             ))
             .build(),
     );
@@ -189,7 +185,7 @@ pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> Pl
             .worker(worker)
             .session(SessionBinding::new(
                 Arc::new(FixtureSession),
-                FIXTURE_SAMPLE_RATE,
+                consts::FIXTURE_SAMPLE_RATE,
             ))
             .build(),
     );

@@ -15,10 +15,7 @@ use super::{
 };
 use crate::{BeatArtifact, artifact::MarkedBeat};
 
-#[cfg(feature = "beat-backend")]
-pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
-
-mod consts {
+pub(crate) mod consts {
     pub(super) const ALIGN_BARS: usize = 4;
     pub(super) const BEATS_PER_BAR: f64 = 4.0;
     pub(super) const MAX_BAR_RATIO: f64 = 2.0;
@@ -35,6 +32,9 @@ mod consts {
     pub(super) const RESIDUAL_MS: f64 = 18.0;
     pub(super) const SECS_PER_MIN: f64 = 60.0;
     pub(super) const STABLE_WINDOW_BARS: usize = 16;
+
+    #[cfg(feature = "beat-backend")]
+    pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
 }
 
 #[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
@@ -263,13 +263,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
-
-    mod consts {
-        pub(super) const SR: u32 = 44_100;
-        pub(super) const TOL_100MS: u64 = 4_410;
-        pub(super) const TOL_20MS: u64 = 882;
-    }
+    use crate::{consts, test_pools::pools};
 
     fn marks(times: Vec<f32>) -> Vec<BeatMark> {
         times.into_iter().map(|at| BeatMark::new(at, 0.9)).collect()
@@ -328,11 +322,11 @@ mod tests {
         let pools = pools();
         let raw = RawBeats::new(marks(steady(0.0, 0.5, 128)), marks(steady(0.0, 2.0, 64)));
 
-        super::build_grid(&raw, consts::SR, &GridParams::default(), &pools)
+        super::build_grid(&raw, consts::CORE_SR, &GridParams::default(), &pools)
             .expect("first grid fits the PCM pool budget");
         let allocated = pools.stats().allocated_bytes;
 
-        super::build_grid(&raw, consts::SR, &GridParams::default(), &pools)
+        super::build_grid(&raw, consts::CORE_SR, &GridParams::default(), &pools)
             .expect("second grid fits the PCM pool budget");
 
         assert_eq!(pools.stats().allocated_bytes, allocated);
@@ -348,7 +342,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -369,7 +363,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(downbeats)),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -422,7 +416,7 @@ mod tests {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -442,7 +436,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), Vec::new()),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -467,7 +461,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), Vec::new()),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -489,7 +483,7 @@ mod tests {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
         let grid = build_grid(
             &RawBeats::new(marks(beats.clone()), marks(beats)),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -532,7 +526,7 @@ mod tests {
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 64)),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -570,7 +564,7 @@ mod tests {
             t += 2.06;
         }
         db.push(t);
-        let grid = build_grid(&raw(db), consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert!(
             grid.regions().len() >= 2,
@@ -620,7 +614,7 @@ mod tests {
         let extras: Vec<f32> = [10usize, 20, 30].iter().map(|&i| db[i] + 1.0).collect();
         db.extend(extras);
         db.sort_by(f32::total_cmp);
-        let grid = build_grid(&raw(db), consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert_eq!(
             grid.downbeats().len(),
@@ -639,7 +633,7 @@ mod tests {
         for t in [132.2f32, 135.0, 138.4, 141.0] {
             db.push(t);
         }
-        let grid = build_grid(&raw(db), consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert!((grid.bpm() - 120.0).abs() < 0.5, "bpm {}", grid.bpm());
         for seg in grid.regions() {
@@ -657,7 +651,7 @@ mod tests {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(1.0, 2.0, 8))),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -679,7 +673,7 @@ mod tests {
     fn downbeat_only_short_track_remains_a_degraded_tempo_grid() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 8)),
-            consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 

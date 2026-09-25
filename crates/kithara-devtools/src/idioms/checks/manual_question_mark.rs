@@ -13,32 +13,34 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "manual_question_mark";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "manual_question_mark";
 
-const EXPLANATION: &str = "\
-Detected a `match` expression that hand-rolls what the `?` operator (or \
-`Result::map_err` / `Option::map`) does in one character.
+    pub(super) const EXPLANATION: &str = "\
+    Detected a `match` expression that hand-rolls what the `?` operator (or \
+    `Result::map_err` / `Option::map`) does in one character.
 
-Why it matters. Hand-rolled error propagation hides intent: a reader has \
-to walk both arms to confirm \"this is just bubbling the error up\" vs \
-\"this is doing something custom\". `?` has dedicated tooling support — \
-it nests cleanly with `From` conversions, plays with `try_trait_v2` \
-extensions, and lets `clippy::question_mark` catch related antipatterns. \
-Long-form match arms also accumulate: each one is 3-5 lines vs 1 char, \
-and they grow during refactoring.
+    Why it matters. Hand-rolled error propagation hides intent: a reader has \
+    to walk both arms to confirm \"this is just bubbling the error up\" vs \
+    \"this is doing something custom\". `?` has dedicated tooling support — \
+    it nests cleanly with `From` conversions, plays with `try_trait_v2` \
+    extensions, and lets `clippy::question_mark` catch related antipatterns. \
+    Long-form match arms also accumulate: each one is 3-5 lines vs 1 char, \
+    and they grow during refactoring.
 
-❌  let body = match fetch(url) { Ok(b) => b, Err(e) => return Err(e.into()) };
-✅  let body = fetch(url).map_err(Into::into)?;
+    ❌  let body = match fetch(url) { Ok(b) => b, Err(e) => return Err(e.into()) };
+    ✅  let body = fetch(url).map_err(Into::into)?;
 
-Suppress with `// xtask-lint-ignore: manual_question_mark` only when both \
-arms genuinely diverge in semantics (e.g. error-side does logging or \
-recovery before returning).";
+    Suppress with `// xtask-lint-ignore: manual_question_mark` only when both \
+    arms genuinely diverge in semantics (e.g. error-side does logging or \
+    recovery before returning).";
+}
 
 pub(crate) struct ManualQuestionMark;
 
 impl Check for ManualQuestionMark {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -80,10 +82,11 @@ impl<'ast> Visit<'ast> for MatchVisitor<'_> {
     fn visit_expr_match(&mut self, m: &'ast ExprMatch) {
         if let Some(pattern) = classify(m) {
             let s = m.match_token.span().start();
-            if !self.suppress.is_suppressed(s.line, ID) {
+            if !self.suppress.is_suppressed(s.line, consts::ID) {
                 let key = format!("{}:{}:{}", self.rel, s.line, s.column);
                 self.out.push(
-                    Violation::warn(ID, key, pattern.message()).with_explanation(EXPLANATION),
+                    Violation::warn(consts::ID, key, pattern.message())
+                        .with_explanation(consts::EXPLANATION),
                 );
             }
         }

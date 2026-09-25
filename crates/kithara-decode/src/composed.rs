@@ -11,6 +11,7 @@ use kithara_test_utils::kithara;
 use crate::{
     BlenderProfile,
     codec::FrameCodec,
+    consts,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     error::{DecodeError, DecodeResult},
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
@@ -47,8 +48,6 @@ impl HeadStrip {
         self.frames = self.frames.saturating_add(supplied - emitted);
     }
 }
-
-const ZERO_FRAME_BUDGET: u32 = 32;
 
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
@@ -294,7 +293,7 @@ where
             }
             let zero_frame_budget_reached = if frames == 0 {
                 self.zero_frame_count = self.zero_frame_count.saturating_add(1);
-                self.zero_frame_count >= ZERO_FRAME_BUDGET
+                self.zero_frame_count >= consts::ZERO_FRAME_BUDGET
             } else {
                 self.zero_frame_count = 0;
                 false
@@ -644,7 +643,7 @@ mod default_priming_tests {
 
     fn pcm_prefix(mut next: impl FnMut() -> DecoderChunkOutcome) -> Pcm {
         const FRAMES: usize = 4096;
-        let mut chunks = (0..ZERO_FRAME_BUDGET).filter_map(|_| match next() {
+        let mut chunks = (0..consts::ZERO_FRAME_BUDGET).filter_map(|_| match next() {
             DecoderChunkOutcome::Chunk(chunk) => Some(chunk),
             DecoderChunkOutcome::Pending(PendingReason::Retry) => None,
             _ => panic!("expected PCM"),
@@ -1185,14 +1184,6 @@ mod seek_trim_tests {
         demuxer::{DemuxOutcome, Frame, TrackInfo},
         traits::Decoder,
     };
-
-    mod consts {
-        pub(super) const CHANNELS: u16 = 2;
-        pub(super) const OUTPUT_SAMPLE_RATE: u32 = 48_000;
-        pub(super) const PACKET_COUNT: u64 = 6;
-        pub(super) const PACKET_FRAMES: u32 = 1024;
-        pub(super) const SAMPLE_RATE: u32 = 44_100;
-    }
 
     fn test_spec(sample_rate: u32) -> AudioSpec {
         AudioSpec::new(
@@ -2048,7 +2039,7 @@ mod hook_tests {
         trim_silence: Vec<f32>,
         zero_packet: &'static [u8],
     ) {
-        let outcomes = (0..=ZERO_FRAME_BUDGET)
+        let outcomes = (0..=consts::ZERO_FRAME_BUDGET)
             .map(|index| StubOutcome::Frame {
                 pts: Duration::from_millis(u64::from(index)),
                 duration: Duration::from_millis(1),

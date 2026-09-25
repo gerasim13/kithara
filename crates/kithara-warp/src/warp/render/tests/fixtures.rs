@@ -6,19 +6,11 @@ use realfft::RealFftPlanner;
 
 use super::super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    Warp, WarpConfig,
+    Warp, WarpConfig, consts,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
 pub(super) type WarpRenderer = GenericWarpRenderer<TestPools>;
-
-pub(super) mod consts {
-    pub(crate) const CH: u16 = 2;
-    pub(crate) const F0: f64 = 440.0;
-    /// FFT length for the pitch (dominant-frequency) check.
-    pub(crate) const N: usize = 1 << 14;
-    pub(crate) const SR: u32 = 44_100;
-}
 
 pub(super) fn f64_of(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()

@@ -8,20 +8,10 @@ use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
 
 use crate::{
+    consts,
     pipeline::config::{AudioDecoderConfig, AudioDecoderConfigPatch},
     traits::AudioObserver,
 };
-
-mod consts {
-    /// Output ring depth. wasm needs a deeper ring because its worker is
-    /// scheduled coarsely.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) const AUDIO_BUFFER_CHUNKS: usize = 10;
-    #[cfg(target_arch = "wasm32")]
-    pub(super) const AUDIO_BUFFER_CHUNKS: usize = 32;
-    /// Chunks buffered before preload readiness is signalled.
-    pub(super) const PRELOAD_CHUNKS: usize = 3;
-}
 
 /// The consumer's thread capability: how it wakes the decode worker after
 /// draining its ring, and how its reader-born events reach the bus.

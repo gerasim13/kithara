@@ -106,47 +106,37 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, test_pools::pools};
-
-    mod fixture {
-        pub(super) const CHANNELS: usize = 2;
-        pub(super) const CONTEXT_FRAMES: usize = 8192;
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-    }
+    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, consts, test_pools::pools};
 
     fn signal(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
-        pcm.bungee[offset * fixture::CHANNELS..(offset + frames) * fixture::CHANNELS].to_vec()
+        pcm.bungee[offset * consts::CHANNELS..(offset + frames) * consts::CHANNELS].to_vec()
     }
 
     fn anchored_core(stretch_pcm: &StretchPcm) -> StreamCore {
         let config = ElasticConfig::builder()
             .pools(pools())
-            .sample_rate(fixture::SAMPLE_RATE)
-            .channels(fixture::CHANNELS)
-            .max_source_frames(fixture::CONTEXT_FRAMES)
-            .max_output_frames(fixture::CONTEXT_FRAMES)
+            .sample_rate(consts::SAMPLE_RATE)
+            .channels(consts::CHANNELS)
+            .max_source_frames(consts::CONTEXT_FRAMES)
+            .max_output_frames(consts::CONTEXT_FRAMES)
             .build()
             .expect("the fixture shape is valid");
-        let mut core = StreamCore::new(&config, fixture::CONTEXT_FRAMES)
+        let mut core = StreamCore::new(&config, consts::CONTEXT_FRAMES)
             .expect("the anchored fixture core prepares");
-        core.prepare_input_capacity(fixture::CONTEXT_FRAMES * 4)
+        core.prepare_input_capacity(consts::CONTEXT_FRAMES * 4)
             .expect("the fixture reserves its complete prime context");
-        let history = signal(stretch_pcm, fixture::CONTEXT_FRAMES, 0);
-        let lookahead = signal(
-            stretch_pcm,
-            fixture::CONTEXT_FRAMES,
-            fixture::CONTEXT_FRAMES,
-        );
+        let history = signal(stretch_pcm, consts::CONTEXT_FRAMES, 0);
+        let lookahead = signal(stretch_pcm, consts::CONTEXT_FRAMES, consts::CONTEXT_FRAMES);
         let warm_source = signal(
             stretch_pcm,
-            fixture::CONTEXT_FRAMES,
-            fixture::CONTEXT_FRAMES * 2,
+            consts::CONTEXT_FRAMES,
+            consts::CONTEXT_FRAMES * 2,
         );
-        let mut discarded = vec![0.0; fixture::CONTEXT_FRAMES * fixture::CHANNELS];
+        let mut discarded = vec![0.0; consts::CONTEXT_FRAMES * consts::CHANNELS];
         core.prime(
             &history,
             &lookahead,
-            ElasticRequest::new(fixture::CONTEXT_FRAMES, fixture::CONTEXT_FRAMES)
+            ElasticRequest::new(consts::CONTEXT_FRAMES, consts::CONTEXT_FRAMES)
                 .expect("the warmup request is valid"),
             &warm_source,
             1.0,
@@ -193,15 +183,15 @@ mod tests {
 
         let config = ElasticConfig::builder()
             .pools(pools())
-            .sample_rate(fixture::SAMPLE_RATE)
-            .channels(fixture::CHANNELS)
-            .max_source_frames(fixture::CONTEXT_FRAMES)
-            .max_output_frames(fixture::CONTEXT_FRAMES)
+            .sample_rate(consts::SAMPLE_RATE)
+            .channels(consts::CHANNELS)
+            .max_source_frames(consts::CONTEXT_FRAMES)
+            .max_output_frames(consts::CONTEXT_FRAMES)
             .build()
             .expect("the fixture shape is valid");
         let mut core =
-            StreamCore::new(&config, fixture::CONTEXT_FRAMES).expect("the fixture core prepares");
-        let probe = ElasticRequest::new(fixture::CONTEXT_FRAMES, fixture::CONTEXT_FRAMES)
+            StreamCore::new(&config, consts::CONTEXT_FRAMES).expect("the fixture core prepares");
+        let probe = ElasticRequest::new(consts::CONTEXT_FRAMES, consts::CONTEXT_FRAMES)
             .expect("the latency probe request is valid");
         for _ in 0..StreamCore::PIPELINE_GRAINS {
             core.probe_silence(probe)
@@ -216,7 +206,7 @@ mod tests {
         let slow = ElasticRequest::new(SLOW_SOURCE_FRAMES, SLOW_OUTPUT_FRAMES)
             .expect("the slow request is valid");
         let slow_source = signal(stretch_pcm, SLOW_SOURCE_FRAMES, 0);
-        let mut slow_output = vec![0.0; SLOW_OUTPUT_FRAMES * fixture::CHANNELS];
+        let mut slow_output = vec![0.0; SLOW_OUTPUT_FRAMES * consts::CHANNELS];
         core.render(Some(&slow_source), slow, 1.0, Some(&mut slow_output))
             .expect("the slow request renders");
         let slow_position = core.request.position;
@@ -224,7 +214,7 @@ mod tests {
         let fast = ElasticRequest::new(FAST_SOURCE_FRAMES, FAST_OUTPUT_FRAMES)
             .expect("the fast request is valid");
         let fast_source = signal(stretch_pcm, FAST_SOURCE_FRAMES, SLOW_SOURCE_FRAMES);
-        let mut fast_output = vec![0.0; FAST_OUTPUT_FRAMES * fixture::CHANNELS];
+        let mut fast_output = vec![0.0; FAST_OUTPUT_FRAMES * consts::CHANNELS];
         core.render(Some(&fast_source), fast, 1.0, Some(&mut fast_output))
             .expect("the adjacent fast request renders");
 
@@ -241,14 +231,14 @@ mod tests {
         const TRANSITIONS: usize = 32;
 
         let mut core = anchored_core(stretch_pcm);
-        let mut source_position = fixture::CONTEXT_FRAMES * 3;
-        let mut previous: Option<[f32; fixture::CHANNELS]> = None;
+        let mut source_position = consts::CONTEXT_FRAMES * 3;
+        let mut previous: Option<[f32; consts::CHANNELS]> = None;
         for transition in 0..TRANSITIONS {
             let fast = transition.is_multiple_of(2);
             let source_frames = if fast { QUANTUM * 2 } else { QUANTUM };
             let pitch = if fast { 1.5 } else { 1.0 };
             let source = signal(stretch_pcm, source_frames, source_position);
-            let mut output = vec![f32::NAN; QUANTUM * fixture::CHANNELS];
+            let mut output = vec![f32::NAN; QUANTUM * consts::CHANNELS];
             core.render(
                 Some(&source),
                 ElasticRequest::new(source_frames, QUANTUM)
@@ -263,7 +253,7 @@ mod tests {
             assert!(!core.native.is_flushed());
             assert!(output.iter().all(|sample| sample.is_finite()));
             if let Some(previous) = previous {
-                for channel in 0..fixture::CHANNELS {
+                for channel in 0..consts::CHANNELS {
                     let after = output[channel];
                     assert!(
                         (after - previous[channel]).abs() <= 0.1,
@@ -272,8 +262,8 @@ mod tests {
                 }
             }
             previous = Some([
-                output[(QUANTUM - 1) * fixture::CHANNELS],
-                output[QUANTUM * fixture::CHANNELS - 1],
+                output[(QUANTUM - 1) * consts::CHANNELS],
+                output[QUANTUM * consts::CHANNELS - 1],
             ]);
             source_position += source_frames;
         }
@@ -290,9 +280,9 @@ mod tests {
 
         let mut core = anchored_core(stretch_pcm);
         core.native.fail_next(fault);
-        let source = signal(stretch_pcm, QUANTUM, fixture::CONTEXT_FRAMES * 3);
+        let source = signal(stretch_pcm, QUANTUM, consts::CONTEXT_FRAMES * 3);
         let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("unity request");
-        let mut output = vec![f32::NAN; QUANTUM * fixture::CHANNELS];
+        let mut output = vec![f32::NAN; QUANTUM * consts::CHANNELS];
 
         assert!(
             core.render(Some(&source), request, 1.0, Some(&mut output))
@@ -309,13 +299,13 @@ mod tests {
 
         let recovery_source = signal(
             stretch_pcm,
-            fixture::CONTEXT_FRAMES,
-            fixture::CONTEXT_FRAMES * 3 + QUANTUM,
+            consts::CONTEXT_FRAMES,
+            consts::CONTEXT_FRAMES * 3 + QUANTUM,
         );
-        let mut recovery_output = vec![0.0; fixture::CONTEXT_FRAMES * fixture::CHANNELS];
+        let mut recovery_output = vec![0.0; consts::CONTEXT_FRAMES * consts::CHANNELS];
         core.render(
             Some(&recovery_source),
-            ElasticRequest::new(fixture::CONTEXT_FRAMES, fixture::CONTEXT_FRAMES)
+            ElasticRequest::new(consts::CONTEXT_FRAMES, consts::CONTEXT_FRAMES)
                 .expect("the recovery request is valid"),
             1.0,
             Some(&mut recovery_output),
@@ -335,11 +325,11 @@ mod tests {
         let mut core = anchored_core(stretch_pcm);
         let mut produced = 0usize;
         let mut admitted = 0usize;
-        let mut output = vec![f32::NAN; quantum * fixture::CHANNELS];
+        let mut output = vec![f32::NAN; quantum * consts::CHANNELS];
         while produced < OUTPUT_FRAMES {
             let next = produced + quantum;
             let source_frames = next / 2 - produced / 2;
-            let source = &stretch_pcm.bungee[..source_frames * fixture::CHANNELS];
+            let source = &stretch_pcm.bungee[..source_frames * consts::CHANNELS];
             core.render(
                 Some(source),
                 ElasticRequest::new(source_frames, quantum).expect("quantized half-rate request"),

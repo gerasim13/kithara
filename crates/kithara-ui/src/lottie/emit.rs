@@ -409,12 +409,14 @@ mod tests {
     use super::emit;
     use crate::draw::{DrawCmd, DrawListBuilder, Geom, Paint};
 
-    /// One square, filled, under one group transform: the smallest artwork that
-    /// exercises the whole walk — layer, group, contour, draw.
-    const PROBE: &str = include_str!("../../assets/lottie/probe.json");
+    mod consts {
+        /// One square, filled, under one group transform: the smallest artwork that
+        /// exercises the whole walk — layer, group, contour, draw.
+        pub(super) const PROBE: &str = include_str!("../../assets/lottie/probe.json");
+    }
 
     fn read() -> Composition {
-        Composition::from_slice(PROBE.as_bytes())
+        Composition::from_slice(consts::PROBE.as_bytes())
             .unwrap_or_else(|error| panic!("the probe artwork must read: {error}"))
     }
 

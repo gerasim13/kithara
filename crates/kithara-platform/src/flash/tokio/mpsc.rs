@@ -514,12 +514,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{channel, error::TrySendError, unbounded_channel};
-    use crate::{flash, tokio::task::spawn};
-
-    mod consts {
-        pub(super) const PER_PRODUCER: usize = 200;
-        pub(super) const PRODUCERS: usize = 8;
-    }
+    use crate::{consts, flash, tokio::task::spawn};
 
     /// Bounded channel under a multi-thread runtime: many producers fan into a
     /// single consumer across worker threads, with a capacity small enough to

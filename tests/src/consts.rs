@@ -9,3 +9,7 @@ pub(crate) const MAX_HLS_VARIANTS: usize = 16;
 pub(crate) const MAX_SAMPLE_RATE: u32 = 192_000;
 
 pub(crate) const MIN_SAMPLE_RATE: u32 = 8_000;
+
+#[cfg(all(feature = "analysis", not(target_arch = "wasm32")))]
+#[cfg(test)]
+pub(crate) const BEAT_FRAMES: u64 = 24_000;

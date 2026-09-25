@@ -4,11 +4,10 @@ use kithara_stream::StreamType;
 use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
-use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
-
-mod consts {
-    pub(super) const NANOS_PER_SEC: u128 = 1_000_000_000;
-}
+use crate::{
+    consts,
+    pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream},
+};
 
 pub(crate) fn duration(spec: AudioSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)

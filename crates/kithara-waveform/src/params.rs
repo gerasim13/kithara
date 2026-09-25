@@ -1,16 +1,6 @@
 use bon::Builder;
 
-use crate::Band;
-
-mod consts {
-    use super::Band;
-
-    pub(super) const BAND_GAIN: [f32; Band::COUNT] = [1.0, 2.5, 12.0];
-    pub(super) const ENERGY_FLOOR: f32 = 1e-4;
-    pub(super) const FFT_SIZE: usize = 4096;
-    pub(super) const LOW_MID_HZ: f32 = 250.0;
-    pub(super) const MID_HIGH_HZ: f32 = 2500.0;
-}
+use crate::{Band, consts};
 
 /// FFT / band-split / reduction tunables. One home for the constants.
 #[derive(Builder, Clone, Copy, Debug, fieldwork::Fieldwork)]

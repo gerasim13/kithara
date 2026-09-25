@@ -1,9 +1,6 @@
 use kithara_derive::Ranged;
 
-mod consts {
-    pub(super) const DB_DIVISOR: f32 = 20.0;
-    pub(super) const DB_LOG_BASE: f32 = 10.0;
-}
+use crate::consts;
 
 /// Gain of one EQ band, in dB. `0.0` is unity and [`GainDb::MIN`] kills the
 /// band. The range is asymmetric on purpose: cutting stays useful far past

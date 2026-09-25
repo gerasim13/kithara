@@ -6,10 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-mod consts {
-    pub(super) const CGROUP_ROOT: &str = "/sys/fs/cgroup";
-    pub(super) const PROC_ROOT: &str = "/proc";
-}
+use crate::consts;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -5,12 +5,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use super::domain::DomainPattern;
-
-mod consts {
-    pub(super) const DISCRIMINATOR_DOMAIN: &[u8] = b"kithara.play.query-discriminator.v1\0";
-    pub(super) const HASH_BYTES: usize = 16;
-    pub(super) const IDENTITY_DOMAIN: &[u8] = b"kithara.play.query-identity.v1\0";
-}
+use crate::consts;
 
 /// Domain rule selecting the case-sensitive query keys that identify content.
 #[derive(Clone, Debug)]

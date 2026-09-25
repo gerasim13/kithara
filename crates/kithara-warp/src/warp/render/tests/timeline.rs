@@ -6,10 +6,9 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{
-    StretchControls, WarpRenderer, chunk, consts, f64_of, flush_serviced, render_serviced,
-    renderer, spec,
+    StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec,
 };
-use crate::{GridSegment, RegionPlan, Warp, WarpConfig};
+use crate::{GridSegment, RegionPlan, Warp, WarpConfig, consts};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -630,7 +629,7 @@ fn moving_target_renderer() -> WarpRenderer {
     let mut fx = renderer(StretchControls::new(1.0));
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
-        super::super::SPEED_SMOOTHING_SPAN,
+        super::super::consts::SPEED_SMOOTHING_SPAN,
         SmootherConfig::default(),
         spec().sample_rate,
     ));

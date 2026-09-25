@@ -7,50 +7,13 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
     thread::{Builder, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
 use serde::Serialize;
 
-pub(crate) const SCHEMA: &str = "devtools.pressure.v2";
-
-mod consts {
-    use super::Duration;
-
-    pub(super) const CGROUP_METRICS: &[(&str, &str)] = &[
-        ("cgroup.cpu.stat", "cpu.stat"),
-        ("cgroup.cpu.pressure", "cpu.pressure"),
-        ("cgroup.memory.current", "memory.current"),
-        ("cgroup.memory.peak", "memory.peak"),
-        ("cgroup.memory.events", "memory.events"),
-        ("cgroup.memory.pressure", "memory.pressure"),
-        ("cgroup.io.stat", "io.stat"),
-        ("cgroup.io.pressure", "io.pressure"),
-        ("cgroup.pids.current", "pids.current"),
-        ("cgroup.pids.events", "pids.events"),
-        ("cgroup.cpuset.cpus.effective", "cpuset.cpus.effective"),
-    ];
-    pub(super) const MAX_METRIC_BYTES: usize = 32 * 1_024;
-    pub(super) const MAX_METRIC_READ_BYTES: u64 = 32 * 1_024 + 1;
-    pub(super) const MAX_RECORD_BYTES: usize = 1_048_576;
-    pub(super) const MAX_RECOVERY_BYTES: u64 = 2 * 1_048_576 + 2;
-    pub(super) const MEMINFO_FIELDS: &[&str] = &[
-        "MemTotal",
-        "MemFree",
-        "MemAvailable",
-        "Buffers",
-        "Cached",
-        "SwapTotal",
-        "SwapFree",
-    ];
-    pub(super) const PROC_METRICS: &[(&str, &str)] = &[
-        ("proc.pressure.cpu", "pressure/cpu"),
-        ("proc.pressure.memory", "pressure/memory"),
-        ("proc.pressure.io", "pressure/io"),
-    ];
-    pub(super) const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-}
+use crate::consts;
 
 pub(super) struct Sampler {
     worker: JoinHandle<WorkerOutcome>,
@@ -401,7 +364,7 @@ fn write_sample(
     let record = SampleRecord {
         marker,
         timestamp_ms,
-        schema: SCHEMA,
+        schema: consts::SCHEMA,
         load1: observation.load1,
         scope: Scope {
             proc_pressure: "host",
@@ -434,7 +397,7 @@ fn append_end(
     let record = EndRecord {
         timestamp_ms,
         sampler_healthy,
-        schema: SCHEMA,
+        schema: consts::SCHEMA,
         marker: Marker::End,
         load1: None,
         metrics: BTreeMap::new(),
@@ -583,7 +546,7 @@ mod tests {
         let first = contents.lines().next().expect("start record");
         let record = serde_json::from_str::<Value>(first).expect("parse start record");
 
-        assert_eq!(record["schema"], SCHEMA);
+        assert_eq!(record["schema"], consts::SCHEMA);
         assert_eq!(record["marker"], "start");
         assert_eq!(record["load1"], 1.25);
         assert_eq!(record["scope"]["proc_pressure"], "host");

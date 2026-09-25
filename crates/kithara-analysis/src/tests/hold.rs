@@ -25,22 +25,13 @@ use super::{
 use crate::{
     AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
     beat::GridParams,
+    consts,
     slots::beat::detect,
     test_pools::{Pools, TestPools, pools},
 };
 
-mod consts {
-    pub(super) const BUCKETS: usize = 64;
-    pub(super) const CHUNK_FRAMES: u64 = 200;
-    pub(super) const CHUNK_SECONDS: u32 = 16;
-    pub(super) const HOG_FRAMES: usize = 8192;
-    pub(super) const PATIENCE: u32 = 16;
-    pub(super) const RATE: u32 = 1000;
-    pub(super) const TICK_LIMIT: u64 = 1 << 20;
-}
-
 fn rate() -> NonZeroU32 {
-    NonZeroU32::new(consts::RATE).expect("the test rate is non-zero")
+    NonZeroU32::new(consts::HOLD_RATE).expect("the test rate is non-zero")
 }
 
 fn spec() -> AudioSpec {
@@ -53,18 +44,18 @@ struct Livelock {
 
 fn builder(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-        .with_waveform(consts::BUCKETS)
+        .with_waveform(consts::HOLD_BUCKETS)
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(NoResamplerBackend)
-                .target_rate(consts::RATE)
+                .target_rate(consts::HOLD_RATE)
                 .build(),
         )
         .with_beat_detector(beat_detector(), GridParams::default())
 }
 
 fn chunk_seconds() -> NonZeroU32 {
-    NonZeroU32::new(consts::CHUNK_SECONDS).expect("non-zero")
+    NonZeroU32::new(consts::HOLD_CHUNK_SECONDS).expect("non-zero")
 }
 
 fn read_whole(track: Track) -> Result<TrackAnalysis, Livelock> {
@@ -176,7 +167,7 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end(analysis_silence: 
         &analysis_silence,
         pools(),
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         266.06,
     ))
     .unwrap_or_else(|Livelock { ticks }| {
@@ -200,7 +191,7 @@ fn a_gap_at_the_start_is_taken_rather_than_declared_covered(analysis_silence: Ve
         &analysis_silence,
         pools(),
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         407.2,
     ))
     .unwrap_or_else(|Livelock { ticks }| {
@@ -221,7 +212,7 @@ fn a_pass_that_cannot_feed_its_detector_reads_on(analysis_silence: Vec<f32>) {
         &analysis_silence,
         pools.clone(),
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         330.0,
     );
     let mut hog = Vec::new();
@@ -246,7 +237,7 @@ fn a_source_that_ends_before_its_claimed_length_is_complete(analysis_silence: Ve
         &analysis_silence,
         pools(),
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         40.5,
     );
@@ -278,7 +269,7 @@ fn claiming(analysis_silence: &[f32], pools: Pools) -> Track {
         &analysis_silence,
         pools,
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         40.5,
     )
@@ -338,7 +329,7 @@ fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid(analysis_s
         &analysis_silence,
         pools(),
         spec(),
-        consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         PRIMING,
     ))

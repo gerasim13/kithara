@@ -3,11 +3,7 @@ use std::process::Command;
 use anyhow::{Result, bail};
 use clap::Args;
 
-use crate::{Ctx, common::project::FeatureInvariant};
-
-mod consts {
-    pub(super) const DEPTH: &str = "2";
-}
+use crate::{Ctx, common::project::FeatureInvariant, consts};
 
 #[derive(Debug, Args)]
 pub struct PowersetArgs {

@@ -16,7 +16,10 @@ use super::{
     process::{Process, Recording},
     verdict,
 };
-use crate::config::{CiLaneConfig, KitharaExt};
+use crate::{
+    config::{CiLaneConfig, KitharaExt},
+    consts,
+};
 
 /// One CI job. Lanes are deliberately narrow: a job that does one thing can be
 /// retried, skipped, or read on its own, and the step that failed is the job
@@ -181,26 +184,6 @@ pub(crate) struct RunArgs {
     /// Report what the lane would require and run, without running it.
     #[arg(long)]
     dry_run: bool,
-}
-
-mod consts {
-    pub(super) const CONNECTION_REFUSED_CODE: Option<&str> = if cfg!(target_os = "macos") {
-        Some("(os error 61)")
-    } else if cfg!(target_os = "linux") {
-        Some("(os error 111)")
-    } else if cfg!(windows) {
-        Some("(os error 10061)")
-    } else {
-        None
-    };
-    pub(super) const SCCACHE_COMMAND_ERROR: i32 = 2;
-    pub(super) const SCCACHE_CONNECT_ERROR: &str = "sccache: error: couldn't connect to server";
-    pub(super) const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
-        Some("(os error 2)")
-    } else {
-        None
-    };
-    pub(super) const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
 }
 
 fn sccache_server_is_stopped(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
@@ -462,13 +445,13 @@ mod tests {
 
     use super::{
         super::{config::fixture, process::Recording},
-        CacheGroup, Lane, PipelineKind, command_lane, consts, execute_lane,
-        sccache_server_is_stopped,
+        CacheGroup, Lane, PipelineKind, command_lane, execute_lane, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
         ci::process::Process,
         config::{CiLaneConfig, KitharaExt},
+        consts,
     };
 
     /// The repository the lane declarations are read from, whatever checkout a
@@ -1267,12 +1250,6 @@ mod tests {
         names
     }
 
-    /// Lanes no pipeline schedules and no fleet claims. Each one is reached by
-    /// name alone and says so with empty membership, which is a declaration
-    /// rather than an oversight - and naming them here is what keeps a lane
-    /// that merely forgot its membership from hiding among them.
-    const BY_NAME_ONLY: [&str; 1] = ["deep-ui"];
-
     #[test]
     fn a_pipeline_job_only_ever_runs_a_declared_lane() {
         let lanes = declared_lanes();
@@ -1311,7 +1288,7 @@ mod tests {
             assert!(
                 scheduled.contains(&name)
                     || !lane.kinds_github.is_empty()
-                    || BY_NAME_ONLY.contains(&name.as_str()),
+                    || consts::BY_NAME_ONLY.contains(&name.as_str()),
                 "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
                  GitHub pipeline kind, and it is not named as reachable by name alone"
             );

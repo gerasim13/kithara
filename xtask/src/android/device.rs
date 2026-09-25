@@ -16,17 +16,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::FileLock;
 use sha2::{Digest, Sha256};
 
-use crate::{child, config::AndroidConfig};
-
-mod consts {
-    use super::Duration;
-
-    pub(super) const ATTACH_POLL: Duration = Duration::from_millis(500);
-    pub(super) const ATTACH_DEADLINE: Duration = Duration::from_secs(180);
-    pub(super) const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
-    pub(super) const EMULATOR: &str = "the emulator this run booted";
-    pub(super) const ORIGIN_PROBE: Duration = Duration::from_secs(5);
-}
+use crate::{child, config::AndroidConfig, consts};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Screen {
@@ -772,7 +762,7 @@ mod tests {
         use std::{fs, process::Stdio};
 
         use super::*;
-        use crate::testing::install_script;
+        use crate::{consts, testing::install_script};
 
         fn recording_adb(dir: &Path, trace: &Path, code: i32) -> PathBuf {
             let path = dir.join("adb");

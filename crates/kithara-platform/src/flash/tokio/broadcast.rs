@@ -331,14 +331,9 @@ mod tests {
 
     use super::{RecvError, TryRecvError, channel};
     use crate::{
-        flash,
+        consts, flash,
         tokio::task::{spawn, yield_now},
     };
-
-    mod consts {
-        pub(super) const MSGS: usize = 100;
-        pub(super) const SUBS: usize = 4;
-    }
 
     /// One sender fans out to several subscribers across worker threads; each
     /// must receive every message. Subscribers park on the engine waiter between

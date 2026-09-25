@@ -2,13 +2,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_decode::BlenderProfile;
 use kithara_signal::{AudioChunk, AudioSpec};
 
-mod consts {
-    /// The AAC decoder's post-seek onset transient outlasts 20 ms; 40 ms keeps that measured
-    /// transition inside the existing linear generation join.
-    pub(super) const JOIN_MICROS: u32 = 40_000;
-    pub(super) const MICROS_PER_SEC: u32 = 1_000_000;
-    pub(super) const MIN_JOIN_FRAMES: u16 = 2;
-}
+use crate::consts;
 
 enum JoinState {
     Steady,

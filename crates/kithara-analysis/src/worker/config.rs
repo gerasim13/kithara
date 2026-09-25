@@ -5,32 +5,7 @@ use kithara_platform::{CancelToken, time::Duration};
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{Priority, Worker};
 
-use crate::analyzer::AnalyzerBuilder;
-
-mod consts {
-    use super::{NonZeroU32, NonZeroUsize};
-
-    pub(super) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(64) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const CHUNK_SECONDS: NonZeroU32 = match NonZeroU32::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const PRODUCER_DRAIN_LIMIT: NonZeroUsize = match NonZeroUsize::new(8) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const PUBLISH_SECONDS: NonZeroU32 = match NonZeroU32::new(5) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-}
+use crate::{analyzer::AnalyzerBuilder, consts};
 
 /// Configuration for one analysis dispatcher and its per-pass tasks.
 #[derive(Builder)]
@@ -53,7 +28,7 @@ where
     #[builder(default = Duration::from_millis(10))]
     pub(crate) wait_timeout: Duration,
     /// Fixed source duration covered by one progressive schedule chunk.
-    #[builder(default = consts::CHUNK_SECONDS)]
+    #[builder(default = consts::CONFIG_CHUNK_SECONDS)]
     pub(crate) chunk_seconds: NonZeroU32,
     /// Consecutive progress passes between cooperative thread yields.
     #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]

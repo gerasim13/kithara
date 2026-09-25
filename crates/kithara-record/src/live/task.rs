@@ -8,12 +8,10 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-use super::{
-    FormatChange, LiveRecordingReport,
-    recorder::{Control, consts},
-};
+use super::{FormatChange, LiveRecordingReport, recorder::Control};
 use crate::{
     LiveRecordingConfig, LiveRecordingError, PartSinkFactory, RecordingConfig, RecordingCore,
+    consts,
 };
 
 pub(super) struct RecordingTask<F>

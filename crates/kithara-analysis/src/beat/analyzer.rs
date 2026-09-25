@@ -487,13 +487,9 @@ mod tests {
     use crate::{
         BeatAnalysisConfig,
         beat::BeatPassConfig,
+        consts,
         test_pools::{TestPools, pools},
     };
-
-    mod consts {
-        pub(super) const SRC: u32 = 44_100;
-        pub(super) const TARGET: usize = 22_050;
-    }
 
     #[kithara::test(native, flash(false))]
     fn a_block_boundary_moves_a_mark_without_touching_its_confidence() {

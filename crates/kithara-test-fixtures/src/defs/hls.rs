@@ -25,8 +25,16 @@ mod consts {
 
     pub(super) const CHANNELS: u16 = 2;
     pub(super) const ENCODERS: usize = 4;
+    pub(super) const GAPLESS_BOUNDARY_MILLIS: [u64; 9] = [
+        4_000, 8_000, 18_000, 28_000, 38_000, 48_000, 58_000, 68_000, 71_250,
+    ];
+    pub(super) const GAPLESS_TARGET_DURATION: u8 = 10;
     pub(super) const IV: [u8; 16] = [0; 16];
     pub(super) const KEY: [u8; 16] = *b"0123456789abcdef";
+    pub(super) const MILLIS_PER_SECOND: u64 = 1_000;
+    pub(super) const RSS_SEGMENTS: usize = 25;
+    pub(super) const RSS_SEGMENT_MILLIS: u64 = 4_000;
+    pub(super) const RSS_TARGET_DURATION: u8 = 4;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     pub(super) const SEGMENTS: usize = 37;
     pub(super) const SEGMENT_MILLIS: u64 = 6_000;
@@ -62,20 +70,6 @@ mod consts {
             label: "slossless",
         },
     ];
-}
-
-mod gapless {
-    pub(super) const BOUNDARY_MILLIS: [u64; 9] = [
-        4_000, 8_000, 18_000, 28_000, 38_000, 48_000, 58_000, 68_000, 71_250,
-    ];
-    pub(super) const MILLIS_PER_SECOND: u64 = 1_000;
-    pub(super) const TARGET_DURATION: u8 = 10;
-}
-
-mod rss {
-    pub(super) const SEGMENTS: usize = 25;
-    pub(super) const SEGMENT_MILLIS: u64 = 4_000;
-    pub(super) const TARGET_DURATION: u8 = 4;
 }
 
 #[derive(Clone, Copy)]
@@ -147,13 +141,13 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
     let segment_frames = usize::try_from(consts::SAMPLE_RATE)
         .expect("invariant: sample rate fits usize")
         * usize::try_from(consts::SEGMENT_MILLIS).expect("invariant: duration fits usize")
-        / usize::try_from(gapless::MILLIS_PER_SECOND)
+        / usize::try_from(consts::MILLIS_PER_SECOND)
             .expect("invariant: millisecond scale fits usize");
     let packets_per_segment = segment_frames.div_ceil(frame_samples);
     let encoded_frames = usize::try_from(consts::SAMPLE_RATE)
         .expect("invariant: sample rate fits usize")
         * usize::try_from(consts::TOTAL_MILLIS).expect("invariant: duration fits usize")
-        / usize::try_from(gapless::MILLIS_PER_SECOND)
+        / usize::try_from(consts::MILLIS_PER_SECOND)
             .expect("invariant: millisecond scale fits usize");
     let total_frames = if spec.codec == AudioCodec::AacLc {
         encoded_frames
@@ -186,7 +180,7 @@ fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u
     for (index, unit) in track.access_units.iter().enumerate() {
         let next_duration = duration.saturating_add(u64::from(unit.duration));
         while let Some(millis) = target {
-            let target_duration = millis * u64::from(track.timescale) / gapless::MILLIS_PER_SECOND;
+            let target_duration = millis * u64::from(track.timescale) / consts::MILLIS_PER_SECOND;
             if next_duration < target_duration {
                 break;
             }
@@ -224,15 +218,15 @@ fn long_boundaries(track: &EncodedTrack) -> Vec<usize> {
 }
 
 fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
-    boundaries_at(track, gapless::BOUNDARY_MILLIS)
+    boundaries_at(track, consts::GAPLESS_BOUNDARY_MILLIS)
 }
 
 fn rss_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries_at(
         track,
-        (1..=rss::SEGMENTS).map(|index| {
+        (1..=consts::RSS_SEGMENTS).map(|index| {
             u64::try_from(index).expect("invariant: RSS segment index fits u64")
-                * rss::SEGMENT_MILLIS
+                * consts::RSS_SEGMENT_MILLIS
         }),
     )
 }
@@ -431,7 +425,7 @@ fn gapless_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         context,
         encrypted,
         gapless_variants(),
-        gapless::TARGET_DURATION,
+        consts::GAPLESS_TARGET_DURATION,
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: gapless HLS bundle failed: {error}"))
 }
@@ -443,6 +437,11 @@ fn gapless_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
 )]
 #[case::plain(false)]
 fn rss_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
-    bundle(context, encrypted, rss_variants(), rss::TARGET_DURATION)
-        .unwrap_or_else(|error| panic!("kithara-test-fixtures: RSS HLS bundle failed: {error}"))
+    bundle(
+        context,
+        encrypted,
+        rss_variants(),
+        consts::RSS_TARGET_DURATION,
+    )
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: RSS HLS bundle failed: {error}"))
 }

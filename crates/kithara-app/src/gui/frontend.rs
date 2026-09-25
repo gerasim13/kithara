@@ -15,7 +15,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
-    ui::{AppUi, package::Package, window::WINDOW_SIZE},
+    ui::{AppUi, package::Package, window::consts::WINDOW_SIZE},
     update, view,
 };
 use crate::{

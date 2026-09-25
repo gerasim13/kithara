@@ -18,10 +18,10 @@ use kithara_test_fixtures::unit_fixtures::{
 };
 use kithara_test_utils::kithara;
 
-use super::{GaplessTrimmer, consts};
+use super::GaplessTrimmer;
 use crate::{
-    DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
-    test_pools::pools,
+    DropChunks, GaplessInfo, GaplessTailCompensation, consts,
+    gapless::heuristic::SilenceTrimParams, test_pools::pools,
 };
 
 fn sample_buffer(values: &[f32]) -> SampleBuffer {

@@ -10,10 +10,10 @@ use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 use super::{
-    StretchControls, WarpRenderer, chunk, consts, dominant_bin, expected_bin, flush_serviced,
+    StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
     render_serviced, renderer, spec,
 };
-use crate::{Warp, WarpConfig, test_pools::pools};
+use crate::{Warp, WarpConfig, consts, test_pools::pools};
 
 #[kithara::test]
 #[cfg_attr(

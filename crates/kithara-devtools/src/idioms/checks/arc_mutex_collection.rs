@@ -12,38 +12,40 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "arc_mutex_collection";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "arc_mutex_collection";
 
-const EXPLANATION: &str = "\
-Detected `Arc<Mutex<Collection>>` (or `Arc<RwLock<Collection>>`) wrapping \
-a HashMap / HashSet / Vec / BTreeMap / BTreeSet.
+    pub(super) const EXPLANATION: &str = "\
+    Detected `Arc<Mutex<Collection>>` (or `Arc<RwLock<Collection>>`) wrapping \
+    a HashMap / HashSet / Vec / BTreeMap / BTreeSet.
 
-Why it matters. Coarse-grained locks around a whole collection serialise \
-every read and every write, even when callers touch disjoint keys. Lock \
-contention on a single shared `Mutex<HashMap>` is a top-3 source of \
-latency stalls in audio pipelines (the holder is preempted while the \
-renderer waits). Per-bucket locking via `dashmap::DashMap` / `DashSet` \
-removes the global serialisation point — each bucket has its own lock, \
-callers on different keys never block each other. For pure append-heavy \
-collections (telemetry, work queues), a lock-free `crossbeam::queue::SegQueue` \
-or `tokio::sync::mpsc` channel is even cheaper.
+    Why it matters. Coarse-grained locks around a whole collection serialise \
+    every read and every write, even when callers touch disjoint keys. Lock \
+    contention on a single shared `Mutex<HashMap>` is a top-3 source of \
+    latency stalls in audio pipelines (the holder is preempted while the \
+    renderer waits). Per-bucket locking via `dashmap::DashMap` / `DashSet` \
+    removes the global serialisation point — each bucket has its own lock, \
+    callers on different keys never block each other. For pure append-heavy \
+    collections (telemetry, work queues), a lock-free `crossbeam::queue::SegQueue` \
+    or `tokio::sync::mpsc` channel is even cheaper.
 
-❌  decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,        // global lock per lookup
-✅  decrypted_keys: Arc<dashmap::DashMap<Url, Bytes>>,      // bucket-level locking
-✅  decrypted_keys: Arc<RwLock<HashMap<Url, Bytes>>>,       // many concurrent readers
+    ❌  decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,        // global lock per lookup
+    ✅  decrypted_keys: Arc<dashmap::DashMap<Url, Bytes>>,      // bucket-level locking
+    ✅  decrypted_keys: Arc<RwLock<HashMap<Url, Bytes>>>,       // many concurrent readers
 
-Suppress with `// xtask-lint-ignore: arc_mutex_collection` when:
-1. The collection is mutated rarely under exclusive write (e.g. config
-   built once at startup, then read-only).
-2. The access pattern requires consistent multi-key transactions (DashMap
-   bucket locks don't compose).
-3. wasm32 builds where DashMap pulls dependencies that don't compile.";
+    Suppress with `// xtask-lint-ignore: arc_mutex_collection` when:
+    1. The collection is mutated rarely under exclusive write (e.g. config
+       built once at startup, then read-only).
+    2. The access pattern requires consistent multi-key transactions (DashMap
+       bucket locks don't compose).
+    3. wasm32 builds where DashMap pulls dependencies that don't compile.";
+}
 
 pub(crate) struct ArcMutexCollection;
 
 impl Check for ArcMutexCollection {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -88,7 +90,7 @@ impl<'ast> Visit<'ast> for TypeVisitor<'_> {
             && let Some(coll) = match_collection(inner)
         {
             let s = tp.span().start();
-            if !self.suppress.is_suppressed(s.line, ID) {
+            if !self.suppress.is_suppressed(s.line, consts::ID) {
                 let key = format!("{}:{}:{}", self.rel, s.line, s.column);
                 let msg = format!(
                     "M1: `Arc<{lock}<{coll}<...>>>` — replace with {hint} for fine-grained locking",
@@ -96,8 +98,9 @@ impl<'ast> Visit<'ast> for TypeVisitor<'_> {
                     coll = coll.0,
                     hint = coll.1,
                 );
-                self.out
-                    .push(Violation::warn(ID, key, msg).with_explanation(EXPLANATION));
+                self.out.push(
+                    Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION),
+                );
             }
         }
         visit::visit_type_path(self, tp);

@@ -1,12 +1,6 @@
 use kithara_bufpool::{Percent, PoolConfig};
 
-mod consts {
-    pub(super) const BYTE_MAX_BUFFERS: usize = 32;
-    pub(super) const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
-    pub(super) const DEFAULT_OVERALL_BYTES: usize = 256 * 1024 * 1024;
-    pub(super) const SAMPLE_MAX_BUFFERS: usize = 128;
-    pub(super) const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
-}
+use crate::consts;
 
 kithara_bufpool::pool_schema! {
     /// Byte and sample pools available to one isolated test harness.

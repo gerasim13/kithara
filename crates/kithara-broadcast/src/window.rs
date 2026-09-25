@@ -124,12 +124,7 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::LiveWindow;
-    use crate::{config::BroadcastConfig, segment::Segment};
-
-    mod consts {
-        pub(super) const DURATION_TS: u32 = 192_512;
-        pub(super) const TIMESCALE: u32 = 48_000;
-    }
+    use crate::{config::BroadcastConfig, consts, segment::Segment};
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()

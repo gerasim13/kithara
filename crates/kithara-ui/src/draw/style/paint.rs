@@ -106,17 +106,21 @@ mod tests {
 
     use super::{Paint, Rgba, Stop, Stops, StopsError};
 
-    const BLACK: Rgba = Rgba {
-        a: 1.0,
-        b: 0.0,
-        g: 0.0,
-        r: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BLACK: Rgba = Rgba {
+            a: 1.0,
+            b: 0.0,
+            g: 0.0,
+            r: 0.0,
+        };
+    }
 
     fn stop(offset: f32) -> Stop {
         Stop {
             offset,
-            color: BLACK,
+            color: consts::BLACK,
         }
     }
 
@@ -159,6 +163,6 @@ mod tests {
     /// passing colours.
     #[kithara::test]
     fn a_colour_is_a_paint() {
-        assert_eq!(Paint::from(BLACK), Paint::Solid(BLACK));
+        assert_eq!(Paint::from(consts::BLACK), Paint::Solid(consts::BLACK));
     }
 }

@@ -25,6 +25,7 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use crate::{
+    consts,
     pipeline::{
         decode::core::{DecodeInit, DecoderFactory},
         fetch::Fetch,
@@ -44,16 +45,6 @@ fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
         panic!("TrackStep::Produced must carry PCM data");
     };
     data
-}
-
-mod consts {
-    pub(super) const CAPTURE_END_SEGMENT: usize = 6;
-    pub(super) const CHANNELS: usize = 2;
-    pub(super) const SAMPLE_RATE: u32 = 44_100;
-    pub(super) const SLQ_VARIANT: usize = 0;
-    pub(super) const SMQ_VARIANT: usize = 1;
-    pub(super) const SPLICE_SEGMENT: u32 = 3;
-    pub(super) const TOTAL_SEGMENTS: usize = 7;
 }
 
 struct VariantLayout {
@@ -549,7 +540,11 @@ fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &AudioChunk) {
     let channels = usize::from(chunk.meta.spec.channels);
-    assert_eq!(channels, consts::CHANNELS, "AAC fixture should be stereo");
+    assert_eq!(
+        channels,
+        consts::SPLICE_CHANNELS,
+        "AAC fixture should be stereo"
+    );
     for frame in 0..chunk.frames() {
         left.push(chunk.samples[frame * channels]);
     }

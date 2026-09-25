@@ -5,15 +5,7 @@ use kithara::{
     queue::{Queue, QueueControl, TrackSource},
 };
 
-mod consts {
-    pub(super) const BYTE_MAX_BUFFERS: usize = 32;
-    pub(super) const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
-    pub(super) const INITIAL_SAMPLE_BUFFERS: usize = 16;
-    pub(super) const INITIAL_SAMPLE_CAPACITY: usize = 9_216;
-    pub(super) const OVERALL_BYTES: usize = 256 * 1024 * 1024;
-    pub(super) const SAMPLE_MAX_BUFFERS: usize = 128;
-    pub(super) const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
-}
+use crate::consts;
 
 pool_schema! {
     /// Buffer pools owned by one FFI engine composition root.

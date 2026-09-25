@@ -86,8 +86,8 @@ fn confidence(curve: &[f32], at: f32, mean: f32) -> f32 {
         .copied()
         .unwrap_or(0.0);
     (1.0 / (1.0 + (-(value - mean) / mean).exp())).clamp(
-        consts::tracker::CONFIDENCE_BOUNDS.0,
-        consts::tracker::CONFIDENCE_BOUNDS.1,
+        consts::TRACKER_CONFIDENCE_BOUNDS.0,
+        consts::TRACKER_CONFIDENCE_BOUNDS.1,
     )
 }
 

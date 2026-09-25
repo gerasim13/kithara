@@ -31,7 +31,7 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::{kithara, mock::CallCounter};
 
 use crate::{
-    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind,
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind, consts,
     pipeline::{
         decode::{
             DecoderGeneration,
@@ -66,16 +66,9 @@ pub(super) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     data
 }
 
-pub(super) mod consts {
-    pub(super) const CHANNELS: u16 = 2;
-    pub(crate) const ROUTE_CHUNK_FRAMES: usize = 256;
-    pub(super) const ROUTE_SAMPLE_RATE: u32 = 48_000;
-    pub(crate) const SAMPLE_RATE: u32 = 44_100;
-}
-
 pub(super) fn spec(sample_rate: u32) -> AudioSpec {
     AudioSpec::new(
-        consts::CHANNELS,
+        consts::REBUILD_CHANNELS,
         NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
     )
 }
@@ -265,7 +258,7 @@ impl Decoder for RouteSignalDecoder {
             *remaining = remaining.saturating_sub(1);
         }
         let spec = self.audio_spec();
-        let channels = usize::from(consts::CHANNELS);
+        let channels = usize::from(consts::REBUILD_CHANNELS);
         let frames = consts::ROUTE_CHUNK_FRAMES;
         let start_sample =
             usize::try_from(self.next_frame).expect("fixture frame index") * channels;

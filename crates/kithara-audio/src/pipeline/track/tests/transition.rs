@@ -11,13 +11,13 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{
-    RouteFixture, TestDecoder, consts, media_info, produced_data, route_signal_source,
+    RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
     route_signal_source_with_finite_incoming, route_signal_source_with_finite_sides,
     route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
     route_signal_source_with_gaps, spec,
 };
 use crate::{
-    DecoderChangeCause, DecoderEvent,
+    DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},

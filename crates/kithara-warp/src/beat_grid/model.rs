@@ -18,10 +18,8 @@ use super::{BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotErro
 use crate::{
     AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty,
     MapAxis, MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError,
-    SegmentFacts, SegmentSet,
+    SegmentFacts, SegmentSet, consts,
 };
-
-const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// A served beat grid cannot be expressed on the decoded axis it was given.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -67,7 +65,7 @@ impl BeatGridSnapshot {
     ) -> Result<Self, BeatGridModelError> {
         let raw = model.as_raw();
         let rate = f64::from(axis.sample_rate().get());
-        let beat_frames = rate * SECONDS_PER_MINUTE / raw.bpm;
+        let beat_frames = rate * consts::MODEL_SECONDS_PER_MINUTE / raw.bpm;
         let meter = meter_facts(raw)?;
         let anchors = anchors(raw, axis, rate)?;
         let segments = segments(
@@ -344,13 +342,6 @@ mod tests {
 
     use super::*;
     use crate::{Beat, BeatGridQuery, BeatGridUnavailable, MapPoint, MapPosition, SessionFrame};
-
-    mod consts {
-        pub(super) const BPM: f64 = 120.0;
-        pub(super) const RATES: [u32; 3] = [44_100, 48_000, 96_000];
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-        pub(super) const SECONDS_PER_BEAT: f64 = 0.5;
-    }
 
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("invariant: fixture sample rate is non-zero")

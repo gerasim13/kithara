@@ -361,7 +361,6 @@ impl Drop for BroadcastHandle {
 #[cfg(test)]
 mod tests {
     use kithara_output::LiveOutput;
-    use kithara_platform::time::Duration;
     use kithara_stream::{AudioCodec, ContainerFormat};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -370,14 +369,7 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::*;
-
-    mod consts {
-        use super::Duration;
-
-        pub(super) const AMPLITUDE: f32 = 0.25;
-        pub(super) const SAMPLE_RATE: usize = 48_000;
-        pub(super) const TARGET: Duration = Duration::from_millis(500);
-    }
+    use crate::consts;
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
@@ -410,8 +402,8 @@ mod tests {
     }
 
     fn write_second(output: &mut impl LiveOutput) {
-        let left = vec![consts::AMPLITUDE; consts::SAMPLE_RATE];
-        let right = vec![-consts::AMPLITUDE; consts::SAMPLE_RATE];
+        let left = vec![consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
+        let right = vec![-consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
         output.write_stereo(left.len(), &left, &right);
     }
 
@@ -442,7 +434,7 @@ mod tests {
     fn an_intake_gap_marks_the_next_segment_discontinuous() {
         let (mut output, handle) = start();
         write_second(&mut output);
-        output.write_stereo(consts::SAMPLE_RATE, &[], &[]);
+        output.write_stereo(consts::BROADCAST_SAMPLE_RATE, &[], &[]);
         write_second(&mut output);
 
         handle.stop();
@@ -450,7 +442,7 @@ mod tests {
         assert!(playlist(&handle).contains("#EXT-X-DISCONTINUITY\n"));
         assert_eq!(
             handle.status().dropped_samples,
-            u64::try_from(consts::SAMPLE_RATE * 2).expect("drop count fits")
+            u64::try_from(consts::BROADCAST_SAMPLE_RATE * 2).expect("drop count fits")
         );
     }
 

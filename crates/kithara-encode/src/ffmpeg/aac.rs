@@ -67,19 +67,11 @@ mod tests {
 
     use super::{AacFFmpegEncoder, PackagedEncodeRequest};
     use crate::{
-        EncodedTrack,
+        EncodedTrack, consts,
         stream::{StreamBackend, StreamEncoder},
         test_pcm::TestPcm,
         test_pools,
     };
-
-    mod consts {
-        pub(super) const BIT_RATE: u64 = 128_000;
-        pub(super) const CHANNELS: u16 = 2;
-        pub(super) const ENCODER_DELAY: u32 = 2_112;
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-        pub(super) const TRAILING_DELAY: u32 = 1_920;
-    }
 
     fn encode_offline(pcm: &TestPcm) -> EncodedTrack {
         let pools = test_pools::pools();
@@ -93,9 +85,9 @@ mod tests {
                         .build(),
                 )
                 .encoder_delay(consts::ENCODER_DELAY)
-                .timescale(consts::SAMPLE_RATE)
+                .timescale(consts::AAC_SAMPLE_RATE)
                 .trailing_delay(consts::TRAILING_DELAY)
-                .bit_rate(consts::BIT_RATE)
+                .bit_rate(consts::AAC_BIT_RATE)
                 .packets_per_segment(2)
                 .build(),
         )
@@ -106,17 +98,17 @@ mod tests {
     fn the_offline_wrapper_keeps_every_streamed_access_unit(encode_saw_i16: &'static [u8]) {
         let pcm = TestPcm::from_bytes(
             encode_saw_i16.to_vec(),
-            consts::SAMPLE_RATE,
-            consts::CHANNELS,
+            consts::AAC_SAMPLE_RATE,
+            consts::AAC_CHANNELS,
         );
         let offline = encode_offline(&pcm);
 
         let mut encoder = StreamEncoder::builder()
             .backend(StreamBackend::Ffmpeg)
-            .sample_rate(consts::SAMPLE_RATE)
-            .channels(consts::CHANNELS)
-            .bit_rate(consts::BIT_RATE)
-            .timescale(consts::SAMPLE_RATE)
+            .sample_rate(consts::AAC_SAMPLE_RATE)
+            .channels(consts::AAC_CHANNELS)
+            .bit_rate(consts::AAC_BIT_RATE)
+            .timescale(consts::AAC_SAMPLE_RATE)
             .build()
             .expect("stream encoder");
         let mut streamed = encoder.push(&pcm.samples_f32()).expect("push");
@@ -129,14 +121,14 @@ mod tests {
     fn offline_track_holds_the_golden_shape(encode_saw_i16: &'static [u8]) {
         let track = encode_offline(&TestPcm::from_bytes(
             encode_saw_i16.to_vec(),
-            consts::SAMPLE_RATE,
-            consts::CHANNELS,
+            consts::AAC_SAMPLE_RATE,
+            consts::AAC_CHANNELS,
         ));
         let units = &track.access_units;
 
         assert_eq!(track.media_info.codec, Some(AudioCodec::AacLc));
-        assert_eq!(track.media_info.sample_rate, Some(consts::SAMPLE_RATE));
-        assert_eq!(track.media_info.channels, Some(consts::CHANNELS));
+        assert_eq!(track.media_info.sample_rate, Some(consts::AAC_SAMPLE_RATE));
+        assert_eq!(track.media_info.channels, Some(consts::AAC_CHANNELS));
         assert_eq!(track.encoder_delay, consts::ENCODER_DELAY);
         assert_eq!(track.trailing_delay, consts::TRAILING_DELAY);
         assert!(track.codec_config.is_empty());

@@ -7,93 +7,7 @@ use anyhow::{Context as _, Result};
 use clap::Args;
 use serde::Serialize;
 
-use crate::{Ctx, common::baseline::Baseline};
-
-mod consts {
-    pub(super) const BASELINE_CONFIG_DIRS: &[&str] =
-        &[".config/arch", ".config/style", ".config/idioms"];
-    pub(super) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
-# Optional generic tooling config sections. Uncomment only the settings this workspace owns.
-#
-# [health]
-# feature_powerset_exclude = []
-# machete_exclude = []
-# lockbud_exclude = []
-# semver_packages = []
-# geiger_package = ""
-#
-# [test]
-# default_lane = ""
-# default_backend = ""
-# feature_arg = ""
-# features = []
-#
-# [test.flash]
-# features = []
-# default = true
-#
-# [test.lanes.default]
-# program = ""
-# prefix_args = []
-# suffix_args = []
-# default_features = []
-# default_flash = true
-# default_no_block = false
-# passthrough = ""
-#
-# [test.net_backends.default]
-# features = []
-#
-# [perf]
-# primary_lane = ""
-# nextest_profile = "perf"
-# frame_prefix = ""
-#
-# [[perf.lanes]]
-# flash = true
-# backend = ""
-#
-# [orphans]
-# exclude_packages = []
-#
-# [quality]
-# unimock_traits_dir = ""
-#
-# [lint_exclude]
-# paths = []
-# modules = []
-# scan_all_rules = []
-#
-# [workspace-scan]
-# exclude = []
-"#;
-    pub(super) const CONFIG_REL: &str = ".config/xtask.toml";
-
-    pub(super) const MAIN_RS_SNIPPET: &str = r#"use clap::{Parser, Subcommand};
-use kithara_devtools::{CoreCommand, Ctx};
-
-#[derive(Debug, Parser)]
-#[command(name = "xtask")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    #[command(flatten)]
-    Core(CoreCommand),
-}
-
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let ctx = Ctx::load()?;
-    match cli.command {
-        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
-    }
-}
-"#;
-}
+use crate::{Ctx, common::baseline::Baseline, consts};
 
 #[derive(Debug, Args)]
 pub struct InitArgs {
@@ -162,7 +76,7 @@ fn target_files(root: &Path) -> TargetFiles {
         .collect();
     TargetFiles {
         baselines,
-        config: root.join(consts::CONFIG_REL),
+        config: root.join(consts::PROJECT_CONFIG_REL),
     }
 }
 

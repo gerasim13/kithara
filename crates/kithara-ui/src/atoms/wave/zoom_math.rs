@@ -5,17 +5,21 @@ use num_traits::cast::AsPrimitive;
 
 use crate::render::WaveBucket;
 
+pub(crate) mod consts {
+    #[cfg(test)]
+    pub(crate) const MAX_ZOOM: f32 = super::Zoom::MAX.0;
+
+    #[cfg(test)]
+    pub(crate) const MIN_ZOOM: f32 = super::Zoom::MIN.0;
+
+    pub(super) const BUTTON_FACTOR: f32 = 0.7;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Ranged)]
 #[ranged(min = 0.015, max = 0.5, default = 0.12, clamp)]
 pub struct Zoom(f32);
 
 pub const DEFAULT_ZOOM: f32 = Zoom::DEFAULT.0;
-#[cfg(test)]
-pub(crate) const MAX_ZOOM: f32 = Zoom::MAX.0;
-#[cfg(test)]
-pub(crate) const MIN_ZOOM: f32 = Zoom::MIN.0;
-
-const BUTTON_FACTOR: f32 = 0.7;
 
 /// Bars tile the track from its origin, so a bar's content never depends on
 /// the playhead; the window only selects which bars are visible and where
@@ -124,13 +128,13 @@ pub(crate) fn zoom_for_wheel(zoom: impl Into<Zoom>, delta_y: f32) -> Zoom {
 /// Narrows the visible window by one button press.
 #[must_use]
 pub fn zoom_in(zoom: Zoom) -> Zoom {
-    Zoom::from(f32::from(zoom) * BUTTON_FACTOR)
+    Zoom::from(f32::from(zoom) * consts::BUTTON_FACTOR)
 }
 
 /// Widens the visible window by one button press.
 #[must_use]
 pub fn zoom_out(zoom: Zoom) -> Zoom {
-    Zoom::from(f32::from(zoom) / BUTTON_FACTOR)
+    Zoom::from(f32::from(zoom) / consts::BUTTON_FACTOR)
 }
 
 #[cfg(test)]
@@ -139,12 +143,14 @@ mod tests {
 
     use super::*;
 
-    const EPSILON: f32 = 0.000_1;
+    mod consts {
+        pub(super) const EPSILON: f32 = 0.000_1;
+    }
 
     fn assert_near(actual: impl Into<f32>, expected: f32) {
         let actual = actual.into();
         assert!(
-            (actual - expected).abs() < EPSILON,
+            (actual - expected).abs() < consts::EPSILON,
             "expected {expected}, got {actual}"
         );
     }
@@ -165,10 +171,10 @@ mod tests {
         let narrow = window_bounds(-1.0, 0.0);
         let wide = window_bounds(2.0, 2.0);
 
-        assert_near(narrow.start, -MIN_ZOOM / 2.0);
-        assert_near(narrow.end, MIN_ZOOM / 2.0);
-        assert_near(wide.start, 1.0 - MAX_ZOOM / 2.0);
-        assert_near(wide.end, 1.0 + MAX_ZOOM / 2.0);
+        assert_near(narrow.start, -super::consts::MIN_ZOOM / 2.0);
+        assert_near(narrow.end, super::consts::MIN_ZOOM / 2.0);
+        assert_near(wide.start, 1.0 - super::consts::MAX_ZOOM / 2.0);
+        assert_near(wide.end, 1.0 + super::consts::MAX_ZOOM / 2.0);
     }
 
     #[kithara::test]
@@ -194,8 +200,8 @@ mod tests {
         assert_near(grid.norm_width, 0.025);
         let first: f32 = grid.first.as_();
         let last: f32 = grid.last.as_();
-        assert!(first * grid.norm_width <= window.start + EPSILON);
-        assert!(last * grid.norm_width >= window.end - EPSILON);
+        assert!(first * grid.norm_width <= window.start + consts::EPSILON);
+        assert!(last * grid.norm_width >= window.end - consts::EPSILON);
         assert!((first + 1.0) * grid.norm_width > window.start);
         assert!((last - 1.0) * grid.norm_width < window.end);
         assert!(bar_grid(0.0, 4.0, 0.25, &window).is_none());
@@ -284,16 +290,28 @@ mod tests {
     fn wheel_uses_canonical_factors_and_clamps() {
         assert_near(zoom_for_wheel(0.12, 1.0), 0.15);
         assert_near(zoom_for_wheel(0.12, -1.0), 0.096);
-        assert_near(zoom_for_wheel(MAX_ZOOM, 1.0), MAX_ZOOM);
-        assert_near(zoom_for_wheel(MIN_ZOOM, -1.0), MIN_ZOOM);
+        assert_near(
+            zoom_for_wheel(super::consts::MAX_ZOOM, 1.0),
+            super::consts::MAX_ZOOM,
+        );
+        assert_near(
+            zoom_for_wheel(super::consts::MIN_ZOOM, -1.0),
+            super::consts::MIN_ZOOM,
+        );
     }
 
     #[kithara::test]
     fn buttons_step_wider_than_a_detent_and_clamp() {
         assert_near(zoom_in(DEFAULT_ZOOM.into()), 0.084);
         assert_near(zoom_out(DEFAULT_ZOOM.into()), 0.171_428_57);
-        assert_near(zoom_in(MIN_ZOOM.into()), MIN_ZOOM);
-        assert_near(zoom_out(MAX_ZOOM.into()), MAX_ZOOM);
+        assert_near(
+            zoom_in(super::consts::MIN_ZOOM.into()),
+            super::consts::MIN_ZOOM,
+        );
+        assert_near(
+            zoom_out(super::consts::MAX_ZOOM.into()),
+            super::consts::MAX_ZOOM,
+        );
     }
 
     #[kithara::test]

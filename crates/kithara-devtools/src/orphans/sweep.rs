@@ -13,19 +13,7 @@ use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
 use super::declared::{declared_files, normalize};
-use crate::{Ctx, util::check_tool};
-
-mod consts {
-    pub(super) const INSTALL_HINT: &str = "cargo install cargo-modules";
-    pub(super) const MARKER: &str = "orphaned module `";
-    /// A cgroup v2 job container reports its own cap here; a machine without
-    /// one has no such file and is bounded by its cores alone.
-    pub(super) const MEMORY_MAX: &str = "/sys/fs/cgroup/memory.max";
-    /// What one `cargo modules` run needs. It loads the whole workspace into a
-    /// rust-analyzer database and peaked at three gibibytes on this one, so
-    /// the budget is that measurement with room for the workspace to grow.
-    pub(super) const WORKER_MEMORY: u64 = 3584 * 1024 * 1024;
-}
+use crate::{Ctx, consts, util::check_tool};
 
 #[derive(Debug, Args)]
 pub struct OrphansArgs {
@@ -97,7 +85,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         &["modules", "--version"],
         ctx.config
             .tools
-            .install_hint("cargo-modules", consts::INSTALL_HINT),
+            .install_hint("cargo-modules", consts::SWEEP_INSTALL_HINT),
     )?;
 
     if args.packages.is_empty() && args.audit_mode {
@@ -489,8 +477,6 @@ mod tests {
         assert!(orphans.is_empty());
     }
 
-    const GIB: u64 = 1024 * 1024 * 1024;
-
     /// A worker the kernel kills leaves nothing behind, and a package reported
     /// as unchecked without a reason reads as a broken tool rather than as a
     /// job that ran out of room.
@@ -528,7 +514,7 @@ mod tests {
         assert_eq!(
             workers(
                 3,
-                Some(8 * GIB),
+                Some(8 * consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             2
@@ -547,7 +533,7 @@ mod tests {
         assert_eq!(
             workers(
                 3,
-                Some(GIB),
+                Some(consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             1
@@ -559,7 +545,7 @@ mod tests {
         assert_eq!(
             workers(
                 2,
-                Some(64 * GIB),
+                Some(64 * consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             2

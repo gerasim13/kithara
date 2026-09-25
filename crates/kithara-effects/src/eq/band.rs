@@ -1,18 +1,7 @@
 use bon::Builder;
 use num_traits::cast::AsPrimitive;
 
-use crate::GainDb;
-
-mod consts {
-    pub(super) const BAND_MAX_FREQ: f32 = 18000.0;
-    pub(super) const BAND_MIN_FREQ: f32 = 60.0;
-    /// Centre frequency a band starts at before the caller places it.
-    pub(super) const DEFAULT_FREQ: f32 = 1000.0;
-    pub(super) const HIGH_SHELF_DISCRIMINANT: u8 = 2;
-    pub(super) const LOG_FREQ_BASE: f32 = 10.0;
-    pub(super) const Q_REFERENCE_BANDS: f32 = 10.0;
-    pub(super) const Q_SCALE_FACTOR: f32 = 1.4;
-}
+use crate::{GainDb, consts};
 
 /// The type of biquad filter used for an EQ band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

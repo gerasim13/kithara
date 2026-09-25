@@ -192,15 +192,10 @@ mod tests {
 
     use super::Semaphore;
     use crate::{
-        flash,
+        consts, flash,
         sync::Arc,
         tokio::task::{spawn, yield_now},
     };
-
-    mod consts {
-        pub(super) const PERMITS: usize = 3;
-        pub(super) const TASKS: usize = 16;
-    }
 
     /// Many tasks contend for a few permits; each acquires, yields (forcing the
     /// others to park on the engine waiter), then releases by dropping the

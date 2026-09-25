@@ -334,20 +334,64 @@ mod tests {
         skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
     };
 
+    mod consts {
+        use super::*;
+
+        pub(super) const FIXTURE: DrawFixture = {
+            let color = Rgba {
+                a: 1.0,
+                b: 0.25,
+                g: 0.5,
+                r: 0.75,
+            };
+            DrawFixture {
+                color,
+                bounds: Rect {
+                    h: 12.0,
+                    w: 40.0,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                point: Pt { x: 4.0, y: 4.0 },
+                role: TextRoleSkin {
+                    color: ColorRole::Text,
+                    font: FontFamily::Sans,
+                    size: 12.0,
+                    spacing: 0.0,
+                    weight: FontWeight::Normal,
+                },
+            }
+        };
+    }
+
     #[kithara::test]
     fn every_draw_operation_adds_to_the_encoding() {
-        let run = TextContext::new()
-            .unwrap()
-            .shape("GAIN", FIXTURE.role, Some(FIXTURE.bounds.w));
+        let run = TextContext::new().unwrap().shape(
+            "GAIN",
+            consts::FIXTURE.role,
+            Some(consts::FIXTURE.bounds.w),
+        );
         let mut builder = DrawListBuilder::default();
-        builder.fill_circle(FIXTURE.point, 5.0, FIXTURE.color);
-        builder.stroke_arc(FIXTURE.point, 5.0, 0.0, 1.0, FIXTURE.color, 1.0);
-        builder.stroke_circle(FIXTURE.point, 5.0, FIXTURE.color, 1.0);
-        builder.stroke_line(FIXTURE.point, Pt { x: 8.0, y: 8.0 }, FIXTURE.color, 1.0);
-        builder.fill_rect(FIXTURE.bounds, FIXTURE.color);
-        builder.fill_rounded_rect(FIXTURE.bounds, 3.0, FIXTURE.color);
-        builder.stroke_rounded_rect(FIXTURE.bounds, 3.0, FIXTURE.color, 1.0);
-        builder.text(&run, "GAIN", Transform::IDENTITY, FIXTURE.color);
+        builder.fill_circle(consts::FIXTURE.point, 5.0, consts::FIXTURE.color);
+        builder.stroke_arc(
+            consts::FIXTURE.point,
+            5.0,
+            0.0,
+            1.0,
+            consts::FIXTURE.color,
+            1.0,
+        );
+        builder.stroke_circle(consts::FIXTURE.point, 5.0, consts::FIXTURE.color, 1.0);
+        builder.stroke_line(
+            consts::FIXTURE.point,
+            Pt { x: 8.0, y: 8.0 },
+            consts::FIXTURE.color,
+            1.0,
+        );
+        builder.fill_rect(consts::FIXTURE.bounds, consts::FIXTURE.color);
+        builder.fill_rounded_rect(consts::FIXTURE.bounds, 3.0, consts::FIXTURE.color);
+        builder.stroke_rounded_rect(consts::FIXTURE.bounds, 3.0, consts::FIXTURE.color, 1.0);
+        builder.text(&run, "GAIN", Transform::IDENTITY, consts::FIXTURE.color);
         let list = builder.finish();
         let mut scene = Scene::new();
 
@@ -360,9 +404,9 @@ mod tests {
     #[kithara::test]
     fn clip_replay_balances_the_layer_and_encodes_nested_commands() {
         let mut nested = DrawListBuilder::default();
-        nested.fill_rect(FIXTURE.bounds, FIXTURE.color);
+        nested.fill_rect(consts::FIXTURE.bounds, consts::FIXTURE.color);
         let mut builder = DrawListBuilder::default();
-        builder.clip(FIXTURE.bounds, nested.finish());
+        builder.clip(consts::FIXTURE.bounds, nested.finish());
         let mut scene = Scene::new();
 
         replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
@@ -376,19 +420,29 @@ mod tests {
     fn system_text_detection_covers_direct_and_nested_clips_only() {
         let system = system_run();
         let mut direct = DrawListBuilder::default();
-        direct.text(&system, "fallback", Transform::IDENTITY, FIXTURE.color);
+        direct.text(
+            &system,
+            "fallback",
+            Transform::IDENTITY,
+            consts::FIXTURE.color,
+        );
         let direct = direct.finish();
         assert!(has_system_text(&direct));
 
         let mut nested = DrawListBuilder::default();
-        nested.clip(FIXTURE.bounds, direct);
+        nested.clip(consts::FIXTURE.bounds, direct);
         assert!(has_system_text(&nested.finish()));
 
         let embedded = TextContext::new()
             .unwrap_or_else(|error| panic!("embedded text context must build: {error}"))
-            .shape("GAIN", FIXTURE.role, None);
+            .shape("GAIN", consts::FIXTURE.role, None);
         let mut embedded_list = DrawListBuilder::default();
-        embedded_list.text(&embedded, "GAIN", Transform::IDENTITY, FIXTURE.color);
+        embedded_list.text(
+            &embedded,
+            "GAIN",
+            Transform::IDENTITY,
+            consts::FIXTURE.color,
+        );
         assert!(!has_system_text(&embedded_list.finish()));
     }
 
@@ -452,25 +506,32 @@ mod tests {
 
     fn line_scene(width: f32) -> Scene {
         let mut builder = DrawListBuilder::default();
-        builder.stroke_line(FIXTURE.point, Pt { x: 8.0, y: 8.0 }, FIXTURE.color, width);
+        builder.stroke_line(
+            consts::FIXTURE.point,
+            Pt { x: 8.0, y: 8.0 },
+            consts::FIXTURE.color,
+            width,
+        );
         let mut scene = Scene::new();
         replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
         scene
     }
 
     fn text_scene(content: &str) -> Scene {
-        let run = TextContext::new()
-            .unwrap()
-            .shape(content, FIXTURE.role, Some(FIXTURE.bounds.w));
+        let run = TextContext::new().unwrap().shape(
+            content,
+            consts::FIXTURE.role,
+            Some(consts::FIXTURE.bounds.w),
+        );
         let mut builder = DrawListBuilder::default();
         builder.text(
             &run,
             content,
             Transform::translate(Pt {
-                x: FIXTURE.bounds.x + (FIXTURE.bounds.w - run.width()) / 2.0,
-                y: FIXTURE.bounds.y,
+                x: consts::FIXTURE.bounds.x + (consts::FIXTURE.bounds.w - run.width()) / 2.0,
+                y: consts::FIXTURE.bounds.y,
             }),
-            FIXTURE.color,
+            consts::FIXTURE.color,
         );
         let mut scene = Scene::new();
         replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
@@ -482,7 +543,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("system text resources must build: {error}"));
         let mut text = TextContext::from(&resources);
         for content in ["曲名", "שלום", "مرحبا", "ಜಗ", "ชื่อ"] {
-            let run = text.shape(content, FIXTURE.role, None);
+            let run = text.shape(content, consts::FIXTURE.role, None);
             if run
                 .segments()
                 .iter()
@@ -501,32 +562,6 @@ mod tests {
         color: Rgba,
         role: TextRoleSkin,
     }
-
-    const FIXTURE: DrawFixture = {
-        let color = Rgba {
-            a: 1.0,
-            b: 0.25,
-            g: 0.5,
-            r: 0.75,
-        };
-        DrawFixture {
-            color,
-            bounds: Rect {
-                h: 12.0,
-                w: 40.0,
-                x: 0.0,
-                y: 0.0,
-            },
-            point: Pt { x: 4.0, y: 4.0 },
-            role: TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Sans,
-                size: 12.0,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
-        }
-    };
 
     #[cfg(feature = "render")]
     #[kithara::test]

@@ -5,9 +5,8 @@ use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 use crate::{
     AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform,
     blob::{BlobError, MAX_PREALLOC, Reader, Writer},
+    consts,
 };
-
-const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0007;
 
 impl TrackAnalysis {
     /// Append this snapshot to caller-owned storage using the durable analysis format.
@@ -17,7 +16,7 @@ impl TrackAnalysis {
     /// Returns [`BlobError::TooLarge`] when a length does not fit the format.
     pub fn write_to(&self, out: &mut Vec<u8>) -> Result<(), BlobError> {
         let mut writer = Writer::new(out);
-        writer.write_u32(TRACK_ANALYSIS_BYTES_VERSION);
+        writer.write_u32(consts::TRACK_ANALYSIS_BYTES_VERSION);
         writer.write_str(self.token().as_str())?;
         writer.write_u32(self.source_sample_rate().get());
         writer.write_optional_u64(self.extent());
@@ -51,10 +50,10 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
     fn try_from((bytes, active): (&[u8], &AnalysisFingerprint)) -> Result<Self, Self::Error> {
         let mut reader = Reader::new(bytes);
         let version = reader.read_u32()?;
-        if version != TRACK_ANALYSIS_BYTES_VERSION {
+        if version != consts::TRACK_ANALYSIS_BYTES_VERSION {
             return Err(BlobError::Version {
                 found: version,
-                expected: TRACK_ANALYSIS_BYTES_VERSION,
+                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
             });
         }
 
@@ -147,33 +146,6 @@ mod tests {
     use super::*;
     use crate::artifact::FitRegion;
 
-    mod consts {
-        pub(super) const BEAT_TAG: &str = "beat:test:v1";
-        pub(super) const TOKEN: &str = "assets/track.analysis";
-        pub(super) const V5_FIXTURE: &[u8] = &[
-            0x05, 0x00, 0x41, 0x4b, 0x09, 0x00, 0x00, 0x00, 0x67, 0x6f, 0x6c, 0x64, 0x65, 0x6e,
-            0x2d, 0x76, 0x35, 0x80, 0xbb, 0x00, 0x00, 0x01, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x77, 0x61, 0x76, 0x65, 0x3a, 0x76,
-            0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x62,
-            0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-        pub(super) const V7_FIXTURE: &[u8] = &[
-            0x07, 0x00, 0x41, 0x4b, 0x09, 0x00, 0x00, 0x00, 0x67, 0x6f, 0x6c, 0x64, 0x65, 0x6e,
-            0x2d, 0x76, 0x37, 0x44, 0xac, 0x00, 0x00, 0x01, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x77,
-            0x61, 0x76, 0x65, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x07, 0x00, 0x00, 0x00, 0x62, 0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-    }
-
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::new(Some(beat), Some(wave))
     }
@@ -210,7 +182,7 @@ mod tests {
             coverage.insert(0..extent);
         }
         TrackAnalysis::builder()
-            .token(consts::TOKEN.into())
+            .token(consts::TRACK_TOKEN.into())
             .revision(7)
             .source_sample_rate(rate())
             .extent(extent)
@@ -237,7 +209,7 @@ mod tests {
             TrackAnalysis::try_from((consts::V5_FIXTURE, &active)),
             Err(BlobError::Version {
                 found: 0x4b41_0005,
-                expected: TRACK_ANALYSIS_BYTES_VERSION,
+                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
             })
         ));
     }
@@ -331,7 +303,7 @@ mod tests {
         coverage.insert(0..400);
         coverage.insert(600..1000);
         let want = TrackAnalysis::builder()
-            .token(consts::TOKEN.into())
+            .token(consts::TRACK_TOKEN.into())
             .revision(11)
             .source_sample_rate(rate())
             .extent(1_000)
@@ -365,8 +337,10 @@ mod tests {
     #[kithara::test]
     fn rejects_non_boolean_flags() {
         let mut bytes = encode(&analysis(Some(grid()), Some(wave()), 1));
-        let extent_flag =
-            TRACK_ANALYSIS_BYTES_VERSION.to_le_bytes().len() + 4 + consts::TOKEN.len() + 4;
+        let extent_flag = consts::TRACK_ANALYSIS_BYTES_VERSION.to_le_bytes().len()
+            + 4
+            + consts::TRACK_TOKEN.len()
+            + 4;
         bytes[extent_flag] = 2;
         assert!(matches!(
             TrackAnalysis::try_from((&bytes[..], &active())),

@@ -125,11 +125,7 @@ mod tests {
     use rangemap::RangeSet;
 
     use super::Schedule;
-
-    mod consts {
-        pub(super) const EXTENT: u64 = 1000;
-        pub(super) const WINDOW: u64 = 200;
-    }
+    use crate::consts;
 
     fn coverage(runs: &[(u64, u64)]) -> RangeSet<u64> {
         let mut out = RangeSet::new();
@@ -166,7 +162,11 @@ mod tests {
     fn an_untouched_track_starts_with_the_middle_of_its_first_half() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(&RangeSet::new(), Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &RangeSet::new(),
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             Some(200),
             "the first run is chunk one, the middle of the first half"
         );
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(
             schedule.next(
                 &coverage(&[(0, 200), (400, 600)]),
-                Some(consts::EXTENT),
+                Some(consts::WORKER_SCHEDULE_EXTENT),
                 Some(consts::WINDOW)
             ),
             Some(200),
@@ -192,12 +192,16 @@ mod tests {
         // Holes of 100 and 300 frames; the second one is the wider.
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
         assert_eq!(
-            covered.gaps(&(0..consts::EXTENT)).count(),
+            covered.gaps(&(0..consts::WORKER_SCHEDULE_EXTENT)).count(),
             2,
             "two holes to choose between"
         );
         assert_eq!(
-            schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &covered,
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             Some(400)
         );
     }
@@ -206,7 +210,11 @@ mod tests {
     fn an_unbounded_run_is_aimed_at_the_start_of_its_gap() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(&coverage(&[(600, 400)]), Some(consts::EXTENT), None),
+            schedule.next(
+                &coverage(&[(600, 400)]),
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                None
+            ),
             Some(0),
             "a run with no window decodes to the end, so only its start matters"
         );
@@ -219,20 +227,26 @@ mod tests {
         let mut covered = RangeSet::new();
         let mut runs = 0;
 
-        while let Some(at) = schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)) {
+        while let Some(at) = schedule.next(
+            &covered,
+            Some(consts::WORKER_SCHEDULE_EXTENT),
+            Some(consts::WINDOW),
+        ) {
             covered.insert(at..at + consts::WINDOW);
             runs += 1;
             assert!(
-                runs <= 2 * consts::EXTENT.div_ceil(consts::WINDOW),
+                runs <= 2 * consts::WORKER_SCHEDULE_EXTENT.div_ceil(consts::WINDOW),
                 "a choice that leaves the front of its gap behind never converges: {:?}",
                 covered.iter().collect::<Vec<_>>()
             );
         }
 
         assert!(
-            covered.covers(&(0..consts::EXTENT)),
+            covered.covers(&(0..consts::WORKER_SCHEDULE_EXTENT)),
             "the track is covered, not approached: {:?}",
-            covered.gaps(&(0..consts::EXTENT)).collect::<Vec<_>>()
+            covered
+                .gaps(&(0..consts::WORKER_SCHEDULE_EXTENT))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -242,12 +256,15 @@ mod tests {
         // Gaps of 200 and 300 frames.
         let covered = coverage(&[(200, 200), (700, 300)]);
         assert_eq!(
-            schedule.extend(&covered, Some(consts::EXTENT)),
+            schedule.extend(&covered, Some(consts::WORKER_SCHEDULE_EXTENT)),
             Some(400),
             "the widest gap is where a run has the most to continue"
         );
         assert_eq!(
-            schedule.extend(&coverage(&[(200, 800)]), Some(consts::EXTENT)),
+            schedule.extend(
+                &coverage(&[(200, 800)]),
+                Some(consts::WORKER_SCHEDULE_EXTENT)
+            ),
             Some(0),
             "a gap at the start is read through to the audio that closes it"
         );
@@ -258,8 +275,8 @@ mod tests {
         let schedule = Schedule::default();
         assert_eq!(
             schedule.next(
-                &coverage(&[(0, consts::EXTENT)]),
-                Some(consts::EXTENT),
+                &coverage(&[(0, consts::WORKER_SCHEDULE_EXTENT)]),
+                Some(consts::WORKER_SCHEDULE_EXTENT),
                 Some(consts::WINDOW)
             ),
             None
@@ -281,28 +298,44 @@ mod tests {
         let mut schedule = Schedule::default();
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
         assert_eq!(
-            schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &covered,
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             Some(400)
         );
 
         // The seek to 400 snapped back into covered audio and added nothing.
         schedule.barren(400);
         assert_eq!(
-            schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &covered,
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             Some(450),
             "recovery may try another position, but never repeats the barren one"
         );
 
         schedule.barren(450);
         assert_eq!(
-            schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &covered,
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             Some(100),
             "the next choice comes from the other uncovered range"
         );
 
         schedule.barren(100);
         assert_eq!(
-            schedule.next(&covered, Some(consts::EXTENT), Some(consts::WINDOW)),
+            schedule.next(
+                &covered,
+                Some(consts::WORKER_SCHEDULE_EXTENT),
+                Some(consts::WINDOW)
+            ),
             None,
             "a pass with nowhere left to reach is finished, not spinning"
         );

@@ -11,10 +11,9 @@ mod encode {
 
     use crate::analysis::seconds_at;
 
-    /// Scope tag every analysis message carries on the player event channel.
-    pub(crate) const ANALYSIS_SCOPE: &str = "analysis";
-
-    mod consts {
+    pub(super) mod consts {
+        /// Scope tag every analysis message carries on the player event channel.
+        pub(in super::super) const ANALYSIS_SCOPE: &str = "analysis";
         pub(super) const BANDS_PER_BUCKET: usize = 3;
         pub(super) const STAGE: usize = 768;
     }
@@ -27,7 +26,11 @@ mod encode {
         let artifact = beat.map(BeatSnapshot::artifact);
 
         let message = Object::new();
-        set(&message, "scope", &JsValue::from_str(ANALYSIS_SCOPE));
+        set(
+            &message,
+            "scope",
+            &JsValue::from_str(consts::ANALYSIS_SCOPE),
+        );
         set(&message, "trackId", &number(track_id.as_u64()));
         set(&message, "revision", &number(analysis.revision()));
         set(
@@ -114,7 +117,7 @@ mod route {
     use send_wrapper::SendWrapper;
     use wasm_bindgen::{JsCast, JsValue};
 
-    use super::encode::ANALYSIS_SCOPE;
+    use super::encode::consts::ANALYSIS_SCOPE;
 
     #[derive(Clone, Default)]
     pub(crate) struct AnalysisRoute {

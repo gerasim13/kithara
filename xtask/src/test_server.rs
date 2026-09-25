@@ -7,14 +7,14 @@ use std::{
     process::{Child, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
 use tracing::warn;
 
-use crate::{child, ci::process::Process};
+use crate::{child, ci::process::Process, consts};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Port {
@@ -33,16 +33,6 @@ impl Port {
             Self::Ephemeral => 0,
         }
     }
-}
-
-mod consts {
-    use super::Duration;
-
-    /// The line the server prints once its listener is bound. Its origin is
-    /// `STARTUP_RECORD` in `tests/crates/integration/src/test_server/native.rs`.
-    pub(super) const STARTUP_RECORD: &str = "test server listening on";
-    pub(super) const POLL: Duration = Duration::from_millis(200);
-    pub(super) const READY: Duration = Duration::from_secs(60);
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -143,7 +133,7 @@ impl TestServer {
         let deadline = Instant::now() + consts::READY;
         loop {
             child::check(cancel)?;
-            match announced.recv_timeout(consts::POLL) {
+            match announced.recv_timeout(consts::TEST_SERVER_POLL) {
                 Ok(line) => {
                     let bound = bound_port(&line)?;
                     if let Port::Fixed(expected) = port
@@ -175,7 +165,7 @@ impl TestServer {
 
     fn await_health(&mut self, cancel: Option<&child::Cancel>) -> Result<()> {
         let client = Client::builder()
-            .timeout(consts::POLL)
+            .timeout(consts::TEST_SERVER_POLL)
             .build()
             .context("building the readiness client")?;
         let endpoint = format!("{}/health", self.url);
@@ -197,7 +187,7 @@ impl TestServer {
                     consts::READY.as_secs()
                 );
             }
-            thread::sleep(consts::POLL);
+            thread::sleep(consts::TEST_SERVER_POLL);
         }
     }
 

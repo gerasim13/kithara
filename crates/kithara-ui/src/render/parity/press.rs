@@ -23,27 +23,29 @@ use crate::{
     view,
 };
 
-/// A burger menu hanging over a control of the page.
-///
-/// The surface a menu opens is drawn above the document, and the document goes
-/// on laying controls out under it. The page control here is exactly the one a
-/// menu row covers, which is the arrangement both shipped menus - the burger
-/// and the quality picker - stand in.
-const OVER_THE_PAGE: &str = r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-    Popover(id: "menu", open: View(id: "menu"), align: Start,
-        anchor: Pressable(id: "burger", press: View(id: "menu"),
-            child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
-        content: Pressable(id: "item", press: Command(id: "fixture.pick"),
-            child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))))),
-    Pressable(id: "page", press: Command(id: "fixture.page"),
-        child: Spacer(id: "page-face", size: Some((w: Fill, h: Fill)))),
-])"#;
+mod consts {
+    /// A burger menu hanging over a control of the page.
+    ///
+    /// The surface a menu opens is drawn above the document, and the document goes
+    /// on laying controls out under it. The page control here is exactly the one a
+    /// menu row covers, which is the arrangement both shipped menus - the burger
+    /// and the quality picker - stand in.
+    pub(super) const OVER_THE_PAGE: &str = r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Popover(id: "menu", open: View(id: "menu"), align: Start,
+            anchor: Pressable(id: "burger", press: View(id: "menu"),
+                child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+            content: Pressable(id: "item", press: Command(id: "fixture.pick"),
+                child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))))),
+        Pressable(id: "page", press: Command(id: "fixture.page"),
+            child: Spacer(id: "page-face", size: Some((w: Fill, h: Fill)))),
+    ])"#;
 
-/// The window both hosts open the document in.
-const WINDOW: (u32, u32) = (240, 160);
+    /// The window both hosts open the document in.
+    pub(super) const WINDOW: (u32, u32) = (240, 160);
 
-/// The state the document names for the menu it opens and shuts.
-const MENU: &str = "demo/menu";
+    /// The state the document names for the menu it opens and shuts.
+    pub(super) const MENU: &str = "demo/menu";
+}
 
 /// What one gesture left behind: where each press landed, what the document
 /// published, and whether the menu stands open at the end of it.
@@ -118,7 +120,8 @@ fn documents() -> MemResolver {
         &format!(
             r#"(schema: "kithara.module", version: 1, id: "menu", chrome: Plain,
                 root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0,
-                    children: [{OVER_THE_PAGE}]))"#
+                    children: [{OVER_THE_PAGE}]))"#,
+            OVER_THE_PAGE = consts::OVER_THE_PAGE
         ),
     );
     resolver
@@ -140,7 +143,7 @@ fn retained(steps: &[&str]) -> Played {
             .resolver(&resolver)
             .text(builtin::text_doc())
             .build(),
-        WINDOW,
+        consts::WINDOW,
         1.0,
     )
     .unwrap_or_else(|error| panic!("the menu fixture must mount: {error}"));
@@ -166,7 +169,7 @@ fn retained(steps: &[&str]) -> Played {
     }
     Played {
         points,
-        open: ui.view().flag(MENU),
+        open: ui.view().flag(consts::MENU),
         published: ui.app().published.clone(),
     }
 }
@@ -184,12 +187,12 @@ fn immediate(points: &[Pt]) -> Played {
         &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("both hosts open the same document: {error}"));
-    let mut host = Immediate::mount(Menu::default(), &ui, builtin::skin(), WINDOW);
+    let mut host = Immediate::mount(Menu::default(), &ui, builtin::skin(), consts::WINDOW);
     for point in points {
         host.click_at(*point);
     }
     Played {
-        open: host.view().flag(MENU),
+        open: host.view().flag(consts::MENU),
         published: host.app().published.clone(),
         points: points.to_vec(),
     }

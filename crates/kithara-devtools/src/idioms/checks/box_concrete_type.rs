@@ -13,43 +13,45 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "box_concrete_type";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "box_concrete_type";
 
-const EXPLANATION: &str = "\
-Detected `Box::new(StructLiteral { ... })` on a concrete (non-trait-object) value.
+    pub(super) const EXPLANATION: &str = "\
+    Detected `Box::new(StructLiteral { ... })` on a concrete (non-trait-object) value.
 
-Why it matters. `Box<T>` exists for two cases: erasing a sized type into \
-`Box<dyn Trait>` for runtime polymorphism, or breaking infinite type \
-recursion in enums (`enum Tree { Leaf, Node(Box<Tree>) }`). Wrapping a \
-sized concrete struct in `Box::new` for any other reason adds one heap \
-allocation per construction, one indirection on every access, plus \
-pointer-chasing cost in cache. If the type is `Sized` and you don't need \
-polymorphism, store it inline. If size pressure is the worry, use \
-`Box<T>` only when the type is genuinely large (>= a few hundred bytes) \
-and rarely accessed.
+    Why it matters. `Box<T>` exists for two cases: erasing a sized type into \
+    `Box<dyn Trait>` for runtime polymorphism, or breaking infinite type \
+    recursion in enums (`enum Tree { Leaf, Node(Box<Tree>) }`). Wrapping a \
+    sized concrete struct in `Box::new` for any other reason adds one heap \
+    allocation per construction, one indirection on every access, plus \
+    pointer-chasing cost in cache. If the type is `Sized` and you don't need \
+    polymorphism, store it inline. If size pressure is the worry, use \
+    `Box<T>` only when the type is genuinely large (>= a few hundred bytes) \
+    and rarely accessed.
 
-❌  enum TrackSource { Url(Url), Config(Box<ResourceConfig>) } // ResourceConfig sized, no recursion
-✅  enum TrackSource { Url(Url), Config(ResourceConfig) }
+    ❌  enum TrackSource { Url(Url), Config(Box<ResourceConfig>) } // ResourceConfig sized, no recursion
+    ✅  enum TrackSource { Url(Url), Config(ResourceConfig) }
 
-Exempt by construction: a `Box::new(StructLiteral)` whose box-bound local \
-escapes to FFI as a raw pointer within the same function — via \
-`Box::into_raw(b)` or a raw-pointer cast of the box (`b.as_mut() as *mut _`, \
-`&*b as *const _`). There the `Box` is a pinned allocation: it hands a \
-stable heap address to a C API and owns the backing storage for the \
-duration of the call. Storing the struct inline would move it and dangle \
-the live FFI pointer.
+    Exempt by construction: a `Box::new(StructLiteral)` whose box-bound local \
+    escapes to FFI as a raw pointer within the same function — via \
+    `Box::into_raw(b)` or a raw-pointer cast of the box (`b.as_mut() as *mut _`, \
+    `&*b as *const _`). There the `Box` is a pinned allocation: it hands a \
+    stable heap address to a C API and owns the backing storage for the \
+    duration of the call. Storing the struct inline would move it and dangle \
+    the live FFI pointer.
 
-Suppress with `// xtask-lint-ignore: box_concrete_type` for: (1) enums \
-where the boxed variant is rare and reduces stack size of the others, \
-(2) recursive enums (`Box<Self>`), (3) tests that intentionally exercise \
-a `Box::new` path. Heuristic check — suppress noisy false positives \
-without guilt.";
+    Suppress with `// xtask-lint-ignore: box_concrete_type` for: (1) enums \
+    where the boxed variant is rare and reduces stack size of the others, \
+    (2) recursive enums (`Box<Self>`), (3) tests that intentionally exercise \
+    a `Box::new` path. Heuristic check — suppress noisy false positives \
+    without guilt.";
+}
 
 pub(crate) struct BoxConcreteType;
 
 impl Check for BoxConcreteType {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -120,19 +122,19 @@ impl BoxVisitor<'_> {
                 continue;
             }
             let s = call.span().start();
-            if self.suppress.is_suppressed(s.line, ID) {
+            if self.suppress.is_suppressed(s.line, consts::ID) {
                 continue;
             }
             let key = format!("{}:{}:{}", self.rel, s.line, s.column);
             self.out.push(
                 Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     "B1: `Box::new(StructLiteral { ... })` on a concrete sized type — \
                          store inline unless the variant is genuinely large or this is \
                          `Box<dyn Trait>` after coercion",
                 )
-                .with_explanation(EXPLANATION),
+                .with_explanation(consts::EXPLANATION),
             );
         }
     }

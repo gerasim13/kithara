@@ -138,16 +138,18 @@ mod tests {
     use super::*;
     use crate::source::MemResolver;
 
-    const MANIFEST: &str = r#"(
-        schema: "kithara.package",
-        version: 1,
-        id: "kithara-default",
-        contract: 1,
-        screens: {
-            "player": "player.klayout.ron",
-            "player-single": "player-single.klayout.ron",
-        },
-    )"#;
+    mod consts {
+        pub(super) const MANIFEST: &str = r#"(
+            schema: "kithara.package",
+            version: 1,
+            id: "kithara-default",
+            contract: 1,
+            screens: {
+                "player": "player.klayout.ron",
+                "player-single": "player-single.klayout.ron",
+            },
+        )"#;
+    }
 
     fn layout(id: &str) -> String {
         format!(r#"(schema: "kithara.layout", version: 1, id: "{id}", root: ())"#)
@@ -163,7 +165,7 @@ mod tests {
 
     #[kithara::test]
     fn a_package_names_the_file_behind_a_role() {
-        let resolver = holding(MANIFEST);
+        let resolver = holding(consts::MANIFEST);
         let package = load_package(&resolver, "package.kpackage.ron").unwrap();
 
         assert_eq!(
@@ -176,7 +178,7 @@ mod tests {
 
     #[kithara::test]
     fn a_role_the_package_does_not_answer_is_refused_by_name() {
-        let resolver = holding(MANIFEST);
+        let resolver = holding(consts::MANIFEST);
         let package = load_package(&resolver, "package.kpackage.ron").unwrap();
 
         let error = package
@@ -191,14 +193,14 @@ mod tests {
 
     #[kithara::test]
     fn a_package_inherits_nothing_unless_it_says_so() {
-        let package = load_package(&holding(MANIFEST), "package.kpackage.ron").unwrap();
+        let package = load_package(&holding(consts::MANIFEST), "package.kpackage.ron").unwrap();
 
         assert!(!package.inherits);
     }
 
     #[kithara::test]
     fn a_package_that_says_so_inherits() {
-        let manifest = MANIFEST.replace("contract: 1,", "contract: 1, inherits: true,");
+        let manifest = consts::MANIFEST.replace("contract: 1,", "contract: 1, inherits: true,");
 
         let package = load_package(&holding(&manifest), "package.kpackage.ron").unwrap();
 
@@ -209,7 +211,7 @@ mod tests {
     /// message names the mismatch and not whatever a stale document tripped on.
     #[kithara::test]
     fn a_package_written_for_another_contract_is_refused() {
-        let manifest = MANIFEST.replace("contract: 1,", "contract: 7,");
+        let manifest = consts::MANIFEST.replace("contract: 1,", "contract: 7,");
 
         let error = load_package(&holding(&manifest), "package.kpackage.ron").unwrap_err();
 
@@ -228,13 +230,15 @@ mod tests {
     /// act on: the rest of the manifest was written for a different build.
     #[kithara::test]
     fn a_foreign_contract_is_reported_before_anything_else_about_the_package() {
-        let manifest = MANIFEST.replace("contract: 1,", "contract: 7,").replace(
-            r#"screens: {
+        let manifest = consts::MANIFEST
+            .replace("contract: 1,", "contract: 7,")
+            .replace(
+                r#"screens: {
             "player": "player.klayout.ron",
             "player-single": "player-single.klayout.ron",
         },"#,
-            "screens: {},",
-        );
+                "screens: {},",
+            );
 
         let error = load_package(&holding(&manifest), "package.kpackage.ron").unwrap_err();
 
@@ -243,7 +247,7 @@ mod tests {
 
     #[kithara::test]
     fn a_package_answering_for_nothing_is_refused() {
-        let manifest = MANIFEST.replace(
+        let manifest = consts::MANIFEST.replace(
             r#"screens: {
             "player": "player.klayout.ron",
             "player-single": "player-single.klayout.ron",
@@ -258,7 +262,8 @@ mod tests {
 
     #[kithara::test]
     fn a_role_with_no_file_behind_it_is_refused() {
-        let manifest = MANIFEST.replace(r#""player": "player.klayout.ron","#, r#""player": "","#);
+        let manifest =
+            consts::MANIFEST.replace(r#""player": "player.klayout.ron","#, r#""player": "","#);
 
         let error = load_package(&holding(&manifest), "package.kpackage.ron").unwrap_err();
 
@@ -273,7 +278,7 @@ mod tests {
     /// compiling on the manifest alone would draw the wrong screen in silence.
     #[kithara::test]
     fn a_file_naming_another_screen_is_refused_under_the_role_it_was_put_behind() {
-        let manifest = MANIFEST.replace(
+        let manifest = consts::MANIFEST.replace(
             r#""player": "player.klayout.ron","#,
             r#""player": "player-single.klayout.ron","#,
         );
@@ -292,7 +297,7 @@ mod tests {
 
     #[kithara::test]
     fn a_role_whose_file_is_not_there_is_not_found() {
-        let manifest = MANIFEST.replace(
+        let manifest = consts::MANIFEST.replace(
             r#""player": "player.klayout.ron","#,
             r#""player": "gone.klayout.ron","#,
         );

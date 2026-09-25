@@ -305,7 +305,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        super::zoom_math::{MAX_ZOOM, norm_to_x, window_bounds, x_to_norm},
+        super::zoom_math::{consts::MAX_ZOOM, norm_to_x, window_bounds, x_to_norm},
         *,
     };
     use crate::{

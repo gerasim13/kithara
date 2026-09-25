@@ -12,6 +12,17 @@ use crate::{
     state::{StateController, UiState},
 };
 
+pub(crate) mod consts {
+    use super::*;
+
+    /// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
+    /// `+TEMPO_RANGE`.
+    pub(crate) const TEMPO_RANGE: f32 = TempoPercent::MAX.0;
+
+    /// What one wheel detent over the TEMPO block is worth, in percent.
+    pub(crate) const TEMPO_STEP: f32 = 1.5;
+}
+
 /// One deck as the GUI sees it: the shared model behind it, the snapshot the
 /// current frame renders from, and the view-local state that belongs to no
 /// one else.
@@ -39,13 +50,6 @@ impl DeckUi {
 pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
 }
-
-/// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
-/// `+TEMPO_RANGE`.
-pub(crate) const TEMPO_RANGE: f32 = TempoPercent::MAX.0;
-
-/// What one wheel detent over the TEMPO block is worth, in percent.
-pub(crate) const TEMPO_STEP: f32 = 1.5;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TimestretchState {
@@ -176,7 +180,10 @@ fn set_tempo(deck: &mut DeckUi, tempo: TempoPercent) {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{TEMPO_RANGE, TEMPO_STEP, TempoPercent, TimestretchState};
+    use super::{
+        TempoPercent, TimestretchState,
+        consts::{TEMPO_RANGE, TEMPO_STEP},
+    };
 
     #[kithara::test]
     fn speed_is_one_percent_per_tempo_point() {

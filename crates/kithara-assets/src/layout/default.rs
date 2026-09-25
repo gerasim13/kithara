@@ -7,11 +7,7 @@ use super::{
         fingerprint,
     },
 };
-
-mod consts {
-    pub(super) const DEFAULT_EXTENSION: &str = "bin";
-    pub(super) const MAX_EXTENSION_LEN: usize = 16;
-}
+use crate::consts;
 
 /// Default portable cache layout shared by file, HLS, and named artifacts.
 #[derive(Debug, Default)]

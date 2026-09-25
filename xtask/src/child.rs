@@ -27,13 +27,7 @@ use signal_hook::{
     flag, low_level,
 };
 
-mod consts {
-    use super::Duration;
-
-    pub(super) const POLL: Duration = Duration::from_millis(20);
-    /// How long a child gets to leave after it is killed outright.
-    pub(super) const GRACE: Duration = Duration::from_secs(10);
-}
+use crate::consts;
 
 /// Children of a run get their own process group, including commands they spawn.
 #[cfg(unix)]
@@ -122,7 +116,7 @@ pub(crate) fn supervise(
                 kill_owned(child)?;
                 return Ok(status);
             }
-            Ok(None) => thread::sleep(consts::POLL),
+            Ok(None) => thread::sleep(consts::CHILD_POLL),
             Err(error) => {
                 return Err(match stop(child, "failed command wait") {
                     Ok(_) => error,
@@ -186,7 +180,7 @@ fn reap(child: &mut Child, grace: Duration, what: &str) -> Result<Option<ExitSta
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        thread::sleep(consts::POLL);
+        thread::sleep(consts::CHILD_POLL);
     }
 }
 

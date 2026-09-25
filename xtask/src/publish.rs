@@ -11,13 +11,10 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
 use kithara_devtools::{Ctx, util::check_tool};
 
-use crate::config::{KitharaExt, PublishConfig};
-
-mod consts {
-    /// User-agent used for registry availability checks when the project
-    /// config leaves `publish.user_agent` empty.
-    pub(super) const DEFAULT_USER_AGENT: &str = "xtask-publish";
-}
+use crate::{
+    config::{KitharaExt, PublishConfig},
+    consts,
+};
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct PublishArgs {

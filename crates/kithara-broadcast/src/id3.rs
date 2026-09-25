@@ -49,13 +49,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::TimestampTag;
-
-    mod consts {
-        pub(super) const MPEG_TIMESCALE: u32 = 90_000;
-        pub(super) const OWNER: &[u8] = b"com.apple.streaming.transportStreamTimestamp\0";
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-        pub(super) const WRAP: u64 = 1 << 33;
-    }
+    use crate::consts;
 
     fn timestamp_bytes(tag: &[u8]) -> [u8; 8] {
         tag[TimestampTag::LEN - TimestampTag::TIMESTAMP_LEN..]
@@ -65,7 +59,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_tag_is_an_id3_header_a_priv_frame_and_eight_timestamp_bytes() {
-        let tag = TimestampTag::render(consts::SAMPLE_RATE.into(), consts::SAMPLE_RATE);
+        let tag = TimestampTag::render(consts::ID3_SAMPLE_RATE.into(), consts::ID3_SAMPLE_RATE);
 
         assert_eq!(
             tag.as_slice(),
@@ -87,7 +81,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_declared_sizes_span_the_rendered_tag() {
-        let tag = TimestampTag::render(0, consts::SAMPLE_RATE);
+        let tag = TimestampTag::render(0, consts::ID3_SAMPLE_RATE);
 
         assert_eq!(
             usize::from(tag[TimestampTag::TAG_HEADER_LEN - 1]),
@@ -125,9 +119,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_conversion_rounds_to_the_nearest_tick() {
-        assert_eq!(TimestampTag::mpeg_timestamp(1, consts::SAMPLE_RATE), 2);
+        assert_eq!(TimestampTag::mpeg_timestamp(1, consts::ID3_SAMPLE_RATE), 2);
         assert_eq!(
-            TimestampTag::mpeg_timestamp(1_024, consts::SAMPLE_RATE),
+            TimestampTag::mpeg_timestamp(1_024, consts::ID3_SAMPLE_RATE),
             1_920
         );
     }

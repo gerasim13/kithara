@@ -11,15 +11,12 @@ use super::{
     snapshot::{BeatSnapshot, BeatState},
     track::TrackAnalysis,
 };
+use crate::consts;
 
 /// How far a marker may sit from a whole beat and still name that beat without
 /// a second reading. Past a quarter beat the nearest ordinal is a guess, and a
 /// guess is not an observation, so the pass publishes the tempo alone instead.
 pub const ORDINAL_TOLERANCE_BEATS: f64 = 0.25;
-
-mod consts {
-    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
-}
 
 /// Why a pass states no grid a player could follow.
 ///
@@ -182,17 +179,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};
-    use crate::{BeatArtifact, artifact::track::AnalysisToken};
-
-    mod consts {
-        pub(super) const BPM: f64 = 120.0;
-        /// Half a second at each rate, so the same music lands on the same
-        /// seconds from two different frame counts.
-        pub(super) const PERIOD_44_1: u64 = 22_050;
-        pub(super) const PERIOD_48: u64 = 24_000;
-        pub(super) const RATE_44_1: u32 = 44_100;
-        pub(super) const RATE_48: u32 = 48_000;
-    }
+    use crate::{BeatArtifact, artifact::track::AnalysisToken, consts};
 
     fn analysis(
         rate: u32,

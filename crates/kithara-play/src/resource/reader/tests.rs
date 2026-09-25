@@ -28,14 +28,10 @@ use ringbuf::traits::{Consumer, Producer};
 use super::*;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+    consts,
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     test_pools::{TestPools, pools},
 };
-
-mod consts {
-    pub(super) const BLOCK_FRAMES: usize = 512;
-    pub(super) const SAMPLE_RATE: u32 = 44_100;
-}
 
 struct DropState;
 

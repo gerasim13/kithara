@@ -20,14 +20,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::FileLock;
 
-mod consts {
-    /// Held by the one job building in the directory.
-    pub(super) const LOCK_FILE: &str = ".kithara-lane.lock";
-    /// The content the directory's artifacts may have been built from.
-    pub(super) const SOURCES_FILE: &str = ".kithara-lane-sources";
-    /// Stands for content a build the record did not see may have used.
-    pub(super) const UNKNOWN_BLOB: &str = "unknown";
-}
+use crate::consts;
 
 /// Git blob ids per tracked path.
 type Sources = BTreeMap<String, BTreeSet<String>>;

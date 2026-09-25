@@ -11,6 +11,18 @@ use super::{
 pub use crate::geom::{Pt, Transform};
 use crate::shaping::GlyphRun;
 
+pub(crate) mod consts {
+    use super::*;
+
+    /// Paints nothing: what a control draws where its skin names no colour.
+    pub(crate) const TRANSPARENT: Rgba = Rgba {
+        a: 0.0,
+        b: 0.0,
+        g: 0.0,
+        r: 0.0,
+    };
+}
+
 /// A toolkit-neutral RGBA colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
@@ -21,14 +33,6 @@ pub struct Rgba {
     pub g: f32,
     pub r: f32,
 }
-
-/// Paints nothing: what a control draws where its skin names no colour.
-pub(crate) const TRANSPARENT: Rgba = Rgba {
-    a: 0.0,
-    b: 0.0,
-    g: 0.0,
-    r: 0.0,
-};
 
 /// A toolkit-neutral rectangle in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]

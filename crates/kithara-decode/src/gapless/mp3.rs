@@ -15,11 +15,7 @@ use kithara_platform::time::Duration;
 ))]
 use kithara_signal::AudioSpec;
 
-mod consts {
-    pub(super) const MPEG_HEADER_LEN: usize = 4;
-    pub(super) const SYNC_MASK: u32 = 0xFFE0_0000;
-    pub(super) const SYNC_VALUE: u32 = 0xFFE0_0000;
-}
+use crate::consts;
 
 /// Raw fields read from the LAME extension of a Xing/Info tag.
 #[derive(Debug, Clone, Copy)]
@@ -67,16 +63,6 @@ pub(crate) fn read_xing_duration(data: &[u8]) -> Option<Duration> {
     AudioSpec::new(1, sample_rate).duration_for(frames).ok()
 }
 
-/// Frames whose shared bitrate is accepted as proof the stream is CBR.
-///
-/// A 16 `KiB` probe window holds ~39 frames at 128 kbps and ~15 at 320 kbps, so
-/// this stays well inside the window for every MPEG-1 bitrate.
-#[cfg(any(
-    test,
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-const CBR_EVIDENCE_FRAMES: u32 = 8;
-
 /// Duration of a constant-bitrate stream that keeps no frame count of its own.
 ///
 /// `base` is the absolute offset of `data[0]` in the resource and `total_bytes`
@@ -103,7 +89,7 @@ pub(crate) fn read_cbr_duration(data: &[u8], base: u64, total_bytes: u64) -> Opt
         frames = frames.saturating_add(1);
         cursor = cursor.checked_add(frame_len(header)?)?;
     }
-    if frames < CBR_EVIDENCE_FRAMES {
+    if frames < consts::CBR_EVIDENCE_FRAMES {
         return None;
     }
 
@@ -475,7 +461,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn too_few_frames_yield_no_cbr_duration() {
-        let count = usize::try_from(CBR_EVIDENCE_FRAMES).expect("threshold fits usize") - 1;
+        let count = usize::try_from(consts::CBR_EVIDENCE_FRAMES).expect("threshold fits usize") - 1;
         let buf = frames(128, count);
         let total = u64::try_from(buf.len()).expect("fixture length fits u64");
 

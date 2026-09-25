@@ -14,3 +14,4 @@ pub use protocol::{
     SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
     SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
 };
+mod consts;

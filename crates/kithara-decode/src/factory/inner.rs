@@ -25,7 +25,7 @@ use super::probe::{
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
 use crate::{
-    Decoder,
+    Decoder, consts,
     error::{DecodeError, DecodeResult},
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
@@ -286,7 +286,7 @@ impl DecoderFactory {
                     .codec
                     .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
             {
-                crate::fmp4::REQUIRED_INPUT
+                consts::REQUIRED_INPUT
             }
             _ if matches!(media_info.container, Some(ContainerFormat::Wav)) => {
                 ReaderInput::InitOnly

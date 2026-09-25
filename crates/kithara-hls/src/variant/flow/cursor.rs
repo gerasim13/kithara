@@ -3,7 +3,8 @@ use std::sync::atomic::Ordering;
 use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
-use super::{HlsVariant, core::NO_PREFETCH_DEFERRAL};
+use super::HlsVariant;
+use crate::consts;
 
 impl<S> HlsVariant<S>
 where
@@ -58,12 +59,12 @@ where
     /// how far it has *consumed* — and leaves the peer asleep on real progress.
     pub(crate) fn take_prefetch_resume_at(&self, consumed: u64) -> bool {
         let at = self.flow.prefetch_resume_at.load(Ordering::Acquire);
-        at != NO_PREFETCH_DEFERRAL
+        at != consts::NO_PREFETCH_DEFERRAL
             && consumed >= at
             && self
                 .flow
                 .prefetch_resume_at
-                .swap(NO_PREFETCH_DEFERRAL, Ordering::AcqRel)
-                != NO_PREFETCH_DEFERRAL
+                .swap(consts::NO_PREFETCH_DEFERRAL, Ordering::AcqRel)
+                != consts::NO_PREFETCH_DEFERRAL
     }
 }

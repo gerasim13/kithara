@@ -12,4 +12,4 @@ pub(crate) use frame::VisFrame;
 pub(crate) use iced::view;
 #[cfg(feature = "masonry")]
 pub use masonry::{VisDeclaration, VisPass};
-pub(crate) use uniform::{SHADER, Uniforms};
+pub(crate) use uniform::{Uniforms, consts::SHADER};

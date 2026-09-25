@@ -7,43 +7,7 @@ use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
 use smallvec::SmallVec;
 use thiserror::Error;
 
-use crate::traits::DecoderInput;
-
-mod consts {
-    pub(super) const BOX_DATA: [u8; 4] = *b"data";
-    pub(super) const BOX_EDTS: [u8; 4] = *b"edts";
-    pub(super) const BOX_ELST: [u8; 4] = *b"elst";
-    pub(super) const BOX_FREEFORM: [u8; 4] = *b"----";
-    pub(super) const BOX_ILST: [u8; 4] = *b"ilst";
-    pub(super) const BOX_MDHD: [u8; 4] = *b"mdhd";
-    pub(super) const BOX_MDIA: [u8; 4] = *b"mdia";
-    pub(super) const BOX_MEAN: [u8; 4] = *b"mean";
-    pub(super) const BOX_META: [u8; 4] = *b"meta";
-    pub(super) const BOX_MINF: [u8; 4] = *b"minf";
-    pub(super) const BOX_MOOF: [u8; 4] = *b"moof";
-    pub(super) const BOX_MOOV: [u8; 4] = *b"moov";
-    pub(super) const BOX_MVEX: [u8; 4] = *b"mvex";
-    pub(super) const BOX_MVHD: [u8; 4] = *b"mvhd";
-    pub(super) const BOX_NAME: [u8; 4] = *b"name";
-    pub(super) const BOX_STBL: [u8; 4] = *b"stbl";
-    pub(super) const BOX_STSD: [u8; 4] = *b"stsd";
-    pub(super) const BOX_TRAK: [u8; 4] = *b"trak";
-    pub(super) const BOX_UDTA: [u8; 4] = *b"udta";
-
-    /// Hard ceiling for `elst` entries to keep adversarial inputs
-    /// from forcing huge allocations. Real edit lists in audio files
-    /// are tiny.
-    pub(super) const ELST_MAX_ENTRIES: usize = 4096;
-
-    /// Hard ceiling for the `----` payload we are willing to pull
-    /// into memory while looking for an iTunSMPB tag. Freeform tags
-    /// are kilobytes at most; this stops adversarial inputs from
-    /// forcing large allocations during a probe.
-    pub(super) const FREEFORM_MAX_BYTES: usize = 64 * 1024;
-
-    pub(super) const ITUNES_MEAN: &str = "com.apple.iTunes";
-    pub(super) const ITUNSMPB_NAME: &str = "iTunSMPB";
-}
+use crate::{consts, traits::DecoderInput};
 
 /// Media-timing pair extracted from an `mdhd` box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

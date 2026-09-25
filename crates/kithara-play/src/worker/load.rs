@@ -3,11 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_platform::time::Duration;
 use portable_atomic::AtomicF32;
 
-mod consts {
-    /// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
-    pub(super) const LOAD_ALPHA: f32 = 0.2;
-    pub(super) const MS_PER_SEC: f64 = 1000.0;
-}
+use crate::consts;
 
 fn to_f64(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()

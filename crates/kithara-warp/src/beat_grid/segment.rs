@@ -259,15 +259,8 @@ mod tests {
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
         Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
+        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView, consts,
     };
-
-    mod consts {
-        pub(super) const AFTER_EOF_FRAME: f64 = 48_000.5;
-        pub(super) const EOF_FRAME: f64 = 48_000.0;
-        pub(super) const FRAME_COUNT: u64 = 48_000;
-        pub(super) const SAMPLE_RATE: u32 = 48_000;
-    }
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")

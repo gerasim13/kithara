@@ -25,21 +25,13 @@ use super::{
         producer::{AnalysisProducer, ring},
         worker::Job,
     },
-    fixtures::{SR, chunk, sine_from, spec},
+    fixtures::{chunk, sine_from, spec},
     node::NodeHarness,
 };
 use crate::{
-    AnalysisProgress,
+    AnalysisProgress, consts,
     test_pools::{TestPools, pools},
 };
-
-mod consts {
-    pub(super) const CHUNK: u64 = 8820;
-    pub(super) const EXTENT: u64 = 4 * 44_100;
-    pub(super) const TICKS: usize = 8192;
-    pub(super) const TOKEN: &str = "scheduled-track";
-    pub(super) const WINDOW_SECONDS: u32 = 1;
-}
 
 fn duration_for_frames(_rate: u32, frames: u64) -> Duration {
     spec()
@@ -158,7 +150,7 @@ impl AudioSession for Source {
         } else {
             reports
         };
-        Some(duration_for_frames(SR, frames))
+        Some(duration_for_frames(consts::FIXTURES_SR, frames))
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -200,7 +192,7 @@ impl AudioRead for Source {
     }
 
     fn position(&self) -> Duration {
-        duration_for_frames(SR, self.at)
+        duration_for_frames(consts::FIXTURES_SR, self.at)
     }
 
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
@@ -226,7 +218,7 @@ impl AudioControl for Source {
             self.push(Call::PastEof { to: target });
             return Ok(SeekOutcome::PastEof {
                 target: position,
-                duration: duration_for_frames(SR, self.frames),
+                duration: duration_for_frames(consts::FIXTURES_SR, self.frames),
             });
         }
 
@@ -239,7 +231,7 @@ impl AudioControl for Source {
         let reported = if self.echoes { target } else { landed };
         Ok(SeekOutcome::Landed {
             target: position,
-            landed_at: duration_for_frames(SR, reported),
+            landed_at: duration_for_frames(consts::FIXTURES_SR, reported),
         })
     }
 }
@@ -337,7 +329,7 @@ where
             rate,
             ingest,
             demand: AnalysisDemand::ALL,
-            token: consts::TOKEN.into(),
+            token: consts::SCHEDULE_TOKEN.into(),
             revision: 0,
             reader: Box::new(source),
             cancel: CancelToken::root(),
@@ -353,11 +345,12 @@ where
             node: NodeHarness::with_settings(
                 builder,
                 receiver,
-                NonZeroU32::new(consts::WINDOW_SECONDS).expect("test chunk duration is non-zero"),
+                NonZeroU32::new(consts::SCHEDULE_WINDOW_SECONDS)
+                    .expect("test chunk duration is non-zero"),
                 NonZeroUsize::new(8).expect("test drain limit is non-zero"),
                 NonZeroU32::new(5).expect("test publish duration is non-zero"),
             ),
-            producer: AnalysisProducer::new(writer, rate, consts::TOKEN.into()),
+            producer: AnalysisProducer::new(writer, rate, consts::SCHEDULE_TOKEN.into()),
         }
     }
 
@@ -387,8 +380,9 @@ fn decoded_at(calls: &[Call]) -> Vec<u64> {
 }
 
 fn least_runs() -> usize {
-    let chunk = u64::from(SR).saturating_mul(u64::from(consts::WINDOW_SECONDS));
-    usize::try_from(consts::EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
+    let chunk =
+        u64::from(consts::FIXTURES_SR).saturating_mul(u64::from(consts::SCHEDULE_WINDOW_SECONDS));
+    usize::try_from(consts::SCHEDULE_EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
 }
 
 fn run_lengths(calls: &[Call]) -> Vec<usize> {
@@ -410,8 +404,8 @@ fn run_lengths(calls: &[Call]) -> Vec<usize> {
 #[kithara::test]
 async fn a_scheduled_pass_seeks_before_it_decodes_anything(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.drive(2).await;
 
@@ -432,12 +426,12 @@ async fn a_scheduled_pass_seeks_before_it_decodes_anything(analysis_pcm: &'stati
 async fn a_growing_duration_replaces_the_one_the_schedule_had(analysis_pcm: &'static [f32]) {
     // The source holds twice what it first reports, the way a decode path
     // refines a duration upward as it learns more.
-    let short = consts::EXTENT / 2;
+    let short = consts::SCHEDULE_EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT)
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT)
             .reporting(Some(short))
             .refining(),
-        scheduled(consts::WINDOW_SECONDS),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.drive(2).await;
     assert_eq!(
@@ -459,8 +453,8 @@ async fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk(
 ) {
     const SNAP: u64 = 30_000;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).snapping(SNAP),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(SNAP),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.drive(8).await;
 
@@ -488,8 +482,8 @@ async fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk(
 #[kithara::test]
 async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
 
@@ -512,7 +506,7 @@ async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into(analysis_pcm:
 async fn a_run_length_is_independent_of_the_detector_window(analysis_pcm: &'static [f32]) {
     let lengths = async |seconds: u32| {
         let mut pass = Pass::open(
-            Source::new(analysis_pcm, consts::EXTENT),
+            Source::new(analysis_pcm, consts::SCHEDULE_EXTENT),
             scheduled(seconds),
         );
         pass.drive(64).await;
@@ -530,10 +524,10 @@ async fn a_run_length_is_independent_of_the_detector_window(analysis_pcm: &'stat
 
 #[kithara::test]
 async fn a_covered_opening_is_not_decoded_a_second_time(analysis_pcm: &'static [f32]) {
-    let covered = consts::EXTENT / 2;
+    let covered = consts::SCHEDULE_EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.offer(0, covered);
 
@@ -556,8 +550,8 @@ async fn a_covered_opening_is_not_decoded_a_second_time(analysis_pcm: &'static [
 #[kithara::test]
 async fn a_source_with_no_length_is_decoded_in_order(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).reporting(None),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).reporting(None),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
@@ -568,7 +562,7 @@ async fn a_source_with_no_length_is_decoded_in_order(analysis_pcm: &'static [f32
     );
     assert_eq!(
         pass.analysis().coverage().iter().collect::<Vec<_>>(),
-        [&(0..consts::EXTENT)],
+        [&(0..consts::SCHEDULE_EXTENT)],
         "its coverage grows as one run"
     );
     assert!(calls.contains(&Call::Eof), "end of stream ends such a pass");
@@ -579,14 +573,14 @@ async fn a_pass_ends_when_a_producer_covers_the_last_of_it(analysis_pcm: &'stati
     // The reader never delivers, so everything covered came from the
     // producer and nothing can have reached end of stream.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).stalling(),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).stalling(),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    pass.offer(0, consts::EXTENT / 2);
+    pass.offer(0, consts::SCHEDULE_EXTENT / 2);
     pass.drive(8).await;
     assert!(!pass.has_ended(), "half a track is not a finished pass");
 
-    pass.offer(consts::EXTENT / 2, consts::EXTENT / 2);
+    pass.offer(consts::SCHEDULE_EXTENT / 2, consts::SCHEDULE_EXTENT / 2);
     assert!(pass.drive(consts::TICKS).await, "the pass ends on its own");
 
     let analysis = pass.analysis();
@@ -603,10 +597,10 @@ async fn a_pass_ends_when_a_producer_covers_the_last_of_it(analysis_pcm: &'stati
 #[kithara::test]
 async fn a_source_that_over_reports_its_length_still_ends(analysis_pcm: &'static [f32]) {
     // Reports four seconds, holds two.
-    let held = consts::EXTENT / 2;
+    let held = consts::SCHEDULE_EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, held).reporting(Some(consts::EXTENT)),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, held).reporting(Some(consts::SCHEDULE_EXTENT)),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
     assert!(
@@ -629,7 +623,7 @@ async fn a_snapshot_published_early_describes_the_whole_track(analysis_pcm: &'st
     const EXTENT: u64 = 20 * 44_100;
     let mut pass = Pass::open(
         Source::new(analysis_pcm, EXTENT),
-        scheduled(consts::WINDOW_SECONDS),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.drive(40).await;
     assert!(!pass.has_ended(), "the pass must still be decoding");
@@ -660,8 +654,8 @@ async fn a_snapping_source_has_its_gaps_closed_rather_than_halved(analysis_pcm: 
     // Seeks land on whole 30 000 frames, so a run aimed at a gap's start
     // begins in covered audio and has to read through it to get there.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).snapping(30_000),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(30_000),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
@@ -685,8 +679,8 @@ async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes(analysis_pcm: &'
     // chunk on covered audio and never reaches them. Each such position
     // costs one run to find out and is then retired, which bounds this.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).snapping(88_200),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(88_200),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
     assert!(
@@ -695,7 +689,7 @@ async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes(analysis_pcm: &'
     );
     let analysis = pass.analysis();
     assert!(
-        analysis.coverage().frames() >= consts::EXTENT / 2,
+        analysis.coverage().frames() >= consts::SCHEDULE_EXTENT / 2,
         "what the reader can reach is still covered: {}",
         analysis.coverage().frames()
     );
@@ -710,8 +704,8 @@ async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes(analysis_pcm: &'
 async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm: &'static [f32]) {
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).flooring(FLOOR),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(FLOOR),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
 
@@ -732,8 +726,8 @@ async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm:
 async fn a_pass_with_nothing_left_to_reach_is_settled(analysis_pcm: &'static [f32]) {
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).flooring(FLOOR),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(FLOOR),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
 
@@ -751,8 +745,8 @@ async fn a_pass_with_nothing_left_to_reach_is_settled(analysis_pcm: &'static [f3
 #[kithara::test]
 async fn a_pass_its_reader_cut_short_is_not_settled(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).failing_after(3),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).failing_after(3),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(
         pass.drive(consts::TICKS).await,
@@ -770,15 +764,15 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &
     // Seeks land on whole 88 200 frames, so the schedule retires positions
     // it cannot reach and ends with the track only partly covered.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).snapping(88_200),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(88_200),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
 
     let analysis = pass.analysis();
     let covered = analysis.coverage().frames();
     assert!(
-        covered < consts::EXTENT,
+        covered < consts::SCHEDULE_EXTENT,
         "this source cannot reach all of its own track: {covered}"
     );
     assert!(
@@ -788,7 +782,7 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &
     let missing: u64 = analysis.missing().iter().map(|gap| gap.frames()).sum();
     assert_eq!(
         missing,
-        consts::EXTENT - covered,
+        consts::SCHEDULE_EXTENT - covered,
         "every frame the pass never reached is reported missing: {:?}",
         analysis.missing()
     );
@@ -800,8 +794,8 @@ fn a_producer_does_not_keep_an_unreachable_position_alive(analysis_pcm: &'static
     // covered, so the position chosen for the middle gap lands back inside
     // covered audio and its run can decode nothing new.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).snapping(88_200),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(88_200),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     pass.offer(0, 100_000);
 
@@ -837,8 +831,8 @@ fn a_producer_does_not_keep_an_unreachable_position_alive(analysis_pcm: &'static
 #[kithara::test]
 async fn a_decode_error_still_publishes_what_the_pass_covered(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT).failing_after(3),
-        scheduled(consts::WINDOW_SECONDS),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).failing_after(3),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(
         pass.drive(consts::TICKS).await,
@@ -862,10 +856,10 @@ async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked(analysis_pcm
     // were asked for while the decoder resumes at a boundary of its own, so
     // a run sized against the seek's answer outlasts its chunk.
     let mut pass = Pass::open(
-        Source::new(analysis_pcm, consts::EXTENT)
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT)
             .snapping(30_000)
             .echoing(),
-        scheduled(consts::WINDOW_SECONDS),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
     assert!(pass.drive(consts::TICKS).await, "the pass ends");
 
@@ -891,18 +885,14 @@ mod artifacts {
     use super::{
         super::{
             super::{analyzer::AnalyzerBuilder, beat::GridParams},
-            fixtures::{Artifacts, SR, artifacts, assert_agrees, beat_detector},
+            fixtures::{Artifacts, artifacts, assert_agrees, beat_detector},
         },
-        Pass, Source, consts, targets,
+        Pass, Source, targets,
     };
     use crate::{
-        BeatAnalysisConfig,
+        BeatAnalysisConfig, consts,
         test_pools::{TestPools, pools},
     };
-
-    const BUCKETS: usize = 64;
-    const WINDOW_SECONDS: u32 = 2;
-    const EXTENT: u64 = 12 * 44_100;
 
     struct Route {
         artifacts: Artifacts,
@@ -911,17 +901,18 @@ mod artifacts {
     }
 
     fn least_runs() -> usize {
-        let chunk = u64::from(SR).saturating_mul(u64::from(consts::WINDOW_SECONDS));
-        usize::try_from(EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
+        let chunk = u64::from(consts::FIXTURES_SR)
+            .saturating_mul(u64::from(consts::SCHEDULE_WINDOW_SECONDS));
+        usize::try_from(consts::ARTIFACTS_EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
     fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
         AnalyzerBuilder::<RubatoBackend, _>::new(pools())
-            .with_waveform(BUCKETS)
+            .with_waveform(consts::HOLD_BUCKETS)
             .with_beat_config(
                 BeatAnalysisConfig::builder()
                     .resampler_backend(RubatoBackend::default())
-                    .detector_window_seconds(WINDOW_SECONDS)
+                    .detector_window_seconds(consts::ARTIFACTS_WINDOW_SECONDS)
                     .detector_overlap_seconds(0)
                     .build(),
             )
@@ -957,14 +948,18 @@ mod artifacts {
     ) {
         // The same source, once decoded in order because it reports no
         // length, and once scheduled because it does.
-        let linear = covered(Source::new(analysis_pcm, EXTENT).reporting(None), &[]).await;
+        let linear = covered(
+            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT).reporting(None),
+            &[],
+        )
+        .await;
         assert!(
             !linear.artifacts.1.is_empty(),
             "the harness must find markers at all"
         );
         assert_eq!(linear.seeks, 0, "a source with no length is read in order");
 
-        let scheduled = covered(Source::new(analysis_pcm, EXTENT), &[]).await;
+        let scheduled = covered(Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT), &[]).await;
         assert!(
             scheduled.seeks > 1,
             "the other route must really have been scheduled, not read in order"
@@ -995,13 +990,21 @@ mod artifacts {
     async fn a_track_half_covered_by_a_producer_agrees_with_one_covered_alone(
         analysis_pcm: &'static [f32],
     ) {
-        let linear = covered(Source::new(analysis_pcm, EXTENT).reporting(None), &[]).await;
+        let linear = covered(
+            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT).reporting(None),
+            &[],
+        )
+        .await;
 
         // Playback covered the first half in its own decode blocks; the
         // schedule has to take up the rest.
-        let block = EXTENT / 16;
+        let block = consts::ARTIFACTS_EXTENT / 16;
         let offered: Vec<(u64, u64)> = (0..8).map(|index| (index * block, block)).collect();
-        let mixed = covered(Source::new(analysis_pcm, EXTENT), &offered).await;
+        let mixed = covered(
+            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT),
+            &offered,
+        )
+        .await;
         assert!(mixed.seeks > 0, "the rest of the track had to be scheduled");
         assert_agrees(
             &linear.artifacts,

@@ -10,15 +10,14 @@ use kithara_stream::{PendingReason, VariantTransition};
 use tracing::{debug, trace};
 
 use super::generation::DecoderGeneration;
-use crate::pipeline::{
-    blend::GaplessBlender,
-    rebuild::state::BuildId,
-    seek::skip::{apply as apply_skip, apply_frames},
+use crate::{
+    consts,
+    pipeline::{
+        blend::GaplessBlender,
+        rebuild::state::BuildId,
+        seek::skip::{apply as apply_skip, apply_frames},
+    },
 };
-
-mod consts {
-    pub(super) const PRIME_STEPS_PER_PASS: usize = 8;
-}
 
 pub(crate) enum IncomingDecode {
     Preparing {

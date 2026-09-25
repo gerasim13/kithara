@@ -9,6 +9,13 @@ use crate::{
     skin::SkinDoc,
 };
 
+pub(crate) mod consts {
+    use super::*;
+
+    pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
+    pub(crate) const NOTHING: SizeSpec = SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0));
+}
+
 /// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
 /// the content measures; neither has an intrinsic size the document can compose.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -201,8 +208,6 @@ impl Snapshot for Unanswered {
         None
     }
 }
-
-pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
 
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
@@ -441,7 +446,7 @@ pub(crate) fn compute_size(
 #[must_use]
 pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     match node {
-        ExpandedNode::Control { .. } => needs(compute_size(node, skin, DEFAULTS)),
+        ExpandedNode::Control { .. } => needs(compute_size(node, skin, consts::DEFAULTS)),
         ExpandedNode::Scroll { size, child, .. } => {
             size.map_or_else(|| min_size(child, skin), needs)
         }
@@ -456,7 +461,7 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
             *size,
             children
                 .first()
-                .map_or(NOTHING, |first| min_size(first, skin)),
+                .map_or(consts::NOTHING, |first| min_size(first, skin)),
         ),
         ExpandedNode::Slot { size, children, .. } => at_least(
             *size,
@@ -468,14 +473,12 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-pub(crate) const NOTHING: SizeSpec = SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0));
-
 pub(crate) fn settled(
     node: &ExpandedNode,
     measure: Option<MeasureAxis>,
     skin: &SkinDoc,
 ) -> SizeSpec {
-    Cells::of(node, skin).map_or(NOTHING, |cells| cells.settled(measure))
+    Cells::of(node, skin).map_or(consts::NOTHING, |cells| cells.settled(measure))
 }
 
 #[must_use]
@@ -881,7 +884,7 @@ mod tests {
         );
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), DEFAULTS),
+            compute_size(&node, builtin::skin_doc(), consts::DEFAULTS),
             SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))
         );
     }
@@ -917,7 +920,7 @@ mod tests {
             surface: None,
         };
 
-        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
+        let size = compute_size(&node, builtin::skin_doc(), consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 32.0);
         assert_eq!(size.h.min(), 10.0);
@@ -940,7 +943,7 @@ mod tests {
             None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
+        let size = compute_size(&node, builtin::skin_doc(), consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
@@ -1035,7 +1038,7 @@ mod tests {
         };
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), DEFAULTS),
+            compute_size(&node, builtin::skin_doc(), consts::DEFAULTS),
             fixed(36.0, 36.0)
         );
     }
@@ -1053,7 +1056,7 @@ mod tests {
             None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
+        let size = compute_size(&node, builtin::skin_doc(), consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -1070,7 +1073,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
+        let size = compute_size(&node, builtin::skin_doc(), consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.h.min(), 12.0);
@@ -1092,7 +1095,7 @@ mod tests {
         skin.layout.grid_gap = 3.0;
         skin.layout.grid_pad = 2.0;
 
-        let size = compute_size(&node, &skin, DEFAULTS);
+        let size = compute_size(&node, &skin, consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 23.0);
         assert_eq!(size.h.min(), 12.0);
@@ -1110,7 +1113,7 @@ mod tests {
         );
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), DEFAULTS),
+            compute_size(&node, builtin::skin_doc(), consts::DEFAULTS),
             override_size
         );
     }
@@ -1132,7 +1135,7 @@ mod tests {
             None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
+        let size = compute_size(&node, builtin::skin_doc(), consts::DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
@@ -1149,7 +1152,10 @@ mod tests {
             steps: vec![(1000.0, control(&mut interner, "wide", fixed(900.0, 600.0)))],
         };
 
-        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), consts::DEFAULTS),
+            declared
+        );
         assert_eq!(
             compute_size(
                 &node,
@@ -1206,7 +1212,10 @@ mod tests {
             Some(MeasureAxis::Width),
         );
 
-        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), consts::DEFAULTS),
+            declared
+        );
         assert_eq!(
             compute_size(&node, builtin::skin_doc(), &SnapshotFixture::all_hidden()),
             declared
@@ -1233,7 +1242,7 @@ mod tests {
         skin.layout.grid_gap = 3.0;
         skin.layout.grid_pad = 2.0;
 
-        assert_eq!(compute_size(&node, &skin, DEFAULTS), SizeSpec::FILL);
+        assert_eq!(compute_size(&node, &skin, consts::DEFAULTS), SizeSpec::FILL);
         assert_eq!(min_size(&node, &skin), fixed(23.0, 12.0));
     }
 
@@ -1489,12 +1498,20 @@ mod tests {
         };
 
         assert_eq!(
-            effective_size(&bare(ControlSpec::Knob { label: None }), skin, DEFAULTS),
+            effective_size(
+                &bare(ControlSpec::Knob { label: None }),
+                skin,
+                consts::DEFAULTS
+            ),
             Some(skin.knob.size),
             "a knob composes, so a parent may size itself on it",
         );
         assert_eq!(
-            effective_size(&bare(ControlSpec::TabLarge { label: id }), skin, DEFAULTS),
+            effective_size(
+                &bare(ControlSpec::TabLarge { label: id }),
+                skin,
+                consts::DEFAULTS
+            ),
             None,
             "a tab fills the strip it sits in, so it offers no box to compose with",
         );
@@ -1513,7 +1530,7 @@ mod tests {
         };
 
         assert_eq!(
-            DEFAULTS.measure(&binding),
+            consts::DEFAULTS.measure(&binding),
             None,
             "a tree measured outside a window takes its base branch, not a room of zero",
         );
@@ -1545,7 +1562,7 @@ mod tests {
         };
 
         assert_eq!(
-            compiled_node_size_with_hidden(&split, builtin::skin_doc(), DEFAULTS),
+            compiled_node_size_with_hidden(&split, builtin::skin_doc(), consts::DEFAULTS),
             declared,
             "with no block under it there is nothing to recompute, so its own box stands",
         );

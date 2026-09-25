@@ -9,16 +9,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-mod consts {
-    pub(super) const HASH_BYTES: usize = 16;
-    /// Windows hashes a path as wide units under a domain of its own, so this
-    /// one names no platform there.
-    #[cfg(not(windows))]
-    pub(super) const LOCAL_UNIX_DOMAIN: &[u8] = b"kithara.asset-root.local.unix.v1\0";
-    #[cfg(windows)]
-    pub(super) const LOCAL_WINDOWS_DOMAIN: &[u8] = b"kithara.asset-root.local.windows.v1\0";
-    pub(super) const REMOTE_DOMAIN: &[u8] = b"kithara.asset-root.remote.v1\0";
-}
+use crate::consts;
 
 /// Logical asset whose resources share one cache lifecycle and root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

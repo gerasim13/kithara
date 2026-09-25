@@ -9,26 +9,7 @@ use clap::Args;
 use kithara_devtools::Ctx;
 use tracing::info;
 
-/// What this programme is pinned to: the price lists it judges against, the
-/// control it photographs on its own, and the sets it owns.
-mod consts {
-    /// The one control this programme photographs by itself, so the shortest
-    /// capture path runs somewhere. Any page that draws a control by a known
-    /// path would do; this one is pinned so a page that stops drawing it says
-    /// so.
-    pub(super) const ELEMENT_PAGE: &str = "clock";
-    pub(super) const ELEMENT_PATH: &str = "clock-components/title";
-    /// What a page of the gallery, and a shipped studio page, are allowed to
-    /// differ by before the programme ends non-zero.
-    pub(super) const GALLERY_BUDGET: &str = "crates/kithara-ui/examples/gallery/parity-budget.txt";
-    /// The sets this programme writes, cleared before it starts so a set left
-    /// by an earlier run cannot be compared as if this run had taken it.
-    pub(super) const SETS: [&str; 5] = ["iced", "masonry", "masks", "parts", "studio"];
-    pub(super) const STUDIO_BUDGET: &str = "crates/kithara-app/assets/ui/parity-budget.txt";
-    /// Where the studio capture is told to write its two sets. It is driven
-    /// from a test, and a test has no command line of its own to be told on.
-    pub(super) const STUDIO_CAPTURE: &str = "KITHARA_STUDIO_CAPTURE";
-}
+use crate::consts;
 
 #[derive(Debug, Args)]
 pub(crate) struct ParityArgs {

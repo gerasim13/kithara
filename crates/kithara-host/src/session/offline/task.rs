@@ -22,7 +22,9 @@ use super::{
     backend::{BackendConfig, OfflineStream},
 };
 
-pub(super) const CHANNELS: usize = 2;
+pub(crate) mod consts {
+    pub(crate) const CHANNELS: usize = 2;
+}
 
 pub(super) enum OfflineMsg<S> {
     Host(HostCmdMsg<S>),
@@ -236,7 +238,7 @@ where
     }
     let total_samples = usize::try_from(frames)
         .map_err(|_| OfflineSessionError::SampleCountOverflow)?
-        .checked_mul(CHANNELS)
+        .checked_mul(consts::CHANNELS)
         .ok_or(OfflineSessionError::SampleCountOverflow)?;
     let mut output = pools
         .get_with_len::<f32>(total_samples)

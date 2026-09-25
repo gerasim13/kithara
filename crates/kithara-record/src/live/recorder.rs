@@ -14,13 +14,7 @@ use ringbuf::{
 };
 
 use super::task::RecordingTask;
-use crate::{LiveRecordingConfig, LiveRecordingError, PartSinkFactory};
-
-pub(super) mod consts {
-    pub(crate) const CHANNELS: u16 = 2;
-    pub(crate) const NO_CUT: u64 = u64::MAX;
-    pub(crate) const STEREO: usize = 2;
-}
+use crate::{LiveRecordingConfig, LiveRecordingError, PartSinkFactory, consts};
 
 #[derive(Clone, Copy)]
 pub(crate) struct FormatChange {

@@ -8,7 +8,7 @@ use super::value::{Value, impl_child_node};
 use crate::{
     deck::EqMode,
     gui::{
-        deck::{DeckView, TEMPO_RANGE, TimestretchState},
+        deck::{DeckView, TimestretchState, consts::TEMPO_RANGE},
         ui::{
             cache::{DeckCache, analysis_bpm},
             scope::deck_index,

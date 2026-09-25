@@ -4,9 +4,10 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{
-    RouteFixture, consts, produced_data, route_signal_source, route_signal_source_with_eof,
+    RouteFixture, produced_data, route_signal_source, route_signal_source_with_eof,
 };
 use crate::{
+    consts,
     pipeline::{
         seek::{ResumeState, SeekContext},
         track::{

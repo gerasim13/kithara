@@ -28,10 +28,6 @@ use crate::{
     pools::AppQueueControl,
 };
 
-/// Timescale the deck stamps a beat position with: the grid states seconds,
-/// and the DJ surface carries them as a rational media time.
-const MEDIA_TIMESCALE: i32 = 600;
-
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
 /// can render without holding the lock — the only writers are the
@@ -208,6 +204,12 @@ fn ranges_to_fractions(ranges: &[Range<u64>], total: u64) -> Arc<[[f32; 2]]> {
 
 #[cfg(test)]
 use kithara::analysis::RangeSet;
+
+mod consts {
+    /// Timescale the deck stamps a beat position with: the grid states seconds,
+    /// and the DJ surface carries them as a rational media time.
+    pub(super) const MEDIA_TIMESCALE: i32 = 600;
+}
 
 #[cfg(test)]
 pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis {
@@ -413,7 +415,7 @@ impl StateController {
             self.queue.bus().publish(DjEvent::BeatTick {
                 slot,
                 beat_number,
-                timestamp: MediaTime::with_seconds(beat.at, MEDIA_TIMESCALE),
+                timestamp: MediaTime::with_seconds(beat.at, consts::MEDIA_TIMESCALE),
             });
             beat_clock.last_beat_number = Some(beat.ordinal);
         }
@@ -681,9 +683,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        BpmInfo, EventReceiver, MEDIA_TIMESCALE, MediaTime, NonZeroU32, RangeSet, StretchControls,
-        UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions, listen,
-        unready_ranges,
+        BpmInfo, EventReceiver, MediaTime, NonZeroU32, RangeSet, StretchControls, UiState,
+        bpm_info_from_grid, codec_label, consts::MEDIA_TIMESCALE, covered, frames_to_fractions,
+        listen, unready_ranges,
     };
     use crate::{
         analysis::{

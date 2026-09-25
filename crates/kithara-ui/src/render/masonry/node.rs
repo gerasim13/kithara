@@ -878,7 +878,7 @@ mod tests {
     use crate::draw::{DrawCmd, Geom};
 
     /// The node the checks below paint.
-    mod fixture {
+    mod consts {
         use super::{Rect, Rgba};
 
         /// A box wide enough to tell one side of a frame from another.
@@ -911,8 +911,8 @@ mod tests {
             NodeLayout::Leaf(Leaf::Empty),
             Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
-            Some(fixture::PAPER),
-            Some((FrameSides::default(), fixture::INK, 1.0)),
+            Some(consts::PAPER),
+            Some((FrameSides::default(), consts::INK, 1.0)),
         )
     }
 
@@ -951,45 +951,45 @@ mod tests {
 
     #[kithara::test]
     fn the_pass_under_a_node_s_children_lays_down_its_ground_alone() {
-        let commands = drawn(|node, list| node.paint_background(fixture::BOX, list));
+        let commands = drawn(|node, list| node.paint_background(consts::BOX, list));
 
         assert_eq!(
             rects(&commands),
-            vec![fixture::BOX],
+            vec![consts::BOX],
             "the pass children paint over must carry the ground and nothing else: {commands:?}"
         );
     }
 
     #[kithara::test]
     fn a_node_puts_every_side_of_its_frame_in_the_pass_over_its_children() {
-        let commands = drawn(|node, list| node.paint_frame(fixture::BOX, list));
+        let commands = drawn(|node, list| node.paint_frame(consts::BOX, list));
 
         assert_eq!(
             rects(&commands),
             vec![
                 Rect {
                     h: 1.0,
-                    w: fixture::BOX.w,
-                    x: fixture::BOX.x,
-                    y: fixture::BOX.y,
+                    w: consts::BOX.w,
+                    x: consts::BOX.x,
+                    y: consts::BOX.y,
                 },
                 Rect {
-                    h: fixture::BOX.h,
+                    h: consts::BOX.h,
                     w: 1.0,
-                    x: fixture::BOX.x + fixture::BOX.w - 1.0,
-                    y: fixture::BOX.y,
+                    x: consts::BOX.x + consts::BOX.w - 1.0,
+                    y: consts::BOX.y,
                 },
                 Rect {
                     h: 1.0,
-                    w: fixture::BOX.w,
-                    x: fixture::BOX.x,
-                    y: fixture::BOX.y + fixture::BOX.h - 1.0,
+                    w: consts::BOX.w,
+                    x: consts::BOX.x,
+                    y: consts::BOX.y + consts::BOX.h - 1.0,
                 },
                 Rect {
-                    h: fixture::BOX.h,
+                    h: consts::BOX.h,
                     w: 1.0,
-                    x: fixture::BOX.x,
-                    y: fixture::BOX.y,
+                    x: consts::BOX.x,
+                    y: consts::BOX.y,
                 },
             ],
             "each side belongs just inside the box it frames: {commands:?}"
@@ -1001,7 +1001,7 @@ mod tests {
     #[kithara::test]
     fn a_node_at_a_window_corner_lays_its_ground_down_as_a_path() {
         let commands = painted(&at_a_window_corner(), |node, list| {
-            node.paint_background(fixture::BOX, list);
+            node.paint_background(consts::BOX, list);
         });
 
         assert!(
@@ -1021,7 +1021,7 @@ mod tests {
     #[kithara::test]
     fn a_node_at_a_window_corner_draws_its_frame_as_one_band() {
         let commands = painted(&at_a_window_corner(), |node, list| {
-            node.paint_frame(fixture::BOX, list);
+            node.paint_frame(consts::BOX, list);
         });
 
         assert!(
@@ -1037,7 +1037,7 @@ mod tests {
         let mut node = framed();
         node.set_round(FrameCorners::EMPTY, 6.0);
 
-        let commands = painted(&node, |node, list| node.paint_frame(fixture::BOX, list));
+        let commands = painted(&node, |node, list| node.paint_frame(consts::BOX, list));
 
         assert_eq!(rects(&commands).len(), 4, "{commands:?}");
     }
@@ -1048,11 +1048,11 @@ mod tests {
             NodeLayout::Leaf(Leaf::Empty),
             Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
-            Some(fixture::PAPER),
+            Some(consts::PAPER),
             None,
         );
         let mut list = DrawListBuilder::default();
-        node.paint_frame(fixture::BOX, &mut list);
+        node.paint_frame(consts::BOX, &mut list);
 
         assert!(
             list.finish().commands().is_empty(),

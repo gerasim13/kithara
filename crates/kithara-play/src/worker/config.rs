@@ -6,24 +6,7 @@ use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_worker::Worker;
 
-mod consts {
-    use super::{Duration, NonZeroU32, NonZeroUsize};
-
-    pub(super) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
-    pub(super) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
-    pub(super) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    pub(super) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-}
+use crate::consts;
 
 /// Configuration for one shared playback worker.
 #[derive(Builder, fieldwork::Fieldwork, Patch)]

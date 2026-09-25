@@ -4,12 +4,10 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 use re_mp4::{BoxHeader, BoxType, Mp4, StsdBoxContent};
 
-use crate::error::{DecodeError, DecodeResult};
-
-mod consts {
-    pub(super) const FLAC_STREAMINFO_BYTES: usize = 34;
-    pub(super) const FOURCC_FLAC: u32 = 0x664c_6143;
-}
+use crate::{
+    consts,
+    error::{DecodeError, DecodeResult},
+};
 
 /// Codec-specific decoder config bytes carried in the init segment.
 #[derive(Debug, Clone, PartialEq, Eq)]

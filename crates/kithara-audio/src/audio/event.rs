@@ -15,13 +15,8 @@ use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
 use crate::{
     AudioEvent, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FrameDomain,
-    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation,
+    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation, consts,
 };
-
-mod consts {
-    pub(super) const AUDIO_EVENT_CAPACITY: usize = 64;
-    pub(super) const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
-}
 
 /// Reader-side event sink.
 ///

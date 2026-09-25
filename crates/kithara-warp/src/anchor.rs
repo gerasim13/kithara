@@ -277,12 +277,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{CoordinateError, SessionAnchor, SessionBeat};
-
-    mod consts {
-        pub(super) const BEATS_PER_SECOND: f64 = 2.0;
-        pub(super) const FRAMES_PER_BEAT: i64 = 24_000;
-        pub(super) const RATE: u32 = 48_000;
-    }
+    use crate::consts;
 
     fn rate() -> NonZeroU32 {
         NonZeroU32::new(consts::RATE).expect("invariant: the fixture rate is non-zero")
@@ -315,8 +310,6 @@ mod tests {
         assert_eq!(round_tripped, frame);
     }
 
-    const SMOOTH_SECONDS: f64 = 0.005;
-
     fn frame(value: i64) -> SessionFrame {
         SessionFrame::new(value)
     }
@@ -332,12 +325,12 @@ mod tests {
     #[kithara::test]
     fn a_retarget_keeps_the_beat_and_the_tempo_continuous() {
         let ramp = anchor_at(0, 0.0)
-            .retarget(frame(0), 3.0, SMOOTH_SECONDS)
+            .retarget(frame(0), 3.0, consts::SMOOTH_SECONDS)
             .expect("invariant: the first target is a positive rate");
         let before = (beat_value(ramp, 100), ramp.tempo_at(frame(100)));
 
         let retargeted = ramp
-            .retarget(frame(100), 1.5, SMOOTH_SECONDS)
+            .retarget(frame(100), 1.5, consts::SMOOTH_SECONDS)
             .expect("invariant: the second target is a positive rate");
 
         assert_eq!(beat_value(retargeted, 100), before.0);
@@ -352,7 +345,7 @@ mod tests {
     #[kithara::test]
     fn frames_before_a_retarget_play_the_tempo_it_started_from() {
         let ramp = anchor_at(48_000, 4.0)
-            .retarget(frame(48_000), 3.0, SMOOTH_SECONDS)
+            .retarget(frame(48_000), 3.0, consts::SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
 
         assert_eq!(ramp.tempo_at(frame(0)), consts::BEATS_PER_SECOND);
@@ -366,7 +359,7 @@ mod tests {
     #[kithara::test]
     fn a_ramp_beat_is_the_integral_of_its_tempo() {
         let ramp = anchor_at(0, 4.0)
-            .retarget(frame(0), 3.0, SMOOTH_SECONDS)
+            .retarget(frame(0), 3.0, consts::SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
         let rate = f64::from(consts::RATE);
         let frames = 2_048_i64;
@@ -387,7 +380,7 @@ mod tests {
     #[kithara::test]
     fn frame_at_inverts_beat_at_on_a_ramp() {
         let ramp = anchor_at(0, 0.0)
-            .retarget(frame(0), 2.5, SMOOTH_SECONDS)
+            .retarget(frame(0), 2.5, consts::SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
 
         for at in [0, 1, 17, 128, 240, 1_000, 48_000] {
@@ -402,7 +395,7 @@ mod tests {
     #[kithara::test]
     fn a_settled_ramp_advances_at_its_target_tempo() {
         let ramp = anchor_at(0, 0.0)
-            .retarget(frame(0), 3.0, SMOOTH_SECONDS)
+            .retarget(frame(0), 3.0, consts::SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
         let settled = consts::FRAMES_PER_BEAT * 4;
 
@@ -421,7 +414,7 @@ mod tests {
         for step in 0..64_i64 {
             let target = if step % 2 == 0 { 2.1 } else { 1.9 };
             ramp = ramp
-                .retarget(frame(step * 128), target, SMOOTH_SECONDS)
+                .retarget(frame(step * 128), target, consts::SMOOTH_SECONDS)
                 .expect("invariant: every knob position is a positive rate");
             let tempo = ramp.tempo_at(frame(step * 128));
             assert!(
@@ -446,7 +439,7 @@ mod tests {
         for (start, target) in [(1.0 / 60.0, 1_000.0 / 60.0), (1_000.0 / 60.0, 1.0 / 60.0)] {
             let ramp = SessionAnchor::new(frame(0), beat(0.0), start, rate())
                 .expect("valid tempo")
-                .retarget(frame(0), target, SMOOTH_SECONDS)
+                .retarget(frame(0), target, consts::SMOOTH_SECONDS)
                 .expect("valid ramp");
             for at in [0, 1, 17, 128, 240, 1_000, 48_000] {
                 assert_eq!(

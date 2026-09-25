@@ -121,19 +121,23 @@ mod tests {
         *,
     };
 
-    const AREA: Rect = Rect {
-        h: 20.0,
-        w: 200.0,
-        x: 10.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const AREA: Rect = Rect {
+            h: 20.0,
+            w: 200.0,
+            x: 10.0,
+            y: 0.0,
+        };
+    }
 
     fn span() -> Span {
         Span::new(Hover::new(CursorShape::ResizeH), 0.2, 0.8)
     }
 
     fn hit(x: f32) -> Hit {
-        Hit::new(Some(Pt { x, y: 10.0 }), AREA)
+        Hit::new(Some(Pt { x, y: 10.0 }), consts::AREA)
     }
 
     fn press(x: f32) -> PointerInput {
@@ -211,7 +215,13 @@ mod tests {
     fn a_degenerate_box_takes_no_press() {
         let span = span();
         let mut state = SpanState::default();
-        let flat = Hit::new(Some(Pt { x: 10.0, y: 10.0 }), Rect { w: 0.0, ..AREA });
+        let flat = Hit::new(
+            Some(Pt { x: 10.0, y: 10.0 }),
+            Rect {
+                w: 0.0,
+                ..consts::AREA
+            },
+        );
 
         let outcome = span.on_input(&mut state, Input::Pointer(press(10.0)), &flat);
 

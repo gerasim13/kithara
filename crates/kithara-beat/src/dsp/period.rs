@@ -7,7 +7,7 @@ fn lag_of(hypothesis: usize) -> f32 {
     (hypothesis + 1).to_f32().unwrap_or(0.0)
 }
 
-/// Beat period in whole frames, one per [`consts::period::ACF_STEP`].
+/// Beat period in whole frames, one per [`consts::PERIOD_ACF_STEP`].
 /// Empty when the curve is shorter than one periodicity window.
 pub(crate) fn periods<S>(
     curve: &[f32],
@@ -17,30 +17,30 @@ pub(crate) fn periods<S>(
 where
     S: HasPool<f32>,
 {
-    if curve.len() < consts::period::ACF_FRAME {
+    if curve.len() < consts::PERIOD_ACF_FRAME {
         return Ok(pools.get::<f32>());
     }
     let mut onsets = collected(pools, curve.len(), curve.iter().copied())?;
-    adaptive_threshold(&mut onsets, consts::period::SMOOTH_HALF, pools)?;
+    adaptive_threshold(&mut onsets, consts::PERIOD_SMOOTH_HALF, pools)?;
 
     let weights = rayleigh_weights(tempo, pools)?;
-    let mut window = pools.get_with_len::<f32>(consts::period::ACF_FRAME)?;
-    let mut autocorrelation = pools.get_with_len::<f32>(consts::period::ACF_FRAME)?;
+    let mut window = pools.get_with_len::<f32>(consts::PERIOD_ACF_FRAME)?;
+    let mut autocorrelation = pools.get_with_len::<f32>(consts::PERIOD_ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
     let mut start = 0;
     loop {
-        let end = (start + consts::period::ACF_FRAME).min(onsets.len());
+        let end = (start + consts::PERIOD_ACF_FRAME).min(onsets.len());
         window.fill(0.0);
         window[..end - start].copy_from_slice(&onsets[start..end]);
         correlate(&window, &mut autocorrelation);
         let mut salience = comb(&autocorrelation, &weights, pools)?;
-        adaptive_threshold(&mut salience, consts::period::SMOOTH_HALF, pools)?;
+        adaptive_threshold(&mut salience, consts::PERIOD_SMOOTH_HALF, pools)?;
         salience[..tempo.search_floor()].fill(0.0);
         saliences.push(salience);
-        if start + consts::period::ACF_FRAME > onsets.len() {
+        if start + consts::PERIOD_ACF_FRAME > onsets.len() {
             break;
         }
-        start += consts::period::ACF_STEP;
+        start += consts::PERIOD_ACF_STEP;
     }
     let hypotheses = track(&saliences, &weights, tempo, pools)?;
     collected(
@@ -95,10 +95,10 @@ fn track<S>(
 where
     S: HasPool<f32>,
 {
-    let lags = consts::period::HYPOTHESES;
+    let lags = consts::PERIOD_HYPOTHESES;
     let sigma = tempo.transition_sigma();
     let variance = 2.0 * sigma * sigma;
-    let support = consts::period::TRANSITION_SUPPORT_SIGMAS * sigma;
+    let support = consts::PERIOD_TRANSITION_SUPPORT_SIGMAS * sigma;
     let mut costs = collected(
         pools,
         lags,
@@ -176,11 +176,11 @@ fn comb<S>(
 where
     S: HasPool<f32>,
 {
-    let mut out = pools.get_with_len::<f32>(consts::period::HYPOTHESES)?;
-    for harmonic in 1..=consts::period::COMB_HARMONICS {
+    let mut out = pools.get_with_len::<f32>(consts::PERIOD_HYPOTHESES)?;
+    for harmonic in 1..=consts::PERIOD_COMB_HARMONICS {
         let width = (2 * harmonic - 1).to_f32().unwrap_or(1.0);
         for offset in 0..(2 * harmonic - 1) {
-            for index in consts::period::PERIOD_INDEX {
+            for index in consts::COMB_PERIOD_INDEX {
                 let at = (index + 1) * harmonic - harmonic + offset;
                 out[index] += weights[index] * autocorrelation[at] / width;
             }
@@ -197,8 +197,8 @@ where
     let variance = mode * mode;
     collected(
         pools,
-        consts::period::HYPOTHESES,
-        (0..consts::period::HYPOTHESES).map(|index| {
+        consts::PERIOD_HYPOTHESES,
+        (0..consts::PERIOD_HYPOTHESES).map(|index| {
             let lag = lag_of(index);
             lag / variance * (-lag * lag / (2.0 * variance)).exp()
         }),
@@ -301,7 +301,7 @@ mod tests {
             periods(&curve, Tempo::default(), &pools).expect("the estimates fit the region");
         assert!(!reported.is_empty(), "20 s of audio yields estimates");
 
-        let range = 1.0..=lag_of(consts::period::HYPOTHESES - 1);
+        let range = 1.0..=lag_of(consts::PERIOD_HYPOTHESES - 1);
         for &period in reported.iter() {
             assert!(
                 period == 0.0 || range.contains(&period),
@@ -324,8 +324,8 @@ mod tests {
     }
 
     fn split_at_seam(lags: &[f32], seam_seconds: f32) -> (Vec<f32>, Vec<f32>) {
-        let step = consts::period::ACF_STEP.to_f32().unwrap_or(1.0) * frames::frame_seconds();
-        let window = consts::period::ACF_FRAME.to_f32().unwrap_or(1.0) * frames::frame_seconds();
+        let step = consts::PERIOD_ACF_STEP.to_f32().unwrap_or(1.0) * frames::frame_seconds();
+        let window = consts::PERIOD_ACF_FRAME.to_f32().unwrap_or(1.0) * frames::frame_seconds();
         let mut before = Vec::new();
         let mut after = Vec::new();
         for (index, &lag) in lags.iter().enumerate() {

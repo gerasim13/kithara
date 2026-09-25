@@ -6,15 +6,7 @@ use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
-use crate::StretchKind;
-
-mod consts {
-    pub(super) const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
-    pub(super) const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
-    pub(super) const MAX_PHASE_ERROR: f64 = 1.0;
-    pub(super) const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
-    pub(super) const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;
-}
+use crate::{StretchKind, consts};
 
 /// Signalsmith preparation geometry.
 ///

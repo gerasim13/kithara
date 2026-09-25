@@ -11,17 +11,8 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    super::{pressure::SCHEMA as PRESSURE_SCHEMA, system::SystemSnapshot},
-    time::format_timestamp,
-};
-use crate::{common::project::StressEvidenceConfig, test::ConfiguredLane};
-
-mod consts {
-    pub(super) const MANIFEST_READ_LIMIT: u64 = 1_048_577;
-    pub(super) const MANIFEST_SCHEMA: u32 = 4;
-    pub(super) const MAX_MANIFEST_BYTES: usize = 1_048_576;
-}
+use super::{super::system::SystemSnapshot, time::format_timestamp};
+use crate::{common::project::StressEvidenceConfig, consts, test::ConfiguredLane};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -72,7 +63,7 @@ impl ManifestConfig {
             workflow_job_timeout_minutes,
             profile: nextest_profile.into(),
             nextest: nextest.into(),
-            pressure_schema: PRESSURE_SCHEMA.to_owned(),
+            pressure_schema: consts::SCHEMA.to_owned(),
         }
     }
 }
@@ -360,7 +351,7 @@ impl Manifest {
             "manifest nextest configuration path is empty"
         );
         ensure!(
-            self.config.pressure_schema == PRESSURE_SCHEMA,
+            self.config.pressure_schema == consts::SCHEMA,
             "manifest pressure schema is invalid"
         );
         ensure!(
@@ -763,9 +754,6 @@ mod tests {
     use super::*;
     use crate::stress::system::{CgroupScope, CgroupV2, CpuSet, Limits};
 
-    const CONTROLLER_SHA: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    const SUBJECT_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
     fn system() -> SystemSnapshot {
         SystemSnapshot {
             kernel: "Linux 6.12-test #1 x86_64".to_owned(),
@@ -826,8 +814,8 @@ mod tests {
             mode: "baseline".to_owned(),
             build: BuildSnapshot::new(Path::new("/stress/target-stress")).expect("build"),
             config: ManifestConfig::new("repeated", "controller/settings/runner.toml", 90),
-            controller_sha: CONTROLLER_SHA.to_owned(),
-            subject_sha: SUBJECT_SHA.to_owned(),
+            controller_sha: consts::CONTROLLER_SHA.to_owned(),
+            subject_sha: consts::SUBJECT_SHA.to_owned(),
             runner: runner(),
             selection: Selection {
                 filter: "all()".to_owned(),
@@ -840,8 +828,8 @@ mod tests {
 
     fn expected() -> ExpectedProvenance {
         ExpectedProvenance {
-            controller_sha: CONTROLLER_SHA.to_ascii_lowercase(),
-            subject_sha: SUBJECT_SHA.to_ascii_uppercase(),
+            controller_sha: consts::CONTROLLER_SHA.to_ascii_lowercase(),
+            subject_sha: consts::SUBJECT_SHA.to_ascii_uppercase(),
             filter: "all()".to_owned(),
             count: 50,
             test_threads: "num-cpus".to_owned(),

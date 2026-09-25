@@ -6,13 +6,7 @@ use core::{
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
-mod consts {
-    pub(super) const DEFAULT_CEILING: f32 = 0.98;
-    pub(super) const DEFAULT_RELEASE_MS: f32 = 50.0;
-    /// Milliseconds per second: the release time arrives in ms, the coefficient
-    /// is computed in samples.
-    pub(super) const MS_PER_SEC: f32 = 1000.0;
-}
+use crate::consts;
 
 /// Configuration rejected by [`LimiterConfig`] or [`PeakLimiter::new`].
 #[non_exhaustive]
@@ -300,28 +294,12 @@ mod tests {
 
     use super::*;
 
-    /// Levels the tests measure against.
-    mod level {
-        pub(super) const CEILING: f32 = 0.98;
-
-        /// How far a reconstructed level may sit from the ceiling. The detector's kernel is
-        /// shorter than a full reconstruction, and on the fixtures here the two disagree by
-        /// about two parts in ten thousand.
-        pub(super) const DETECTOR_RESOLUTION: f32 = 1e-3;
-
-        /// How far above its samples a step out of silence reconstructs. A block that starts at
-        /// full level carries that overshoot, and the limiter has to duck by it; the fixtures
-        /// below start exactly that way, so their output lands a step overshoot under the
-        /// ceiling rather than on it.
-        pub(super) const STEP_OVERSHOOT: f32 = 1.1351;
-    }
-
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(
             NonZeroU32::new(sample_rate).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             LimiterConfig::builder()
-                .ceiling(level::CEILING)
+                .ceiling(consts::CEILING)
                 .release_ms(release_ms)
                 .build()
                 .unwrap(),
@@ -379,7 +357,7 @@ mod tests {
         let mut right = limiter_intersample.clone();
         let sample_peak = left.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
         assert!(
-            sample_peak < level::CEILING,
+            sample_peak < consts::CEILING,
             "fixture must stay under the ceiling between samples, not at them: {sample_peak}"
         );
 
@@ -387,9 +365,9 @@ mod tests {
 
         let reconstructed = reconstructed_peak(&left);
         assert!(
-            reconstructed <= level::CEILING,
+            reconstructed <= consts::CEILING,
             "reconstructed peak {reconstructed} exceeds ceiling {}",
-            level::CEILING
+            consts::CEILING
         );
     }
 
@@ -416,16 +394,16 @@ mod tests {
         // at twice that, three orders below the ceiling's own 0.175 dB of headroom.
         const RESOLUTION_DB: f32 = 0.0002;
         let reconstructed = reconstructed_peak(&left);
-        let over_db = 20.0 * (reconstructed / level::CEILING).log10();
+        let over_db = 20.0 * (reconstructed / consts::CEILING).log10();
         assert!(
             over_db <= RESOLUTION_DB,
             "reconstructed peak {reconstructed} sits {over_db} dB over ceiling {}",
-            level::CEILING
+            consts::CEILING
         );
         let louder: Vec<f32> = left.iter().map(|sample| sample * 1.01).collect();
         let louder = reconstructed_peak(&louder);
         assert!(
-            louder > level::CEILING,
+            louder > consts::CEILING,
             "one percent of headroom is left unused: {louder}"
         );
     }
@@ -453,8 +431,8 @@ mod tests {
         const SEAM_LEAK_DB: f32 = 0.1;
         let whole = reconstructed_peak(&left);
         let chopped = reconstructed_peak(&chopped_l);
-        assert!(whole <= level::CEILING, "a single block leaks: {whole}");
-        let seam_db = 20.0 * (chopped / level::CEILING).log10();
+        assert!(whole <= consts::CEILING, "a single block leaks: {whole}");
+        let seam_db = 20.0 * (chopped / consts::CEILING).log10();
         assert!(
             seam_db <= SEAM_LEAK_DB,
             "seven-frame blocks leak {seam_db} dB over the ceiling"
@@ -480,9 +458,9 @@ mod tests {
         let mut right = limiter_peak.clone();
         run(&mut lim, &mut left, &mut right);
         for &s in &left {
-            assert!(s <= level::CEILING, "sample {s} over ceiling");
+            assert!(s <= consts::CEILING, "sample {s} over ceiling");
             assert!(
-                s >= level::CEILING / level::STEP_OVERSHOOT - level::DETECTOR_RESOLUTION,
+                s >= consts::CEILING / consts::STEP_OVERSHOOT - consts::DETECTOR_RESOLUTION,
                 "sample {s} ducked deeper than the step out of silence asks"
             );
         }
@@ -495,9 +473,9 @@ mod tests {
         let mut right = limiter_negative.clone();
         run(&mut lim, &mut left, &mut right);
         for &s in &left {
-            assert!(s >= -level::CEILING, "sample {s} under -ceiling");
+            assert!(s >= -consts::CEILING, "sample {s} under -ceiling");
             assert!(
-                s <= -level::CEILING / level::STEP_OVERSHOOT + level::DETECTOR_RESOLUTION,
+                s <= -consts::CEILING / consts::STEP_OVERSHOOT + consts::DETECTOR_RESOLUTION,
                 "sample {s} ducked deeper than the step out of silence asks"
             );
         }
@@ -516,8 +494,8 @@ mod tests {
             lim.process_planar(&mut chans);
         }
         for (&l, &r) in left.iter().zip(right.iter()) {
-            assert!(l.abs() <= level::CEILING + 1e-6, "left {l} over ceiling");
-            assert!(r.abs() <= level::CEILING + 1e-6, "right {r} over ceiling");
+            assert!(l.abs() <= consts::CEILING + 1e-6, "left {l} over ceiling");
+            assert!(r.abs() <= consts::CEILING + 1e-6, "right {r} over ceiling");
         }
     }
 
@@ -529,8 +507,8 @@ mod tests {
         run(&mut lim, &mut left, &mut right);
         let gain = left[0] / 2.0;
         assert!(
-            (gain - level::CEILING / level::STEP_OVERSHOOT / 2.0).abs()
-                < level::DETECTOR_RESOLUTION,
+            (gain - consts::CEILING / consts::STEP_OVERSHOOT / 2.0).abs()
+                < consts::DETECTOR_RESOLUTION,
             "the loud channel did not land a step overshoot under the ceiling: {}",
             left[0]
         );
@@ -548,12 +526,12 @@ mod tests {
         let mut right = limiter_attack.clone();
         run(&mut lim, &mut left, &mut right);
         assert!(
-            left[0] <= level::CEILING,
+            left[0] <= consts::CEILING,
             "first frame not limited: {}",
             left[0]
         );
         assert!(
-            left[0] >= level::CEILING / level::STEP_OVERSHOOT - level::DETECTOR_RESOLUTION,
+            left[0] >= consts::CEILING / consts::STEP_OVERSHOOT - consts::DETECTOR_RESOLUTION,
             "first frame ducked deeper than the step out of silence asks: {}",
             left[0]
         );
@@ -664,9 +642,9 @@ mod tests {
         assert!(config(0.0, 50.0).is_err());
         assert!(config(1.5, 50.0).is_err());
         assert!(config(f32::NAN, 50.0).is_err());
-        assert!(config(level::CEILING, 0.0).is_err());
-        assert!(config(level::CEILING, -5.0).is_err());
-        assert!(config(level::CEILING, f32::INFINITY).is_err());
+        assert!(config(consts::CEILING, 0.0).is_err());
+        assert!(config(consts::CEILING, -5.0).is_err());
+        assert!(config(consts::CEILING, f32::INFINITY).is_err());
     }
 
     #[kithara::test(native, flash(false))]

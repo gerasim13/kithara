@@ -3,9 +3,10 @@ message: |
   Inherent `impl` block containing constants and nothing else.
 
   A unit struct or empty enum that exists to hold associated consts is a
-  type used as a namespace. Group the constants in an inline constants-only
-  module instead (`mod consts { pub(super) const A: u32 = 1; }`, used as
-  `consts::A`), or in a separate constants file when there are many.
+  type used as a namespace. Move the constants into a `consts` module
+  instead (see `style.module-consts-in-crate-consts`: the crate's
+  `src/consts.rs`, or one inline `mod consts` per file when the module is
+  gated), used as `consts::A`.
 
   On a real type, one or two constants split away from the methods that use
   them belong in the same `impl` block as those methods. Three or more

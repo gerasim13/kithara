@@ -6,12 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::input::HookInput;
-
-mod consts {
-    pub(super) const PATCH_BYTES: usize = 16 * 1024 * 1024;
-    pub(super) const PATCH_OPERATIONS: usize = 4096;
-    pub(super) const PATH_BYTES: usize = 4096;
-}
+use crate::consts;
 
 pub(super) fn run(input: &HookInput, root: &Path) -> Result<()> {
     let paths = match input.tool_name.as_str() {

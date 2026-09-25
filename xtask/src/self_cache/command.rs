@@ -39,17 +39,7 @@ use super::{
     manifest::{CacheManifest, Freshness},
     publish,
 };
-use crate::config::XtaskCacheConfig;
-
-mod consts {
-    use super::Duration;
-
-    pub(super) const BUILD_OUTPUT_LIMIT: usize = 4096;
-    #[cfg(unix)]
-    pub(super) const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
-    #[cfg(unix)]
-    pub(super) const CHILD_TERMINATION_GRACE: Duration = Duration::from_secs(2);
-}
+use crate::{config::XtaskCacheConfig, consts};
 
 #[derive(Debug, Args)]
 pub(crate) struct SelfCacheArgs {

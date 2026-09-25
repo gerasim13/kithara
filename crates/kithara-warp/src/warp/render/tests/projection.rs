@@ -1,6 +1,7 @@
 use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
 
 use super::*;
+use crate::consts;
 
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {

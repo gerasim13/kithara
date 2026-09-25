@@ -350,8 +350,10 @@ mod dragged {
         render::{ControlAction, ReadValue, UiEvent, controls::Draws},
     };
 
-    /// How far up the hand walks the knob, as a fraction of its travel.
-    const STEP: f32 = 0.05;
+    mod consts {
+        /// How far up the hand walks the knob, as a fraction of its travel.
+        pub(super) const STEP: f32 = 0.05;
+    }
 
     fn area() -> Rect {
         Rect {
@@ -395,7 +397,7 @@ mod dragged {
         knob.input(down(32.0), &at(32.0));
 
         assert!(
-            (dragged(&mut knob, 32.0) - (first + f64::from(STEP))).abs() < 0.001,
+            (dragged(&mut knob, 32.0) - (first + f64::from(consts::STEP))).abs() < 0.001,
             "the second drag must start where the first one left the knob"
         );
     }
@@ -415,7 +417,7 @@ mod dragged {
 
     /// What the knob publishes when the hand walks it one step up from `from`.
     fn dragged(knob: &mut Painted<Knob>, from: f32) -> f64 {
-        let to = from - builtin::skin().knob.drag_range * STEP;
+        let to = from - builtin::skin().knob.drag_range * consts::STEP;
         knob.input(moved(to), &at(to))
             .value()
             .and_then(|action| action.downcast::<UiEvent>().ok())

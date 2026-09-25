@@ -15,14 +15,10 @@ use super::{analysis, report};
 use crate::{
     Ctx,
     common::walker::{relative_to, walk_rs_files},
+    consts,
     util::check_tool,
     verdict::NotClean,
 };
-
-mod consts {
-    pub(super) const CONFIG_REL: &str = ".config/similarity.toml";
-    pub(super) const INSTALL_HINT: &str = "cargo install similarity-rs";
-}
 
 /// Crate exclusions for similarity scans, loaded from
 /// `.config/similarity.toml`. Project-agnostic: when the file is absent
@@ -94,7 +90,7 @@ pub(crate) enum Direction {
 
 impl SimilarityConfig {
     pub(crate) fn load(workspace_root: &Path) -> Result<Self> {
-        let path = workspace_root.join(consts::CONFIG_REL);
+        let path = workspace_root.join(consts::SIMILARITY_CONFIG_REL);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -198,7 +194,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
         &["--version"],
         ctx.config
             .tools
-            .install_hint("similarity-rs", consts::INSTALL_HINT),
+            .install_hint("similarity-rs", consts::CONFIG_INSTALL_HINT),
     )?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&ctx.root);
