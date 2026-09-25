@@ -81,6 +81,12 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn silence_has_zero_rms() {
+        assert_eq!(rms(&[0.0; 4]), 0.0);
+        assert_eq!(rms(&[]), 0.0);
+    }
+
+    #[kithara::test(native, flash(false))]
     fn the_longest_quiet_stretch_is_counted_inside_the_window() {
         let samples = [0.5_f32, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5];
         assert_eq!(max_silence_run(&samples, 0, samples.len(), 0.1), 3);

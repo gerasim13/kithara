@@ -529,16 +529,29 @@ async fn natural_eof_advance_with_late_variant_switch_flac(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
+#[case::flac(
+    SAMPLE_RATE,
+    collapse_short_unknown_islands,
+    "app-layer crossfade FLAC"
+)]
+#[case::flac_resampled_48k(
+    RESAMPLED_RENDER_RATE,
+    collapse_resampled_noise_islands,
+    "app-layer crossfade resampled FLAC"
+)]
+async fn natural_eof_advance_app_layer_crossfade_advance(
     #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
+    #[case] render_sample_rate: u32,
+    #[case] collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
+    #[case] label: &str,
 ) {
     let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
     let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
-        RESAMPLED_RENDER_RATE,
+        render_sample_rate,
         crossfade_eq_stretch_player_config(&timestretch),
     )
     .await;
@@ -546,25 +559,25 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
     let (rendered, expected_a_end_frame) = render_app_layer_crossfade_until_b_with_postroll(
         &setup.queue,
         &setup.harness,
-        RESAMPLED_RENDER_RATE,
+        render_sample_rate,
     )
     .await;
-    assert_provenance_headroom(&rendered, "app-layer crossfade resampled FLAC");
+    assert_provenance_headroom(&rendered, label);
     let analysis = assert_crossfade_contract(
         &rendered,
         &setup.queue,
         expected_a_end_frame,
-        RESAMPLED_RENDER_RATE,
-        collapse_resampled_noise_islands,
-        "app-layer crossfade resampled FLAC",
+        render_sample_rate,
+        collapse_runs,
+        label,
     );
     let context = analysis.context(expected_a_end_frame, setup.queue.current_index());
 
-    assert_no_sustained_ascending_after_b_onset(&context, "app-layer crossfade resampled FLAC");
+    assert_no_sustained_ascending_after_b_onset(&context, label);
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
-        "app-layer crossfade resampled FLAC queue.current_index must advance to track B at end; {}",
+        "{label} queue.current_index must advance to track B at end; {}",
         context.dump()
     );
     setup.close().await;
@@ -797,45 +810,6 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
         || flavor.player_config(),
     )
     .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_app_layer_crossfade_advance_flac(
-    #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
-    temp_dir: TestTempDir,
-) {
-    let (_server, sources) = crossfade_tracks;
-    let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config(
-        &sources,
-        &temp_dir,
-        SAMPLE_RATE,
-        crossfade_eq_stretch_player_config(&timestretch),
-    )
-    .await;
-
-    let (rendered, expected_a_end_frame) =
-        render_app_layer_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE)
-            .await;
-    assert_provenance_headroom(&rendered, "app-layer crossfade FLAC");
-    let analysis = assert_crossfade_contract(
-        &rendered,
-        &setup.queue,
-        expected_a_end_frame,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "app-layer crossfade FLAC",
-    );
-    let context = analysis.context(expected_a_end_frame, setup.queue.current_index());
-
-    assert_no_sustained_ascending_after_b_onset(&context, "app-layer crossfade FLAC");
-    assert_eq!(
-        setup.queue.current_index(),
-        Some(1),
-        "app-layer crossfade FLAC queue.current_index must advance to track B at end; {}",
-        context.dump()
-    );
-    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]

@@ -188,8 +188,9 @@ enum Trigger {
 // pins — and is owned by the seek-stall workstream. Mixing it in would make
 // this otherwise-deterministic guard flaky.
 
-/// No eager exact size, body open: seek lands while only placeholder geometry
-/// is available.
+/// Size withheld: the seek lands while only placeholder geometry is
+/// available. Body withheld too: it lands on an undelivered segment, the
+/// closest model of the genuinely-immediate user seek.
 #[kithara::test(
     tokio,
     multi_thread,
@@ -198,40 +199,13 @@ enum Trigger {
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
-async fn immediate_seek_size_withheld(
+#[case::size_withheld(GateMode { withhold_head: true, withhold_body: false })]
+#[case::size_and_body_withheld(GateMode { withhold_head: true, withhold_body: true })]
+async fn immediate_seek(
     #[future(awt)] gated_source: (CreatedHls, SegmentGateHandle),
+    #[case] mode: GateMode,
 ) {
-    run_case(
-        gated_source,
-        GateMode {
-            withhold_head: true,
-            withhold_body: false,
-        },
-    )
-    .await;
-}
-
-/// Body withheld: seek lands on an undelivered segment — the closest model of
-/// the genuinely-immediate user seek.
-#[kithara::test(
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(1),
-    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
-)]
-async fn immediate_seek_size_and_body_withheld(
-    #[future(awt)] gated_source: (CreatedHls, SegmentGateHandle),
-) {
-    run_case(
-        gated_source,
-        GateMode {
-            withhold_head: true,
-            withhold_body: true,
-        },
-    )
-    .await;
+    run_case(gated_source, mode).await;
 }
 
 async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode) {

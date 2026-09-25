@@ -67,15 +67,16 @@ mod tests {
     use super::EncodeError;
 
     #[kithara::test]
-    fn error_display_mentions_codec() {
-        let error = EncodeError::UnsupportedCodec(AudioCodec::AacLc);
-        assert_eq!(error.to_string(), "Unsupported codec: AacLc");
-    }
-
-    #[kithara::test]
-    fn error_display_mentions_container() {
-        let error = EncodeError::UnsupportedContainer(ContainerFormat::Fmp4);
-        assert_eq!(error.to_string(), "Unsupported container: Fmp4");
+    #[case::codec(
+        EncodeError::UnsupportedCodec(AudioCodec::AacLc),
+        "Unsupported codec: AacLc"
+    )]
+    #[case::container(
+        EncodeError::UnsupportedContainer(ContainerFormat::Fmp4),
+        "Unsupported container: Fmp4"
+    )]
+    fn error_display_mentions(#[case] error: EncodeError, #[case] message: &str) {
+        assert_eq!(error.to_string(), message);
     }
 
     #[kithara::test]
