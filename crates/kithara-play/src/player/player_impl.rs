@@ -80,8 +80,8 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
-        // A web session is not `Send`, and the web has no Warp backend to
-        // stage on.
+        // A web session is not `Send`, so it cannot take receipts from the
+        // staging runtime: a web player stages nothing.
         #[cfg(not(target_arch = "wasm32"))]
         let owner: Option<Arc<dyn kithara_sync::ReceiptSink>> =
             Some(Arc::new(engine.session().clone()));
