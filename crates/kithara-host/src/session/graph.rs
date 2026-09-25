@@ -261,12 +261,19 @@ pub(super) mod lifecycle {
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
     ///
-    /// Reserves a successor before stopping, since backends may defer processor drop after
-    /// `stop_stream` and teardown must not depend on the RT `stream_stopped` callback reaching this
-    /// handle.
+    /// The browser is the exception. Its output is unlocked once, by a user
+    /// gesture, and a closed audio context can never be resumed, so a web
+    /// session holds its output until it dies and this call does nothing.
+    ///
+    /// Reserves a successor before stopping, since backends may defer processor
+    /// drop after `stop_stream` and teardown must not depend on the RT
+    /// `stream_stopped` callback reaching this handle.
     pub(in crate::session) fn shutdown_if_idle<T, S>(
         state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {
+        if cfg!(target_arch = "wasm32") {
+            return Ok(());
+        }
         let idle = state.graph.decks().all(|deck| !deck.started);
         if idle {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
