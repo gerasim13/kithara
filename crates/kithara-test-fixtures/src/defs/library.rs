@@ -105,7 +105,6 @@ fn library_flac(
     content_type = "application/x-kithara-analysis",
     format = super::rhythm::analysis_format,
     depends_on = ["library_flac_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
     optional
 )]
 #[case::newtechno()]
@@ -123,7 +122,6 @@ fn library_analysis(
     _context: &BuildContext<'_>,
     inputs: &[&[u8]],
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let flac = inputs
         .first()
         .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
@@ -189,7 +187,6 @@ fn library_mp3(
     content_type = "application/x-kithara-analysis",
     format = super::rhythm::analysis_format,
     depends_on = ["library_mp3_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
     optional
 )]
 #[case::zvuk_27390231()]
@@ -202,7 +199,6 @@ fn library_mp3_analysis(
     _context: &BuildContext<'_>,
     inputs: &[&[u8]],
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let mp3 = inputs
         .first()
         .ok_or(RemoteFileError::Missing("library_mp3 dependency"))?;
