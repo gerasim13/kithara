@@ -17,7 +17,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, auto,
+    auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     hls_server::{
@@ -25,8 +25,8 @@ use kithara_integration_tests::{
         abr::{AbrTestServer, master_playlist},
         test_server,
     },
-    rt_cancel, temp_dir,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
 
 /// Driver-1: Verify that seek works AFTER all segments have been downloaded.
@@ -42,7 +42,7 @@ use tracing::info;
 async fn test_driver_seek_after_playlist_finished(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
     let server = test_server;
     let url = server.url("/master.m3u8");
@@ -56,7 +56,7 @@ async fn test_driver_seek_after_playlist_finished(
     let config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
@@ -105,7 +105,7 @@ async fn test_driver_seek_after_playlist_finished(
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
 #[kithara::test(tokio, native, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelToken) {
+async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
@@ -127,7 +127,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
     let config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .events(bus)
         .initial_abr_mode(auto(0))
         .build();

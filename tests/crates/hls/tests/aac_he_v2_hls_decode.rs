@@ -9,10 +9,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;

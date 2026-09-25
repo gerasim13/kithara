@@ -9,15 +9,12 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    offline::{
-        OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left,
-        max_silence_run,
-    },
-    temp_dir,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent},
 };
-use kithara_test_fixtures::signal::goertzel_magnitude;
+use kithara_test_fixtures::signal::{deinterleave_left, goertzel_magnitude, max_silence_run};
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::{

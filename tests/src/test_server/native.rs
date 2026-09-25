@@ -3,12 +3,12 @@ use std::env;
 use axum::{Router, middleware, routing::get};
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
+use kithara_test_utils::TestHttpServer;
 use tower_http::cors::CorsLayer;
 use url::Url;
 
 use crate::{
     hls_url::HlsSpec,
-    http_server::TestHttpServer,
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{

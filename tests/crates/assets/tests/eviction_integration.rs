@@ -10,16 +10,14 @@ use kithara::{
     },
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    temp_dir,
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::temp_dir;
 
 use super::support::{LiteralLayout, asset_dir_exists, literal_layouts, pending, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_scope_with_root(
-    temp_dir: &kithara_integration_tests::TestTempDir,
+    temp_dir: &kithara_test_utils::TestTempDir,
     asset_root: &str,
     max_assets: Option<usize>,
 ) -> AssetScope<TestPools> {
@@ -46,7 +44,7 @@ fn asset_scope_with_root(
 fn eviction_max_assets_skips_pinned_assets(
     #[case] max_assets: usize,
     #[case] create_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -126,7 +124,7 @@ fn eviction_max_assets_skips_pinned_assets(
 #[case(3)]
 fn eviction_ignores_missing_index(
     #[case] asset_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -155,7 +153,7 @@ fn eviction_ignores_missing_index(
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempDir) {
+fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
 
     for i in 0..3 {
@@ -195,7 +193,7 @@ fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,
     #[case] pinned_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 

@@ -8,11 +8,11 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara,
+    TestServerHelper, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent},
-    temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 #[kithara::fixture]

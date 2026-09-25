@@ -15,10 +15,10 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use crate::bufpool_ext::pools;

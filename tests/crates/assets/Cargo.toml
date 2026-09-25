@@ -24,7 +24,7 @@ kithara = { workspace = true, features = ["usdt", "assets", "bufpool", "platform
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
 bytes = { workspace = true }
 rkyv = { workspace = true }

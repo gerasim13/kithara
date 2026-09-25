@@ -10,12 +10,10 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
 };
+use kithara_test_utils::TestTempDir;
 use url::Url;
 
-use crate::{
-    TestTempDir,
-    bufpool_ext::{Pools, TestPools, pools},
-};
+use crate::bufpool_ext::{Pools, TestPools, pools};
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {

@@ -12,11 +12,12 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, TestTempDir,
+    PackagedTestServer,
     bufpool_ext::{TestPools, pools},
-    kithara, temp_dir,
+    kithara,
     waits::wait_thread_count_quiesced,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 
 /// Real-time watchdog for the lib `wait_thread_count_quiesced` helper. Bounds

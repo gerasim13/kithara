@@ -14,12 +14,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_fixture::HlsStreamBuilder,
     hls_server::{TestServer, test_server},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 use url::Url;
 

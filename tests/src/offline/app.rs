@@ -12,9 +12,9 @@ use kithara_app::{
     document::Config,
     pools::{AppPools, PoolsSection, build as app_pools},
 };
+use kithara_test_utils::TestTempDir;
 
 use super::{OfflineQueue, QueueTicker, RENDER_PACE};
-use crate::TestTempDir;
 
 #[non_exhaustive]
 pub struct AppQueueFixture {

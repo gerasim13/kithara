@@ -27,8 +27,8 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
-use kithara_integration_tests::TestHttpServer;
 use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
+use kithara_test_utils::TestHttpServer;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");

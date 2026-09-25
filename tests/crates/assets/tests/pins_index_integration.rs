@@ -11,14 +11,15 @@ use kithara::{
     assets::DiskAssetStore,
     platform::{CancelToken, time::Duration},
 };
-use kithara_integration_tests::{asset_fixture::PinsIndex, bufpool_ext::pools, temp_dir};
+use kithara_integration_tests::{asset_fixture::PinsIndex, bufpool_ext::pools};
+use kithara_test_utils::temp_dir;
 
 fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")
 }
 
 #[kithara::fixture]
-fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAssetStore {
+fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore {
     DiskAssetStore::new(temp_dir.path(), CancelToken::never())
 }
 
@@ -33,7 +34,7 @@ enum ReadBack {
 #[case::missing_file(None)]
 #[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
 fn pins_index_bad_state_returns_default(
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
     disk_asset_store: DiskAssetStore,
     #[case] prewrite_contents: Option<&[u8]>,
 ) {
@@ -77,7 +78,7 @@ fn pins_index_bad_state_returns_default(
 fn pins_index_roundtrip(
     #[case] asset_names: Vec<&str>,
     #[case] read_back: ReadBack,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let pins: HashSet<String> = asset_names.iter().map(ToString::to_string).collect();
@@ -118,7 +119,7 @@ fn pins_index_roundtrip(
 #[case(5)]
 fn pins_index_concurrent_updates_handled_correctly(
     #[case] asset_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let _dir = temp_dir.path();

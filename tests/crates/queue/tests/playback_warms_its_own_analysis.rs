@@ -23,9 +23,9 @@ use kithara_integration_tests::{
     analysis_pass::stalled_reader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    served_mp3, temp_dir,
-    waits::wait_until,
+    served_mp3,
 };
+use kithara_test_utils::{temp_dir, wait_until};
 use url::Url;
 
 use crate::bufpool_ext::pools;

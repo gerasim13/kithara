@@ -4974,6 +4974,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-fixtures",
  "kithara-test-utils",
 ]
 
@@ -5897,6 +5898,7 @@ dependencies = [
 name = "kithara-test-utils"
 version = "0.0.1-alpha4"
 dependencies = [
+ "axum",
  "fieldwork",
  "kithara-bufpool",
  "kithara-platform",

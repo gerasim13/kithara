@@ -21,9 +21,10 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     hls_fixture::create_test_downloader,
-    offline::{OfflinePlayer, WindowStats, rms},
-    temp_dir,
+    offline::{OfflinePlayer, WindowStats},
 };
+use kithara_test_fixtures::signal::rms;
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use crate::{

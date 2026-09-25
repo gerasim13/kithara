@@ -20,14 +20,14 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::TestTempDir;
-#[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::bufpool_ext::TestPools;
 use kithara_integration_tests::bufpool_ext::pools;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::hls_sized_wav_three;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;

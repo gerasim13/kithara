@@ -36,9 +36,9 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
-    offline::OfflineHostHarness,
+    PackagedTestServer, SegmentGateHandle, event::TestEvent, kithara, offline::OfflineHostHarness,
 };
+use kithara_test_utils::TestTempDir;
 
 use crate::bufpool_ext::{Pools, TestPools, pools};
 

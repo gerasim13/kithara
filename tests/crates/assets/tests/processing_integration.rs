@@ -6,12 +6,12 @@ use kithara::{
     assets::{AcquisitionResult, ReadSide, WriteSide},
     platform::{sync::Arc, time::Duration},
 };
-use kithara_integration_tests::temp_dir;
+use kithara_test_utils::temp_dir;
 
 use super::support::{asset_scope, resource, xor_processor};
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
+fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let scope = asset_scope(&temp_dir, "test-processing");
@@ -49,7 +49,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
+fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let scope = asset_scope(&temp_dir, "test-cache");
@@ -91,7 +91,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
+fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let scope = asset_scope(&temp_dir, "test-partial");
@@ -133,7 +133,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
+fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let scope = asset_scope(&temp_dir, "test-eof");
@@ -165,7 +165,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
+fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
     let scope = asset_scope(&temp_dir, "no-processing");
 
     let key = scope.key(&resource("test.bin")).unwrap();

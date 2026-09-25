@@ -22,11 +22,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_server::{TestServer, test_server},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 /// Settle window / hang budget for [`wait_thread_count_quiesced`].
 const SETTLE_WINDOW: usize = 4;

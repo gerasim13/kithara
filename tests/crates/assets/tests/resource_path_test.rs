@@ -5,7 +5,7 @@ use kithara::{
     assets::{AcquisitionResult, ReadSide, WriteSide},
     platform::time::Duration,
 };
-use kithara_integration_tests::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 use super::support::{asset_scope, resource};
 

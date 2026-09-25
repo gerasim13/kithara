@@ -4,7 +4,8 @@ use kithara::{
     assets::{ReadSide, WriteSide},
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::{storage_ext::read_bytes, temp_dir};
+use kithara_integration_tests::storage_ext::read_bytes;
+use kithara_test_utils::temp_dir;
 
 use super::support::{asset_scope, pending, resource};
 
@@ -17,7 +18,7 @@ fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
     #[case] initial_offset: u64,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-complex");
 
@@ -51,7 +52,7 @@ fn streaming_resource_complex_write_patterns(
 fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-concurrent");
 
@@ -91,7 +92,7 @@ fn streaming_resource_concurrent_writes(
 fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-edge-reads");
 
@@ -128,7 +129,7 @@ fn streaming_resource_edge_case_reads(
 #[case(vec![(0, 512), (1024, 512)])]
 fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-multi-range");
 
@@ -168,7 +169,7 @@ fn streaming_resource_multiple_range_operations(
 #[case(true)]
 fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-commit");
 
@@ -224,7 +225,7 @@ fn streaming_resource_commit_behavior(
 #[case(16384)]
 fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-zero-length");
 

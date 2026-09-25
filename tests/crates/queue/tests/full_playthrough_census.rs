@@ -32,12 +32,11 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
 };
@@ -47,7 +46,7 @@ use kithara_test_fixtures::{
     hls_fixtures::frame_samples,
     signal::{FrameClass, classify_windows},
 };
-use kithara_test_utils::probe::IntoProbeArg;
+use kithara_test_utils::{TestTempDir, probe::IntoProbeArg, temp_dir};
 
 use crate::bufpool_ext::TestPools;
 

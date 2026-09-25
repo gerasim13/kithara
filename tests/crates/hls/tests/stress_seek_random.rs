@@ -7,10 +7,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64,
+    Xorshift64,
     bufpool_ext::{TestPools, pools},
     hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 #[derive(Default)]

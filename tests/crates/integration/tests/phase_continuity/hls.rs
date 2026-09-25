@@ -13,11 +13,12 @@ use kithara::{
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
 use kithara_integration_tests::auto;
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{EncryptionRequest, PackagedSignal},
     phase_continuity::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan},
 };
+use kithara_test_utils::TestTempDir;
 use tracing::{info, warn};
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;

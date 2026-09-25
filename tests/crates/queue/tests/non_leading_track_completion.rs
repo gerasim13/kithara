@@ -18,11 +18,9 @@ use kithara::{
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{
-        OfflinePlayerHarness, OfflinePlayerOptions, mean_abs, offline_queue_fixture_with_options,
-    },
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture_with_options},
 };
-use kithara_test_fixtures::assets;
+use kithara_test_fixtures::{assets, signal::mean_abs};
 
 use crate::{
     bufpool_ext::TestPools,

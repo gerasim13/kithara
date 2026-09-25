@@ -13,12 +13,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, auto,
+    auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     hls_server::abr::{AbrTestServer, master_playlist},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.

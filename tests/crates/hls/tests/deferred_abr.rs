@@ -4,11 +4,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
-    TestTempDir,
     hls_fixture::HlsStreamBuilder,
     hls_server::{TestServer, test_server},
-    rt_cancel, temp_dir,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
 
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
@@ -42,13 +41,13 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 async fn manual_variant_returns_correct_data(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
     #[case] variant: usize,
 ) {
     let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(variant)
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     let result = spawn_blocking(move || {
@@ -80,12 +79,12 @@ async fn manual_variant_returns_correct_data(
 async fn sequential_read_across_segments_maintains_variant(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
     let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     let result = spawn_blocking(move || {
@@ -141,12 +140,12 @@ async fn sequential_read_across_segments_maintains_variant(
 async fn after_seek_sequential_reads_maintain_variant(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
     let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(2)
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     let result = spawn_blocking(move || {
@@ -186,11 +185,11 @@ async fn after_seek_sequential_reads_maintain_variant(
 async fn multiple_seeks_maintain_correct_variant(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
     let server = test_server;
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     let result = spawn_blocking(move || {
@@ -265,13 +264,13 @@ async fn multiple_seeks_maintain_correct_variant(
 async fn seek_to_segment_boundary_reads_correct_segment(
     #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
     #[case] position: u64,
 ) {
     let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     let result = spawn_blocking(move || {

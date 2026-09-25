@@ -16,8 +16,8 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
-use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};
-use kithara_test_utils::off_thread::OffThread;
+use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker};
+use kithara_test_utils::{off_thread::OffThread, temp_dir};
 
 use crate::bufpool_ext::{TestPools, pools};
 

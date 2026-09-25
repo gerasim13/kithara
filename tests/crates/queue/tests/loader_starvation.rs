@@ -26,11 +26,11 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     waits::wait_for_loader_done,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

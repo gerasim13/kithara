@@ -17,9 +17,10 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    served_mp3, temp_dir, usdt_trace,
+    served_mp3, usdt_trace,
     waits::wait_for_loader_done_event,
 };
+use kithara_test_utils::temp_dir;
 use serial_test::serial;
 use url::Url;
 

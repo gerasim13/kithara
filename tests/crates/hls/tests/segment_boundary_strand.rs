@@ -43,7 +43,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SegmentGateHandle, TestTempDir,
+    SegmentGateHandle,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
@@ -51,6 +51,7 @@ use kithara_test_fixtures::{
     hls_fixtures::{hls_header_boundary, hls_pcm_boundary},
     signal,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;

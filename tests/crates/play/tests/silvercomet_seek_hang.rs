@@ -16,10 +16,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    offline::{OfflinePlayer, WindowStats, rms},
-    temp_dir,
+    offline::{OfflinePlayer, WindowStats},
     test_defaults::Consts as Shared,
 };
+use kithara_test_fixtures::signal::rms;
+use kithara_test_utils::temp_dir;
 
 use crate::bufpool_ext::{TestPools, pools};
 

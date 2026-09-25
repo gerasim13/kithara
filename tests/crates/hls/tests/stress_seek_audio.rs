@@ -10,7 +10,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper, Xorshift64,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -19,6 +19,7 @@ use kithara_integration_tests::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_sized_wav_forty_eight, hls_sized_wav_hundred};
 use kithara_test_fixtures::signal;
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 use url::Url;
 

@@ -15,13 +15,14 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{DelayRule, EncryptionRequest},
     hls_fixture::create_test_downloader,
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
     usdt_trace,
 };
+use kithara_test_utils::TestTempDir;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

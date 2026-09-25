@@ -26,7 +26,5 @@ pub use player::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use ticker::QueueTicker;
-pub use window::{
-    TimedPlayerEvent, WindowStats, deinterleave_left, max_silence_run, mean_abs, peak, rms,
-};
+pub use window::{TimedPlayerEvent, WindowStats};
 pub use worker::OfflineWorker;

@@ -10,13 +10,13 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SegmentGateHandle, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::{

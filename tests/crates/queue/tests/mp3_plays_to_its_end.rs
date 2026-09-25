@@ -23,13 +23,13 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
     kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
 };
 use kithara_test_fixtures::assets;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 use crate::bufpool_ext::TestPools;
 

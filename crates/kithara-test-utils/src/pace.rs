@@ -12,9 +12,10 @@
 //! off ambient (so `flash(false)` tests keep real timing), and virtual inside an
 //! ambient flash test. Raw `flash::enter_dynamic` / `flash::dynamic` are that
 //! macro's private expansion and must never be called by hand.
-#![cfg(not(target_arch = "wasm32"))]
 
-use kithara::platform::time::Duration;
+use kithara_platform::time::Duration;
+
+use crate::kithara;
 
 /// A `thread::sleep` that runs on the flash virtual clock inside an ambient flash
 /// test, and on the real clock otherwise.
@@ -22,10 +23,10 @@ use kithara::platform::time::Duration;
 /// Use only for *deliberate* time advance — real-time playback pacing or
 /// simulated network latency, where the duration itself is the thing under test.
 /// This is NOT a substitute for waiting on program state; for "wait until X
-/// happens" use [`crate::waits`].
+/// happens" use [`crate::wait::wait_until`].
 /// `no_block`: deliberate virtual-time pace; the sleep duration is the behavior under test.
 #[kithara::allow_block]
 #[kithara::flash(true)]
 pub fn virtual_pace(duration: Duration) {
-    kithara::platform::thread::sleep(duration);
+    kithara_platform::thread::sleep(duration);
 }

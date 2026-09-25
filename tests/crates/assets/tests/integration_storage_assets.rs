@@ -9,7 +9,8 @@ use kithara::{
     },
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::{bufpool_ext::pools, storage_ext::read_bytes, temp_dir};
+use kithara_integration_tests::{bufpool_ext::pools, storage_ext::read_bytes};
+use kithara_test_utils::temp_dir;
 
 use super::support::{asset_scope, pending, resource};
 
@@ -45,7 +46,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] size: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
     let scope = asset_scope(&temp_dir, asset_root);
@@ -85,7 +86,7 @@ fn resource_persistence(
     #[case] rel_path: &str,
     #[case] payload: &[u8],
     #[case] streaming: bool,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, asset_root);
     let key = scope.key(&resource(rel_path)).unwrap();
@@ -111,7 +112,7 @@ fn resource_persistence(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests::TestTempDir) {
+fn mixed_resource_persistence_across_reopen(temp_dir: kithara_test_utils::TestTempDir) {
     let scope = asset_scope(&temp_dir, "mixed-asset");
 
     let atomic_key = scope.key(&resource("meta/index.json")).unwrap();
@@ -155,7 +156,7 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests:
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn streaming_resource_concurrent_write_and_read_across_handles(
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "concurrent-asset");
 
@@ -202,7 +203,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
 fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] segment_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
     let scope = asset_scope(&temp_dir, asset_root);
@@ -276,7 +277,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 fn atomic_resource_roundtrip_with_different_paths(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, asset_root);
 
@@ -301,7 +302,7 @@ fn streaming_resource_write_read_at_different_positions(
     #[case] offset: u64,
     #[case] size: usize,
     #[case] read_size: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let scope = asset_scope(&temp_dir, "streaming-test");
 
@@ -328,7 +329,7 @@ fn streaming_resource_write_read_at_different_positions(
 #[case(5)]
 fn multiple_resources_same_asset_root_independently_accessible(
     #[case] resource_count: usize,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let asset_root = "multi-resource-asset";
     let scope = asset_scope(&temp_dir, asset_root);
@@ -365,7 +366,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
 /// Test that `delete_asset` only deletes the asset directory for the store's `asset_root`,
 /// leaving other assets in the same `root_dir` untouched.
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::TestTempDir) {
+fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     let asset_roots = ["asset-alpha", "asset-beta", "asset-gamma"];
@@ -432,7 +433,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     hang_timeout_secs(1),
     tracing("kithara_assets=debug,kithara_storage=debug")
 )]
-fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) {
+fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     let asset_roots = ["seq-asset-1", "seq-asset-2", "seq-asset-3", "seq-asset-4"];
@@ -489,7 +490,7 @@ fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) 
 
 /// Test that deleting a non-existent asset doesn't affect other assets.
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::TestTempDir) {
+fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     {

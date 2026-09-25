@@ -6,9 +6,8 @@ use kithara::{
     events::EventReceiver,
     platform::time::{Duration, Instant},
 };
-use kithara_integration_tests::{
-    event::TestEvent, flash_pace::virtual_pace, offline::OfflinePlayer,
-};
+use kithara_integration_tests::{event::TestEvent, offline::OfflinePlayer};
+use kithara_test_utils::virtual_pace;
 
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;

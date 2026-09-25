@@ -9,11 +9,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    PackagedTestServer, TestTempDir,
+    PackagedTestServer,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(
     tokio,

@@ -10,7 +10,7 @@ use kithara::{
 };
 #[cfg(target_arch = "wasm32")]
 use kithara_integration_tests::bufpool_ext::pools;
-use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
+use kithara_test_utils::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;

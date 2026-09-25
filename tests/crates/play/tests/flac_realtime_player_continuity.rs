@@ -11,7 +11,7 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::DelayRule,
     hls_fixture::create_test_downloader,
     offline::OfflinePlayer,
@@ -20,6 +20,7 @@ use kithara_integration_tests::{
         check_against_previous,
     },
 };
+use kithara_test_utils::TestTempDir;
 use tracing::{info, warn};
 use url::Url;
 

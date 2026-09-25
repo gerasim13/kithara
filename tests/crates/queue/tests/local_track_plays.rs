@@ -19,15 +19,15 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper, Xorshift64,
     event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
     offline::{OfflineQueue, QueueTicker, assert_playhead_tracks_renderer, audio_clock_pace},
-    temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

@@ -11,9 +11,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
+    offline::{OfflinePlayerHarness, offline_queue_fixture},
 };
-use kithara_test_fixtures::assets;
+use kithara_test_fixtures::{assets, signal::mean_abs};
 
 use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
 

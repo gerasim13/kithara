@@ -10,10 +10,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64,
+    Xorshift64,
     bufpool_ext::{TestPools, pools},
 };
 use kithara_test_fixtures::fixtures::stress_wav;
+use kithara_test_utils::TestTempDir;
 use tempfile::NamedTempFile;
 use tracing::info;
 

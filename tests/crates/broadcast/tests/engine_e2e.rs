@@ -15,9 +15,9 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     bufpool_ext::pools,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
-    waits::wait_until,
 };
 use kithara_test_fixtures::integration_fixtures::broadcast_tone;
+use kithara_test_utils::wait_until;
 use url::Url;
 
 use super::origin::{Playlist, assert_carries_the_tone, decode_adts_left};

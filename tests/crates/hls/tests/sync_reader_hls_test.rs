@@ -7,11 +7,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_server::abr::{AbrTestServer, master_playlist},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {

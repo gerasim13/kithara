@@ -19,9 +19,10 @@ use kithara_app::{
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
+    bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow, usdt_trace,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk

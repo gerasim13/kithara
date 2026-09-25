@@ -9,12 +9,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir, auto,
+    auto,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;

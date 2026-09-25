@@ -16,9 +16,9 @@ use kithara::{
 use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::{OfflinePlayer, resource_from_reader},
-    temp_dir,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};
+use kithara_test_utils::temp_dir;
 use tracing::info;
 
 use crate::{

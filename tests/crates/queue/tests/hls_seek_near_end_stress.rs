@@ -21,13 +21,13 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, audio_clock_pace},
-    temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

@@ -13,7 +13,8 @@ use kithara::{
     },
     platform::time::Duration,
 };
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::kithara;
+use kithara_test_utils::temp_dir;
 use rkyv::option::ArchivedOption;
 
 use super::support::{asset_scope, resource};
@@ -95,7 +96,7 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
 /// commit → read lifecycle, checking every index file at every
 /// observable step.
 #[kithara::test(timeout(Duration::from_secs(5)))]
-fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_tests::TestTempDir) {
+fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let asset_root = "persisted-asset";
     let pins = pins_path(&root);
@@ -228,7 +229,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
 /// fine-print — just asserts the three files appear in the spots the
 /// documented API promises they will.
 #[kithara::test(timeout(Duration::from_secs(3)))]
-fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::TestTempDir) {
+fn index_files_land_under_root_dir_index(temp_dir: kithara_test_utils::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let scope = asset_scope(&temp_dir, "basic-asset");
     let key = scope.key(&resource("one.bin")).unwrap();

@@ -22,8 +22,9 @@ use kithara_app::{
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
+    bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.

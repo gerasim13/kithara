@@ -13,8 +13,8 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::{audio_mock::TestPcmReader, offline::peak};
-use kithara_test_fixtures::integration_fixtures::deadline_tracks;
+use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_test_fixtures::{integration_fixtures::deadline_tracks, signal::peak};
 use kithara_test_utils::test::usdt::{self, ProbeEvent};
 use ringbuf::traits::Producer;
 

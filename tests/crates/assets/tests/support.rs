@@ -10,10 +10,8 @@ use kithara::{
     },
     platform::sync::Arc,
 };
-use kithara_integration_tests::{
-    TestTempDir,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::TestTempDir;
 use url::Url;
 
 const RESOURCE_NAMESPACE: &str = "test-resource";

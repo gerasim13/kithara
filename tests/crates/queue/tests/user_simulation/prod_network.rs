@@ -29,10 +29,11 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara,
+    kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     user_sim::{actions::Action, scenarios},
 };
+use kithara_test_utils::TestTempDir;
 
 /// Production zvuk DRM track URL — same one `zvuk_prod_drm_e2e.rs`
 /// runs end-to-end. HE-AAC v2 fragments behind AES-128 + per-segment

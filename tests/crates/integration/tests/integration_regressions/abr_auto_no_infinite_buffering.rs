@@ -10,12 +10,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    kithara, rt_cancel, temp_dir,
+    kithara,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 
 const STORM_ROUNDS: usize = 10;
 const VARIANT_COUNT: usize = 3;
@@ -31,7 +31,7 @@ const READ_DEADLINE: Duration = Duration::from_secs(30);
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn abr_mode_storm_does_not_wedge_loading(
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
     #[future(awt)] abr_source: HlsTestServer,
 ) {
     let server = abr_source;
@@ -44,7 +44,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
     let config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .initial_abr_mode(AbrMode::Auto(None))
         .build();
     let mut stream = Stream::<Hls<TestPools>>::new(config)

@@ -63,8 +63,6 @@ pub mod encode_ext;
 pub mod fixture_protocol;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod fixtures;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod flash_pace;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod gapless;
 #[cfg(all(feature = "analysis", not(target_arch = "wasm32")))]

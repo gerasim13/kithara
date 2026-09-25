@@ -30,7 +30,8 @@ use kithara::{
         time::{Duration, sleep},
     },
 };
-use kithara_integration_tests::{TestHttpServer, bufpool_ext::pools};
+use kithara_integration_tests::bufpool_ext::pools;
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
 type TestServer = TestHttpServer;

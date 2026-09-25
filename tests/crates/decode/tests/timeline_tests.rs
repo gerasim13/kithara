@@ -98,11 +98,11 @@ mod hls_timeline {
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{
-        TestTempDir,
         bufpool_ext::{TestPools, pools},
         hls_server::{HlsTestServer, HlsTestServerConfig},
     };
     use kithara_test_fixtures::assets::sized_wav_timeline_saw_2mb;
+    use kithara_test_utils::TestTempDir;
 
     use crate::common::test_defaults::SawWav;
 

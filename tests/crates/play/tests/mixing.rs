@@ -14,10 +14,13 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflineHostHarness, peak, resource_from_reader},
+    offline::{OfflineHostHarness, resource_from_reader},
 };
-use kithara_test_fixtures::integration_fixtures::{
-    constant_four, constant_quiet, constant_three, constant_two, constant_unity,
+use kithara_test_fixtures::{
+    integration_fixtures::{
+        constant_four, constant_quiet, constant_three, constant_two, constant_unity,
+    },
+    signal::peak,
 };
 
 use crate::bufpool_ext::{TestPools, pools};

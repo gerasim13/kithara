@@ -9,11 +9,11 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara,
+    kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::drain_tone};
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

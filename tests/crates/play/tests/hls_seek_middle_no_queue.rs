@@ -13,8 +13,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, fixture_protocol::DelayRule,
-    hls_fixture::create_test_downloader, offline::OfflinePlayer, temp_dir,
+    hls_fixture::create_test_downloader, offline::OfflinePlayer,
 };
+use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},

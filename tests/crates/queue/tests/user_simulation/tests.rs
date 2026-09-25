@@ -19,9 +19,9 @@ use kithara_integration_tests::{
     fixture_protocol::EncryptionRequest,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use super::{

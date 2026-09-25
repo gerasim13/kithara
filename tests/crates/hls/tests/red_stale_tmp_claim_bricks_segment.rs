@@ -36,10 +36,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
+use kithara_test_utils::TestTempDir;
 
 struct Consts;
 impl Consts {

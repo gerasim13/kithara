@@ -27,7 +27,6 @@ use kithara_integration_tests::{
     Xorshift64,
     event::TestEvent,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     usdt_trace,
     waits::{
@@ -35,6 +34,7 @@ use kithara_integration_tests::{
         wait_for_position_event,
     },
 };
+use kithara_test_utils::temp_dir;
 
 use crate::bufpool_ext::{TestPools, pools};
 

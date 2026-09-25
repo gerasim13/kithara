@@ -8,10 +8,11 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 const VARIANT_COUNT: usize = 3;

@@ -20,10 +20,10 @@ use kithara_integration_tests::{
     offline::OfflineHostHarness,
     smoothing::{
         Consts, SmoothingCase, assert_step_is_ramped, last_block_peak, observe, observe_until,
-        peak, sine_queue,
+        sine_queue,
     },
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{SignalAsset, signal::peak};
 
 use crate::bufpool_ext::pools;
 

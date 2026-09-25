@@ -25,7 +25,7 @@ kithara = { workspace = true, features = ["usdt", "download", "mock", "offline",
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls-inputs"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
 bytes = { workspace = true }
 hex = { workspace = true }

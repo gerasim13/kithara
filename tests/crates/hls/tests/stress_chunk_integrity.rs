@@ -20,7 +20,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64, auto,
+    Xorshift64, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -30,6 +30,7 @@ use kithara_test_fixtures::hls_fixtures::{
     hls_header_fifty, hls_pcm_fifty, hls_pcm_fifty_descending,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
+use kithara_test_utils::TestTempDir;
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;

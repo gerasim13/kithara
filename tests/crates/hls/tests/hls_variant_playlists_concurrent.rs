@@ -20,14 +20,14 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     usdt_trace::{self, ProbeEvent},
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 struct Consts;

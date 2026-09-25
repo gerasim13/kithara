@@ -17,13 +17,13 @@ use kithara::{
     stream::{ContainerFormat, MediaInfo, SeekEpoch},
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     reads::blocking_audio,
 };
 use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::TestTempDir;
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,

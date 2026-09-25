@@ -11,9 +11,9 @@ use kithara::{
 };
 use kithara_app::document::Config;
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::app_queue, served_mp3, temp_dir,
-    waits::wait_for_position_at_least,
+    TestServerHelper, kithara, offline::app_queue, served_mp3, waits::wait_for_position_at_least,
 };
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use super::{app_disk_asset_store, app_track_source};

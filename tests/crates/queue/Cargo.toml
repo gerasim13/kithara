@@ -24,7 +24,7 @@ kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "m
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls", "signal", "wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
 aes = { workspace = true }
 bytes = { workspace = true }

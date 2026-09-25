@@ -6,16 +6,14 @@ use kithara::{
     assets::{AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide},
     platform::{CancelToken, time::Duration},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    cancel_token, temp_dir,
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::{cancel_token, temp_dir};
 
 use super::support::{LiteralLayout, asset_dir_exists, literal_layouts, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_scope_with_root_and_limit(
-    temp_dir: &kithara_integration_tests::TestTempDir,
+    temp_dir: &kithara_test_utils::TestTempDir,
     asset_root: &str,
     max_bytes: Option<u64>,
     cancel: CancelToken,
@@ -43,7 +41,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     #[case] asset_b_name: &str,
     #[case] asset_c_name: &str,
     cancel_token: CancelToken,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -142,7 +140,7 @@ fn eviction_corner_cases_different_byte_limits(
     #[case] max_bytes: usize,
     #[case] new_asset_size: usize,
     cancel_token: CancelToken,
-    temp_dir: kithara_integration_tests::TestTempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let cancel = cancel_token;
     let dir = temp_dir.path().to_path_buf();
