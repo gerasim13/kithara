@@ -3,7 +3,7 @@ use kithara_ui::{
     builtin,
     error::UiDocError,
     ids::{DocId, SourceUri},
-    skin::{ColorRole, SkinDoc, load_skin, parse_skin_over},
+    skin::{ColorRole, PopSkin, SkinDoc, load_skin, parse_skin_over},
     source::{Limits, MemResolver},
 };
 
@@ -233,4 +233,16 @@ fn a_patch_refuses_a_color_it_cannot_read() {
         .expect_err("a broken color is an error");
 
     assert!(matches!(error, UiDocError::BadColor { .. }));
+}
+
+#[kithara::test]
+fn pop_holds_exactly_the_declared_chrome() {
+    let declared: PopSkin = ron::from_str(
+        "(background: BgFooter, frame: (radius: 0.0, border_width: 1.0, border: LineHi), \
+         cap_height: 2.0, cap_color: Accent, \
+         shadow: (color: Shadow, alpha: 0.6, offset_x: 0.0, offset_y: 16.0, blur: 40.0))",
+    )
+    .unwrap_or_else(|error| panic!("the declared pop chrome must be a pop section: {error}"));
+
+    assert_eq!(builtin::skin_doc().pop, declared);
 }
