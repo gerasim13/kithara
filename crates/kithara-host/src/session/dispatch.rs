@@ -44,12 +44,16 @@ where
 
 fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply {
     let operation = match cmd {
-        SyncCmd::Transact(operation) => operation,
+        SyncCmd::Transact(operation) => match transport::observe_commits(state) {
+            Ok(()) => operation,
+            Err(error) => return HostReply::Admission(Err(SyncRejected::new(error, operation))),
+        },
         SyncCmd::TransactCurrent(operations) => {
-            let topology = match state.root.topology() {
-                Ok(topology) => topology,
-                Err(error) => return HostReply::Err(SessionError::from(error).into()),
-            };
+            let topology =
+                match transport::observe_commits(state).and_then(|()| state.root.topology()) {
+                    Ok(topology) => topology,
+                    Err(error) => return HostReply::Err(SessionError::from(error).into()),
+                };
             SyncOperation::Topology {
                 operations,
                 base: topology.stamp(),
@@ -72,6 +76,7 @@ fn acknowledge_root<T, S>(
     state: &mut SessionState<T, S>,
     receipt: SyncReceipt,
 ) -> Result<SyncStatusSnapshot, SyncError> {
+    transport::observe_commits(state)?;
     let result = state.root.acknowledge(receipt);
     if result.is_ok() {
         state.publish_root();

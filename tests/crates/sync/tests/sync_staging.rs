@@ -96,9 +96,6 @@ async fn render_until(
 /// recording frame `seconds` in: a launch the executor stages beside
 /// whatever the deck plays. Returns the operation the preparation carries.
 async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64) -> u64 {
-    // The Host publishes its committed transport as the session grid only
-    // when a transport command observes it; nothing else refreshes the root.
-    harness.set_tempo(case, case.start_bpm(), true).await;
     harness.request_sync_intent(case, SyncIntent::Enable).await;
     let deck = harness.decks[0].id();
     let topology = harness
