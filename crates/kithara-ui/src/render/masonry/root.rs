@@ -26,7 +26,6 @@ use super::{
         WindowTracker,
     },
     custom::HostAction,
-    leaf::cursor_icon,
     node::Node,
     picker::{self, HostedEngine},
 };
@@ -35,7 +34,7 @@ use crate::draw::Rgba;
 use crate::{
     backends::VelloBackend,
     draw::{Pt, Rect, replay},
-    interact::CursorShape,
+    interact::{CursorShape, masonry::cursor_icon},
     render::{
         DragGhost, Skin, UiEvent, WindowCommand, WindowSurface, shader::ShaderDeclaration,
         vis::VisDeclaration,

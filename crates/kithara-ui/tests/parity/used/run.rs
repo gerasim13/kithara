@@ -6,10 +6,7 @@ use iced::{
     },
 };
 use kithara_test_utils::kithara;
-use num_traits::cast::AsPrimitive;
-
-use super::shared::{Endpoints, collect_rows, renderer, snapped};
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::compile,
@@ -18,6 +15,9 @@ use crate::{
     source::{MemResolver, UiConfig},
     view,
 };
+use num_traits::cast::AsPrimitive;
+
+use crate::shared::{Endpoints, collect_rows, renderer, snapped};
 
 /// A strip carrying one run wider than the room the window leaves it, so each
 /// host has to say what a squeezed run asks its parent for.

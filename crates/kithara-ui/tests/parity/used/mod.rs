@@ -11,8 +11,6 @@ mod bars;
 mod blocks;
 mod extension;
 mod hand;
-pub(in crate::render) mod immediate;
 mod press;
 mod run;
-pub(in crate::render) mod shared;
 mod stepper;

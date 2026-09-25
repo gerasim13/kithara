@@ -6,10 +6,7 @@ use iced::{
     },
 };
 use kithara_test_utils::kithara;
-use num_traits::cast::AsPrimitive;
-
-use super::shared::{Endpoints, collect_rows, renderer};
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::compile,
@@ -19,6 +16,9 @@ use crate::{
     source::{MemResolver, UiConfig},
     view,
 };
+use num_traits::cast::AsPrimitive;
+
+use crate::shared::{Endpoints, collect_rows, renderer};
 
 /// The shape of the documents below, and the window both hosts are given.
 struct Consts;

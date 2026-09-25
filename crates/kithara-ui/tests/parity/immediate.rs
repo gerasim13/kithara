@@ -22,25 +22,25 @@ use iced_runtime::{
     UserInterface,
     user_interface::{Cache, State},
 };
-use num_traits::cast::AsPrimitive;
-
-use super::shared::renderer;
-use crate::{
+use kithara_ui::{
     app::App,
     compile::CompiledUi,
     draw::Pt,
     render::{Clock, ControlAction, Skin, UiEvent, fonts::FONT_BYTES, tree},
     view::ViewState,
 };
+use num_traits::cast::AsPrimitive;
+
+use crate::shared::renderer;
 
 /// One compiled document, drawn and answered by the immediate host.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(in crate::render) struct Immediate<'a, A> {
+pub(crate) struct Immediate<'a, A> {
     ui: &'a CompiledUi,
     skin: &'a Skin,
     /// The application this host is showing.
-    #[field(get, vis = "pub(in crate::render)")]
+    #[field(get, vis = "pub(crate)")]
     app: A,
     /// What the interface kept of the tree it built last time. An immediate
     /// host forgets the tree between frames, so what a widget remembers of a
@@ -48,7 +48,7 @@ pub(in crate::render) struct Immediate<'a, A> {
     /// and nowhere else.
     cache: Cache,
     /// The hand the tree last asked the window to show.
-    #[field(get(copy), vis = "pub(in crate::render)")]
+    #[field(get(copy), vis = "pub(crate)")]
     hand: Interaction,
     renderer: iced::Renderer,
     size: Size,
@@ -56,14 +56,14 @@ pub(in crate::render) struct Immediate<'a, A> {
     state: State,
     /// The state the screen keeps for itself, which this host owns exactly as
     /// the retained one does.
-    #[field(get, vis = "pub(in crate::render)")]
+    #[field(get, vis = "pub(crate)")]
     view: ViewState,
 }
 
 impl<'a, A: App> Immediate<'a, A> {
     /// A whole press at one point of the window: the pointer arrives, presses
     /// and lets go, each one its own frame the way a runtime hands them over.
-    pub(in crate::render) fn click_at(&mut self, at: Pt) -> bool {
+    pub(crate) fn click_at(&mut self, at: Pt) -> bool {
         let cursor = Point::new(at.x, at.y);
         [
             Event::Mouse(mouse::Event::CursorMoved { position: cursor }),
@@ -132,7 +132,7 @@ impl<'a, A: App> Immediate<'a, A> {
     }
 
     /// The pointer arrives at one point and stops there, pressing nothing.
-    pub(in crate::render) fn hover_at(&mut self, at: Pt) -> bool {
+    pub(crate) fn hover_at(&mut self, at: Pt) -> bool {
         let cursor = Point::new(at.x, at.y);
         let moved = Event::Mouse(mouse::Event::CursorMoved { position: cursor });
         self.play(cursor, &moved)
@@ -140,7 +140,7 @@ impl<'a, A: App> Immediate<'a, A> {
 
     /// One key pressed and let go, the pointer resting at one point of
     /// the window: a keyboard reaches whatever the last press there focused.
-    pub(in crate::render) fn key_at(&mut self, at: Pt, key: keyboard::Key, code: Code) -> bool {
+    pub(crate) fn key_at(&mut self, at: Pt, key: keyboard::Key, code: Code) -> bool {
         let cursor = Point::new(at.x, at.y);
         let text = match &key {
             keyboard::Key::Character(character) => Some(character.clone()),
@@ -170,12 +170,7 @@ impl<'a, A: App> Immediate<'a, A> {
 
     /// Mounts the document, registering the toolkit's own faces with the font
     /// system this host shapes through the way a window does on the way up.
-    pub(in crate::render) fn mount(
-        app: A,
-        ui: &'a CompiledUi,
-        skin: &'a Skin,
-        size: (u32, u32),
-    ) -> Self {
+    pub(crate) fn mount(app: A, ui: &'a CompiledUi, skin: &'a Skin, size: (u32, u32)) -> Self {
         let mut fonts = font_system()
             .write()
             .unwrap_or_else(|error| panic!("iced font system lock: {error}"));
@@ -209,7 +204,7 @@ impl<'a, A: App> Immediate<'a, A> {
     /// The pointer arrives at one point and presses without letting go, which
     /// is where a drag starts. Travel is `hover_at`, which is the same move
     /// event with the button already down.
-    pub(in crate::render) fn press_at(&mut self, at: Pt) -> bool {
+    pub(crate) fn press_at(&mut self, at: Pt) -> bool {
         let cursor = Point::new(at.x, at.y);
         [
             Event::Mouse(mouse::Event::CursorMoved { position: cursor }),
@@ -240,7 +235,7 @@ impl<'a, A: App> Immediate<'a, A> {
     /// The arrival is aim rather than gesture, so what it took is not counted:
     /// a widget that takes every move it is offered would otherwise answer for
     /// a wheel it never read.
-    pub(in crate::render) fn wheel_at(&mut self, at: Pt, notches: f32) -> bool {
+    pub(crate) fn wheel_at(&mut self, at: Pt, notches: f32) -> bool {
         let cursor = Point::new(at.x, at.y);
         self.hover_at(at);
         let wheel = Event::Mouse(mouse::Event::WheelScrolled {

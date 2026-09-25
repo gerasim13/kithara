@@ -26,7 +26,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
-        masonry::pointer_button,
+        masonry::{cursor_icon, pointer_button},
     },
     module::TextAlign,
     render::{
@@ -564,20 +564,6 @@ impl WindowLayerProgram for DragProgram {
 
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
-    }
-}
-
-pub(crate) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
-    match shape {
-        CursorShape::None => CursorIcon::Default,
-        CursorShape::Grab => CursorIcon::Grab,
-        CursorShape::Grabbing => CursorIcon::Grabbing,
-        CursorShape::Pointer => CursorIcon::Pointer,
-        CursorShape::ResizeDiagonalDown => CursorIcon::NwseResize,
-        CursorShape::ResizeDiagonalUp => CursorIcon::NeswResize,
-        CursorShape::ResizeH => CursorIcon::EwResize,
-        CursorShape::ResizeV => CursorIcon::NsResize,
-        CursorShape::Text => CursorIcon::Text,
     }
 }
 

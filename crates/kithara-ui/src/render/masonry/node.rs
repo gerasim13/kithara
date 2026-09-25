@@ -18,7 +18,7 @@ use tracing::{Span, trace_span};
 use super::{
     Repaint,
     custom::HostAction,
-    leaf::{Leaf, cursor_icon},
+    leaf::Leaf,
     mount::NodeLayout,
     picker::{HostedEngine, local_ime_area, sync_ime_area},
     spot::Spot,
@@ -30,7 +30,7 @@ use crate::{
     interact::{
         CursorShape, Hit, Hover, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
-            pointer_button, pointer_position, portable_modifiers, portable_scroll,
+            cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_scroll,
             portable_text_input,
         },
         recognizers::{StepEvent, Stepper},

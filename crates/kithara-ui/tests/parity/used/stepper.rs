@@ -9,10 +9,7 @@ use iced::{
     mouse,
 };
 use kithara_test_utils::kithara;
-use num_traits::cast::AsPrimitive;
-
-use super::shared::{Endpoints, renderer};
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::compile,
@@ -22,6 +19,9 @@ use crate::{
     source::{MemResolver, UiConfig},
     view,
 };
+use num_traits::cast::AsPrimitive;
+
+use crate::shared::{Endpoints, renderer};
 
 /// The shape of the document below, and the window both hosts are given.
 struct Consts;

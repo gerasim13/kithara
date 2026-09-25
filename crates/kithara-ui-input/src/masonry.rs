@@ -1,5 +1,5 @@
 use masonry::{
-    core::{Ime, TextEvent},
+    core::{CursorIcon, Ime, TextEvent},
     dpi::PhysicalPosition,
     ui_events::{
         ScrollDelta,
@@ -11,7 +11,7 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
+use super::{CursorShape, Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
 
 const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
     (NamedKey::ArrowDown, Key::ArrowDown),
@@ -192,5 +192,21 @@ pub fn pointer_button(button: MasonryPointerButton) -> PointerButton {
         MasonryPointerButton::X1 => PointerButton::Back,
         MasonryPointerButton::X2 => PointerButton::Forward,
         button => PointerButton::Other(button as u32),
+    }
+}
+
+/// The cursor masonry shows for a neutral cursor shape.
+#[must_use]
+pub const fn cursor_icon(shape: CursorShape) -> CursorIcon {
+    match shape {
+        CursorShape::None => CursorIcon::Default,
+        CursorShape::Grab => CursorIcon::Grab,
+        CursorShape::Grabbing => CursorIcon::Grabbing,
+        CursorShape::Pointer => CursorIcon::Pointer,
+        CursorShape::ResizeDiagonalDown => CursorIcon::NwseResize,
+        CursorShape::ResizeDiagonalUp => CursorIcon::NeswResize,
+        CursorShape::ResizeH => CursorIcon::EwResize,
+        CursorShape::ResizeV => CursorIcon::NsResize,
+        CursorShape::Text => CursorIcon::Text,
     }
 }

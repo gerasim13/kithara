@@ -6,10 +6,7 @@ use iced::{
     },
 };
 use kithara_test_utils::kithara;
-use num_traits::cast::AsPrimitive;
-
-use super::shared::{Endpoints, collect_rows, renderer, snapped};
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::{CompiledUi, compile},
@@ -19,10 +16,13 @@ use crate::{
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
         tree,
     },
-    shaping::TextContext,
+    shaping::{FontPolicy, TextContext, TextResources},
     source::{MemResolver, UiConfig},
     view,
 };
+use num_traits::cast::AsPrimitive;
+
+use crate::shared::{Endpoints, collect_rows, renderer, snapped};
 
 /// A document naming content the toolkit does not own, so both hosts have to
 /// say what box the application's own widget was measured into.
@@ -40,14 +40,22 @@ impl Extension {
     const PAD: f32 = 4.0;
 
     /// The size the extension asks for, shaped outside either host so a box
-    /// both hosts got wrong the same way cannot pass for agreement.
+    /// both hosts got wrong the same way cannot pass for agreement. The fonts
+    /// are the ones the built-in skin resolves with.
     fn asked() -> Size2 {
-        let (width, height) = Self::CASE;
-        let mut context = TextContext::from(builtin::skin().text_resources());
-        Caption.measure(
-            &mut TextMeasurer::new(&mut context),
-            SizeLimits::new(Size2::default(), Size2::new(width.as_(), height.as_())),
-        )
+        let resources = TextResources::new(FontPolicy::System)
+            .unwrap_or_else(|error| panic!("the system fonts must load: {error}"));
+        let shaped = TextContext::from(&resources).shape(
+            Self::CAPTION,
+            builtin::skin_doc().text.section,
+            None,
+        );
+        Self::padded(Size2::new(shaped.width(), shaped.height()))
+    }
+
+    /// The caption's shaped size with the extension's own padding around it.
+    fn padded(shaped: Size2) -> Size2 {
+        Size2::new(shaped.w + Self::PAD * 2.0, shaped.h + Self::PAD * 2.0)
     }
 
     fn compiled() -> CompiledUi {
@@ -179,11 +187,7 @@ impl CustomWidget for Caption {
     type Action = ();
 
     fn measure(&mut self, text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        let shaped = text.measure(Extension::CAPTION, builtin::skin_doc().text.section, None);
-        Size2::new(
-            shaped.w + Extension::PAD * 2.0,
-            shaped.h + Extension::PAD * 2.0,
-        )
+        Extension::padded(text.measure(Extension::CAPTION, builtin::skin_doc().text.section, None))
     }
 
     fn paint(

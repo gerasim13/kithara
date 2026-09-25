@@ -8,19 +8,19 @@
 
 use iced::mouse;
 use kithara_test_utils::kithara;
-use masonry::core::CursorIcon;
-
-use super::{immediate::Immediate, shared::Endpoints};
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::{CompiledUi, compile},
     draw::Pt,
-    interact::{CursorShape, Input, MOUSE, PointerInput, PointerPhase},
-    render::{ReadValue, Reads, Skin, UiEvent, masonry::cursor_icon},
+    interact::{CursorShape, Input, MOUSE, PointerInput, PointerPhase, masonry::cursor_icon},
+    render::{ReadValue, Reads, Skin, UiEvent},
     source::{MemResolver, UiConfig},
     view,
 };
+use masonry::core::CursorIcon;
+
+use crate::{immediate::Immediate, shared::Endpoints};
 
 /// The window both hosts are given, and the hand the surface owes.
 struct Consts;

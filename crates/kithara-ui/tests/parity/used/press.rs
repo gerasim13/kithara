@@ -8,9 +8,7 @@
 //! control on one host than on the other draws exactly the same picture.
 
 use kithara_test_utils::kithara;
-
-use super::immediate::Immediate;
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::compile,
@@ -22,6 +20,8 @@ use crate::{
     source::{MemResolver, UiConfig},
     view,
 };
+
+use crate::immediate::Immediate;
 
 /// A burger menu hanging over a control of the page.
 ///

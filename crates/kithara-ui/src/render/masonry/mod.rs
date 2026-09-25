@@ -35,8 +35,6 @@ pub(crate) use controls::{MasonryControl, Painted};
 #[cfg(test)]
 pub(crate) use custom::HostAction;
 pub use host::{MasonryHost, MasonryState};
-#[cfg(test)]
-pub(crate) use leaf::cursor_icon;
 pub use root::{MasonryRoot, MasonryRootError};
 
 pub use crate::render::custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};
