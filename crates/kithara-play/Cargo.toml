@@ -73,6 +73,7 @@ usdt = [
     "kithara-worker/usdt",
 ]
 mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
