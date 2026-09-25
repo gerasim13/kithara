@@ -86,9 +86,10 @@ impl WarpConfig {
         }
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
     ))]
     pub(crate) const fn enters_plan(&self) -> bool {
         self.entering

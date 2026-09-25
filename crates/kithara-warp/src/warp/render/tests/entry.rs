@@ -1,31 +1,55 @@
 use std::num::{NonZero, NonZeroU32};
 
 use kithara_signal::AudioChunk;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_stretch::StretchKind;
 
 use super::*;
 use crate::{WarpPlan, WarpRenderError, test_grids};
 
-/// Source beat the entered plan activates at: well inside the recording, so
-/// the engine history before it is real audio rather than padding.
-const CUE_BEAT: f64 = 4.0;
+mod consts {
+    /// Source beat the entered plan activates at: well inside the recording,
+    /// so the engine history before it is real audio rather than padding.
+    pub(super) const CUE_BEAT: f64 = 4.0;
+    /// Decoder chunks alternating a long span with a single frame, which at a
+    /// slowed rate projects to less than one audible source frame.
+    pub(super) const ALTERNATING_CHUNKS: [usize; 2] = [1_023, 1];
+    pub(super) const CHUNK_PAIRS: usize = 64;
+    /// How far the audible source may trail the decoded one.
+    pub(super) const LAG_FRAMES: u64 = 16 * 1024;
+}
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn entered_plan(host_rate: NonZeroU32) -> WarpPlan {
     let source = test_grids::asset_grid(120.0, spec().sample_rate);
     let target = test_grids::session_grid(100.0, host_rate);
-    let output = test_grids::beat_frames(100.0, host_rate) * CUE_BEAT;
+    let output = test_grids::beat_frames(100.0, host_rate) * consts::CUE_BEAT;
     test_grids::plan_over_at(
         source,
         target,
-        CUE_BEAT,
-        CUE_BEAT,
+        consts::CUE_BEAT,
+        consts::CUE_BEAT,
         SessionFrame::new(num_traits::cast(output).expect("fixture output frame")),
     )
 }
 
-fn entered_renderer(plan: WarpPlan, keylock: bool) -> WarpRenderer {
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+fn entered_renderer(plan: WarpPlan, backend: StretchKind, keylock: bool) -> WarpRenderer {
     let controls = StretchControls::new(1.0);
+    controls.set_backend(backend);
     controls.set_keylock(keylock);
-    controls.set_backend(kithara_stretch::StretchKind::Signalsmith);
     let config = WarpConfig::builder().stretch(controls).build();
     let entered = config.entering(Arc::new(plan));
     let mut renderer = Warp::new((), &entered).renderer(spec(), pools());
@@ -45,13 +69,56 @@ fn source_span(renderer: &WarpRenderer, start: u64, frames: usize) -> AudioChunk
     input
 }
 
+/// Admits the exact engine history an entered plan names before its cue.
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
+    let history = usize::try_from(cue - entry).expect("history fits usize");
+    if history == 0 {
+        return;
+    }
+    let landing = source_span(renderer, entry, history + 256);
+    let preroll = renderer.prepare_quantum(landing.meta, landing.frames());
+    let Err(WarpRenderError::Preroll { frames }) = preroll else {
+        panic!("audio before the activation is history, got {preroll:?}");
+    };
+    assert_eq!(frames.get(), history);
+    let (head, _) = landing.samples.split_at(history * usize::from(Consts::CH));
+    let mut head_meta = landing.meta;
+    head_meta.frames = u32::try_from(history).expect("history fits u32");
+    renderer
+        .admit_preroll(head_meta, head)
+        .expect("history continues from the entry source");
+}
+
 #[kithara::test]
-#[cfg(feature = "stretch-signalsmith")]
-#[case::keylocked(Consts::SR, true)]
-#[case::keylocked_host_rate_differs(48_000, true)]
-#[case::varispeed(Consts::SR, false)]
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_keylocked(Consts::SR, StretchKind::Signalsmith, true)
+)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_keylocked_host_rate_differs(48_000, StretchKind::Signalsmith, true)
+)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_varispeed(Consts::SR, StretchKind::Signalsmith, false)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide(Consts::SR, StretchKind::Glide, false)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide_host_rate_differs(48_000, StretchKind::Glide, false)
+)]
 fn an_entered_plan_presents_its_activation_source_after_exact_history(
     #[case] host_rate: u32,
+    #[case] backend: StretchKind,
     #[case] keylock: bool,
 ) {
     let host_rate = NonZeroU32::new(host_rate).expect("fixture host rate");
@@ -59,7 +126,7 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
     let activation = plan.activation();
     let revision = activation.revision();
     let cue = activation.source();
-    let mut renderer = entered_renderer(plan, keylock);
+    let mut renderer = entered_renderer(plan, backend, keylock);
 
     let entry = renderer
         .entry_source()
@@ -69,21 +136,7 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
         keylock,
         "only a keylocked engine needs history before the activation"
     );
-    let history = usize::try_from(cue - entry).expect("history fits usize");
-    if history > 0 {
-        let landing = source_span(&renderer, entry, history + 256);
-        let preroll = renderer.prepare_quantum(landing.meta, landing.frames());
-        let Err(WarpRenderError::Preroll { frames }) = preroll else {
-            panic!("audio before the activation is history, got {preroll:?}");
-        };
-        assert_eq!(frames.get(), history);
-        let (head, _) = landing.samples.split_at(history * usize::from(Consts::CH));
-        let mut head_meta = landing.meta;
-        head_meta.frames = u32::try_from(history).expect("history fits u32");
-        renderer
-            .admit_preroll(head_meta, head)
-            .expect("history continues from the entry source");
-    }
+    admit_history(&mut renderer, entry, cue);
 
     let mut position = cue;
     let output = loop {
@@ -118,11 +171,70 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
 }
 
 #[kithara::test]
-#[cfg(feature = "stretch-signalsmith")]
-fn an_entered_plan_refuses_a_landing_after_its_activation_source() {
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(#[case] backend: StretchKind) {
     let plan = entered_plan(spec().sample_rate);
     let cue = plan.activation().source();
-    let mut renderer = entered_renderer(plan, true);
+    let mut renderer = entered_renderer(plan, backend, true);
+    let entry = renderer
+        .entry_source()
+        .expect("an entered renderer names its first source frame");
+    admit_history(&mut renderer, entry, cue);
+
+    let mut position = cue;
+    let mut audible = None;
+    for chunk_frames in consts::ALTERNATING_CHUNKS
+        .iter()
+        .cycle()
+        .take(consts::ALTERNATING_CHUNKS.len() * consts::CHUNK_PAIRS)
+    {
+        let mut remaining = *chunk_frames;
+        while remaining > 0 {
+            renderer.prepare(spec());
+            let at = source_span(&renderer, position, remaining);
+            let frames = renderer
+                .prepare_quantum(at.meta, remaining)
+                .expect("the entered source continues")
+                .get();
+            let mut input = source_span(&renderer, position, frames);
+            input.meta.frames = u32::try_from(frames).expect("span fits u32");
+            if let Some(output) = renderer
+                .render_quantum(input)
+                .continue_value()
+                .expect("prepared source shape")
+            {
+                audible = Some(output.meta.frame_offset);
+            }
+            position += u64::try_from(frames).expect("span fits u64");
+            remaining -= frames;
+        }
+    }
+    let audible = audible.expect("the slowed projection presents PCM");
+    assert!(
+        audible + consts::LAG_FRAMES >= position,
+        "the audible source stalled at {audible} while {position} was decoded"
+    );
+}
+
+#[kithara::test]
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith, true)
+)]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, false))]
+fn an_entered_plan_refuses_a_landing_after_its_activation_source(
+    #[case] backend: StretchKind,
+    #[case] keylock: bool,
+) {
+    let plan = entered_plan(spec().sample_rate);
+    let cue = plan.activation().source();
+    let mut renderer = entered_renderer(plan, backend, keylock);
     let late = source_span(&renderer, cue + 1, 256);
     let refused = renderer.prepare_quantum(late.meta, late.frames());
     assert!(
