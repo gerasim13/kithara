@@ -65,6 +65,7 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
+stretch-glide = ["kithara-warp/stretch-glide"]
 usdt = [
     "kithara-effects/usdt",
     "kithara-test-utils/usdt",
@@ -73,8 +74,8 @@ usdt = [
     "kithara-worker/usdt",
 ]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
-no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",

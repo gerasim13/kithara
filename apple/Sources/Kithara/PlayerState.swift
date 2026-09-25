@@ -131,34 +131,59 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
+/// The order the queue moves through its items.
 public enum PlaybackOrder: Sendable, Equatable {
+    /// Queue order.
     case sequential
+    /// A random order that plays every item once before any repeats.
     case shuffle
 }
 
+/// What the player does when the current item ends or fails to load.
 public enum ActionAtItemEnd: Sendable, Equatable {
+    /// Move on to the next item.
     case advance
+    /// Pause on the item that ended.
     case pause
+    /// Leave the player as it is.
     case none
 }
 
+/// The gain law of a crossfade.
 public enum CrossfadeCurve: Sendable, Equatable {
+    /// Moves amplitude linearly; unrelated tracks can dip in perceived power
+    /// in the middle.
     case linear
+    /// Keeps the power of unrelated tracks roughly constant; correlated
+    /// material can sum louder.
     case equalPower
 }
 
+/// How one item fades into the next.
 public struct CrossfadeSettings: Sendable, Equatable {
+    /// One second on the equal-power curve at full depth, pivoting halfway.
     public static let `default` = CrossfadeSettings(
         validatedDuration: 1,
         curve: .equalPower,
         depth: 1,
         position: 0.5
     )
+    /// Length of the overlap in seconds.
     public let duration: Float
+    /// Gain law the fade follows.
     public let curve: CrossfadeCurve
+    /// How far the gains follow ``curve`` rather than a linear ramp, from `0`
+    /// (linear) to `1` (the curve itself).
     public let depth: Float
+    /// Fraction of the fade, strictly inside `0...1`, at which both items
+    /// play at the midpoint gain.
     public let position: Float
 
+    /// Validates and creates crossfade settings.
+    ///
+    /// - Throws: ``KitharaError/invalidArgument(_:)`` when `duration` is
+    ///   negative or not finite, `depth` is outside `0...1`, or `position` is
+    ///   not strictly inside `0...1`.
     public init(
         duration: Float = 1,
         curve: CrossfadeCurve = .equalPower,

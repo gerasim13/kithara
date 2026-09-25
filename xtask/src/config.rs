@@ -778,6 +778,11 @@ pub(crate) struct PublishConfig {
     pub(crate) workspace_hack_crate: String,
     /// Delay in seconds between crate uploads when `--delay` is omitted.
     pub(crate) delay_secs: Option<u64>,
+    /// New crates crates.io registers for one uploader at once.
+    pub(crate) new_crate_burst: Option<usize>,
+    /// Seconds crates.io makes one uploader wait between new crates once the
+    /// burst is spent.
+    pub(crate) new_crate_interval_secs: Option<u64>,
     /// Seconds before crates.io availability checks time out.
     pub(crate) http_timeout_secs: Option<u64>,
     /// User-agent sent to the registry when checking crate availability.

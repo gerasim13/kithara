@@ -56,13 +56,14 @@ ui-masonry = ["kithara/ui-masonry"]
 symphonia = ["kithara/symphonia"]
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-bungee = ["kithara/stretch-bungee"]
+stretch-glide = ["kithara/stretch-glide"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with
 # `--no-default-features --features wasm`) still selects a single HTTP backend
 # (reqwest; wreq has no wasm target). The refs chain through the crate-local
 # client-reqwest/tls-rustls forwarding below.
-wasm = ["client-reqwest", "tls-rustls"]
+wasm = ["client-reqwest", "tls-rustls", "stretch-glide"]
 usdt = ["kithara/usdt"]
 mock = ["dep:unimock", "kithara/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`

@@ -447,33 +447,31 @@ fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
 
 fn run_doc(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
     run_build(profile, android, tools)?;
-    render_docs().map(drop)
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    render_docs(&ambient_process(metadata.workspace_root.as_std_path())).map(drop)
 }
 
 /// Render the Kotlin API documentation from the generated bindings already on
 /// disk, and answer with the directory it was written to. The release job
 /// builds the AAR through its own recipe, so the documentation step must not
-/// build again.
-pub(crate) fn render_docs() -> Result<PathBuf> {
+/// build again. Gradle runs through `process`, because Dokka starts a JVM and
+/// a CI lane hands Java to its steps only through the environment it sets.
+pub(crate) fn render_docs(process: &Process) -> Result<PathBuf> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
     let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
-    let android_root = workspace_root.join("android");
-    let gradlew = android_root.join("gradlew");
+    let gradlew = workspace_root.join("android/gradlew");
     if !gradlew.exists() {
         bail!("gradlew not found at {}", gradlew.display());
     }
 
     println!("==> Rendering Kotlin API documentation");
-    let status = Command::new(&gradlew)
-        .args([":lib:dokkaGenerate", "-x", "generateKitharaFfi"])
-        .current_dir(&android_root)
-        .status()
-        .context("failed to run Gradle dokkaGenerate")?;
-    if !status.success() {
-        bail!("Gradle dokkaGenerate failed");
-    }
+    let mut dokka = process.command_in(&gradlew, "android");
+    dokka.args([":lib:dokkaGenerate", "-x", "generateKitharaFfi"]);
+    process.run_command(&mut dokka, "Android documentation")?;
 
     let docs = workspace_root.join("docs-build/kithara-android");
     if !docs.join("index.html").is_file() {

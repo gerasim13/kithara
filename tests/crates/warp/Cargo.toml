@@ -18,6 +18,7 @@ playback = [
     "dep:serde_json",
 ]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith", "kithara-stretch/stretch-signalsmith"]
+stretch-glide = ["kithara-warp/stretch-glide", "kithara-stretch/stretch-glide", "kithara?/stretch-glide"]
 flash = [
     "kithara-platform/flash",
     "kithara-test-utils/flash",
