@@ -144,9 +144,10 @@ wasm BROWSER="chrome" SUITE="all":
         --test webcodecs_browser
     fi
 
-# Render the same active no-SYNC scenarios into listening artifacts. The
-# recorders are ignored in ordinary CI so filesystem work cannot consume their
-# behavioral-test deadlines.
+# Render the same active no-SYNC scenarios into listening artifacts, then the
+# SYNC and Warp scenarios on Richie Hawtin - The Tunnel with the Host metronome
+# laid over each capture. The recorders are ignored in ordinary CI so filesystem
+# work cannot consume their behavioral-test deadlines.
 [positional-arguments]
 audio-artifacts OUTPUT:
     #!/usr/bin/env bash
@@ -164,6 +165,13 @@ audio-artifacts OUTPUT:
       just test run -p kithara-play-tests --test play_heavy \
         --run-ignored=only \
         -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-sync-tests --test sync \
+        --run-ignored=all \
+        -E 'test(/^sync_(listening::record_sync_listening_wavs|staging)::/)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-warp-tests --test warp \
+        -E 'test(/^region::rendered_clicks_follow_the_integral_of_the_tempo_ramp::.*signalsmith/)'
 
 # Every UI test target, followed by both hosts drawing the same gallery and
 # shipped studio pages, and the gallery built the other way it ships. This is

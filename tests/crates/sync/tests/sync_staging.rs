@@ -7,14 +7,13 @@ use kithara::{
     sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
     warp::AssetFrame,
 };
-use kithara_integration_tests::{audio_artifact::AudioArtifactSet, kithara, usdt_trace};
+use kithara_integration_tests::{kithara, usdt_trace};
 
 use super::{
-    sync_listening::{render_frames, write_capture},
+    sync_listening::render_frames,
     sync_product_matrix::{
         BLOCK_FRAMES, CHANNELS, PreparedSources, ProductHarness, STAGED_BESIDE_PLAYBACK,
-        STAGED_CUE, STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase,
-        synthetic_sources,
+        STAGED_CUE, STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase, tunnel_sources,
     },
 };
 
@@ -27,12 +26,12 @@ const CANCELLED: u64 = 4;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longer than a lane's ring holds, so the sounding lane has to keep decoding.
 const LISTEN_FRAMES: usize = 48_000 * 6;
-/// A cue off the downbeat, well inside the fixture.
+/// A cue off the downbeat, well inside the track.
 const CUE_SECONDS: f64 = 5.25;
 /// A second cue that supersedes the first.
 const SUPERSEDING_CUE_SECONDS: f64 = 9.625;
-/// Recording rate of the synthetic fixtures the cues index.
-const FIXTURE_RATE: f64 = 48_000.0;
+/// Recording rate of the track the cues index.
+const FIXTURE_RATE: f64 = 44_100.0;
 
 /// One receipt the owner answered: the operation it answers for, its
 /// rejection code and whether the owner recorded it.
@@ -142,9 +141,9 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64)
 #[case::deadline_looser_than_the_ring(STAGED_UNDER_LOOSE_DEADLINE)]
 async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     #[case] case: SyncCase,
-    #[future(awt)] synthetic_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
-    let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
+    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
     let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
 
     let receipts = render_until(&mut harness, case, operation, INSTALLED).await;
@@ -169,10 +168,10 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     timeout(Duration::from_secs(60))
 )]
 async fn unloading_the_track_reports_its_installed_lane_cancelled(
-    #[future(awt)] synthetic_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
     let case = STAGED_CUE;
-    let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
+    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
     let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
     let _ = render_until(&mut harness, case, operation, INSTALLED).await;
 
@@ -208,10 +207,10 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     timeout(Duration::from_secs(60))
 )]
 async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
-    #[future(awt)] synthetic_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
-    let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
+    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
     let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
 
     let receipts = render_until(&mut harness, case, operation, CAPACITY).await;
@@ -242,16 +241,16 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     timeout(Duration::from_secs(120))
 )]
 async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
-    #[future(awt)] synthetic_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
     let control = {
         let mut harness =
-            ProductHarness::new_for_block(case, &synthetic_sources, 0, BLOCK_FRAMES).await;
+            ProductHarness::new_for_block(case, &tunnel_sources, 0, BLOCK_FRAMES).await;
         render_frames(&mut harness, case, LISTEN_FRAMES).await
     };
-    let mut harness =
-        ProductHarness::new_for_block(case, &synthetic_sources, 0, BLOCK_FRAMES).await;
+    let mut harness = ProductHarness::new_for_block(case, &tunnel_sources, 0, BLOCK_FRAMES).await;
+    harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, CUE_SECONDS).await;
     let successor = prepare_cue(&mut harness, case, SUPERSEDING_CUE_SECONDS).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
@@ -270,17 +269,6 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id()
     );
 
-    if let Some(artifacts) = AudioArtifactSet::from_env(case.id(), case.sample_rate, CHANNELS)
-        .expect("configure staging artifacts")
-    {
-        for (label, pcm) in [
-            ("control", &control),
-            ("predecessor-through-cancel", &candidate),
-        ] {
-            let path = write_capture(&artifacts, label, pcm);
-            eprintln!("KITHARA_AUDIO_ARTIFACT {label}: {}", path.display());
-        }
-    }
     assert_eq!(candidate.len(), control.len());
     let diverged = candidate
         .iter()

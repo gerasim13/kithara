@@ -35,7 +35,7 @@ usdt = [
 [dependencies]
 kithara = { workspace = true, optional = true, features = ["offline", "queue", "stretch-signalsmith", "tokio-rt-multi-thread"] }
 kithara-beat = { workspace = true }
-kithara-integration-tests = { workspace = true, optional = true, features = ["all"] }
+kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stretch = { workspace = true, default-features = false }
