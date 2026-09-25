@@ -15,10 +15,7 @@ use kithara::{
     warp::{AssetFrame, BeatGridId},
 };
 use kithara_integration_tests::{
-    audio_artifact::AudioArtifactSet,
-    bufpool_ext::pools,
-    cochlea::{CochleaReport, continuity_failures},
-    kithara, usdt_trace,
+    audio_artifact::AudioArtifactSet, bufpool_ext::pools, kithara, usdt_trace,
 };
 
 use super::{
@@ -291,16 +288,16 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
             eprintln!("KITHARA_AUDIO_ARTIFACT {label}: {}", path.display());
         }
     }
-    let failures = continuity_failures(
+    assert_eq!(candidate.len(), control.len());
+    let diverged = candidate
+        .iter()
+        .zip(&control)
+        .position(|(heard, expected)| heard.to_bits() != expected.to_bits());
+    assert_eq!(
+        diverged.map(|sample| sample / usize::from(CHANNELS)),
+        None,
+        "{}: staging beside the sounding lane changed what it plays from this frame on",
         case.id(),
-        &CochleaReport::measure(&candidate, CHANNELS, case.sample_rate),
-        &CochleaReport::measure(&control, CHANNELS, case.sample_rate),
-    );
-    assert!(
-        failures.is_empty(),
-        "{}: staging beside the sounding lane changed what it plays:\n{}",
-        case.id(),
-        failures.join("\n"),
     );
 }
 
