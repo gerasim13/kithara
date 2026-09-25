@@ -16,15 +16,12 @@ use kithara_integration_tests::{
     },
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
 use url::Url;
 
-use crate::{
-    bufpool_ext::TestPools,
-    gapless_common::{
-        AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
-        GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
-    },
+use crate::gapless_common::{
+    AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
+    GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
 };
 
 const BLOCK_FRAMES: usize = 512;

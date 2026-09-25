@@ -11,10 +11,10 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
+use kithara_test_utils::bufpool::TestPools;
 use serde::Serialize;
 
 use super::{Case, SOURCE_RATE};
-use crate::bufpool_ext::TestPools;
 
 pub(super) struct Deck {
     pub(super) player: HostOwned<PlayerImpl<TestPools>>,

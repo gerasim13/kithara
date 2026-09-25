@@ -22,10 +22,8 @@ use kithara_integration_tests::{
     offline::{DiskQueue, RenderPacing},
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{bufpool::TestPools, temp_dir};
 use url::Url;
-
-use crate::bufpool_ext::TestPools;
 
 struct Consts;
 impl Consts {

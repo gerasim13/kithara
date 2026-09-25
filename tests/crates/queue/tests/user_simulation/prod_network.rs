@@ -30,7 +30,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
     user_sim::{actions::Action, scenarios},
 };
 use kithara_test_utils::TestTempDir;
@@ -49,10 +49,10 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
-    crate::app_track_source(
+    app_track_source(
         url,
         &ctx.config,
-        crate::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,

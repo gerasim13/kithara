@@ -37,15 +37,16 @@ use kithara_test_fixtures::{
     analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
     signal::{deinterleave_left, goertzel_magnitude, max_silence_run},
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+    temp_dir,
+};
 
-use crate::{
-    bufpool_ext::{TestPools, pools},
-    gapless_common::{
-        AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
-        AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY,
-        GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
-    },
+use crate::gapless_common::{
+    AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
+    AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
+    GAPLESS_SAMPLE_RATE,
 };
 
 const BLOCK_FRAMES: usize = 512;

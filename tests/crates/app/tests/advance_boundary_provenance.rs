@@ -27,10 +27,8 @@ use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
     goertzel_magnitude, phase,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
 use url::Url;
-
-use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const RESAMPLED_RENDER_RATE: u32 = 48_000;

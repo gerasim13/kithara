@@ -38,7 +38,6 @@ pub mod assets_ext;
     not(target_os = "android")
 ))]
 pub mod audio_artifact;
-#[cfg(feature = "all")]
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use kithara_test_utils::bufpool as bufpool_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]

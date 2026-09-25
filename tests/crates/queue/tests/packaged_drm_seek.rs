@@ -25,7 +25,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -154,10 +154,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     .expect("create product offline queue");
     let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
-    let source = super::app_track_source(
+    let source = app_track_source(
         url.as_str(),
         &config,
-        super::app_disk_asset_store(&config, temp.path()),
+        app_disk_asset_store(&config, temp.path()),
         backend,
         abr,
         None,

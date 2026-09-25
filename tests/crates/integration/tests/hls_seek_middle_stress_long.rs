@@ -34,9 +34,11 @@ use kithara_integration_tests::{
         wait_for_position_event,
     },
 };
-use kithara_test_utils::{Xorshift64, temp_dir};
-
-use crate::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::{
+    Xorshift64,
+    bufpool::{TestPools, pools},
+    temp_dir,
+};
 
 struct Consts;
 impl Consts {

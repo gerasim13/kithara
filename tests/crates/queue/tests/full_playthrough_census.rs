@@ -36,9 +36,10 @@ use kithara_integration_tests::{
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayer, OfflinePlayerOptions},
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -305,7 +306,9 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
             .run(&queue, move |control| control.append(source.to_string()))
             .await
             .expect("append census track through the production loader");
-        crate::wait_loaded(&mut events, id).await;
+        wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE)
+            .await
+            .expect("the census track loads");
         tracks.push(id);
     }
     harness

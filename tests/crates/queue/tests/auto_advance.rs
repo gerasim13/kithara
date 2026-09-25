@@ -9,15 +9,14 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
-    offline::{OfflinePlayer, OfflinePlayerOptions},
+    offline::{
+        LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_loaded, asset_source,
+    },
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::assets;
 
-use crate::{
-    append_loaded,
-    bufpool_ext::TestPools,
-    loader_fixture::{source, wait_loaded},
-};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -528,7 +527,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("second select track A");
-    wait_loaded(&mut reload_events, id_a).await;
+    wait_for_loader_done_event(&mut reload_events, &queue, id_a, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -756,7 +757,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
         })
         .child_url("throttled-a.wav")
         .to_string();
-    let source_b = source(&assets::constant_wav_loud_0_4s());
+    let source_b = asset_source(&assets::constant_wav_loud_0_4s());
     let (id_a, id_b) = harness
         .run(&queue, move |q| {
             (
@@ -765,13 +766,17 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
             )
         })
         .await;
-    wait_loaded(&mut events, id_b).await;
+    wait_for_loader_done_event(&mut events, &queue, id_b, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
     assert_ne!(
         queue.track(id_a).map(|entry| entry.status),
         Some(TrackStatus::Loaded),
         "the throttled first track must still be loading when the second loads"
     );
-    wait_loaded(&mut events, id_a).await;
+    wait_for_loader_done_event(&mut events, &queue, id_a, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 

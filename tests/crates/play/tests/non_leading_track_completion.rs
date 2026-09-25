@@ -18,14 +18,14 @@ use kithara::{
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture_with_options},
+    offline::{
+        OfflinePlayer, OfflinePlayerOptions, append_loaded, asset_source,
+        offline_queue_fixture_with_options,
+    },
 };
 use kithara_test_fixtures::{assets, signal::mean_abs};
 
-use crate::{
-    bufpool_ext::TestPools,
-    loader_fixture::{append_loaded, source},
-};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -75,7 +75,7 @@ async fn non_leading_fixture() -> NonLeadingFixture {
     NonLeadingFixture {
         harness,
         queue,
-        stale: TrackRef::new(stale, SlotId::new(0), Arc::from(source(&files[0]))),
+        stale: TrackRef::new(stale, SlotId::new(0), Arc::from(asset_source(&files[0]))),
         current,
     }
 }

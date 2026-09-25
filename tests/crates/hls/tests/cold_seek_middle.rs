@@ -23,10 +23,12 @@ use kithara_integration_tests::{
     offline::{DiskQueue, OfflineQueue, QueueTicker, RENDER_PACE},
     waits::wait_for_position_event,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+    temp_dir,
+};
 use url::Url;
-
-use crate::bufpool_ext::{TestPools, pools};
 
 async fn wait_for_status(
     rx: &mut EventReceiver<TestEvent>,

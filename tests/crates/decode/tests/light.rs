@@ -10,6 +10,8 @@ mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
 
+#[path = "aac_he_v2_hls_decode.rs"]
+mod aac_he_v2_hls_decode;
 #[path = "aac_priming_regression.rs"]
 mod aac_priming_regression;
 #[path = "apple_mp3_priming_probe.rs"]

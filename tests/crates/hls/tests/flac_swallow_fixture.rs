@@ -22,10 +22,11 @@ use kithara_integration_tests::{
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
     usdt_trace,
 };
-use kithara_test_utils::TestTempDir;
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+};
 use url::Url;
-
-use crate::bufpool_ext::{TestPools, pools};
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
 /// repo's DRM fixtures.

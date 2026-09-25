@@ -11,11 +11,11 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    offline::{OfflinePlayer, offline_queue_fixture},
+    offline::{OfflinePlayer, append_loaded, offline_queue_fixture},
 };
 use kithara_test_fixtures::{assets, signal::mean_abs};
 
-use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;

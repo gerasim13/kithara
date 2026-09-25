@@ -22,7 +22,10 @@ use kithara_integration_tests::{
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
-use kithara_test_utils::TestTempDir;
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+};
 #[cfg(not(target_os = "android"))]
 use serde::Serialize;
 use url::Url;
@@ -36,7 +39,6 @@ use super::{
     runtime,
     runtime::{Deck, DeckObservation, EventPolicy},
 };
-use crate::bufpool_ext::{TestPools, pools};
 
 pub(super) const CHANNELS: u16 = 2;
 pub(super) const SOURCE_RATE: u32 = 44_100;

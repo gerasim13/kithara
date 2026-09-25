@@ -4457,6 +4457,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "url",
 ]
 
 [[package]]
@@ -4522,6 +4523,7 @@ dependencies = [
  "kithara-app",
  "kithara-integration-tests",
  "kithara-test-dylib",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
  "url",
@@ -4649,6 +4651,8 @@ dependencies = [
  "kithara-test-utils",
  "serial_test",
  "tempfile",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4816,6 +4820,7 @@ dependencies = [
 name = "kithara-decode-tests"
 version = "0.0.1-alpha4"
 dependencies = [
+ "derive_more",
  "futures",
  "kithara",
  "kithara-integration-tests",
@@ -5140,11 +5145,14 @@ dependencies = [
 name = "kithara-harness-tests"
 version = "0.0.1-alpha4"
 dependencies = [
+ "cochlea-features",
  "js-sys",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-dylib",
+ "kithara-test-fixtures",
  "kithara-test-utils",
+ "reqwest",
  "serial_test",
  "tempfile",
  "wasm-bindgen",
@@ -5258,6 +5266,9 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "serde",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -5938,6 +5949,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-beat",
+ "kithara-derive",
  "kithara-integration-tests",
  "kithara-platform",
  "kithara-signal",
@@ -5946,7 +5958,9 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "num-traits",
+ "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

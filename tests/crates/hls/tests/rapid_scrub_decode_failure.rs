@@ -26,9 +26,11 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
-
-use crate::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+    temp_dir,
+};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.

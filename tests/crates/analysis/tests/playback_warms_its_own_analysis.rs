@@ -25,10 +25,8 @@ use kithara_integration_tests::{
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_mp3,
 };
-use kithara_test_utils::{temp_dir, wait_until};
+use kithara_test_utils::{bufpool::pools, temp_dir, wait_until};
 use url::Url;
-
-use crate::bufpool_ext::pools;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays(

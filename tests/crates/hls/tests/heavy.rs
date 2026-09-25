@@ -12,6 +12,8 @@ mod common {
 
 #[path = "drm_stream_integrity.rs"]
 mod drm_stream_integrity;
+#[path = "hls_abr_variant_switch.rs"]
+mod hls_abr_variant_switch;
 #[path = "stress_chunk_integrity.rs"]
 mod stress_chunk_integrity;
 #[path = "stress_seek_random.rs"]

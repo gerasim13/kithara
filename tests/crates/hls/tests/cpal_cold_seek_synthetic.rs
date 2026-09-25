@@ -18,10 +18,8 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{bufpool::pools, temp_dir};
 use url::Url;
-
-use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]

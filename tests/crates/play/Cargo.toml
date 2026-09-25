@@ -19,7 +19,6 @@ tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
-apple-fused-src = ["kithara/apple-fused-src"]
 network = []
 network-manual = []
 
@@ -55,10 +54,6 @@ workspace = true
 [[test]]
 name = "play"
 path = "tests/suite.rs"
-
-[[test]]
-name = "play_heavy"
-path = "tests/heavy.rs"
 
 [[test]]
 name = "play_stress"
