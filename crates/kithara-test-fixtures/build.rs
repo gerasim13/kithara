@@ -186,14 +186,18 @@ fn materialize_one(
     refresh: &HashSet<String>,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
+    // Only an optional source fetches. An optional asset built from
+    // dependencies derives its bytes locally, so it is produced whenever its
+    // dependencies are: every fetched track reaches its analysis at build time.
+    let fetches = def.optional && def.dependencies.is_empty();
     // A fetching family cannot be produced again without hydration, so a
     // refresh never reaches one: the store keeps what it already holds.
-    let hydration_off = def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none();
+    let hydration_off = fetches && std::env::var_os(REMOTE_FIXTURES_ENV).is_none();
     let reuse = hydration_off || !refresh.contains(name);
     if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
     }
-    if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
+    if hydration_off {
         return Some((
             name.clone(),
             format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
