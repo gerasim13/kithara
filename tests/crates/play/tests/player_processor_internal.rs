@@ -233,6 +233,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: first_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
@@ -262,6 +263,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: second_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
@@ -293,6 +295,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
@@ -434,6 +437,7 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
