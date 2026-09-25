@@ -65,6 +65,12 @@ impl TryFrom<FfiFileSourceSettings> for kithara_file::FileConfigPatch {
     derive(uniffi::Record)
 )]
 pub struct FfiHlsSourceSettings {
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    /// `None` falls back to a ~2 `MiB` cap at the consumer site —
+    /// production HLS streams need a downloader backpressure cap.
+    /// `Some(0)` prevents prefetch beyond the reader position.
+    /// Accepted range: 0..=8388608 bytes.
+    pub look_ahead_bytes: Option<u64>,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
@@ -81,6 +87,14 @@ impl TryFrom<FfiHlsSourceSettings> for kithara_hls::HlsConfigPatch {
 
     fn try_from(value: FfiHlsSourceSettings) -> Result<Self, Self::Error> {
         let mut patch = Self::default();
+        if let Some(input) = value.look_ahead_bytes {
+            if input > 8388608 {
+                return Err(crate::types::FfiError::InvalidArgument {
+                    reason: "HlsConfig.look_ahead_bytes must be in 0..=8388608".into(),
+                });
+            }
+            patch.look_ahead_bytes = Some(Some(input));
+        }
         if let Some(input) = value.size_probe_method {
             patch.size_probe_method = Some(input.try_into()?);
         }

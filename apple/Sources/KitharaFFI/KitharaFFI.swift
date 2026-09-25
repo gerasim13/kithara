@@ -4122,6 +4122,14 @@ public func FfiConverterTypeFfiFileSourceSettings_lower(_ value: FfiFileSourceSe
  */
 public struct FfiHlsSourceSettings: Equatable, Hashable {
     /**
+     * Max bytes the downloader may be ahead of the reader before it pauses.
+     * `None` falls back to a ~2 `MiB` cap at the consumer site —
+     * production HLS streams need a downloader backpressure cap.
+     * `Some(0)` prevents prefetch beyond the reader position.
+     * Accepted range: 0..=8388608 bytes.
+     */
+    public let lookAheadBytes: UInt64?
+    /**
      * Method used by on-demand exact-size probes. Segment-aware fMP4 decode
      * never issues these probes; file-like paths use them after a seek needs
      * exact prefix offsets.
@@ -4139,6 +4147,13 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
+         * Max bytes the downloader may be ahead of the reader before it pauses.
+         * `None` falls back to a ~2 `MiB` cap at the consumer site —
+         * production HLS streams need a downloader backpressure cap.
+         * `Some(0)` prevents prefetch beyond the reader position.
+         * Accepted range: 0..=8388608 bytes.
+         */lookAheadBytes: UInt64?,
+        /**
          * Method used by on-demand exact-size probes. Segment-aware fMP4 decode
          * never issues these probes; file-like paths use them after a seek needs
          * exact prefix offsets.
@@ -4149,6 +4164,7 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
          * would allow anyway.
          * Accepted range: 1..=64.
          */downloadBatchSize: UInt32?) {
+        self.lookAheadBytes = lookAheadBytes
         self.sizeProbeMethod = sizeProbeMethod
         self.downloadBatchSize = downloadBatchSize
     }
@@ -4169,12 +4185,14 @@ public struct FfiConverterTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiHlsSourceSettings {
         return
             try FfiHlsSourceSettings(
+                lookAheadBytes: FfiConverterOptionUInt64.read(from: &buf),
                 sizeProbeMethod: FfiConverterOptionTypeFfiSizeProbeMethod.read(from: &buf),
                 downloadBatchSize: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiHlsSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt64.write(value.lookAheadBytes, into: &buf)
         FfiConverterOptionTypeFfiSizeProbeMethod.write(value.sizeProbeMethod, into: &buf)
         FfiConverterOptionUInt32.write(value.downloadBatchSize, into: &buf)
     }

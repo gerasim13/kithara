@@ -166,12 +166,14 @@ mod tests {
     fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.hls.download_batch_size = Some(6);
+        config.hls.look_ahead_bytes = Some(Some(0));
 
         let built = config
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 
         assert_eq!(built.stream().download_batch_size, 6);
+        assert_eq!(built.stream().look_ahead_bytes, Some(0));
     }
 
     #[kithara::test]

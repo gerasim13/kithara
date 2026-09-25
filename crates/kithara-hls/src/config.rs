@@ -150,9 +150,9 @@ where
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     /// `None` falls back to a ~2 `MiB` cap at the consumer site —
-    /// production HLS streams need a downloader
-    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
-    #[config(value)]
+    /// production HLS streams need a downloader backpressure cap.
+    /// `Some(0)` prevents prefetch beyond the reader position.
+    #[config(value, sdk(max = 8388608))]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared across all components.
     #[patch(skip)]

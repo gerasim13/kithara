@@ -199,7 +199,7 @@ async function main() {
   if (!invalidSource) throw new Error("unknown HLS size probe method was accepted");
   const hlsItem = AudioPlayerItem.newWithSourceSettings(
     { ...itemConfig, url: `${location.origin}/live.m3u8` },
-    { file: undefined, hls: { downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
+    { file: undefined, hls: { lookAheadBytes: 0n, downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
   ) as AudioPlayerItem;
   hlsItem.uniffiDestroy();
   const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;

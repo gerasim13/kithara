@@ -749,6 +749,7 @@ mod tests {
             FfiSourceSettings {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
+                    look_ahead_bytes: Some(0),
                     download_batch_size: Some(6),
                     size_probe_method: Some(crate::FfiSizeProbeMethod::RangeGet),
                 }),
@@ -763,6 +764,10 @@ mod tests {
             hls.source.as_ref().unwrap().hls.size_probe_method,
             Some(kithara_hls::SizeProbeMethod::RangeGet)
         );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.look_ahead_bytes,
+            Some(Some(0))
+        );
 
         for settings in [
             FfiSourceSettings {
@@ -774,6 +779,7 @@ mod tests {
             FfiSourceSettings {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
+                    look_ahead_bytes: None,
                     download_batch_size: Some(6),
                     size_probe_method: None,
                 }),
@@ -793,8 +799,22 @@ mod tests {
                 FfiSourceSettings {
                     file: None,
                     hls: Some(crate::FfiHlsSourceSettings {
+                        look_ahead_bytes: None,
                         download_batch_size: None,
                         size_probe_method: Some(crate::FfiSizeProbeMethod::Unknown),
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        look_ahead_bytes: Some(8_388_609),
+                        ..Default::default()
                     }),
                 },
             ),

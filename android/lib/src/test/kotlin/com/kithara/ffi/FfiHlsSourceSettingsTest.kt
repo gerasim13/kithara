@@ -12,9 +12,15 @@ class FfiHlsSourceSettingsTest {
             sizeProbeMethod = FfiSizeProbeMethod.RANGE_GET,
             downloadBatchSize = 6u,
         )
+        val bounded = FfiHlsSourceSettings(
+            lookAheadBytes = 0uL,
+            sizeProbeMethod = FfiSizeProbeMethod.RANGE_GET,
+            downloadBatchSize = 6u,
+        )
 
         assertEquals(6u, legacy.downloadBatchSize)
         assertNull(legacy.sizeProbeMethod)
         assertEquals(FfiSizeProbeMethod.RANGE_GET, configured.sizeProbeMethod)
+        assertEquals(0uL, bounded.lookAheadBytes)
     }
 }

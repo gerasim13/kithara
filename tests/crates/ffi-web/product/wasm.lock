@@ -2485,6 +2485,8 @@ name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "delegate",
+ "fieldwork",
  "hex",
  "kithara-bufpool",
  "kithara-config",
@@ -2576,6 +2578,7 @@ dependencies = [
  "js-sys",
  "kithara-android",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-mp4",
  "kithara-mpa",
@@ -3073,6 +3076,7 @@ dependencies = [
  "fieldwork",
  "fs4",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",

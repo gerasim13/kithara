@@ -389,6 +389,17 @@ fn render_source_record(
                     field.name
                 )?;
             }
+            "Option<u64>" if registration.package == "kithara-hls" => {
+                let maximum = field.sdk_max.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "SDK source field {}.{} needs a maximum",
+                        registration.owner,
+                        field.name
+                    )
+                })?;
+                writeln!(output, "    /// Accepted range: 0..={maximum} bytes.")?;
+                writeln!(output, "    pub {}: Option<u64>,", field.name)?;
+            }
             _ => bail!(
                 "unsupported SDK source field {}.{}: {}",
                 registration.owner,
@@ -440,6 +451,24 @@ fn render_source_record(
                 "            patch.{} = Some(input.try_into()?);",
                 field.name
             )?,
+            "Option<u64>" => {
+                let maximum = field.sdk_max.unwrap_or_default();
+                writeln!(output, "            if input > {maximum} {{")?;
+                output.push_str(
+                    "                return Err(crate::types::FfiError::InvalidArgument {\n",
+                );
+                writeln!(
+                    output,
+                    "                    reason: \"{}.{} must be in 0..={maximum}\".into(),",
+                    registration.owner, field.name
+                )?;
+                output.push_str("                });\n            }\n");
+                writeln!(
+                    output,
+                    "            patch.{} = Some(Some(input));",
+                    field.name
+                )?;
+            }
             _ => unreachable!("field type was checked while rendering the record"),
         }
         output.push_str("        }\n");
@@ -835,7 +864,8 @@ mod tests {
             ),
         ] {
             let probe = if owner == "HlsConfig" {
-                " /// Probe method.\n #[config(value, sdk)] size_probe_method: SizeProbeMethod"
+                " /// Probe method.\n #[config(value, sdk)] size_probe_method: SizeProbeMethod, \
+                 /// Look-ahead limit.\n #[config(value, sdk(max = 8388608))] look_ahead_bytes: Option<u64>"
             } else {
                 ""
             };
@@ -853,6 +883,9 @@ mod tests {
         assert!(generated.contains("pub reader_event_capacity: Option<u32>"));
         assert!(generated.contains("pub download_batch_size: Option<u32>"));
         assert!(generated.contains("pub size_probe_method: Option<FfiSizeProbeMethod>"));
+        assert!(generated.contains("pub look_ahead_bytes: Option<u64>"));
+        assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));
+        assert!(generated.contains("if input > 8388608"));
         assert!(generated.contains("patch.size_probe_method = Some(input.try_into()?)"));
         assert!(generated.contains("FfiSizeProbeMethod::Unknown => Err"));
         assert!(generated.contains("input > 4096"));
