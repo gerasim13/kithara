@@ -89,7 +89,7 @@ fn six_styles_expose_every_rhythm_control() {
                 "{style}/{control}: downbeat map must match WAV markers"
             );
 
-            let analyzed = artifact_named("rhythm_analyzed_analysis", style, control);
+            let analyzed = artifact_named("analysis_rhythm_wav", style, control);
             assert!(analyzed.bpm().is_finite() && analyzed.bpm() > 0.0);
             assert!(!analyzed.beats().is_empty());
         }
@@ -182,7 +182,7 @@ fn production_analysis_agrees_with_independent_score_truth() {
     for (style, bpm) in STYLES {
         for control in CONTROLS {
             let expected = artifact(style, control);
-            let analyzed = artifact_named("rhythm_analyzed_analysis", style, control);
+            let analyzed = artifact_named("analysis_rhythm_wav", style, control);
             let tempo_error = (analyzed.bpm() - bpm).abs();
             assert!(
                 tempo_error <= bpm * Consts::TEMPO_TOLERANCE_RATIO,
@@ -214,7 +214,7 @@ fn production_analysis_tracks_score_downbeat_phase() {
     for (style, bpm) in STYLES {
         for control in CONTROLS {
             let expected = artifact(style, control);
-            let analyzed = artifact_named("rhythm_analyzed_analysis", style, control);
+            let analyzed = artifact_named("analysis_rhythm_wav", style, control);
             let tolerance = cast(
                 (Consts::SAMPLE_RATE * Consts::SECONDS_PER_MINUTE / bpm
                     * Consts::MARKER_TOLERANCE_BEATS)

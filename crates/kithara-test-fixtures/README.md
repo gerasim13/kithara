@@ -28,6 +28,16 @@ build produces it again: no format version bump and no `cache-version` change.
 Every `.analysis` asset is keyed this way by `analysis_format`, one analysis
 file written with the current `kithara-analysis`.
 
+With the `rhythm` family on, every whole audio track (`content_type =
+"audio/*"`) carries a build-time analysis beside it, `analysis_{accessor}`: the
+production beat pass over the decoded track. Its key also carries the beat
+pass's cache tag (`analysed_format`), so a new detector or grid re-analyses
+every track instead of serving an older grid. Audio bytes that are no whole
+track — a segment, an init header, data malformed on purpose — are declared
+`fragment` and carry none; a track assembled from fragments declares its
+analysis itself. Generated rhythm tracks keep their generator-truth analyses as
+well, so a test can run on either grid and measure how far the analyser drifts.
+
 `KITHARA_FIXTURE_REFRESH` overrides that reuse for one build: `all` rebuilds the
 whole revision, and a comma-separated list rebuilds only what it names: an
 accessor (`{func}_{case}`), or a producing function (`{func}`), which stands for

@@ -100,37 +100,6 @@ fn library_flac(
     )
 }
 
-#[kithara::asset(
-    ext = "analysis",
-    content_type = "application/x-kithara-analysis",
-    format = super::rhythm::analysis_format,
-    depends_on = ["library_flac_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
-#[case::newtechno()]
-#[case::ryabina()]
-#[case::song1()]
-#[case::dragoncoda()]
-#[case::newtriphop()]
-#[case::slowtechno()]
-#[case::song2()]
-#[case::track05()]
-#[case::c343()]
-#[case::e101()]
-#[case::g242()]
-fn library_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let flac = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_encoded(flac, "flac");
-    Ok(super::rhythm::analysis_file(artifact, frames))
-}
-
 /// Playlist tracks the application is exercised with, published as delivered
 /// by the Zvuk CDN: 320 kbit/s MP3, no re-encoding.
 #[kithara::asset(
@@ -182,30 +151,4 @@ fn library_mp3(
             panic!("requested library fixture `{file}` failed verification: {error}")
         }),
     )
-}
-
-#[kithara::asset(
-    ext = "analysis",
-    content_type = "application/x-kithara-analysis",
-    format = super::rhythm::analysis_format,
-    depends_on = ["library_mp3_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
-#[case::zvuk_27390231()]
-#[case::zvuk_151585912()]
-#[case::zvuk_125475417()]
-#[case::zvuk_138535169()]
-#[case::zvuk_130432502()]
-#[case::zvuk_132017169()]
-fn library_mp3_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let mp3 = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_mp3 dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_encoded(mp3, "mp3");
-    Ok(super::rhythm::analysis_file(artifact, frames))
 }
