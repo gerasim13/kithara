@@ -1,7 +1,7 @@
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod harness;
+mod disk_queue;
 pub mod host;
 mod owner;
 pub mod player;
@@ -13,16 +13,14 @@ mod worker;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub use app::{AppQueueFixture, LazyAppQueueFixture, app_queue, insecure_app_queue};
 #[cfg(not(target_arch = "wasm32"))]
-pub use harness::{
-    OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture,
-    offline_queue_fixture_with_options,
-};
+pub use disk_queue::{DiskQueue, RenderPacing};
 pub use host::{
     MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE,
     assert_playhead_tracks_renderer, audio_clock_pace,
 };
 pub use player::{
-    NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
+    NotificationKind, OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture,
+    offline_queue_fixture_with_options, resource_from_reader, resource_from_reader_with_src,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use ticker::QueueTicker;

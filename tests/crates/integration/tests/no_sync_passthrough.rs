@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     },
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
-    offline::{OfflinePlayer, OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
 use kithara_test_fixtures::{
     assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s},
@@ -426,7 +426,7 @@ async fn render_passthrough(
         None
     };
 
-    let mut target = OfflinePlayer::new(
+    let target = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
@@ -437,7 +437,7 @@ async fn render_passthrough(
         .load_and_fadein(resource_from_reader(target_audio))
         .await;
     let mut load = if let Some(audio) = load_audio.take() {
-        let mut player = OfflinePlayer::new(
+        let player = OfflinePlayer::new(
             HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
@@ -509,7 +509,7 @@ async fn render_passthrough(
 #[kithara::flash(true)]
 async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())

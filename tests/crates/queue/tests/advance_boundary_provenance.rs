@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
@@ -72,7 +72,7 @@ const LINEAR_PATH_MAX_PEAK: f32 = 0.9;
 type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
-fn with_provenance_headroom(harness: OfflinePlayerHarness) -> OfflinePlayerHarness {
+fn with_provenance_headroom(harness: OfflinePlayer) -> OfflinePlayer {
     harness.set_host_level(PROVENANCE_LEVEL);
     harness
 }
@@ -1064,7 +1064,7 @@ async fn natural_eof_advance_emits_only_b_aac(
 }
 
 struct QueueSetup {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
 }
 
@@ -1138,7 +1138,7 @@ async fn setup_queue_with_sample_rate(
     render_sample_rate: u32,
 ) -> QueueSetup {
     let harness = with_provenance_headroom(
-        OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayer::with_sample_rate(
             OfflinePlayerOptions::builder()
                 .crossfade_duration(0.0)
                 .build(),
@@ -1173,7 +1173,7 @@ async fn setup_queue_with_sample_rate(
 
 async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
     let harness = with_provenance_headroom(
-        OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayer::with_sample_rate(
             OfflinePlayerOptions::builder()
                 .crossfade_duration(0.0)
                 .build(),
@@ -1213,7 +1213,7 @@ async fn setup_flac_queue_with_player_config(
     player_config: OfflinePlayerOptions,
 ) -> QueueSetup {
     let harness = with_provenance_headroom(
-        OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await,
+        OfflinePlayer::with_sample_rate(player_config, render_sample_rate).await,
     );
     let queue = harness
         .insert_control(Queue::new(
@@ -1239,7 +1239,7 @@ async fn setup_flac_queue_with_player_config(
 }
 
 async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -1282,7 +1282,7 @@ fn hls_source(url: &Url, cache_dir: &Path) -> TrackSource<TestPools> {
 }
 
 async fn append_loaded(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     source: TrackSource<TestPools>,
 ) -> kithara::events::TrackId {
@@ -1321,7 +1321,7 @@ async fn wait_loaded_from(events: &mut EventReceiver<TestEvent>, id: kithara::ev
 #[kithara::flash(true)]
 async fn render_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     class_tolerance: f32,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
@@ -1357,7 +1357,7 @@ async fn render_until_b_with_postroll(
 #[kithara::flash(true)]
 async fn render_until_b_with_late_variant_switch(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
 ) -> (Vec<f32>, usize, usize, Option<usize>) {
     let block_duration = render_block_duration(SAMPLE_RATE);
     let mut progress = RenderProgress::new();
@@ -1430,7 +1430,7 @@ async fn render_until_b_with_late_variant_switch(
 #[kithara::flash(true)]
 async fn render_crossfade_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
     let block_duration = render_block_duration(render_sample_rate);
@@ -1464,7 +1464,7 @@ async fn render_crossfade_until_b_with_postroll(
 
 async fn render_app_layer_crossfade_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
     render_app_layer_crossfade_until_b_with_postroll_config(
@@ -1480,7 +1480,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
 #[kithara::flash(true)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     render_sample_rate: u32,
     block_budget: usize,
     duration_wait_secs: f64,
@@ -1518,7 +1518,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
 }
 
 async fn drive_app_layer_crossfade_advance(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     auto_advanced_index: &mut Option<usize>,
 ) {
@@ -1561,7 +1561,7 @@ fn drain_variant_applied_events(
 #[kithara::flash(true)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize, usize, f64) {
     let block_duration = render_block_duration(render_sample_rate);
@@ -1619,7 +1619,7 @@ async fn render_seek_near_end_until_b_with_postroll(
 #[kithara::flash(true)]
 async fn render_until_tone_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, f64) {
     let block_duration = render_block_duration(render_sample_rate);

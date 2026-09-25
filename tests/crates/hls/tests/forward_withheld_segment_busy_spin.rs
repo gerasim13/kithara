@@ -27,9 +27,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SegmentGateHandle,
+    CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
@@ -67,25 +66,26 @@ fn count_decode_steps(events: &[ProbeEvent]) -> usize {
 async fn gated_audio(
     hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
-) -> (HlsTestServer, SegmentGateHandle) {
+) -> (CreatedHls, SegmentGateHandle) {
     let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
-    let config = HlsTestServerConfig {
-        variant_count: 1,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
-        segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![1_000_000]),
-        ..Default::default()
-    };
+    let config = HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(SEGMENT_COUNT)
+        .segment_size(SEGMENT_SIZE)
+        .segment_duration_secs(segment_duration)
+        .custom_data_per_variant(vec![Arc::clone(&pcm)])
+        .init_data_per_variant(vec![Arc::clone(&init_segment)])
+        .variant_bandwidths(vec![1_000_000]);
 
     // Withhold the BODY of GATED_SEGMENT; its HEAD (size) stays open so the
     // up-front layout is complete and the worker reaches the boundary.
-    HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
+    let helper = TestServerHelper::new().await;
+    let hls = helper.create_hls(config).await.expect("create HLS fixture");
+    let gate = helper.register_segment_gate(hls.token(), 0, GATED_SEGMENT);
+    (hls, gate)
 }
 
 #[kithara::test(
@@ -96,7 +96,7 @@ async fn gated_audio(
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn forward_into_withheld_segment_waits_and_resumes(
-    #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
+    #[future(awt)] gated_audio: (CreatedHls, SegmentGateHandle),
 ) {
     let (server, gate) = gated_audio;
     let trace = usdt_trace::scope();
@@ -111,7 +111,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
-    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
+    let hls_config = HlsConfig::for_url(server.master_url())
         .store(store)
         .pools(pools)
         .cancel(cancel)

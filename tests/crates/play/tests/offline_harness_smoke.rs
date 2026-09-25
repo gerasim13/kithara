@@ -2,7 +2,7 @@
 
 use kithara::{self, events::TrackId, play::Resource};
 use kithara_integration_tests::{
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
     test_defaults::Consts,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -24,7 +24,7 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
 
 #[kithara::test(tokio)]
 async fn offline_harness_smoke(constant_half: &'static [u8]) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         Consts::SAMPLE_RATE,
     )

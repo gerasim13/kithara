@@ -9,7 +9,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent},
+    offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -38,7 +38,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     #[future(awt)] queue_sources: (TestServerHelper, [Url; 2]),
 ) {
     let (_server, [first_url, second_url]) = queue_sources;
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -131,11 +131,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     harness.close().await;
 }
 
-async fn make_signal_resource(
-    harness: &OfflinePlayerHarness,
-    cache_dir: &Path,
-    url: Url,
-) -> Resource {
+async fn make_signal_resource(harness: &OfflinePlayer, cache_dir: &Path, url: Url) -> Resource {
     let mut config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL"),
     )

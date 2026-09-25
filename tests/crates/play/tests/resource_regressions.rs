@@ -25,10 +25,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
+    Content, CreatedHls, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::PackagedSignal,
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::resource_from_reader,
+    output_continuity::{
+        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
+        render_offline_window,
+    },
 };
 use kithara_test_fixtures::{
     Mp3Shape, SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments,
@@ -39,10 +42,6 @@ use tracing::info;
 use crate::{
     bufpool_ext::{Pools, TestPools, pools},
     common::test_defaults::Consts as Shared,
-    continuity::{
-        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
-        render_offline_window,
-    },
 };
 
 struct Consts;
@@ -258,17 +257,20 @@ fn read_hls_stream_bytes(
 }
 
 #[kithara::fixture]
-async fn open_audio_hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
+async fn open_audio_hls_server(saw_segments: &'static [u8]) -> CreatedHls {
     let segment_duration =
         Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
-    HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(saw_segments.to_vec())),
-        segment_duration_secs: segment_duration,
-        segment_size: Consts::HLS_SEGMENT_SIZE,
-        segments_per_variant: Consts::HLS_SEGMENT_COUNT,
-        ..Default::default()
-    })
-    .await
+    TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .custom_data(Arc::new(saw_segments.to_vec()))
+                .segment_duration_secs(segment_duration)
+                .segment_size(Consts::HLS_SEGMENT_SIZE)
+                .segments_per_variant(Consts::HLS_SEGMENT_COUNT),
+        )
+        .await
+        .expect("create HLS fixture")
 }
 
 async fn create_packaged_single_variant_fixture(codec: AudioCodec) -> (TestServerHelper, url::Url) {
@@ -536,7 +538,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     case::ephemeral_android(true, DecoderBackend::Android)
 )]
 async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
-    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] open_audio_hls_server: CreatedHls,
     #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
@@ -556,7 +558,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
-    let hls_url = hls_server.url("/master.m3u8");
+    let hls_url = hls_server.master_url();
 
     let hls_pos = warm_hls_worker(
         &hls_url,
@@ -657,7 +659,7 @@ enum WarmupTeardown {
     case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)
 )]
 async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
-    #[future(awt)] audio_hls_pair: (HlsTestServer, HlsTestServer),
+    #[future(awt)] audio_hls_pair: (CreatedHls, CreatedHls),
     #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
@@ -674,8 +676,8 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let worker_b = play_worker(&region_b);
     let store_a = asset_store(&temp_a, false, &region_a);
     let store_b = asset_store(&temp_b, true, &region_b);
-    let hls_url_a = server_a.url("/master.m3u8");
-    let hls_url_b = server_b.url("/master.m3u8");
+    let hls_url_a = server_a.master_url();
+    let hls_url_b = server_b.master_url();
 
     let first_pos = match teardown {
         WarmupTeardown::Shutdown | WarmupTeardown::DropOnly => {
@@ -739,7 +741,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     hang_timeout_secs(5)
 )]
 async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
-    #[future(awt)] audio_hls_pair: (HlsTestServer, HlsTestServer),
+    #[future(awt)] audio_hls_pair: (CreatedHls, CreatedHls),
 ) {
     let (server_a, server_b) = audio_hls_pair;
     let temp_a = TestTempDir::new();
@@ -748,8 +750,8 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     let pools_b = pools();
     let store_a = asset_store(&temp_a, false, &pools_a);
     let store_b = asset_store(&temp_b, true, &pools_b);
-    let hls_url_a = server_a.url("/master.m3u8");
-    let hls_url_b = server_b.url("/master.m3u8");
+    let hls_url_a = server_a.master_url();
+    let hls_url_b = server_b.master_url();
 
     let first_read = read_hls_stream_some(&hls_url_a, store_a, &pools_a).await;
     assert!(first_read > 0, "first HLS stream session must read bytes");
@@ -920,7 +922,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     case::ephemeral_android(true, DecoderBackend::Android)
 )]
 async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
-    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] open_audio_hls_server: CreatedHls,
     #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
@@ -940,7 +942,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     );
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
-    let hls_url = hls_server.url("/master.m3u8");
+    let hls_url = hls_server.master_url();
 
     let hls_seek = warm_hls_worker(
         &hls_url,
@@ -1008,7 +1010,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn stress_offline_crossfade_no_gaps(
-    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] open_audio_hls_server: CreatedHls,
     tone_mp3: &'static [u8],
 ) {
     use kithara_integration_tests::offline::OfflinePlayer;
@@ -1020,7 +1022,7 @@ async fn stress_offline_crossfade_no_gaps(
     let hls_server = open_audio_hls_server;
     let region = pools();
     let store = asset_store(&temp_dir(), true, &region);
-    let hls_url = hls_server.url("/master.m3u8");
+    let hls_url = hls_server.master_url();
 
     let master_scope = CancelScope::new(None);
     let master_cancel = master_scope.token();
@@ -1320,7 +1322,7 @@ async fn local_resource_decodes_with_duration(
 }
 
 #[kithara::fixture]
-async fn audio_hls_pair() -> (HlsTestServer, HlsTestServer) {
+async fn audio_hls_pair() -> (CreatedHls, CreatedHls) {
     (open_audio_hls_server().await, open_audio_hls_server().await)
 }
 

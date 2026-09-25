@@ -58,8 +58,6 @@ mod seek_past_eof;
 mod seek_variant_switch_after_eof;
 #[path = "segment_boundary_strand.rs"]
 mod segment_boundary_strand;
-#[path = "smoke_test.rs"]
-mod smoke_test;
 #[path = "source_seek.rs"]
 mod source_seek;
 #[path = "sync_reader_hls_test.rs"]

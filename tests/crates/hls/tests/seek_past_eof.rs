@@ -9,8 +9,8 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 
@@ -51,16 +51,19 @@ async fn seek_beyond_head_total_within_actual_total(
     temp_dir: TestTempDir,
     cancel_token: CancelToken,
 ) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: Consts::NUM_SEGMENTS,
-        segment_size: Consts::ACTUAL_SEGMENT_SIZE,
-        head_reported_segment_size: Some(Consts::HEAD_REPORTED_SIZE),
-        ..Default::default()
-    })
-    .await;
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(Consts::NUM_SEGMENTS)
+                .segment_size(Consts::ACTUAL_SEGMENT_SIZE)
+                .head_reported_segment_size(Consts::HEAD_REPORTED_SIZE),
+        )
+        .await
+        .expect("create HLS fixture");
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

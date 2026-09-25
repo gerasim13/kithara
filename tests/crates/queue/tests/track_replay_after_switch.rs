@@ -5,30 +5,26 @@ use std::fmt::Write;
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
-    download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
+        time,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::DiskQueue,
 };
 use kithara_test_fixtures::SignalAsset;
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::temp_dir;
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::TestPools;
 
 /// Reproduces the bug the user keeps hitting manually: play track A, switch
 /// to B, then switch back to A. The second `select(A)` finds the track in
@@ -105,66 +101,6 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
         .master_url()
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    build_queue_with_tick_cf(temp_dir, 0.0).await
-}
-
-async fn build_queue_with_tick_cf(
-    temp_dir: &TestTempDir,
-    crossfade_seconds: f32,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .crossfade_duration(crossfade_seconds)
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .crossfade_settings(kithara::play::CrossfadeSettings {
-                    duration: crossfade_seconds,
-                    ..kithara::play::CrossfadeSettings::default()
-                })
-                .build(),
-        ),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 #[kithara::flash(true)]
 async fn wait_for_loader_done(
     queue: &QueueControl<TestPools>,
@@ -234,7 +170,16 @@ async fn replay_track_after_switch_does_not_hang_loader(
     let (mode, _helper, url_a, url_b) = tracks;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .crossfade_seconds(0.0)
+        .open()
+        .await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -345,8 +290,16 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     let (_helper, url_a, url_b) = mp3_hls_pair;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) =
-        build_queue_with_tick_cf(&temp, crossfade_seconds).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .crossfade_seconds(crossfade_seconds)
+        .open()
+        .await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))

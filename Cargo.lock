@@ -5620,7 +5620,6 @@ dependencies = [
  "reqwest",
  "serial_test",
  "tracing",
- "tracing-subscriber",
  "url",
 ]
 

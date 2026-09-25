@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_fixtures::assets;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -98,7 +98,7 @@ async fn play_queue(
     temp_dir: &TestTempDir,
     sources: Vec<ResourceSrc>,
 ) -> (QueueLog, TrackId) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(crossfade)
             .block_on_underrun(true)

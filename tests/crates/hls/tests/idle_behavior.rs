@@ -13,10 +13,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    hls_server::packaged_test_server,
+    hls_server::packaged_hls,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
@@ -61,15 +61,15 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
     hang_timeout_secs(2)
 )]
 async fn idle_does_not_panic_hang_detector(
-    #[future(awt)] packaged_test_server: PackagedTestServer,
+    #[future(awt)] packaged_hls: CreatedHls,
     temp_dir: TestTempDir,
 ) {
     let watchdog_fired = arm_panic_marker("HangDetector");
 
-    let server = packaged_test_server;
+    let hls = packaged_hls;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
+    let hls_config = HlsConfig::for_url(hls.master_url())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

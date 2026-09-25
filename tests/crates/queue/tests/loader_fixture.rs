@@ -5,7 +5,7 @@ use kithara::{
     platform::time::{self, Duration},
     queue::{QueueControl, QueueEvent, TrackStatus},
 };
-use kithara_integration_tests::{event::TestEvent, offline::OfflinePlayerHarness};
+use kithara_integration_tests::{event::TestEvent, offline::OfflinePlayer};
 use kithara_test_fixtures::asset::Asset;
 
 use crate::bufpool_ext::TestPools;
@@ -20,7 +20,7 @@ pub(crate) fn source(track: &Asset) -> String {
 }
 
 pub(crate) async fn append_loaded(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     track: &Asset,
 ) -> TrackId {
@@ -28,7 +28,7 @@ pub(crate) async fn append_loaded(
 }
 
 pub(crate) async fn append_source_loaded(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     source: String,
 ) -> TrackId {

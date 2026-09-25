@@ -17,7 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayerHarness, offline_queue_fixture},
+    offline::{OfflinePlayer, offline_queue_fixture},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
 
@@ -34,7 +34,7 @@ const EOF_BLOCK_BUDGET: usize = 128;
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) {
     for _ in 0..block_budget {
@@ -52,7 +52,7 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 
 /// Two entries appended from one file, with the second one selected.
 struct SecondCopyPlaying {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     source: String,
     first: TrackId,

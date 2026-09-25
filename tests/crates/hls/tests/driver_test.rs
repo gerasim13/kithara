@@ -17,14 +17,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    auto,
+    CreatedHls, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    hls_server::{
-        TestServer,
-        abr::{AbrTestServer, master_playlist},
-        test_server,
-    },
+    hls_server::{abr_binary_ladder, test_pattern_hls},
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
@@ -40,12 +36,12 @@ use tracing::info;
 /// EXPECTED: seek is processed, segment data is read correctly
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn test_driver_seek_after_playlist_finished(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
     cancel_token: CancelToken,
 ) {
-    let server = test_server;
-    let url = server.url("/master.m3u8");
+    let hls = test_pattern_hls;
+    let url = hls.master_url();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -106,14 +102,13 @@ async fn test_driver_seek_after_playlist_finished(
 /// without the full decoder chain.
 #[kithara::test(tokio, native, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: CancelToken) {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_secs(2),
-    )
-    .await;
+    let hls = TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_secs(2)))
+        .await
+        .expect("create ABR ladder");
 
-    let url = server.url("/master.m3u8");
+    let url = hls.master_url();
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();

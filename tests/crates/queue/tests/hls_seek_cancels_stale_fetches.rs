@@ -5,35 +5,25 @@ use std::collections::{HashMap, HashSet};
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestId},
+    download::{DownloaderEvent, RequestId},
     hls::HlsEvent,
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
+        time,
         time::{Duration, Instant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper,
-    event::TestEvent,
-    fixture_protocol::DelayRule,
-    kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    usdt_trace,
-    waits::wait_for_loader_done,
+    HlsFixtureBuilder, TestServerHelper, event::TestEvent, fixture_protocol::DelayRule, kithara,
+    offline::DiskQueue, usdt_trace, waits::wait_for_loader_done,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::temp_dir;
 use url::Url;
-
-use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -98,50 +88,6 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        ),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .max_concurrent(Consts::MAX_CONCURRENT)
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 #[derive(Debug, Default)]
 struct PostSeekObservation {
     /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
@@ -192,7 +138,16 @@ async fn hls_seek_near_end_skips_prefix(
     let (_server, url) = prepared_hls;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_downloads(Consts::MAX_CONCURRENT)
+        .open()
+        .await;
 
     let mut rx = queue.subscribe();
 

@@ -13,10 +13,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    auto,
+    CreatedHls, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    hls_server::abr::{AbrTestServer, master_playlist},
+    hls_server::abr_binary_ladder,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
@@ -43,11 +43,11 @@ use tracing::info;
 )]
 async fn test_abr_variant_switch_no_byte_glitches(
     temp_dir: TestTempDir,
-    #[future(awt)] slow_abr: AbrTestServer,
+    #[future(awt)] slow_abr: CreatedHls,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = slow_abr;
+    let hls = slow_abr;
 
-    let url = server.url("/master.m3u8");
+    let url = hls.master_url();
     info!("Test server started at: {}", url);
 
     let cancel_token = CancelToken::never();
@@ -160,11 +160,11 @@ async fn test_abr_variant_switch_no_byte_glitches(
 )]
 async fn test_basic_multi_segment_reading(
     temp_dir: TestTempDir,
-    #[future(awt)] fast_abr: AbrTestServer,
+    #[future(awt)] fast_abr: CreatedHls,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = fast_abr;
+    let hls = fast_abr;
 
-    let url = server.url("/master.m3u8");
+    let url = hls.master_url();
     let cancel_token = CancelToken::never();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -230,11 +230,11 @@ async fn test_basic_multi_segment_reading(
 )]
 async fn test_abr_variant_switch_with_seek_backward(
     temp_dir: TestTempDir,
-    #[future(awt)] backward_abr: AbrTestServer,
+    #[future(awt)] backward_abr: CreatedHls,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = backward_abr;
+    let hls = backward_abr;
 
-    let url = server.url("/master.m3u8");
+    let url = hls.master_url();
     let cancel_token = CancelToken::never();
 
     let bus = EventBus::new(32);
@@ -306,31 +306,28 @@ async fn test_abr_variant_switch_with_seek_backward(
 }
 
 #[kithara::fixture]
-async fn slow_abr() -> AbrTestServer {
-    AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_secs(2),
-    )
-    .await
+async fn slow_abr() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_secs(2)))
+        .await
+        .expect("create ABR ladder")
 }
 
 #[kithara::fixture]
-async fn fast_abr() -> AbrTestServer {
-    AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(1),
-    )
-    .await
+async fn fast_abr() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_millis(1)))
+        .await
+        .expect("create ABR ladder")
 }
 
 #[kithara::fixture]
-async fn backward_abr() -> AbrTestServer {
-    AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        true,
-        Duration::from_secs(2),
-    )
-    .await
+async fn backward_abr() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(true, Duration::from_secs(2)))
+        .await
+        .expect("create ABR ladder")
 }

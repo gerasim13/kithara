@@ -92,6 +92,8 @@ mod native;
 pub mod net_fixture;
 #[cfg(any(feature = "all", feature = "wasm"))]
 pub mod offline;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod output_continuity;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod packed_audio;
 #[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
@@ -145,11 +147,9 @@ pub use assets_ext::memory_asset_store;
 pub use fixtures::*;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use hls_server::{
-    AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,
-    TestServer, abr, compat, master_playlist, mixed_codec_ladder, mixed_codec_ladder_encrypted,
-    mixed_codec_ladder_url, packaged, packaged_test_server, test_master_playlist,
-    test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist_encrypted,
-    test_segment_data, test_server,
+    abr_binary_ladder, aes128_encryption, aes128_segment, mixed_codec_ladder,
+    mixed_codec_ladder_encrypted, mixed_codec_ladder_url, packaged_hls, packaged_ladder,
+    packaged_ladder_encrypted, test_pattern_hls, test_pattern_ladder,
 };
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use hls_url::{

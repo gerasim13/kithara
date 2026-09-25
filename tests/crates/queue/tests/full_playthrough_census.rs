@@ -36,7 +36,7 @@ use kithara_integration_tests::{
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
 };
@@ -261,7 +261,7 @@ async fn track_src(
 }
 
 struct Census {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     tracks: Vec<TrackId>,
 }
@@ -280,7 +280,7 @@ impl Census {
 }
 
 async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
             .block_on_underrun(true)

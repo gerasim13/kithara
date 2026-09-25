@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::AssetStore,
     audio::AudioEvent,
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
@@ -16,27 +15,18 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::DelayRule,
+    hls_server::{packaged_ladder, packaged_ladder_encrypted},
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::{DiskQueue, OfflineQueue, QueueTicker, RENDER_PACE},
     waits::wait_for_position_event,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
-
-fn install_tracing() {
-    use tracing_subscriber::{EnvFilter, fmt};
-    let _ = fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug")
-        }))
-        .with_test_writer()
-        .try_init();
-}
 
 async fn wait_for_status(
     rx: &mut EventReceiver<TestEvent>,
@@ -70,45 +60,6 @@ async fn wait_for_status(
         }
     }
     Err(format!("timeout waiting for {target:?}"))
-}
-
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(QueueConfig::builder().player(player).build()),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let queue_for_tick = queue.control();
-    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    (queue, downloader, store, tick_handle)
 }
 
 /// Minimum post-seek advance (seconds) that counts as audible progress.
@@ -221,17 +172,29 @@ async fn observe_seek_advance_or_panic(
     tick_handle.stop().await;
 }
 
-async fn run_seek_scenario(
-    server: &PackagedTestServer,
-    urls: &[&str],
-    select_index: usize,
-    temp: TestTempDir,
-) {
-    install_tracing();
+#[derive(Clone, Copy)]
+enum Ladder {
+    Plain,
+    Encrypted,
+}
 
-    let resolved: Vec<String> = urls
+async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTempDir) {
+    let helper = TestServerHelper::new().await;
+    let plain = helper
+        .create_hls(packaged_ladder())
+        .await
+        .expect("create packaged ladder");
+    let encrypted = helper
+        .create_hls(packaged_ladder_encrypted())
+        .await
+        .expect("create encrypted packaged ladder");
+
+    let resolved: Vec<String> = ladders
         .iter()
-        .map(|p| server.url(p).as_str().to_string())
+        .map(|ladder| match ladder {
+            Ladder::Plain => plain.master_url().to_string(),
+            Ladder::Encrypted => encrypted.master_url().to_string(),
+        })
         .collect();
 
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -352,17 +315,21 @@ async fn run_seek_scenario(
     let _ = ids;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::one_track(&["/master.m3u8"], 0)]
-#[case::first_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 0)]
-#[case::second_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 1)]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(120))
+)]
+#[case::one_track(&[Ladder::Plain], 0)]
+#[case::first_of_two(&[Ladder::Plain, Ladder::Encrypted], 0)]
+#[case::second_of_two(&[Ladder::Plain, Ladder::Encrypted], 1)]
 async fn queue_seek_at_index(
-    #[future(awt)] packaged_source: PackagedTestServer,
     temp_dir: TestTempDir,
-    #[case] paths: &[&str],
+    #[case] ladders: &[Ladder],
     #[case] index: usize,
 ) {
-    run_seek_scenario(&packaged_source, paths, index, temp_dir).await;
+    run_seek_scenario(ladders, index, temp_dir).await;
 }
 
 /// Two concurrent `Queue::append` calls for the exact same HLS URL
@@ -377,35 +344,40 @@ async fn queue_seek_at_index(
 ///
 /// Without `#[ignore]` this pins a real regression: until the coalescer exists,
 /// this test fails under `just test` and keeps the bug visible.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(20))
+)]
 #[ignore = "pins real regression — pending downloader request coalescer; unignore when single-flight layer lands"]
-async fn queue_seek_same_url_twice_index0(
-    #[future(awt)] packaged_source: PackagedTestServer,
-    temp_dir: TestTempDir,
-) {
-    run_seek_scenario(
-        &packaged_source,
-        &["/master.m3u8", "/master.m3u8"],
-        0,
-        temp_dir,
-    )
-    .await;
+async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
+    run_seek_scenario(&[Ladder::Plain, Ladder::Plain], 0, temp_dir).await;
 }
 
 /// Long-track variant: 20 segments × 4s = 80s, with a 150ms delay on
 /// every segment fetch to emulate a cold-network CDN. Seeks past the
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(180))
+)]
 async fn queue_seek_long_cold_cache_far_segment(
     temp_dir: TestTempDir,
     #[future(awt)] long_hls: (TestServerHelper, Url),
 ) {
-    install_tracing();
-
     let (_helper, master) = long_hls;
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: tick_handle,
+        ..
+    } = DiskQueue::builder(temp_dir.path()).open().await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -476,16 +448,25 @@ async fn queue_seek_long_cold_cache_far_segment(
 /// the physical stream length, so `source.seek(Current(delta))` lands
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(180))
+)]
 async fn queue_seek_multi_variant_cold_far(
     temp_dir: TestTempDir,
     #[future(awt)] multi_hls: (TestServerHelper, Url),
 ) {
-    install_tracing();
-
     let (_helper, master) = multi_hls;
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: tick_handle,
+        ..
+    } = DiskQueue::builder(temp_dir.path()).open().await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -584,9 +565,4 @@ async fn multi_hls() -> (TestServerHelper, Url) {
         .expect("create multi-variant HLS fixture");
     let master = created.master_url();
     (helper, master)
-}
-
-#[kithara::fixture]
-async fn packaged_source() -> PackagedTestServer {
-    PackagedTestServer::new().await
 }

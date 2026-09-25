@@ -9,7 +9,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_fixtures::assets;
 
@@ -24,7 +24,7 @@ const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
 
-fn queue_config(harness: &OfflinePlayerHarness, duration: f32) -> QueueConfig<TestPools> {
+fn queue_config(harness: &OfflinePlayer, duration: f32) -> QueueConfig<TestPools> {
     QueueConfig::builder()
         .player(harness.take_player())
         .crossfade_settings(kithara::play::CrossfadeSettings {
@@ -61,7 +61,7 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 /// concatenated stereo-interleaved PCM.
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
@@ -77,7 +77,7 @@ async fn render_loop(
 async fn crossfade_started_requires_a_live_predecessor() {
     const CROSSFADE_SECS: f32 = 0.2;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -149,7 +149,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
 #[kithara::test(tokio)]
 async fn repeat_one_natural_advance_keeps_current_track() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -189,7 +189,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
 /// transport is the explicit selection.
 #[kithara::test(tokio)]
 async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -220,7 +220,7 @@ async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
 
 #[kithara::test(tokio)]
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -268,7 +268,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -340,7 +340,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
@@ -417,7 +417,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
     const CROSSFADE_SECS: f32 = 0.2;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -496,7 +496,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -564,7 +564,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -633,7 +633,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     const LEVEL_B: f32 = 0.80;
     const LEVEL_C: f32 = 0.40;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -707,7 +707,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     harness.close().await;
 }
 
-async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPools> {
+async fn autoplay_queue(harness: &OfflinePlayer) -> QueueControl<TestPools> {
     harness
         .insert_control(Queue::new(
             QueueConfig::builder()
@@ -731,7 +731,7 @@ async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPool
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -805,7 +805,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
 async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),

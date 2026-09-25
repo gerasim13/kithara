@@ -222,7 +222,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
     let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
-    let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
@@ -286,10 +285,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
 
             let seek_target = player.position() + 30.0;
-            let seek_epoch = next_seek_epoch;
-            next_seek_epoch += 1;
-            eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
-            player.seek(seek_target, seek_epoch);
+            eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s");
+            player.seek(seek_target);
 
             let after =
                 render_and_collect(&mut player, window_blocks, &mut iteration_samples).await;

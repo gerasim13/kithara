@@ -13,9 +13,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    TestServerHelper,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::{SignalAsset, integration_fixtures::concurrent_wav};
@@ -78,17 +77,20 @@ async fn spawn_hls_instance(
     id: usize,
     wav_data: Arc<Vec<u8>>,
     temp_path: &std::path::Path,
-) -> (HlsTestServer, JoinHandle<InstanceResult>) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: SawWav::DEFAULT.segment_size,
-        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
-        custom_data: Some(wav_data),
-        ..Default::default()
-    })
-    .await;
+) -> (CreatedHls, JoinHandle<InstanceResult>) {
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segments_per_variant(Consts::SEGMENT_COUNT)
+                .segment_size(SawWav::DEFAULT.segment_size)
+                .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+                .custom_data(wav_data),
+        )
+        .await
+        .expect("create HLS fixture");
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let cancel = CancelToken::never();
     let pools = pools();
 

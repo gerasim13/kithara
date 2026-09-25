@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     bufpool_ext::{TestPools, pools},
     memory_asset_store,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
 use kithara_test_fixtures::integration_fixtures::broadcast_tone;
 use url::Url;
@@ -76,10 +76,9 @@ fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
     resource_from_reader(TestPcmReader::from_samples(spec, broadcast_tone))
 }
 
-async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
+async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
     let harness =
-        OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE)
-            .await;
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE).await;
     harness
         .with_player(move |player| {
             player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
@@ -93,7 +92,7 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
     harness
 }
 
-async fn render_blocks(harness: &OfflinePlayerHarness) -> Vec<f32> {
+async fn render_blocks(harness: &OfflinePlayer) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(BLOCKS_PER_RATE * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..BLOCKS_PER_RATE {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);

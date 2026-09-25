@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
@@ -56,7 +56,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     temp_dir: TestTempDir,
 ) {
     let (_server, master, withheld_tail) = startup_source;
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .gapless_mode(gapless_mode)
             .build(),
@@ -114,7 +114,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     master: &Url,
     cache_dir: &Path,
 ) -> Resource {

@@ -35,8 +35,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
-    fixture_protocol::EncryptionRequest,
-    hls_fixture::{aes128_iv, aes128_key_bytes},
+    hls_server::aes128_encryption,
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
     usdt_trace,
@@ -1039,10 +1038,7 @@ async fn hls(
         .init_data_per_variant(vec![Arc::new(init.bytes().to_vec())])
         .custom_data(Arc::new(media.bytes().to_vec()));
     if matches!(protection, HlsProtection::Drm) {
-        builder = builder.encryption(EncryptionRequest {
-            key_hex: hex::encode(aes128_key_bytes()),
-            iv_hex: Some(hex::encode(aes128_iv())),
-        });
+        builder = builder.encryption(aes128_encryption());
     }
     server
         .create_hls(builder)

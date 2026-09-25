@@ -5,32 +5,27 @@ use std::cell::Cell;
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker, audio_clock_pace},
+    offline::{DiskQueue, RenderPacing},
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::temp_dir;
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::TestPools;
 
 struct Consts;
 impl Consts {
@@ -167,50 +162,6 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
         .master_url()
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let render_pace = audio_clock_pace(&session);
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        ),
-        render_pace,
-    )
-    .await
-    .expect("create product offline queue");
-    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 /// Run one fresh-player attempt: spin up Queue + Player, append the HLS
 /// track, wait for loader, briefly play, seek to `target`, observe.
 ///
@@ -225,7 +176,16 @@ async fn run_one_attempt(
 ) -> IterOutcome {
     let temp = temp_dir();
     phase.set(AttemptPhase::Setup);
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .pacing(RenderPacing::AudioClock)
+        .open()
+        .await;
 
     let outcome = async {
         let src = match ResourceSrc::parse(url.as_str()) {

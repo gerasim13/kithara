@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent},
+    offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
 use kithara_test_fixtures::{
     analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
@@ -109,7 +109,7 @@ async fn single_track_silence_trim_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),
 ) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -166,7 +166,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
     #[future(awt)] trimmed_next: (TestServerHelper, CreatedHls),
 ) {
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -237,7 +237,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
     #[future(awt)] trimmed_stitch: (TestServerHelper, CreatedHls),
 ) {
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -349,7 +349,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         "fixture must keep the selected one-frame-deficit search geometry"
     );
 
-    let probe_harness = OfflinePlayerHarness::with_sample_rate(
+    let probe_harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -407,7 +407,7 @@ async fn render_apple_fused_deficit_seam(
     cache_dir: &std::path::Path,
     stitch_frame: usize,
 ) -> AppleFusedSeamRender {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -466,7 +466,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
 ) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -508,7 +508,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     temp_dir: TestTempDir,
     #[future(awt)] untagged_primed: (TestServerHelper, CreatedHls),
 ) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -540,7 +540,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
     #[future(awt)] untagged_trimmed_next: (TestServerHelper, CreatedHls),
 ) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -615,7 +615,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
     temp_dir: TestTempDir,
     #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
 ) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -705,7 +705,7 @@ async fn gapless_source(
 }
 
 async fn create_resource(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
 ) -> Resource {
@@ -731,7 +731,7 @@ async fn create_resource(
     any(target_os = "macos", target_os = "ios")
 ))]
 async fn create_apple_fused_resource(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
 ) -> Resource {
@@ -785,7 +785,7 @@ async fn render_synthetic_fused_deficit_seam(
         u64::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES).expect("fixture size fits u64")
     );
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -886,7 +886,7 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
 /// Loads the queue and returns the identity the player will report back
 /// for each item, in the order they were given.
 async fn load_tagged_queue<const N: usize>(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     items: [Resource; N],
 ) -> [TrackId; N] {
     let ids = [(); N].map(|()| TrackId::allocate());
@@ -1100,14 +1100,14 @@ impl AudioControl for SyntheticPcmReader {
 }
 
 async fn render_until_item_end(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     terminal_item_id: TrackId,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     render_until_item_end_with_post_roll(harness, terminal_item_id, POST_ROLL_BLOCKS).await
 }
 
 async fn render_until_item_end_with_post_roll(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     terminal_item_id: TrackId,
     post_roll_blocks: usize,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {

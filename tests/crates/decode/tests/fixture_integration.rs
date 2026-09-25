@@ -7,7 +7,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     decode_ext::DecoderChunkOutcomeTestExt,
     fixture_protocol::PackagedSignal,
@@ -228,38 +228,6 @@ async fn test_create_packaged_hls_returns_stable_typed_urls(
     assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
     assert!(!init.bytes().await.unwrap().is_empty());
     assert!(!segment.bytes().await.unwrap().is_empty());
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_packaged_test_server_serves_audio_mp4_resources(
-    #[future(awt)] packaged_server: PackagedTestServer,
-) {
-    let server = packaged_server;
-    let client = Client::new();
-
-    let master = client.get(server.url("/master.m3u8")).send().await.unwrap();
-    let media = client.get(server.url("/v0.m3u8")).send().await.unwrap();
-    let init = client.get(server.url("/init/v0.mp4")).send().await.unwrap();
-    let segment = client
-        .get(server.url("/seg/v0_0.m4s"))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(master.status(), 200);
-    assert_eq!(
-        master.headers().get("content-type").unwrap(),
-        "application/vnd.apple.mpegurl"
-    );
-    assert_eq!(media.status(), 200);
-    assert_eq!(
-        media.headers().get("content-type").unwrap(),
-        "application/vnd.apple.mpegurl"
-    );
-    assert_eq!(init.status(), 200);
-    assert_eq!(init.headers().get("content-type").unwrap(), "audio/mp4");
-    assert_eq!(segment.status(), 200);
-    assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -600,11 +568,6 @@ fn scan_top_level_box_summaries(bytes: &[u8]) -> Vec<BoxSummary> {
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
     TestServerHelper::new().await
-}
-
-#[kithara::fixture]
-async fn packaged_server() -> PackagedTestServer {
-    PackagedTestServer::new().await
 }
 
 #[kithara::fixture]

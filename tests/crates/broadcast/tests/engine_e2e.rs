@@ -14,7 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     bufpool_ext::pools,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
 use kithara_test_fixtures::integration_fixtures::broadcast_tone;
 use kithara_test_utils::wait_until;
@@ -35,12 +35,10 @@ fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
     resource_from_reader(TestPcmReader::from_samples(spec, broadcast_tone))
 }
 
-async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
-        SESSION_RATE,
-    )
-    .await;
+async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SESSION_RATE)
+            .await;
     harness
         .with_player(move |player| {
             player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
@@ -54,7 +52,7 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
     harness
 }
 
-async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
+async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
@@ -63,7 +61,7 @@ async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32
     rendered
 }
 
-async fn render_tone(harness: &OfflinePlayerHarness, frames: usize) {
+async fn render_tone(harness: &OfflinePlayer, frames: usize) {
     let mut audible = 0;
     for _ in 0..MAX_BLOCKS {
         let block = harness.render(BLOCK_FRAMES).await;
@@ -137,7 +135,7 @@ impl OnAir {
     }
 
     async fn start(
-        harness: &OfflinePlayerHarness,
+        harness: &OfflinePlayer,
         ring_samples: usize,
         gap_after_writes: Option<usize>,
     ) -> Self {

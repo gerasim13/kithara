@@ -23,9 +23,9 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
-    Xorshift64,
+    CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper, Xorshift64,
     event::TestEvent,
+    hls_server::packaged_ladder,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
     test_defaults::Consts as Shared,
     usdt_trace,
@@ -249,12 +249,12 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn hls_seek_middle_repeated_seeks_long_stress(
     #[case] backend: DecoderBackend,
-    #[future(awt)] gated_source: (PackagedTestServer, Vec<SegmentGateHandle>),
+    #[future(awt)] gated_source: (CreatedHls, Vec<SegmentGateHandle>),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (server, handles) = gated_source;
+    let (hls, handles) = gated_source;
     let mut gates: Vec<ControlledGate> = Consts::GATED_SEGMENTS
         .into_iter()
         .zip(handles)
@@ -264,7 +264,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
             released: false,
         })
         .collect();
-    let master = server.url("/master.m3u8");
+    let master = hls.master_url();
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -321,7 +321,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     for iter in 0..Consts::STRESS_ITERATIONS {
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
-        player.seek(target, u64::from(1 + iter));
+        player.seek(target);
         let segment = segment_for_target(target);
         if let Some(index) = gates
             .iter()
@@ -575,10 +575,17 @@ async fn hls_rate_seek_stress_keeps_playback_live(
 }
 
 #[kithara::fixture]
-async fn gated_source() -> (PackagedTestServer, Vec<SegmentGateHandle>) {
-    let gate_specs = Consts::GATED_SEGMENTS.map(|segment| (Consts::GATED_VARIANT, segment));
-    let (server, handles) = PackagedTestServer::with_segment_gates(&gate_specs).await;
-    (server, handles)
+async fn gated_source() -> (CreatedHls, Vec<SegmentGateHandle>) {
+    let helper = TestServerHelper::new().await;
+    let hls = helper
+        .create_hls(packaged_ladder())
+        .await
+        .expect("create packaged ladder");
+    let handles = Consts::GATED_SEGMENTS
+        .into_iter()
+        .map(|segment| helper.register_segment_gate(hls.token(), Consts::GATED_VARIANT, segment))
+        .collect();
+    (hls, handles)
 }
 
 #[kithara::fixture]

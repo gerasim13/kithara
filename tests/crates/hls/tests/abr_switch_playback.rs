@@ -28,15 +28,15 @@ use kithara_integration_tests::{
     fixture_protocol::{DelayRule, PcmPattern},
     mixed_codec_ladder, mixed_encrypted, mixed_plain,
     offline::{OfflinePlayer, resource_from_reader},
+    output_continuity::{
+        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
+        render_offline_window,
+    },
     served_mp3,
 };
 use kithara_test_utils::{TestTempDir, temp_dir, virtual_pace};
 use tracing::info;
 use url::Url;
-
-use crate::continuity::{
-    CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
-};
 
 fn packaged_switch_abr_mode() -> AbrMode {
     auto(0)

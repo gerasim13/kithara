@@ -98,8 +98,8 @@ mod hls_timeline {
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{
+        CreatedHls, HlsFixtureBuilder, TestServerHelper,
         bufpool_ext::{TestPools, pools},
-        hls_server::{HlsTestServer, HlsTestServerConfig},
     };
     use kithara_test_fixtures::assets::sized_wav_timeline_saw_2mb;
     use kithara_test_utils::TestTempDir;
@@ -107,7 +107,7 @@ mod hls_timeline {
     use crate::common::test_defaults::SawWav;
 
     #[kithara::fixture]
-    async fn timeline_server() -> HlsTestServer {
+    async fn timeline_server() -> CreatedHls {
         const SEGMENT_COUNT: usize = 10;
         let segment_duration = SawWav::DEFAULT.segment_size as f64
             / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
@@ -115,14 +115,17 @@ mod hls_timeline {
         let wav = tokio::task::spawn_blocking(|| sized_wav_timeline_saw_2mb().bytes().to_vec())
             .await
             .expect("read prepared timeline WAV");
-        HlsTestServer::new(HlsTestServerConfig {
-            segments_per_variant: SEGMENT_COUNT,
-            segment_size: SawWav::DEFAULT.segment_size,
-            segment_duration_secs: segment_duration,
-            custom_data: Some(Arc::new(wav)),
-            ..Default::default()
-        })
-        .await
+        TestServerHelper::new()
+            .await
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .segments_per_variant(SEGMENT_COUNT)
+                    .segment_size(SawWav::DEFAULT.segment_size)
+                    .segment_duration_secs(segment_duration)
+                    .custom_data(Arc::new(wav)),
+            )
+            .await
+            .expect("create HLS fixture")
     }
 
     #[kithara::test(
@@ -131,9 +134,9 @@ mod hls_timeline {
         hang_timeout_secs(1),
         tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
     )]
-    async fn test_hls_timeline_segment_tracking(#[future(awt)] timeline_server: HlsTestServer) {
+    async fn test_hls_timeline_segment_tracking(#[future(awt)] timeline_server: CreatedHls) {
         let server = timeline_server;
-        let url = server.url("/master.m3u8");
+        let url = server.master_url();
         let temp_dir = TestTempDir::new();
         let cancel = CancelToken::never();
         let pools = pools();

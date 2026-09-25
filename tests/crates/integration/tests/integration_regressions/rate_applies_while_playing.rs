@@ -8,7 +8,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
-    OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -104,12 +104,9 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
         .collect()
 }
 
-async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
-        SAMPLE_RATE,
-    )
-    .await;
+async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     harness
         .with_player(move |player| {
             player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);

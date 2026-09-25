@@ -57,12 +57,6 @@ impl StartupFixture {
     }
 }
 
-fn variant_size_probe_count(helper: &TestServerHelper, token: &str, variant: usize) -> u64 {
-    (0..SEGMENTS_PER_VARIANT)
-        .map(|segment| helper.size_probe_count(token, variant, segment))
-        .sum()
-}
-
 /// Guard for the S13 lazy-size startup contract.
 ///
 /// Startup must not issue eager size probes for either file-like WAV or
@@ -148,14 +142,11 @@ async fn startup_issues_no_eager_size_probe_storm(
     .expect("spawn_blocking first-frame read panicked");
     drop(audio);
 
-    let token = created.token();
-    let total: u64 = (0..VARIANT_COUNT)
-        .map(|variant| variant_size_probe_count(&helper, token, variant))
-        .sum();
-    let active = variant_size_probe_count(&helper, token, ACTIVE_VARIANT);
+    let total = helper.total_size_probe_count(&created);
+    let active = helper.variant_size_probe_count(&created, ACTIVE_VARIANT);
     let non_active: Vec<u64> = (0..VARIANT_COUNT)
         .filter(|&v| v != ACTIVE_VARIANT)
-        .map(|v| variant_size_probe_count(&helper, token, v))
+        .map(|v| helper.variant_size_probe_count(&created, v))
         .collect();
 
     info!(

@@ -10,9 +10,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     kithara,
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
@@ -32,7 +32,7 @@ const READ_DEADLINE: Duration = Duration::from_secs(30);
 async fn abr_mode_storm_does_not_wedge_loading(
     temp_dir: TestTempDir,
     cancel_token: CancelToken,
-    #[future(awt)] abr_source: HlsTestServer,
+    #[future(awt)] abr_source: CreatedHls,
 ) {
     let server = abr_source;
     let pools = pools();
@@ -41,7 +41,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
             root: temp_dir.path().to_path_buf(),
         })
         .build();
-    let config = HlsConfig::for_url(server.url("/master.m3u8"))
+    let config = HlsConfig::for_url(server.master_url())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)
@@ -103,19 +103,22 @@ async fn abr_mode_storm_does_not_wedge_loading(
 }
 
 #[kithara::fixture]
-async fn abr_source() -> HlsTestServer {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: VARIANT_COUNT,
-        segments_per_variant: SEGMENTS_PER_VARIANT,
-        variant_bandwidths: Some(BANDWIDTHS.to_vec()),
-        delay_rules: vec![DelayRule {
-            segment_eq: Some(0),
-            delay_ms: FIRST_SEGMENT_DELAY_MS,
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
-    .await;
+async fn abr_source() -> CreatedHls {
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(VARIANT_COUNT)
+                .segments_per_variant(SEGMENTS_PER_VARIANT)
+                .variant_bandwidths(BANDWIDTHS.to_vec())
+                .delay_rules(vec![DelayRule {
+                    segment_eq: Some(0),
+                    delay_ms: FIRST_SEGMENT_DELAY_MS,
+                    ..Default::default()
+                }]),
+        )
+        .await
+        .expect("create HLS fixture");
 
     server
 }

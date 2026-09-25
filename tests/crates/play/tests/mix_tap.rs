@@ -9,7 +9,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
-    OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -30,12 +30,9 @@ fn make_resource(constant_half: &'static [u8]) -> Resource {
     )
 }
 
-async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
-        SAMPLE_RATE,
-    )
-    .await;
+async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     harness
         .with_player(move |player| {
             player.insert(make_resource(constant_half), TrackId::allocate(), None);
@@ -49,7 +46,7 @@ async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
     harness
 }
 
-async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
+async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
@@ -106,11 +103,8 @@ async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
 
 #[kithara::test(tokio)]
 async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_half: &'static [u8]) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
-        SAMPLE_RATE,
-    )
-    .await;
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     let mut tap = harness
         .host()
         .enable_mix_tap(ROOMY_CAPACITY)

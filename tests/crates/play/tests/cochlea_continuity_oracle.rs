@@ -6,7 +6,7 @@ use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::{events::TrackId, signal::AudioSpec};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -24,7 +24,7 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
         CHANNELS,
         NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
     );
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),

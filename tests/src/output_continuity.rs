@@ -1,4 +1,6 @@
-#![cfg(not(target_arch = "wasm32"))]
+//! Output-continuity oracle for offline renders: the longest silent run a
+//! render window carried, and whether `PlaybackProgress` ever ran backwards.
+
 use std::fmt;
 
 use kithara::{
@@ -6,11 +8,12 @@ use kithara::{
     events::EventReceiver,
     platform::time::{Duration, Instant},
 };
-use kithara_integration_tests::{event::TestEvent, offline::OfflinePlayer};
 use kithara_test_utils::virtual_pace;
 
-pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
-pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
+use crate::{event::TestEvent, offline::OfflinePlayer};
+
+pub const CONTINUITY_BLOCK_FRAMES: usize = 512;
+pub const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
 
 /// One offline render window, judged by what the mix carried.
@@ -23,23 +26,23 @@ const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
 /// underrunning it — is pinned on the audio thread, where such a wait is a hang
 /// rather than a slow block.
 #[derive(Debug, Clone)]
-pub(crate) struct OutputGapStats {
-    pub(crate) label: String,
-    pub(crate) blocks: u32,
-    pub(crate) max_silence_run: u32,
-    pub(crate) max_render: Duration,
+pub struct OutputGapStats {
+    pub label: String,
+    pub blocks: u32,
+    pub max_silence_run: u32,
+    pub max_render: Duration,
     block_frames: usize,
     sample_rate: u32,
 }
 
 impl OutputGapStats {
     #[must_use]
-    pub(crate) fn block_duration_for(block_frames: usize, sample_rate: u32) -> Duration {
+    pub fn block_duration_for(block_frames: usize, sample_rate: u32) -> Duration {
         Duration::from_secs_f64(block_frames as f64 / f64::from(sample_rate))
     }
 
     #[must_use]
-    pub(crate) fn block_budget(&self) -> Duration {
+    pub fn block_budget(&self) -> Duration {
         Self::block_duration_for(self.block_frames, self.sample_rate)
     }
 }
@@ -57,16 +60,16 @@ impl fmt::Display for OutputGapStats {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct PlaybackProgressProbe {
-    pub(crate) progress_events: usize,
-    pub(crate) regressions: usize,
-    pub(crate) max_gap_between_events: Duration,
+pub struct PlaybackProgressProbe {
+    pub progress_events: usize,
+    pub regressions: usize,
+    pub max_gap_between_events: Duration,
     last_position_ms: Option<u64>,
     last_event_at: Option<Instant>,
 }
 
 impl PlaybackProgressProbe {
-    pub(crate) fn drain(&mut self, rx: &mut EventReceiver<TestEvent>) {
+    pub fn drain(&mut self, rx: &mut EventReceiver<TestEvent>) {
         while let Ok(event) = rx.try_recv().map(|env| env.event) {
             if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event {
                 let now = Instant::now();
@@ -88,7 +91,7 @@ impl PlaybackProgressProbe {
         }
     }
 
-    pub(crate) fn observe_idle(&mut self) {
+    pub fn observe_idle(&mut self) {
         if let Some(last) = self.last_event_at {
             let gap = last.elapsed();
             if gap > self.max_gap_between_events {
@@ -99,7 +102,7 @@ impl PlaybackProgressProbe {
 }
 
 #[must_use]
-pub(crate) async fn render_offline_window(
+pub async fn render_offline_window(
     player: &mut OfflinePlayer,
     blocks: u32,
     label: &str,

@@ -18,7 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture_with_options},
+    offline::{OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture_with_options},
 };
 use kithara_test_fixtures::{assets, signal::mean_abs};
 
@@ -50,7 +50,7 @@ enum NonLeadingRole {
 /// Three tracks loaded through the queue, with the first standing in for a
 /// non-leading slot. The files stay alive as long as the queue may read them.
 struct NonLeadingFixture {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     stale: TrackRef,
     current: TrackId,
@@ -82,7 +82,7 @@ async fn non_leading_fixture() -> NonLeadingFixture {
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
@@ -94,7 +94,7 @@ async fn render_loop(
 }
 
 fn publish_completion(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     completion: Completion,
     role: NonLeadingRole,
     track: TrackRef,
