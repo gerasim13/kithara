@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     offline::resource_from_reader,
     output_continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
-        render_offline_window,
+        render_offline_window, render_until_audible,
     },
 };
 use kithara_test_fixtures::{
@@ -872,9 +872,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     )
     .await;
     player.load_and_fadein(resource).await;
-    let _warmup = render_offline_window(
+    render_until_audible(
         &mut player,
-        24,
         "packaged warmup",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,

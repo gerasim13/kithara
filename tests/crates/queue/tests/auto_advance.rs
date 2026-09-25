@@ -497,6 +497,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,

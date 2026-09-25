@@ -47,7 +47,7 @@ kithara-encode = { workspace = true, features = ["fdk-aac"] }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-utils = { workspace = true }
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 arc-swap = { workspace = true }
 axum = { workspace = true }

@@ -15,6 +15,10 @@ use crate::{event::TestEvent, offline::OfflinePlayer};
 pub const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
+/// Blocks a caller may render while waiting for first audible output. At
+/// [`CONTINUITY_BLOCK_FRAMES`] and [`CONTINUITY_SAMPLE_RATE`] this is ~5 s of
+/// output: past any decoder warm-up, and inside every caller's test budget.
+const AUDIBLE_WARMUP_BLOCKS: u32 = 430;
 
 /// One offline render window, judged by what the mix carried.
 ///
@@ -99,6 +103,41 @@ impl PlaybackProgressProbe {
             }
         }
     }
+}
+
+/// Render until the mix carries its first audible block.
+///
+/// A fixed warm-up window is a start-up budget in disguise. The render loop
+/// drives the virtual clock while a segment fetch runs on the real one, so a
+/// window counted in blocks can elapse before the first segment has landed;
+/// the measurement window that follows then opens on zero-fill and the silence
+/// oracle reports a dropout that never happened. Waiting for audible output
+/// leaves that oracle measuring steady state alone, while a stream that stays
+/// silent still fails, now naming the budget it exhausted.
+///
+/// # Panics
+///
+/// Panics when no block is audible within [`AUDIBLE_WARMUP_BLOCKS`].
+pub async fn render_until_audible(
+    player: &mut OfflinePlayer,
+    label: &str,
+    block_frames: usize,
+    sample_rate: u32,
+) {
+    let block_budget = OutputGapStats::block_duration_for(block_frames, sample_rate);
+    for _ in 0..AUDIBLE_WARMUP_BLOCKS {
+        let started = Instant::now();
+        let out = player.render(block_frames).await;
+        let elapsed = started.elapsed();
+        if out
+            .iter()
+            .any(|sample| sample.abs() > ACTIVE_SAMPLE_THRESHOLD)
+        {
+            return;
+        }
+        virtual_pace(block_budget.saturating_sub(elapsed));
+    }
+    panic!("{label}: no audible block within {AUDIBLE_WARMUP_BLOCKS} rendered blocks");
 }
 
 #[must_use]

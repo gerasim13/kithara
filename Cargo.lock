@@ -4337,7 +4337,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kithara"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-abr",
@@ -4382,7 +4382,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-abr"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -4411,7 +4411,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-analysis"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -4450,7 +4450,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-analysis-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
@@ -4462,7 +4462,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-android"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "dashmap",
  "derive_more",
@@ -4479,7 +4479,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-app"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "bytes",
@@ -4517,7 +4517,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-app-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-app",
@@ -4531,7 +4531,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-apple"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "block2 0.6.2",
  "fieldwork",
@@ -4547,7 +4547,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-assets"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "arc-swap",
@@ -4590,7 +4590,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-audio"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "arc-swap",
@@ -4641,7 +4641,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-audio-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "assert_no_alloc",
  "kithara",
@@ -4657,7 +4657,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-beat"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "hex",
@@ -4684,7 +4684,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-blob"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
  "kithara-bufpool",
@@ -4695,7 +4695,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-broadcast"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "axum",
@@ -4728,7 +4728,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-broadcast-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bytes",
  "kithara",
@@ -4742,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-bufpool"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "crossbeam-queue",
@@ -4768,11 +4768,11 @@ dependencies = [
 
 [[package]]
 name = "kithara-core-test-fixtures"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 
 [[package]]
 name = "kithara-decode"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "core-foundation 0.10.1",
@@ -4818,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-decode-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "derive_more",
  "futures",
@@ -4837,7 +4837,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-derive"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara-test-dylib",
  "kithara-test-utils",
@@ -4851,7 +4851,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-devtools"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
@@ -4876,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-download"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "axum",
  "bon",
@@ -4903,7 +4903,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-drm"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "bytes",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-effects"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "biquad",
  "bon",
@@ -4948,7 +4948,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-effects-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
@@ -4958,7 +4958,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-encode"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "derive_more",
@@ -4981,7 +4981,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-events"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "crossbeam-queue",
  "derive_more",
@@ -4998,7 +4998,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ffi"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bytes",
  "cpal",
@@ -5041,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ffi-web-analysis-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "js-sys",
  "kithara",
@@ -5053,7 +5053,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ffi-web-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "fieldwork",
  "gloo-timers",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-file"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "delegate",
@@ -5112,7 +5112,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-file-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "axum",
  "bytes",
@@ -5142,7 +5142,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-harness-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "js-sys",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-hls"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "arc-swap",
@@ -5206,7 +5206,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-hls-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bytes",
  "gloo-timers",
@@ -5223,7 +5223,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-host"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "audioadapter-buffers",
@@ -5257,7 +5257,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-host-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-integration-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "anyhow",
@@ -5330,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-mp4"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "derive_more",
  "kithara-test-utils",
@@ -5341,7 +5341,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-mpa"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara-workspace-hack",
  "num-traits",
@@ -5351,7 +5351,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-net"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "async-trait",
  "axum",
@@ -5392,7 +5392,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-output"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "kithara-platform",
@@ -5404,7 +5404,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-platform"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "assert_no_alloc",
@@ -5438,7 +5438,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-play"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "axum",
@@ -5496,7 +5496,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-play-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "derive_more",
@@ -5516,7 +5516,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-queue"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "delegate",
@@ -5551,7 +5551,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-queue-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "bytes",
@@ -5572,7 +5572,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-record"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "kithara-bufpool",
@@ -5590,7 +5590,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-resampler"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -5616,7 +5616,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ring"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5625,7 +5625,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-signal"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
  "derive_more",
@@ -5644,7 +5644,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-storage"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "bon",
@@ -5674,7 +5674,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-stream"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -5698,7 +5698,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-stream-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "futures",
  "kithara",
@@ -5709,7 +5709,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-stretch"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "bungee-sys",
@@ -5736,7 +5736,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-sync"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "delegate",
@@ -5753,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-sync-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
  "futures",
@@ -5768,7 +5768,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-dylib"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
@@ -5778,7 +5778,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-fixtures"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "bon",
@@ -5823,7 +5823,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-macros"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara-workspace-hack",
  "proc-macro2",
@@ -5833,7 +5833,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-utils"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "axum",
  "fieldwork",
@@ -5858,7 +5858,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ui"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -5906,7 +5906,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-warp"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "bon",
@@ -5936,7 +5936,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-warp-tests"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-beat",
@@ -5955,7 +5955,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-waveform"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "delegate",
@@ -5977,7 +5977,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-worker"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "criterion",
@@ -6000,7 +6000,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-workspace-hack"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -12456,7 +12456,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.0.1-alpha4"
+version = "0.0.1-alpha5"
 dependencies = [
  "anyhow",
  "base64",

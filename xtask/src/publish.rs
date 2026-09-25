@@ -96,6 +96,32 @@ pub(crate) fn publish_release(ctx: &Ctx) -> Result<()> {
     )
 }
 
+/// Every crate a release publishes, by name, once each of them is at
+/// `version`. A release names one version, and a crate left behind at another
+/// would reach the registry under a number nobody released.
+pub(crate) fn release_crates(version: &str) -> Result<Vec<String>> {
+    let order = resolve_publish_order()?;
+    crates_at_version(locate_versions(&order)?, version)
+}
+
+fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result<Vec<String>> {
+    let mut behind: Vec<_> = versions
+        .iter()
+        .filter(|(_, found)| found.as_str() != version)
+        .map(|(name, found)| format!("{name} {found}"))
+        .collect();
+    if !behind.is_empty() {
+        behind.sort();
+        bail!(
+            "the release names {version}, but these crates carry another version: {}",
+            behind.join(", ")
+        );
+    }
+    let mut names: Vec<_> = versions.into_keys().collect();
+    names.sort();
+    Ok(names)
+}
+
 /// Dry-run: disable hakari, validate packaging for each crate, re-enable hakari.
 ///
 /// Uses `cargo package --list` to verify that each crate can be packaged
@@ -656,6 +682,30 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_release_refuses_a_crate_at_another_version() {
+        let versions = HashMap::from([
+            ("kithara".to_string(), "0.0.2".to_string()),
+            ("kithara-net".to_string(), "0.0.1".to_string()),
+        ]);
+
+        let error = crates_at_version(versions, "0.0.2").unwrap_err();
+
+        assert!(error.to_string().contains("kithara-net 0.0.1"), "{error}");
+    }
+
+    #[test]
+    fn a_release_lists_its_crates_by_name() {
+        let versions = HashMap::from([
+            ("kithara-net".to_string(), "0.0.2".to_string()),
+            ("kithara".to_string(), "0.0.2".to_string()),
+        ]);
+
+        let names = crates_at_version(versions, "0.0.2").unwrap();
+
+        assert_eq!(names, ["kithara", "kithara-net"]);
+    }
 
     #[test]
     fn publish_order_is_resolved() {

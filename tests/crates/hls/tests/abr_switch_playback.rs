@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     offline::{OfflinePlayer, resource_from_reader},
     output_continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
-        render_offline_window,
+        render_offline_window, render_until_audible,
     },
     served_mp3,
 };
@@ -436,9 +436,8 @@ async fn packaged_abr_switch_keeps_player_continuity(
     )
     .await;
     player.load_and_fadein(resource).await;
-    let _warmup = render_offline_window(
+    render_until_audible(
         &mut player,
-        24,
         "packaged abr warmup",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
