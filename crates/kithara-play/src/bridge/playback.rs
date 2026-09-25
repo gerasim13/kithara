@@ -55,13 +55,13 @@ pub struct PlaybackShared {
     /// Whether playback is active.
     pub playing: AtomicBool,
     /// Cached span in seconds: how much of the source is on disk.
-    pub cached: AtomicF64,
+    pub(crate) cached: AtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
-    pub duration: AtomicF64,
+    pub(crate) duration: AtomicF64,
     /// Decoded-ahead frontier in seconds.
-    pub frontier: AtomicF64,
+    pub(crate) frontier: AtomicF64,
     /// Playback position in seconds.
-    pub position: AtomicF64,
+    pub(crate) position: AtomicF64,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
