@@ -5810,6 +5810,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

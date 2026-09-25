@@ -1,14 +1,22 @@
 use kithara_audio::{AudioReader, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
-use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, tokio::runtime::Handle};
+use kithara_events::TrackId;
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{BoxFuture, MaybeSendFuture},
+    sync::Arc,
+    tokio::runtime::Handle,
+};
+use kithara_sync::{StagePort, SyncExecutionReject};
 use kithara_warp::{WarpPlan, supports_playback_rate};
 use kithara_worker::TaskError;
+use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
 use crate::{
     PlayWorker, TrackConfig,
-    worker::{ReadinessProbe, StagedSlot},
+    worker::{Readiness, ReadinessProbe, StagedSlot},
 };
 
 /// One staged lane to open: the plan it enters, the cancel it answers to,
@@ -90,6 +98,45 @@ impl StagingRecipe {
         request: StageRequest,
     ) -> BoxFuture<'static, Result<StagedLane, StagingError>> {
         (self.open)(request)
+    }
+}
+
+impl StagePort for StagingRecipe {
+    type Media = TrackId;
+    type Lane = StagedLane;
+
+    fn runtime(&self) -> &Handle {
+        self.handle()
+    }
+
+    /// Opens the lane, then holds it only once its probe proves the plan's
+    /// prepared PCM.
+    fn stage(
+        self,
+        plan: WarpPlan,
+        cancel: CancelToken,
+    ) -> impl MaybeSendFuture<Output = Result<StagedLane, SyncExecutionReject>> + 'static {
+        async move {
+            let (probe, verdict) = ReadinessProbe::new(&plan);
+            let request = StageRequest {
+                plan,
+                cancel,
+                probe,
+            };
+            match self.open(request).await {
+                Ok(lane) => match verdict.await {
+                    Ok(Readiness::Ready) => Ok(lane),
+                    Ok(Readiness::Failed) => Err(SyncExecutionReject::Media),
+                    Err(_) => Err(SyncExecutionReject::Cancelled),
+                },
+                Err(StagingError::Capacity) => Err(SyncExecutionReject::Capacity),
+                Err(StagingError::Cancelled) => Err(SyncExecutionReject::Cancelled),
+                Err(StagingError::Media(error)) => {
+                    warn!(%error, "sync: the staged lane could not be opened");
+                    Err(SyncExecutionReject::Media)
+                }
+            }
+        }
     }
 }
 
