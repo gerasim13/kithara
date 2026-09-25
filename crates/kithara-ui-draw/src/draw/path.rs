@@ -1,8 +1,5 @@
-use super::{
-    ir::Rect,
-    pool::{Buffer, VecGuard},
-};
-use crate::geom::Pt;
+use super::pool::{Buffer, VecGuard};
+use crate::geom::{Pt, Rect};
 
 /// One move a vector outline is made of, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]

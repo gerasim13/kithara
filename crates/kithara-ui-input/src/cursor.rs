@@ -3,7 +3,7 @@ use super::Hit;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "iced", derive(kithara_derive::Mirror))]
 #[cfg_attr(feature = "iced", mirror(into = iced::mouse::Interaction))]
-pub(crate) enum CursorShape {
+pub enum CursorShape {
     None,
     Grab,
     Grabbing,
@@ -20,16 +20,18 @@ pub(crate) enum CursorShape {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Hover {
+pub struct Hover {
     shape: CursorShape,
 }
 
 impl Hover {
-    pub(crate) const fn new(shape: CursorShape) -> Self {
+    #[must_use]
+    pub const fn new(shape: CursorShape) -> Self {
         Self { shape }
     }
 
-    pub(crate) fn cursor(self, active: bool, hit: &Hit) -> CursorShape {
+    #[must_use]
+    pub fn cursor(self, active: bool, hit: &Hit) -> CursorShape {
         if active || hit.over() {
             self.shape
         } else {
@@ -41,9 +43,9 @@ impl Hover {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::{Pt, Rect};
 
     use super::*;
-    use crate::draw::{Pt, Rect};
 
     fn hit(at: Option<Pt>) -> Hit {
         Hit::new(

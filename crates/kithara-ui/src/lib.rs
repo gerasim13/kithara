@@ -13,8 +13,6 @@ pub(crate) mod engine;
 pub mod error;
 pub mod expand;
 pub mod ids;
-#[cfg(feature = "render")]
-pub mod interact;
 pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
@@ -29,6 +27,8 @@ pub use doc::{envelope, layout, module, package, param, skin, text};
 #[cfg(feature = "render")]
 pub use kithara_ui_draw as draw;
 pub use kithara_ui_draw::geom;
+#[cfg(feature = "render")]
+pub use kithara_ui_input as interact;
 #[cfg(feature = "render")]
 pub use kithara_ui_lottie as lottie;
 #[cfg(feature = "render")]

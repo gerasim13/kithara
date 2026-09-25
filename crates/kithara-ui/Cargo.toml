@@ -28,7 +28,7 @@ capture = [
     "dep:iced_wgpu",
     "dep:kithara-ui-capture",
 ]
-masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
+masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
 # lane that runs this package under the gate detects a blocking call made
@@ -38,6 +38,7 @@ no-block = ["kithara-platform/no-block"]
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
 render = [
+    "dep:kithara-ui-input",
     "dep:kithara-ui-lottie",
     "dep:lucide-icons",
     "dep:naga",
@@ -49,7 +50,7 @@ render = [
     "kithara-ui-draw/list",
     "kithara-ui-shaping/shape",
 ]
-iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced"]
+iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced", "kithara-ui-input/iced"]
 vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
@@ -58,6 +59,7 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-ui-capture = { workspace = true, optional = true }
 kithara-ui-draw = { workspace = true }
+kithara-ui-input = { workspace = true, optional = true }
 kithara-ui-lottie = { workspace = true, optional = true }
 kithara-ui-shaping = { workspace = true }
 

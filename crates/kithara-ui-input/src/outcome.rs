@@ -1,6 +1,5 @@
 /// Whether the current event may continue to content behind this component.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum Propagation {
     /// Leaves the current event available to content behind the component.
     #[default]
@@ -11,7 +10,6 @@ pub enum Propagation {
 
 /// Requested change to retained pointer ownership after this event.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum PointerOwnership {
     /// Keeps the retained owner unchanged.
     #[default]
@@ -19,21 +17,20 @@ pub enum PointerOwnership {
     /// Makes this component the retained owner of the current pointer. A
     /// component requests this while handling [`PointerPhase::Down`].
     ///
-    /// [`PointerPhase::Down`]: crate::interact::PointerPhase::Down
+    /// [`PointerPhase::Down`]: crate::PointerPhase::Down
     Claim,
     /// Gives the current pointer back to hit-tested routing.
     Release,
 }
 
 /// Typed event value, propagation verdict, and retained pointer ownership.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, with)]
 pub struct Outcome<T = f32> {
     value: Option<T>,
-    #[field(get(copy), with, vis = "pub")]
+    #[field(get(copy), with)]
     ownership: PointerOwnership,
-    #[field(get(copy), vis = "pub")]
+    #[field(get(copy))]
     propagation: Propagation,
 }
 

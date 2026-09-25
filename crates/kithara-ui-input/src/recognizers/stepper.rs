@@ -8,7 +8,7 @@ use super::{
 /// What a turn of a stepping surface amounts to. `By` is a delta, not a value:
 /// the surface never knows what it is stepping.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum StepEvent {
+pub enum StepEvent {
     By(f32),
     Activate,
 }
@@ -16,7 +16,7 @@ pub(crate) enum StepEvent {
 /// A surface that steps a value by detents, by trackpad travel and by dragging.
 /// It owns no configuration, so the gesture and its state are one value.
 #[derive(Default)]
-pub(crate) struct Stepper {
+pub struct Stepper {
     double_click: DoubleClick,
     drag: Option<f32>,
     last_step: Option<Instant>,
@@ -35,19 +35,15 @@ impl Stepper {
         Some((from - y) * Self::DRAG_STEPS_PER_PIXEL)
     }
 
-    pub(crate) const fn dragging(&self) -> bool {
+    #[must_use]
+    pub const fn dragging(&self) -> bool {
         self.drag.is_some()
     }
 
     /// Measures travel against the event position, never the hit, since a host that expresses the
     /// hit locally puts the two in different coordinate spaces; mixing them would jump by the
     /// surface's offset from the window corner.
-    pub(crate) fn on_input(
-        &mut self,
-        input: Input<'_>,
-        hit: &Hit,
-        now: Instant,
-    ) -> Outcome<StepEvent> {
+    pub fn on_input(&mut self, input: Input<'_>, hit: &Hit, now: Instant) -> Outcome<StepEvent> {
         match input {
             Input::Wheel(scroll) if hit.over() => {
                 let steps = self.step(scroll, now);
@@ -130,12 +126,10 @@ fn direction(scroll: Scroll) -> f32 {
 mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::{Pt, Rect};
 
     use super::*;
-    use crate::{
-        draw::{Pt, Rect},
-        interact::mouse as mouse_input,
-    };
+    use crate::mouse as mouse_input;
 
     fn surface() -> Rect {
         Rect {
@@ -185,7 +179,11 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            stepper.on_input(Input::Wheel(Scroll::pixels(-14.0)), &inside(), now),
+            stepper.on_input(
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: -14.0 }),
+                &inside(),
+                now
+            ),
             Outcome::set(StepEvent::By(1.0)),
             "any pixel delta is one detent, not an accumulated fraction"
         );
@@ -193,7 +191,7 @@ mod tests {
         for tail in [-11.0, -8.0, -5.0, -3.0, -1.5, -0.6, -0.2] {
             assert_eq!(
                 stepper.on_input(
-                    Input::Wheel(Scroll::pixels(tail)),
+                    Input::Wheel(Scroll::Pixels { x: 0.0, y: tail }),
                     &inside(),
                     now + Duration::from_millis(199),
                 ),
@@ -203,7 +201,7 @@ mod tests {
         }
         assert_eq!(
             stepper.on_input(
-                Input::Wheel(Scroll::pixels(-11.0)),
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: -11.0 }),
                 &inside(),
                 now + Duration::from_millis(200),
             ),

@@ -1,9 +1,10 @@
+use kithara_ui_draw::{Pt, Rect};
+
 use super::super::{CursorShape, Hit, Hover, Input, Outcome, PointerPhase};
-use crate::draw::{Pt, Rect};
 
 /// Which end of a two-handled interval a gesture drives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Edge {
+pub enum Edge {
     Min,
     Max,
 }
@@ -20,7 +21,7 @@ pub(crate) enum Edge {
 /// own endpoint; a numbered handle would make the host translate an index back
 /// into a name it already had.
 #[derive(Clone, Copy)]
-pub(crate) struct Span {
+pub struct Span {
     hover: Hover,
     max: f32,
     min: f32,
@@ -28,27 +29,29 @@ pub(crate) struct Span {
 
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct SpanState {
+pub struct SpanState {
     held: Option<Edge>,
 }
 
 impl SpanState {
-    #[cfg(feature = "masonry")]
-    pub(crate) fn cancel_pointer(&mut self) {
+    pub fn cancel_pointer(&mut self) {
         self.held = None;
     }
 
-    pub(crate) const fn captures_pointer(&self) -> bool {
+    #[must_use]
+    pub const fn captures_pointer(&self) -> bool {
         self.held.is_some()
     }
 }
 
 impl Span {
-    pub(crate) const fn new(hover: Hover, min: f32, max: f32) -> Self {
+    #[must_use]
+    pub const fn new(hover: Hover, min: f32, max: f32) -> Self {
         Self { hover, max, min }
     }
 
-    pub(crate) fn cursor(&self, state: &SpanState, hit: &Hit) -> CursorShape {
+    #[must_use]
+    pub fn cursor(&self, state: &SpanState, hit: &Hit) -> CursorShape {
         self.hover.cursor(state.captures_pointer(), hit)
     }
 
@@ -60,7 +63,7 @@ impl Span {
         }
     }
 
-    pub(crate) fn on_input(
+    pub fn on_input(
         &self,
         state: &mut SpanState,
         input: Input<'_>,

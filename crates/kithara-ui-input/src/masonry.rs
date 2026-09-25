@@ -26,7 +26,8 @@ const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
     (NamedKey::Home, Key::Home),
 ];
 
-pub(crate) fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
+#[must_use]
+pub fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
     match event {
         TextEvent::Keyboard(event) => {
             let key = portable_key(&event.key);
@@ -63,7 +64,8 @@ pub(crate) fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
     }
 }
 
-pub(crate) fn masonry_text_event(input: Input<'_>) -> Option<TextEvent> {
+#[must_use]
+pub fn masonry_text_event(input: Input<'_>) -> Option<TextEvent> {
     match input {
         Input::KeyPressed { key, modifiers, .. } => {
             Some(keyboard_event(KeyState::Down, key, modifiers))
@@ -122,7 +124,8 @@ fn masonry_key(key: Key<'_>) -> MasonryKey {
     }
 }
 
-pub(crate) fn portable_modifiers(modifiers: MasonryModifiers) -> Modifiers {
+#[must_use]
+pub fn portable_modifiers(modifiers: MasonryModifiers) -> Modifiers {
     Modifiers::new(
         modifiers.alt(),
         modifiers.ctrl(),
@@ -153,7 +156,8 @@ fn masonry_modifiers(modifiers: Modifiers) -> MasonryModifiers {
 /// Enter, leave and cancel carry no position: a widget being told the pointer
 /// left says nothing about where it went, and answering with a stale point
 /// would put the gesture somewhere the hand is not.
-pub(crate) const fn pointer_position(event: &PointerEvent) -> Option<PhysicalPosition<f64>> {
+#[must_use]
+pub const fn pointer_position(event: &PointerEvent) -> Option<PhysicalPosition<f64>> {
     match event {
         PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.position),
         PointerEvent::Move(update) => Some(update.current.position),
@@ -167,7 +171,8 @@ pub(crate) const fn pointer_position(event: &PointerEvent) -> Option<PhysicalPos
 ///
 /// A page delta has no neutral spelling — the recognizers count lines and
 /// pixels — so it is declined rather than guessed at.
-pub(crate) fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> {
+#[must_use]
+pub fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> {
     match delta {
         ScrollDelta::LineDelta(x, y) => Some(Scroll::Lines { x, y }),
         ScrollDelta::PixelDelta(delta) => Some(Scroll::Pixels {
@@ -178,7 +183,8 @@ pub(crate) fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> 
     }
 }
 
-pub(crate) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
+#[must_use]
+pub fn pointer_button(button: MasonryPointerButton) -> PointerButton {
     match button {
         MasonryPointerButton::Primary => PointerButton::Primary,
         MasonryPointerButton::Secondary => PointerButton::Secondary,

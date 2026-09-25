@@ -1,13 +1,14 @@
 use std::mem;
 
+use kithara_ui_draw::Pt;
+
 use super::super::{CursorShape, Hit, Input, Outcome, PointerPhase};
-use crate::draw::Pt;
 
 /// What a press-and-pull on one item of a list amounts to. Which item it was
 /// stays with whoever owns the list; the recognizer reports only that a drag
 /// began or ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DragEvent {
+pub enum DragEvent {
     Started,
     Dropped,
 }
@@ -18,10 +19,10 @@ pub(crate) enum DragEvent {
 /// gesture and its state are one value.
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct ItemDrag {
+pub struct ItemDrag {
     origin: Option<Pt>,
     active: bool,
-    #[field(get = is_held, vis = "pub(crate)")]
+    #[field(get = is_held)]
     held: bool,
 }
 
@@ -30,7 +31,8 @@ impl ItemDrag {
     /// press stays a plain click.
     const THRESHOLD: f32 = 4.0;
 
-    pub(crate) const fn cursor(&self) -> CursorShape {
+    #[must_use]
+    pub const fn cursor(&self) -> CursorShape {
         if self.active {
             CursorShape::Grabbing
         } else {
@@ -38,7 +40,7 @@ impl ItemDrag {
         }
     }
 
-    pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<DragEvent> {
+    pub fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<DragEvent> {
         match input {
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
                 *self = Self {
@@ -87,9 +89,10 @@ impl ItemDrag {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::Rect;
 
     use super::*;
-    use crate::{draw::Rect, interact::mouse as mouse_input};
+    use crate::mouse as mouse_input;
 
     fn row() -> Rect {
         Rect {

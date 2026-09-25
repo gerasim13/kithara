@@ -1,14 +1,13 @@
 use kithara_platform::time::Instant;
-
-use crate::draw::Pt;
+use kithara_ui_draw::Pt;
 
 #[derive(Default)]
-pub(crate) struct DoubleClick {
+pub struct DoubleClick {
     previous: Option<(Pt, Instant)>,
 }
 
 impl DoubleClick {
-    pub(crate) fn register(&mut self, position: Pt, now: Instant) -> bool {
+    pub fn register(&mut self, position: Pt, now: Instant) -> bool {
         let consecutive = self
             .previous
             .is_some_and(|(previous_position, previous_time)| {

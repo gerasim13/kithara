@@ -1,4 +1,4 @@
-use crate::draw::Pt;
+use kithara_ui_draw::Pt;
 
 /// Stable identity of one pointer for the duration of its gesture.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -9,7 +9,6 @@ pub const MOUSE: PointerId = PointerId(0);
 
 /// Toolkit-neutral pointer button.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum PointerButton {
     /// Primary selection button.
     Primary,
@@ -27,7 +26,6 @@ pub enum PointerButton {
 
 /// Raw and recognized stages of a pointer gesture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum PointerPhase {
     /// A button began a gesture.
     Down,
@@ -51,7 +49,6 @@ pub enum PointerPhase {
 
 /// One toolkit-neutral pointer input packet.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct PointerInput {
     /// Host-space logical point, when the source event reports one.
     pub at: Option<Pt>,
@@ -85,7 +82,8 @@ impl PointerInput {
     }
 }
 
-pub(crate) const fn mouse(phase: PointerPhase, at: Option<Pt>) -> PointerInput {
+#[must_use]
+pub const fn mouse(phase: PointerPhase, at: Option<Pt>) -> PointerInput {
     let button = if matches!(phase, PointerPhase::Down | PointerPhase::Up) {
         Some(PointerButton::Primary)
     } else {

@@ -1,9 +1,9 @@
+use kithara_ui_draw::{Pt, Rect};
+
 use super::{modifiers::Modifiers, pointer::PointerInput};
-use crate::draw::{Pt, Rect};
 
 /// Toolkit-neutral input delivered to a custom component.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum Input<'a> {
     KeyPressed {
         key: Key<'a>,
@@ -27,7 +27,6 @@ pub enum Input<'a> {
 
 /// Toolkit-neutral keyboard key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum Key<'a> {
     ArrowDown,
     ArrowLeft,
@@ -46,7 +45,6 @@ pub enum Key<'a> {
 
 /// Toolkit-neutral text-input-method event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum InputMethod<'a> {
     Opened,
     Preedit {
@@ -59,7 +57,6 @@ pub enum InputMethod<'a> {
 
 /// Axis selected from a neutral scroll delta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum ScrollAxis {
     Horizontal,
     Vertical,
@@ -67,14 +64,14 @@ pub enum ScrollAxis {
 
 /// Toolkit-neutral line or pixel scroll delta.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum Scroll {
     Lines { x: f32, y: f32 },
     Pixels { x: f32, y: f32 },
 }
 
 impl Scroll {
-    pub(crate) const fn delta(self, axis: ScrollAxis) -> f32 {
+    #[must_use]
+    pub const fn delta(self, axis: ScrollAxis) -> f32 {
         let (x, y) = match self {
             Self::Lines { x, y } | Self::Pixels { x, y } => (x, y),
         };
@@ -84,25 +81,18 @@ impl Scroll {
         }
     }
 
-    pub(crate) const fn is_pixels(self) -> bool {
+    #[must_use]
+    pub const fn is_pixels(self) -> bool {
         matches!(self, Self::Pixels { .. })
     }
 
-    pub(crate) const fn lines(y: f32) -> Self {
+    #[must_use]
+    pub const fn lines(y: f32) -> Self {
         Self::Lines { y, x: 0.0 }
     }
 
-    #[cfg(test)]
-    pub(crate) const fn pixels(y: f32) -> Self {
-        Self::Pixels { y, x: 0.0 }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn x(self) -> f32 {
-        self.delta(ScrollAxis::Horizontal)
-    }
-
-    pub(crate) const fn y(self) -> f32 {
+    #[must_use]
+    pub const fn y(self) -> f32 {
         self.delta(ScrollAxis::Vertical)
     }
 }
@@ -112,7 +102,6 @@ impl Scroll {
 /// The point and area always share one coordinate space. A retained engine may
 /// use host space, while a custom leaf receives its own local space.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct Hit {
     at: Option<Pt>,
     area: Rect,
@@ -155,7 +144,8 @@ impl Hit {
         self.inside().is_some()
     }
 
-    pub(crate) fn uniform_horizontal_index(self, count: usize) -> Option<usize> {
+    #[must_use]
+    pub fn uniform_horizontal_index(self, count: usize) -> Option<usize> {
         self.area.uniform_horizontal_index(self.inside()?, count)
     }
 }
@@ -165,7 +155,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::interact::{PointerButton, PointerId, PointerInput, PointerPhase};
+    use crate::{PointerButton, PointerId, PointerInput, PointerPhase};
 
     #[kithara::test]
     fn pointer_input_preserves_identity_button_phase_position_and_clicks() {

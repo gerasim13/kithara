@@ -5,7 +5,10 @@ use super::{
     model::{Descriptor, Emission, Kind, Target},
     router::Router,
 };
-use crate::interact::{CursorShape, Input, InputMethodRequest, Rect};
+use crate::{
+    draw::Rect,
+    interact::{CursorShape, Input, InputMethodRequest},
+};
 
 #[derive(Default)]
 pub(crate) struct Engine {
@@ -1316,12 +1319,19 @@ mod tests {
         engine.reconcile([scroll("outer"), scroll("inner")]);
         let inner = target("inner", 50.0, 50.0);
 
-        let _ = engine.handle(Input::Wheel(Scroll::pixels(-1_000.0)), &[inner], now);
+        let _ = engine.handle(
+            Input::Wheel(Scroll::Pixels {
+                x: 0.0,
+                y: -1_000.0,
+            }),
+            &[inner],
+            now,
+        );
         assert_eq!(engine.scroll_offset("inner"), Some(100.0));
 
         let emission = engine
             .handle(
-                Input::Wheel(Scroll::pixels(-10.0)),
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: -10.0 }),
                 &[target("outer", 50.0, 50.0), inner],
                 now,
             )
@@ -1342,14 +1352,25 @@ mod tests {
         engine.reconcile([scroll(path)]);
 
         let down = engine
-            .handle(Input::Wheel(Scroll::pixels(-1_000.0)), &[target], now)
+            .handle(
+                Input::Wheel(Scroll::Pixels {
+                    x: 0.0,
+                    y: -1_000.0,
+                }),
+                &[target],
+                now,
+            )
             .expect("the scroll must consume travel to the bottom");
         assert_eq!(down.outcome, Outcome::captured());
         assert_eq!(engine.scroll_offset(path), Some(100.0));
 
         assert!(
             engine
-                .handle(Input::Wheel(Scroll::pixels(-1.0)), &[target], now)
+                .handle(
+                    Input::Wheel(Scroll::Pixels { x: 0.0, y: -1.0 }),
+                    &[target],
+                    now
+                )
                 .is_none(),
             "a downward wheel at the bottom must remain ignored"
         );
@@ -1386,7 +1407,10 @@ mod tests {
         engine.reconcile([scroll(path)]);
 
         let _ = engine.handle(
-            Input::Wheel(Scroll::pixels(-1_000.0)),
+            Input::Wheel(Scroll::Pixels {
+                x: 0.0,
+                y: -1_000.0,
+            }),
             &[target],
             Instant::now(),
         );

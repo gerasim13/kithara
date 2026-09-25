@@ -5943,6 +5943,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-ui-capture",
  "kithara-ui-draw",
+ "kithara-ui-input",
  "kithara-ui-lottie",
  "kithara-ui-shaping",
  "kithara-workspace-hack",
@@ -5999,6 +6000,22 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-ui-input"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "fieldwork",
+ "iced",
+ "kithara-derive",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui-draw",
+ "kithara-workspace-hack",
+ "masonry",
+ "num-traits",
 ]
 
 [[package]]

@@ -14,7 +14,8 @@ use super::{
     mouse as mouse_input,
 };
 
-pub(crate) fn input(event: &Event) -> Option<Input<'_>> {
+#[must_use]
+pub fn input(event: &Event) -> Option<Input<'_>> {
     match event {
         Event::Keyboard(KeyboardEvent::KeyPressed {
             key,
@@ -83,7 +84,8 @@ fn portable_key<'a>(key: &'a IcedKey<impl AsRef<str>>) -> Key<'a> {
     }
 }
 
-pub(crate) fn input_method(request: Option<InputMethodRequest<'_>>) -> IcedInputMethod<&str> {
+#[must_use]
+pub fn input_method(request: Option<InputMethodRequest<'_>>) -> IcedInputMethod<&str> {
     let Some(request) = request else {
         return IcedInputMethod::Disabled;
     };
@@ -112,7 +114,7 @@ fn portable_modifiers(modifiers: keyboard::Modifiers) -> Modifiers {
     )
 }
 
-pub(crate) fn hit(bounds: Rectangle, cursor: Cursor) -> Hit {
+pub fn hit(bounds: Rectangle, cursor: Cursor) -> Hit {
     Hit::new(cursor.position().map(Into::into), bounds.into())
 }
 
@@ -126,12 +128,10 @@ mod tests {
         },
     };
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::Pt;
 
     use super::*;
-    use crate::{
-        draw::Pt,
-        interact::{CursorShape, MOUSE, PointerButton, PointerInput},
-    };
+    use crate::{CursorShape, MOUSE, PointerButton, PointerInput, ScrollAxis};
 
     #[kithara::test]
     fn key_press_and_release_preserve_key_and_all_modifiers() {
@@ -290,7 +290,7 @@ mod tests {
                 panic!("a mouse wheel must become portable input");
             };
 
-            assert_eq!(scroll.x(), expected_x);
+            assert_eq!(scroll.delta(ScrollAxis::Horizontal), expected_x);
             assert_eq!(scroll.y(), expected_y);
             assert_eq!(scroll.is_pixels(), pixels);
         }

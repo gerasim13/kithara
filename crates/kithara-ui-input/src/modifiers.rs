@@ -1,6 +1,5 @@
 /// Active keyboard modifiers.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
 pub struct Modifiers {
     alt: bool,
     control: bool,

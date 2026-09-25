@@ -1,12 +1,12 @@
 use super::super::{Hit, Input, Outcome, PointerPhase};
 
 #[derive(Default)]
-pub(crate) struct Crossing {
+pub struct Crossing {
     over: bool,
 }
 
 impl Crossing {
-    pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<bool> {
+    pub fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<bool> {
         let over = match input {
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => hit.over(),
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Leave => false,
@@ -28,12 +28,12 @@ impl Crossing {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::{Pt, Rect};
 
     use super::{
         super::super::{Hit, Input, Modifiers, Outcome, PointerPhase, mouse as mouse_input},
         Crossing,
     };
-    use crate::draw::{Pt, Rect};
 
     fn hit(x: f32) -> Hit {
         Hit::new(

@@ -1,16 +1,16 @@
 use kithara_platform::time::Instant;
+use kithara_ui_draw::{Pt, Rect};
 
 use super::{
     super::{CursorShape, Hit, Hover, Input, Outcome, PointerInput, PointerPhase},
     DoubleClick, wheel,
 };
-use crate::draw::{Pt, Rect};
 
 /// How a pointer position becomes a value. A relative track counts travel from
 /// the press, so the press only arms it; an absolute track reads the position
 /// itself, so the press seeks straight there.
 #[derive(Clone, Copy)]
-pub(crate) enum Track {
+pub enum Track {
     /// Vertical travel divided by `range` and added to `value`; up is positive.
     RelativeVertical { range: f32, value: f32 },
     /// Horizontal travel over the area's width, scaled and *subtracted* from
@@ -42,8 +42,8 @@ impl Track {
     /// next drag walks the control back to where it mounted. An absolute track
     /// reads the position itself and has nothing to move; a pixel track's value
     /// is a width rather than a fraction, and is not what an endpoint reports.
-    #[cfg(feature = "masonry")]
-    pub(crate) const fn at(self, value: f32) -> Self {
+    #[must_use]
+    pub const fn at(self, value: f32) -> Self {
         match self {
             Self::RelativeVertical { range, .. } => Self::RelativeVertical { range, value },
             Self::RelativeHorizontal { scale, .. } => Self::RelativeHorizontal { scale, value },
@@ -56,7 +56,7 @@ impl Track {
 }
 
 #[derive(bon::Builder)]
-pub(crate) struct Scalar {
+pub struct Scalar {
     hover: Hover,
     reset: Option<f32>,
     wheel: Option<WheelStep>,
@@ -65,16 +65,16 @@ pub(crate) struct Scalar {
 
 /// Opt-in wheel stepping: the current normalized value plus the per-tick step.
 #[derive(Clone, Copy)]
-pub(crate) struct WheelStep {
-    pub(crate) step: f32,
-    pub(crate) value: f32,
+pub struct WheelStep {
+    pub step: f32,
+    pub value: f32,
 }
 
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct ScalarState {
+pub struct ScalarState {
     double_click: DoubleClick,
-    #[field(get = captures_pointer, vis = "pub(crate)")]
+    #[field(get = captures_pointer)]
     active: bool,
     start_position: f32,
     start_value: f32,
@@ -82,17 +82,18 @@ pub(crate) struct ScalarState {
 }
 
 impl ScalarState {
-    pub(crate) fn cancel_pointer(&mut self) {
+    pub fn cancel_pointer(&mut self) {
         self.active = false;
     }
 }
 
 impl Scalar {
-    pub(crate) fn cursor(&self, state: &ScalarState, hit: &Hit) -> CursorShape {
+    #[must_use]
+    pub fn cursor(&self, state: &ScalarState, hit: &Hit) -> CursorShape {
         self.hover.cursor(state.active, hit)
     }
 
-    pub(crate) fn on_input(
+    pub fn on_input(
         &self,
         state: &mut ScalarState,
         input: Input<'_>,
@@ -445,7 +446,7 @@ mod tests {
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::Wheel(Scroll::pixels(-12.0)),
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: -12.0 }),
                 &cursor,
                 now,
             ),
@@ -455,14 +456,19 @@ mod tests {
         assert_eq!(
             drag.on_input(
                 &mut state,
-                Input::Wheel(Scroll::pixels(-12.0)),
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: -12.0 }),
                 &cursor,
                 now,
             ),
             Outcome::set(0.75)
         );
         assert_eq!(
-            drag.on_input(&mut state, Input::Wheel(Scroll::pixels(45.0)), &cursor, now,),
+            drag.on_input(
+                &mut state,
+                Input::Wheel(Scroll::Pixels { x: 0.0, y: 45.0 }),
+                &cursor,
+                now,
+            ),
             Outcome::set(0.0)
         );
     }

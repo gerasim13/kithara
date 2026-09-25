@@ -5,7 +5,8 @@ use super::super::{Hit, Input, Outcome, PointerPhase};
 /// later event has nothing to change and the cursor rule stays with [`Hover`].
 ///
 /// [`Hover`]: super::super::Hover
-pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
+#[must_use]
+pub fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
     match input {
         Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
             Outcome::set(())
@@ -22,12 +23,12 @@ pub(crate) fn on_input(input: Input<'_>, hit: &Hit) -> Outcome<()> {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::{Pt, Rect};
 
     use super::{
         super::super::{Scroll, mouse as mouse_input},
         *,
     };
-    use crate::draw::{Pt, Rect};
 
     fn at(x: f32) -> Hit {
         Hit::new(

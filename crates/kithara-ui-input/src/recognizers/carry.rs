@@ -1,5 +1,6 @@
+use kithara_ui_draw::Pt;
+
 use super::super::{CursorShape, Hit, Input, Outcome, PointerOwnership, PointerPhase};
-use crate::draw::Pt;
 
 /// Press-and-move that carries one placement of a scene.
 ///
@@ -9,7 +10,7 @@ use crate::draw::Pt;
 /// spot of it. Which corner that is in a scene, and whether a magnet moves it
 /// somewhere else, belongs to whoever mounted the placement.
 #[derive(Default)]
-pub(crate) struct Carry {
+pub struct Carry {
     /// Where the press landed, from the placement's own corner.
     grab: Option<Pt>,
 }
@@ -24,7 +25,8 @@ impl Carry {
         })
     }
 
-    pub(crate) const fn cursor(&self) -> CursorShape {
+    #[must_use]
+    pub const fn cursor(&self) -> CursorShape {
         if self.grab.is_some() {
             CursorShape::Grabbing
         } else {
@@ -33,11 +35,12 @@ impl Carry {
     }
 
     /// Whether a pointer is carrying this placement right now.
-    pub(crate) const fn is_carried(&self) -> bool {
+    #[must_use]
+    pub const fn is_carried(&self) -> bool {
         self.grab.is_some()
     }
 
-    pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<Pt> {
+    pub fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<Pt> {
         match input {
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
                 let Some(at) = hit.inside() else {
@@ -85,9 +88,10 @@ impl Carry {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use kithara_ui_draw::Rect;
 
     use super::*;
-    use crate::{draw::Rect, interact::mouse as mouse_input};
+    use crate::mouse as mouse_input;
 
     /// A placement standing at (100, 50), forty across and forty down.
     fn area() -> Rect {

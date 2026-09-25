@@ -2,11 +2,11 @@ use kurbo::{Arc, Circle, PathEl, Point, RoundedRect, Shape};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    ir::{DrawCmd, Geom, Rect},
+    ir::{DrawCmd, Geom},
     list::DrawList,
     path::{Path, Verb},
 };
-use crate::geom::{Pt, Transform};
+use crate::geom::{Pt, Rect, Transform};
 
 /// The upright rectangle that holds this one after the transform.
 ///

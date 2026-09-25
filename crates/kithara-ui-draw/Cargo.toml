@@ -28,7 +28,6 @@ list = [
     "dep:kithara-platform",
     "dep:kithara-ui-shaping",
     "dep:kurbo",
-    "dep:num-traits",
     "dep:roxmltree",
     "dep:thiserror",
     "dep:tracing",
@@ -48,7 +47,7 @@ derive_more = { workspace = true, optional = true }
 fieldwork = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
 kurbo = { workspace = true, optional = true }
-num-traits = { workspace = true, optional = true }
+num-traits = { workspace = true }
 roxmltree = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true, optional = true }

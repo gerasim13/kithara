@@ -7,8 +7,8 @@ mod limits;
 pub use draw::{
     Backend, CachedValue, Caps, DrawBuffers, DrawCmd, DrawList, DrawListBuilder, FillRule, Geom,
     Image, ImageId, LineCap, LineJoin, MAX_STOPS, Needs, Outline, Paint, Path, Pen, PoolPath,
-    PoolStats, PoolText, Rect, Rgba, Stop, Stops, StopsError, SvgError, TRANSPARENT, Unsupported,
-    Verb, ink, outline, replay, union,
+    PoolStats, PoolText, Rgba, Stop, Stops, StopsError, SvgError, TRANSPARENT, Unsupported, Verb,
+    ink, outline, replay, union,
 };
-pub use geom::{Pt, Transform};
+pub use geom::{Pt, Rect, Transform};
 pub use limits::{DrawPoolLimits, DrawPoolLimitsPatch};

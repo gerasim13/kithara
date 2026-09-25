@@ -1,7 +1,8 @@
 use std::ops::Range;
 
+use kithara_ui_draw::Rect;
+
 use super::Hit;
-use crate::draw::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CaretStop {
@@ -11,11 +12,11 @@ struct CaretStop {
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct TextInputLayout {
+pub struct TextInputLayout {
     carets: Vec<CaretStop>,
     line_height: f32,
     line_y: f32,
-    #[field(get, vis = "pub(crate)")]
+    #[field(get)]
     text_size: f32,
 }
 
@@ -26,12 +27,10 @@ impl Default for TextInputLayout {
 }
 
 impl TextInputLayout {
-    pub(crate) fn new(
-        carets: impl IntoIterator<Item = (usize, f32)>,
-        line_y: f32,
-        line_height: f32,
-        text_size: f32,
-    ) -> Self {
+    pub fn new<C>(carets: C, line_y: f32, line_height: f32, text_size: f32) -> Self
+    where
+        C: IntoIterator<Item = (usize, f32)>,
+    {
         Self {
             line_height,
             line_y,
@@ -43,7 +42,8 @@ impl TextInputLayout {
         }
     }
 
-    pub(crate) fn caret(&self, index: usize, area: Rect) -> Rect {
+    #[must_use]
+    pub fn caret(&self, index: usize, area: Rect) -> Rect {
         Rect {
             h: self.line_height,
             w: 1.0,
@@ -52,14 +52,16 @@ impl TextInputLayout {
         }
     }
 
-    pub(crate) fn clamp(&self, index: usize) -> usize {
+    #[must_use]
+    pub fn clamp(&self, index: usize) -> usize {
         self.carets
             .iter()
             .min_by_key(|caret| caret.index.abs_diff(index))
             .map_or(0, |caret| caret.index)
     }
 
-    pub(crate) fn index_at(&self, hit: Hit) -> usize {
+    #[must_use]
+    pub fn index_at(&self, hit: Hit) -> usize {
         let Some(point) = hit.at() else {
             return 0;
         };
@@ -70,7 +72,8 @@ impl TextInputLayout {
             .map_or(0, |caret| caret.index)
     }
 
-    pub(crate) fn x(&self, index: usize) -> f32 {
+    #[must_use]
+    pub fn x(&self, index: usize) -> f32 {
         let index = self.clamp(index);
         self.carets
             .iter()
@@ -79,13 +82,13 @@ impl TextInputLayout {
     }
 }
 
-pub(crate) struct PreeditRef<'a> {
-    pub(crate) content: &'a str,
-    pub(crate) selection: Option<Range<usize>>,
+pub struct PreeditRef<'a> {
+    pub content: &'a str,
+    pub selection: Option<Range<usize>>,
 }
 
-pub(crate) struct InputMethodRequest<'a> {
-    pub(crate) preedit: Option<PreeditRef<'a>>,
-    pub(crate) caret: Rect,
-    pub(crate) text_size: f32,
+pub struct InputMethodRequest<'a> {
+    pub preedit: Option<PreeditRef<'a>>,
+    pub caret: Rect,
+    pub text_size: f32,
 }
