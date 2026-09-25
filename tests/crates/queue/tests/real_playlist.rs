@@ -12,12 +12,12 @@ use kithara::{
 };
 use kithara_app::{document::Config, pools::AppPools};
 use kithara_integration_tests::{
-    Xorshift64,
     event::TestEvent,
     kithara,
     offline::{AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
+use kithara_test_utils::Xorshift64;
 
 /// Same as [`build_source`] but overrides `store.cache_dir` with this
 /// process's private temp dir so the real `kithara-app` cache stays

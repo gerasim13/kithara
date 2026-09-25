@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
+    decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::time::Duration,
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -9,7 +9,6 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    decode_ext::DecoderChunkOutcomeTestExt,
     fixture_protocol::PackagedSignal,
 };
 use kithara_test_fixtures::{
@@ -476,7 +475,7 @@ fn run_packaged_fmp4_decoder_check(
         .unwrap_or_else(|error| panic!("decode first probe chunk for packaged {label}: {error}"));
 
     let chunk = AudioChunk::try_from(direct_chunk).unwrap_or_else(|_| {
-        if probe_chunk.is_chunk() {
+        if matches!(probe_chunk, DecoderChunkOutcome::Chunk(_)) {
             panic!(
                 "packaged {label} direct fmp4 decoder returned EOF, but probe-based decoder produced PCM; total_len={}, boxes={box_summaries:?}",
                 total_len

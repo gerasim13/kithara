@@ -13,10 +13,11 @@ use kithara::{
     play::RegisteredAudio,
     stream::{Stream, StreamType},
 };
+use kithara_test_utils::Xorshift64;
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
-use crate::{bufpool_ext::TestPools, rng::Xorshift64};
+use crate::bufpool_ext::TestPools;
 
 pub const SAMPLE_RATE: u32 = 44_100;
 pub const CHANNELS: u16 = 2;

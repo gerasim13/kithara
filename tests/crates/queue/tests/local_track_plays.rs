@@ -14,7 +14,7 @@ use kithara::{
     queue::{QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
@@ -22,7 +22,7 @@ use kithara_integration_tests::{
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_fixtures::SignalAsset;
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{Xorshift64, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::TestPools;

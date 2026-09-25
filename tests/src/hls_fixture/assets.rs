@@ -10,6 +10,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::TestTempDir;
 use url::Url;
 

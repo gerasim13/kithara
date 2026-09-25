@@ -23,7 +23,7 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper, Xorshift64,
+    CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     event::TestEvent,
     hls_server::packaged_ladder,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
@@ -34,7 +34,7 @@ use kithara_integration_tests::{
         wait_for_position_event,
     },
 };
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{Xorshift64, temp_dir};
 
 use crate::bufpool_ext::{TestPools, pools};
 

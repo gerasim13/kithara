@@ -10,10 +10,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_utils::TestTempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64};
 
 struct Consts;
 impl Consts {

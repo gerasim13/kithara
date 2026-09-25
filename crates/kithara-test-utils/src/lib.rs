@@ -33,6 +33,7 @@ pub mod off_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pace;
 pub mod probe;
+pub mod rng;
 pub mod rtsan;
 #[cfg(feature = "temp-dir")]
 pub mod temp_dir;
@@ -45,6 +46,7 @@ pub use cancel::{cancel_token, cancel_token_cancelled};
 pub use http_server::TestHttpServer;
 #[cfg(not(target_arch = "wasm32"))]
 pub use pace::virtual_pace;
+pub use rng::Xorshift64;
 #[cfg(feature = "temp-dir")]
 pub use temp_dir::{TestTempDir, temp_dir, temp_path};
 #[cfg(not(target_arch = "wasm32"))]

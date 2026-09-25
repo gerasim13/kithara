@@ -58,3 +58,29 @@ impl From<ffmpeg_next::Error> for EncodeError {
 
 /// Result type for encode operations.
 pub type EncodeResult<T> = Result<T, EncodeError>;
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_test_utils::kithara;
+
+    use super::EncodeError;
+
+    #[kithara::test]
+    fn error_display_mentions_codec() {
+        let error = EncodeError::UnsupportedCodec(AudioCodec::AacLc);
+        assert_eq!(error.to_string(), "Unsupported codec: AacLc");
+    }
+
+    #[kithara::test]
+    fn error_display_mentions_container() {
+        let error = EncodeError::UnsupportedContainer(ContainerFormat::Fmp4);
+        assert_eq!(error.to_string(), "Unsupported container: Fmp4");
+    }
+
+    #[kithara::test]
+    fn backend_message_wraps_any_string() {
+        let error = EncodeError::backend_message("ffmpeg init failed".to_owned());
+        assert!(error.to_string().contains("Encoder error"));
+    }
+}
