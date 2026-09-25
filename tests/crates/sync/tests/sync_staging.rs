@@ -1,22 +1,13 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
-
 use kithara::{
-    host::PlayerMember,
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::Player},
-    signal::{SessionFrame, TransportRevision},
-    sync::{
-        AlignmentSource, LoadGeneration, SyncAdmission, SyncError, SyncGroup, SyncIntent,
-        SyncOperation,
-    },
-    warp::{AssetFrame, BeatGridId},
+    signal::SessionFrame,
+    sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
+    warp::AssetFrame,
 };
-use kithara_integration_tests::{
-    audio_artifact::AudioArtifactSet, bufpool_ext::pools, kithara, usdt_trace,
-};
+use kithara_integration_tests::{audio_artifact::AudioArtifactSet, kithara, usdt_trace};
 
 use super::{
     sync_listening::{render_frames, write_capture},
@@ -255,10 +246,12 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
     let control = {
-        let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
+        let mut harness =
+            ProductHarness::new_for_block(case, &synthetic_sources, 0, BLOCK_FRAMES).await;
         render_frames(&mut harness, case, LISTEN_FRAMES).await
     };
-    let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
+    let mut harness =
+        ProductHarness::new_for_block(case, &synthetic_sources, 0, BLOCK_FRAMES).await;
     let superseded = prepare_cue(&mut harness, case, CUE_SECONDS).await;
     let successor = prepare_cue(&mut harness, case, SUPERSEDING_CUE_SECONDS).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
@@ -299,27 +292,4 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         "{}: staging beside the sounding lane changed what it plays from this frame on",
         case.id(),
     );
-}
-
-#[kithara::test(native, tokio, multi_thread, serial, flash(false))]
-async fn a_player_outside_any_session_refuses_a_staged_preparation() {
-    let track = BeatGridId::allocate().expect("fixture grid id");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .sample_rate(NonZeroU32::new(48_000).expect("fixture rate"))
-            .track_grid_id(track)
-            .build(),
-    );
-    let mut deck = player.sync_attachment().into_group::<PlayerMember>();
-    let refused = deck
-        .transact(SyncOperation::Prepare {
-            target: track,
-            load: LoadGeneration::first(),
-            transport: TransportRevision::first(),
-            source: AlignmentSource::Prepared(AssetFrame::new(4_800.0).expect("fixture cue")),
-            window: SessionFrame::new(0)..SessionFrame::new(i64::MAX),
-        })
-        .expect_err("an unbound player has no owner to report a staged lane to");
-    assert_eq!(refused.error(), &SyncError::OwnerUnavailable);
 }

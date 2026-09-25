@@ -352,9 +352,10 @@ pub(crate) mod tests {
     use kithara_play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
         Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-        bridge::slot_channels, player::Player,
+        bridge::slot_channels, player::PlayerControlSource,
     };
     use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
 
     use super::*;
     use crate::{
@@ -469,12 +470,22 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_preserves_the_resident_players_sync_group() {
-        let player = player();
-        let grid_id = player.sync_attachment().id();
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+        let grid_id = BeatGridId::allocate().expect("fixture grid id");
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .grid_id(grid_id)
+                .sample_rate(TEST_SAMPLE_RATE)
+                .worker(worker)
+                .build(),
+        );
+        let mut queue = Queue::new(QueueConfig::builder().player(player).build());
 
-        assert_eq!(queue.sync_attachment().id(), grid_id);
+        let attachment = queue
+            .attach_session(test_session())
+            .expect("the queue binds its session");
+        assert_eq!(attachment.id(), grid_id);
     }
 
     #[kithara::test]

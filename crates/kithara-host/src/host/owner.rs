@@ -156,9 +156,8 @@ impl<S> Host<S> {
     where
         P: PlayerControlSource<Schema = S>,
     {
-        let attachment = player.sync_attachment();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(
+        let attachment = player.attach_session(SessionBinding::new(
             dispatcher,
             self.requested_sample_rate(),
         ))?;
