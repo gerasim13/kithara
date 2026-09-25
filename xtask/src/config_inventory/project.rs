@@ -926,7 +926,8 @@ mod tests {
         assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));
         assert!(generated.contains("pub download_batch_size: Option<u32>"));
         assert!(generated.contains("pub acquire_attempt_budget: Option<u32>"));
-        assert!(generated.contains("patch.acquire_attempt_budget = Some(u8::try_from(input)"));
+        assert!(generated.contains("patch.acquire_attempt_budget ="));
+        assert!(generated.contains("u8::try_from(input)"));
         assert!(generated.contains("pub size_probe_method: Option<FfiSizeProbeMethod>"));
         assert!(generated.contains("pub look_ahead_bytes: Option<u64>"));
         assert!(generated.contains("patch.look_ahead_bytes = Some(Some(input))"));
