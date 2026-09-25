@@ -282,7 +282,7 @@ async fn reselect_playing_track_cancels_pending_switch() {
 /// through a select the load applies. Only the advance is common to all
 /// three, so waiting on a reload would assert whichever route won, and a
 /// fixed budget of immediate renders would assert the loader's latency.
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false), tracing("kithara_queue=debug,kithara_play=debug"))]
 async fn repeat_one_restarts_the_track_its_own_eof_ended() {
     const PASS_BLOCKS: usize = 64;
 
