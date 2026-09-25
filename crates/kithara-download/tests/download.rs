@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    net::SocketAddr,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
@@ -25,9 +24,9 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
     time::{self, Duration, Instant},
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+    tokio::task::spawn as tokio_spawn,
 };
-use kithara_test_utils::{bufpool::pools as test_pools, kithara};
+use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara};
 use url::Url;
 
 use super::{
@@ -424,7 +423,8 @@ async fn downloader_shutdown_cancels_queued_commands() {
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn streaming_without_writer_still_completes() {
     let app = Router::new().route("/data", get(|| async { "body" }));
-    let url = spawn_server(app).await;
+    let server = TestHttpServer::new(app).await;
+    let url = server.url("/data");
     let gate = CompletionGate::new(1);
     let completion = Arc::new(Mutex::new(None));
     let completion_cb = Arc::clone(&completion);
@@ -468,7 +468,8 @@ async fn completed_request_duration_excludes_real_time_spent_before_it() {
     const EVENT_BUS_CAPACITY: usize = 16;
 
     let app = Router::new().route("/data", get(|| async { "body" }));
-    let url = spawn_server(app).await;
+    let server = TestHttpServer::new(app).await;
+    let url = server.url("/data");
 
     run_real_time_ahead(RUN_AHEAD).await;
 
@@ -601,7 +602,8 @@ async fn max_concurrent_limits_inflight_connections() {
     const TOTAL_REQUESTS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
 
-    let (url, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let url = server.url("/data");
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
@@ -637,7 +639,8 @@ async fn many_downloaders_global_peak_stays_bounded() {
     const HANDLER_DELAY_MS: u64 = 20;
     const GLOBAL_PEAK_LIMIT: usize = NUM_DOWNLOADERS * MAX_CONCURRENT_PER_DL;
 
-    let (url, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let url = server.url("/data");
 
     let mut tasks = Vec::new();
     for _ in 0..NUM_DOWNLOADERS {
@@ -684,7 +687,8 @@ async fn poll_next_respects_max_concurrent() {
     const TOTAL_CMDS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
 
-    let (url, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let url = server.url("/data");
 
     /// Peer that produces `remaining` HEAD commands via `poll_next`,
     /// counting each completion into a shared [`CompletionGate`].
@@ -813,7 +817,8 @@ async fn shared_client_keepalive_bounds_connection_count() {
         }),
     );
 
-    let url = spawn_server(app).await;
+    let server = TestHttpServer::new(app).await;
+    let url = server.url("/data");
     let shared_client = test_client_with_options(
         NetOptions::builder()
             .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
@@ -917,7 +922,8 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     // its `time::sleep` rewritten to a virtual sleep that collapses to ~0 wall
     // time under flash — the real soft_timeout would then never fire and no
     // LoadSlow would be published.
-    let url = spawn_slow_server(SLOW_SERVER_DELAY_MS).await;
+    let server = spawn_slow_server(SLOW_SERVER_DELAY_MS).await;
+    let url = server.url("/data");
 
     let config = DownloaderConfig::for_client(test_client())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
@@ -946,7 +952,8 @@ async fn soft_timeout_covers_response_body() {
     const SOFT_TIMEOUT_MS: u64 = 50;
     const EVENT_BUS_CAPACITY: usize = 64;
 
-    let url = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
+    let server = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
+    let url = server.url("/data");
     let config = DownloaderConfig::for_client(test_client())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
@@ -1058,7 +1065,7 @@ impl Peer for TaggedPriorityPeer {
     }
 }
 
-async fn spawn_slow_server(delay_ms: u64) -> Url {
+async fn spawn_slow_server(delay_ms: u64) -> TestHttpServer {
     let app = Router::new().route(
         "/data",
         get(move || async move {
@@ -1066,10 +1073,10 @@ async fn spawn_slow_server(delay_ms: u64) -> Url {
             "ok"
         }),
     );
-    spawn_server(app).await
+    TestHttpServer::new(app).await
 }
 
-async fn spawn_slow_body_server(delay_ms: u64) -> Url {
+async fn spawn_slow_body_server(delay_ms: u64) -> TestHttpServer {
     let app = Router::new().route(
         "/data",
         get(move || async move {
@@ -1079,7 +1086,7 @@ async fn spawn_slow_body_server(delay_ms: u64) -> Url {
             }))
         }),
     );
-    spawn_server(app).await
+    TestHttpServer::new(app).await
 }
 
 /// Requests a counting server is serving now and the most it served at once.
@@ -1090,7 +1097,7 @@ struct InFlight {
 }
 
 /// Serve `/data` slowly, counting the requests in flight.
-async fn spawn_in_flight_server(delay_ms: u64) -> (Url, Arc<InFlight>) {
+async fn spawn_in_flight_server(delay_ms: u64) -> (TestHttpServer, Arc<InFlight>) {
     let in_flight = Arc::new(InFlight::default());
     let app = Router::new().route(
         "/data",
@@ -1108,21 +1115,10 @@ async fn spawn_in_flight_server(delay_ms: u64) -> (Url, Arc<InFlight>) {
             }
         }),
     );
-    (spawn_server(app).await, in_flight)
+    (TestHttpServer::new(app).await, in_flight)
 }
 
-async fn spawn_server(app: Router) -> Url {
-    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio_spawn(async move {
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("serve");
-    });
-    Url::parse(&format!("http://{addr}/data")).expect("url")
-}
-
-async fn spawn_flaky_retry_server() -> Url {
+async fn spawn_flaky_retry_server() -> TestHttpServer {
     let attempts = Arc::new(AtomicUsize::new(0));
     let app = Router::new().route(
         "/data",
@@ -1141,10 +1137,10 @@ async fn spawn_flaky_retry_server() -> Url {
             }
         }),
     );
-    spawn_server(app).await
+    TestHttpServer::new(app).await
 }
 
-async fn spawn_stalled_body_server() -> Url {
+async fn spawn_stalled_body_server() -> TestHttpServer {
     let app = Router::new().route(
         "/data",
         get(|| async {
@@ -1152,14 +1148,15 @@ async fn spawn_stalled_body_server() -> Url {
             Body::from_stream(first.chain(futures::stream::pending()))
         }),
     );
-    spawn_server(app).await
+    TestHttpServer::new(app).await
 }
 
 /// flash(false): this assertion depends on real localhost request progress and
 /// retries, not on virtual scheduler time.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
 async fn retry_and_first_byte_publish_on_peer_bus() {
-    let url = spawn_flaky_retry_server().await;
+    let server = spawn_flaky_retry_server().await;
+    let url = server.url("/data");
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(100))
         .retry_policy(
@@ -1216,7 +1213,8 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
 /// deliver headers before body inactivity is measured.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
 async fn stalled_body_publishes_resume_and_exhaustion_events() {
-    let url = spawn_stalled_body_server().await;
+    let server = spawn_stalled_body_server().await;
+    let url = server.url("/data");
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(120))
         .retry_policy(
@@ -1281,7 +1279,8 @@ async fn active_peer_completes_before_preload_under_contention() {
     const MAX_CONCURRENT: usize = 2;
     const PER_REQUEST_DELAY_MS: u64 = 30;
 
-    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+    let server = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+    let url = server.url("/data");
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
@@ -1389,15 +1388,15 @@ fn demand_probe(flag: &Arc<AtomicBool>) -> DemandFn {
 /// One fetch in flight at a time over a slow-body server: the lead
 /// command's `on_response` fires before the queue moves again, so a
 /// flag it flips is what the next scheduler pass sees.
-async fn one_slot_downloader() -> (Downloader, Url) {
+async fn one_slot_downloader() -> (Downloader, TestHttpServer) {
     const PER_REQUEST_BODY_DELAY_MS: u64 = 100;
 
-    let url = spawn_slow_body_server(PER_REQUEST_BODY_DELAY_MS).await;
+    let server = spawn_slow_body_server(PER_REQUEST_BODY_DELAY_MS).await;
     let config = DownloaderConfig {
         max_concurrent: 1,
         ..test_config()
     };
-    (Downloader::new(config), url)
+    (Downloader::new(config), server)
 }
 
 /// Emits one pre-built batch, then stays quiet so the queue order alone
@@ -1420,7 +1419,8 @@ async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<F
 /// UrgentDownSwitch hang: v0's demanded bytes queued behind all of v1).
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
-    let (dl, url) = one_slot_downloader().await;
+    let (dl, server) = one_slot_downloader().await;
+    let url = server.url("/data");
     let gate = CompletionGate::new(5);
     let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
     let demand = Arc::new(AtomicBool::new(false));
@@ -1466,7 +1466,8 @@ async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
 /// demanded one takes the front — neither may be confused for the other.
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
-    let (dl, url) = one_slot_downloader().await;
+    let (dl, server) = one_slot_downloader().await;
+    let url = server.url("/data");
     let gate = CompletionGate::new(5);
     let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
     let stale = Arc::new(AtomicBool::new(true));
@@ -1518,7 +1519,8 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     const MAX_CONCURRENT: usize = 2;
     const PER_REQUEST_DELAY_MS: u64 = 10;
 
-    let url = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+    let server = spawn_slow_server(PER_REQUEST_DELAY_MS).await;
+    let url = server.url("/data");
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
@@ -1599,7 +1601,8 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     });
     let handle = dl.register(peer);
 
-    let url = spawn_slow_server(1).await;
+    let server = spawn_slow_server(1).await;
+    let url = server.url("/data");
 
     assert_eq!(
         peer_priority_from_handle(&handle, &active),

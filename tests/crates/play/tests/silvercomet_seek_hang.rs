@@ -158,7 +158,12 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(600)),
+    tracing("kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
+)]
 #[cfg_attr(
     not(target_os = "android"),
     case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
@@ -201,24 +206,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
-
-    let trace_log = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/silvercomet-trace.log")
-        .expect("open trace log");
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "kithara_audio=debug,kithara_hls=debug,kithara_stream=debug",
-                )
-            }),
-        )
-        .with_writer(std::sync::Mutex::new(trace_log))
-        .with_ansi(false)
-        .try_init();
 
     let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
