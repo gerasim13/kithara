@@ -82,12 +82,15 @@ pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
 }
 
 /// Stamp `version` on top of `source` and tag the stamp on both remotes.
-/// Answers the tagged commit.
+/// `crates` are the crates the release publishes: while crates.io holds none
+/// of them at `version`, a tag another build made is replaced. Answers the
+/// tagged commit.
 pub(crate) fn tag_release(
     ctx: &Ctx,
     source: &str,
     version: &str,
     artifacts: &Path,
+    crates: &[String],
 ) -> Result<String> {
     let ext = KitharaExt::from_ctx(ctx)?;
     require_config(&ext.release)?;
@@ -98,6 +101,7 @@ pub(crate) fn tag_release(
         source,
         version,
         artifacts,
+        || publish::registered(ctx, crates, version),
     )
 }
 

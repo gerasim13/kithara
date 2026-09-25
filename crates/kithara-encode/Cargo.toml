@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Portable and native audio encoding with continuous and finite outputs"
-publish = false
 
 [features]
 default = ["ffmpeg", "fdk-aac", "client-reqwest", "tls-rustls"]

@@ -238,6 +238,7 @@ pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &
                     &source,
                     versioned(version.as_deref(), *step)?,
                     &ctx.root,
+                    &crates,
                 )?);
             }
             PublishStep::Retained => {

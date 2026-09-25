@@ -63,37 +63,11 @@ pub(super) fn replace_nightly(
     assets: &[PathBuf],
 ) -> Result<()> {
     let api = Api::new(cfg)?;
-
-    // Ask before removing. `GitLab` answers a delete for a release that does
-    // not exist with 403 rather than 404 — it evaluates the permission against
-    // nothing — and a first run has nothing to remove. Reading that as a
-    // permission failure stopped the channel on the one run where there was
-    // provably no problem.
-    let (code, body) = api.get(&format!("releases/{tag}"))?;
-    match code {
-        200 => {
-            let (code, body) = api.delete(&format!("releases/{tag}"))?;
-            match code {
-                200 | 204 => println!("[gitlab] removed the previous nightly release"),
-                // The same 403-for-nothing-to-delete as the lookup above.
-                403 | 404 => {}
-                other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
-            }
-        }
-        403 | 404 => {}
-        other => bail!("gitlab release lookup failed (HTTP {other}): {body}"),
-    }
+    retract_with(&api, tag)?;
     let (code, body) = api.delete(&format!("repository/tags/{tag}"))?;
     match code {
         200 | 204 | 403 | 404 => {}
         other => bail!("gitlab tag delete failed (HTTP {other}): {body}"),
-    }
-    if let Some(id) = api.package_id(tag)? {
-        let (code, body) = api.delete(&format!("packages/{id}"))?;
-        match code {
-            200 | 204 | 404 => println!("[gitlab] removed the previous nightly package"),
-            other => bail!("gitlab package delete failed (HTTP {other}): {body}"),
-        }
     }
 
     let (code, body) = api.post(&format!("repository/tags?tag_name={tag}&ref={sha}"), None)?;
@@ -109,6 +83,42 @@ pub(super) fn replace_nightly(
         }
     }
     create_release(&api, tag, title, notes, &links(cfg, tag, &names(assets)?))
+}
+
+/// Take down the release under `tag` and the package version it links to,
+/// leaving the tag.
+pub(super) fn retract(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
+    retract_with(&Api::new(cfg)?, tag)
+}
+
+fn retract_with(api: &Api, tag: &str) -> Result<()> {
+    // Ask before removing. `GitLab` answers a delete for a release that does
+    // not exist with 403 rather than 404 — it evaluates the permission against
+    // nothing — and a first run has nothing to remove. Reading that as a
+    // permission failure stopped the channel on the one run where there was
+    // provably no problem.
+    let (code, body) = api.get(&format!("releases/{tag}"))?;
+    match code {
+        200 => {
+            let (code, body) = api.delete(&format!("releases/{tag}"))?;
+            match code {
+                200 | 204 => println!("[gitlab] removed release {tag}"),
+                // The same 403-for-nothing-to-delete as the lookup above.
+                403 | 404 => {}
+                other => bail!("gitlab release delete failed (HTTP {other}): {body}"),
+            }
+        }
+        403 | 404 => {}
+        other => bail!("gitlab release lookup failed (HTTP {other}): {body}"),
+    }
+    if let Some(id) = api.package_id(tag)? {
+        let (code, body) = api.delete(&format!("packages/{id}"))?;
+        match code {
+            200 | 204 | 404 => println!("[gitlab] removed package {tag}"),
+            other => bail!("gitlab package delete failed (HTTP {other}): {body}"),
+        }
+    }
+    Ok(())
 }
 
 fn create_release(api: &Api, tag: &str, title: &str, notes: &str, links: &[Link]) -> Result<()> {
