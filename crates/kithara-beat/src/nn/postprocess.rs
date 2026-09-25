@@ -2,16 +2,27 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     mark::BeatMark,
-    nn::{api::BeatError, config::BeatConfig, consts::Consts},
+    nn::{
+        api::BeatError,
+        config::{BeatConfig, BeatConfigUpdate},
+        consts::Consts,
+    },
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct PeakPicker {
+    #[field(get, vis = "pub(crate)")]
     config: BeatConfig,
 }
 
 impl PeakPicker {
     pub(crate) fn new(config: BeatConfig) -> Self {
         Self { config }
+    }
+
+    pub(crate) fn apply_config_update(&mut self, update: BeatConfigUpdate) {
+        self.config.apply_update(update);
     }
 
     pub(crate) fn decode(
@@ -169,6 +180,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::nn::config::{BeatConfigPeakThresholdUpdate, BeatConfigUpdate};
 
     fn at(peaks: &[Peak]) -> Vec<f64> {
         peaks.iter().map(|peak| peak.at).collect()
@@ -213,6 +225,22 @@ mod tests {
                 "a probability is never a certainty: {beat:?}"
             );
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn retained_config_update_changes_the_next_decode() {
+        let mut logits = flat(100);
+        logits[50] = 0.5;
+        let mut picker = PeakPicker::new(BeatConfig::default());
+        assert_eq!(picker.decode(&logits, &logits).unwrap().0.len(), 1);
+
+        picker.apply_config_update(BeatConfigUpdate {
+            peak_threshold: BeatConfigPeakThresholdUpdate::Set { value: 1.0 },
+            ..Default::default()
+        });
+
+        assert_eq!(picker.config().peak_threshold, 1.0);
+        assert!(picker.decode(&logits, &logits).unwrap().0.is_empty());
     }
 
     #[kithara::test(native, flash(false))]

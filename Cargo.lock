@@ -4683,6 +4683,8 @@ name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "delegate",
+ "fieldwork",
  "hex",
  "kithara-bufpool",
  "kithara-config",
