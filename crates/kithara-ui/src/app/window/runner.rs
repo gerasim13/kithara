@@ -24,7 +24,7 @@ use winit::{
     window::{Fullscreen, ResizeDirection, Window, WindowId},
 };
 
-use super::{
+use super::super::{
     embed::Ui,
     frame::Frame,
     neutral::{App, Config, RunError},
@@ -82,7 +82,7 @@ struct Live<'config, Application> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SurfaceRecovery {
+pub(super) enum SurfaceRecovery {
     Retry,
     Reconfigure,
     Stop,
@@ -95,37 +95,37 @@ enum SurfaceRecovery {
 /// constant. Told a fixed step instead, a document's own time would run at
 /// whatever rate the window happened to be woken at, which is to say at the
 /// rate a hand was moving over it.
-struct FrameClock {
+pub(super) struct FrameClock {
     last: WallInstant,
 }
 
 impl FrameClock {
-    const fn new(now: WallInstant) -> Self {
+    pub(super) const fn new(now: WallInstant) -> Self {
         Self { last: now }
     }
 
     /// How long it has been since the frame before this one.
-    fn step(&mut self, now: WallInstant) -> Duration {
+    pub(super) fn step(&mut self, now: WallInstant) -> Duration {
         let elapsed = now.saturating_duration_since(self.last);
         self.last = now;
         elapsed
     }
 }
 
-struct IdleClock {
+pub(super) struct IdleClock {
     next: WallInstant,
 }
 
 impl IdleClock {
-    const PERIOD: Duration = Duration::from_millis(500);
+    pub(super) const PERIOD: Duration = Duration::from_millis(500);
 
-    fn new(now: WallInstant) -> Self {
+    pub(super) fn new(now: WallInstant) -> Self {
         Self {
             next: now + Self::PERIOD,
         }
     }
 
-    fn wake(&mut self, now: WallInstant) -> bool {
+    pub(super) fn wake(&mut self, now: WallInstant) -> bool {
         if now < self.next {
             return false;
         }
@@ -134,7 +134,7 @@ impl IdleClock {
     }
 }
 
-const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
+pub(super) const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
     match error {
         SurfaceError::Timeout => SurfaceRecovery::Retry,
         SurfaceError::Outdated | SurfaceError::Lost => SurfaceRecovery::Reconfigure,
@@ -146,7 +146,7 @@ const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
 /// presses that count as one gesture is recognised here — once, for every
 /// control, rather than in each of them.
 #[derive(Default)]
-struct Clicks {
+pub(super) struct Clicks {
     last: Option<(PhysicalPosition<f64>, Instant)>,
     count: u8,
 }
@@ -157,7 +157,7 @@ impl Clicks {
     const SLOP: f64 = 5.0;
     const WINDOW: Duration = Duration::from_millis(500);
 
-    fn press(&mut self, at: PhysicalPosition<f64>, now: Instant) -> u8 {
+    pub(super) fn press(&mut self, at: PhysicalPosition<f64>, now: Instant) -> u8 {
         let repeat = self.last.is_some_and(|(previous, when)| {
             now.duration_since(when) <= Self::WINDOW
                 && (previous.x - at.x).abs() <= Self::SLOP
@@ -623,105 +623,5 @@ fn portable_ime(event: &WinitIme) -> InputMethod<'_> {
         },
         WinitIme::Commit(content) => InputMethod::Commit(content),
         WinitIme::Disabled => InputMethod::Closed,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
-    use masonry::vello::wgpu::SurfaceError;
-    use winit::dpi::PhysicalPosition;
-
-    use super::{Clicks, FrameClock, IdleClock, SurfaceRecovery, WallInstant, surface_recovery};
-
-    /// The document is told how long it has really been, so its own time runs
-    /// at the rate the world does rather than the rate the window is woken at.
-    #[kithara::test]
-    fn the_frame_clock_reports_the_gap_between_two_wakes() {
-        let start = WallInstant::now();
-        let mut frames = FrameClock::new(start);
-
-        assert_eq!(
-            frames.step(start + Duration::from_millis(16)),
-            Duration::from_millis(16)
-        );
-        assert_eq!(
-            frames.step(start + Duration::from_millis(516)),
-            Duration::from_millis(500)
-        );
-    }
-
-    #[kithara::test]
-    fn idle_clock_wakes_once_per_period() {
-        let start = WallInstant::now();
-        let mut clock = IdleClock::new(start);
-
-        assert!(!clock.wake(start));
-        assert!(!clock.wake(start + IdleClock::PERIOD / 2));
-        assert!(clock.wake(start + IdleClock::PERIOD));
-        assert!(!clock.wake(start + IdleClock::PERIOD));
-        assert!(clock.wake(start + IdleClock::PERIOD * 2));
-    }
-
-    /// A double click is two presses close in time and place. Nothing below the
-    /// window sees presses, so if this does not count them no control can.
-    #[kithara::test]
-    fn two_quick_presses_in_the_same_place_are_one_double_click() {
-        let mut clicks = Clicks::default();
-        let start = Instant::now();
-        let at = PhysicalPosition::new(100.0, 100.0);
-
-        assert_eq!(clicks.press(at, start), 1);
-        assert_eq!(clicks.press(at, start + Duration::from_millis(120)), 2);
-        assert_eq!(clicks.press(at, start + Duration::from_millis(240)), 3);
-    }
-
-    /// A run ends when the hand pauses or moves away, otherwise every later
-    /// press in a session would read as a deeper multi-click.
-    #[kithara::test]
-    fn a_pause_or_a_move_starts_the_count_again() {
-        let mut clicks = Clicks::default();
-        let start = Instant::now();
-        let at = PhysicalPosition::new(100.0, 100.0);
-
-        assert_eq!(clicks.press(at, start), 1);
-        assert_eq!(
-            clicks.press(at, start + Duration::from_millis(900)),
-            1,
-            "a press long after the last one starts a new run"
-        );
-        assert_eq!(
-            clicks.press(
-                PhysicalPosition::new(140.0, 100.0),
-                start + Duration::from_millis(950)
-            ),
-            1,
-            "a press away from the last one starts a new run"
-        );
-    }
-
-    #[kithara::test]
-    fn retries_only_recoverable_surface_errors() {
-        assert_eq!(
-            surface_recovery(&SurfaceError::Timeout),
-            SurfaceRecovery::Retry
-        );
-        assert_eq!(
-            surface_recovery(&SurfaceError::Outdated),
-            SurfaceRecovery::Reconfigure
-        );
-        assert_eq!(
-            surface_recovery(&SurfaceError::Lost),
-            SurfaceRecovery::Reconfigure
-        );
-        assert_eq!(
-            surface_recovery(&SurfaceError::OutOfMemory),
-            SurfaceRecovery::Stop
-        );
-        assert_eq!(
-            surface_recovery(&SurfaceError::Other),
-            SurfaceRecovery::Stop
-        );
     }
 }
