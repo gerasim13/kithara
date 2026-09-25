@@ -1,6 +1,5 @@
 use kithara_test_utils::kithara;
-
-use crate::{
+use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     draw::Rgba,
@@ -134,7 +133,7 @@ fn pick_second(ui: &mut Ui<'_, Picked>) {
     let row = ui
         .rect_of("demo/two-label")
         .expect("the second row must be laid out");
-    let at = crate::draw::Pt {
+    let at = kithara_ui::draw::Pt {
         x: row.x + row.w / 2.0,
         y: row.y + row.h / 2.0,
     };

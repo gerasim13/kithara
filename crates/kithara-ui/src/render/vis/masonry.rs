@@ -81,7 +81,7 @@ impl VisDeclaration {
 
     /// Unclipped logical rectangle as left, top, right, and bottom.
     #[must_use]
-    #[cfg(test)]
+    #[cfg(all(test, feature = "capture"))]
     pub(crate) const fn rect(self) -> [f64; 4] {
         self.rect
     }

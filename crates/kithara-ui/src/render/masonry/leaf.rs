@@ -151,7 +151,7 @@ impl Leaf {
     }
 
     /// The colour this leaf writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) const fn ink(&self) -> Option<Rgba> {
         match self {
             Self::Text { color, .. } => Some(*color),

@@ -210,7 +210,7 @@ impl Node {
     }
 
     /// The colour this node writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn ink(&self) -> Option<Rgba> {
         match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.ink(),
@@ -602,7 +602,7 @@ impl Node {
     }
 
     /// Where this node draws, relative to the box the layout gave it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "capture"))]
     pub(super) const fn transform(&self) -> Transform {
         self.transform
     }
@@ -858,7 +858,7 @@ impl Widget for Node {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "capture"))]
 impl Node {
     pub(crate) fn set_child_stashed(
         this: &mut masonry::core::WidgetMut<'_, Self>,

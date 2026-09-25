@@ -29,7 +29,7 @@ use super::{
     node::Node,
     picker::{self, HostedEngine},
 };
-#[cfg(any(test, feature = "capture"))]
+#[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
     backends::VelloBackend,
@@ -215,7 +215,7 @@ where
     }
 
     /// The colour the node `id` writes its text in right now.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn ink_of(&self, id: WidgetId) -> Option<Rgba> {
         self.root.get_widget(id)?.downcast::<Node>()?.ink()
     }
@@ -362,7 +362,7 @@ where
         std::mem::take(&mut self.platform)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "capture"))]
     pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
         self.engines
             .iter()

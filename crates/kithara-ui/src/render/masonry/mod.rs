@@ -7,9 +7,6 @@ mod custom;
 mod flex;
 mod host;
 mod leaf;
-#[cfg(test)]
-#[path = "../masonry_tree/lit.rs"]
-mod lit;
 mod menu;
 #[path = "../masonry_tree/mount.rs"]
 pub(crate) mod mount;
@@ -25,7 +22,7 @@ mod root;
 mod shader;
 #[path = "../masonry_tree/spot.rs"]
 mod spot;
-#[cfg(test)]
+#[cfg(all(test, feature = "capture"))]
 mod tests;
 #[path = "../masonry_control/vis.rs"]
 mod vis;

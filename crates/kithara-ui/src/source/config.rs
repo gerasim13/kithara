@@ -78,8 +78,8 @@ pub struct UiConfig {
     /// one page.
     ///
     /// Not a document key: it is a built value assembled from
-    /// [`DrawPoolLimits`], which the document names instead -- see
-    /// `Config::ui` in `kithara-app`.
+    /// [`DrawPoolLimits`](crate::source::DrawPoolLimits), which the document
+    /// names instead -- see `Config::ui` in `kithara-app`.
     #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
     #[patch(skip)]

@@ -322,7 +322,7 @@ impl HostedEngine {
         targets
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "capture"))]
     pub(super) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
         self.targets.iter().find_map(|target| {
             let HostedControlPlan::Tree(plan) = &target.plan else {
