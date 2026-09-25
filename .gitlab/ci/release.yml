@@ -96,7 +96,10 @@ release:publish:
     - .release-job
     - .rules-release
   stage: release-publish
-  timeout: 90 minutes
+  # The crates step keeps to crates.io's pace for new crates, five at once and
+  # one every ten minutes after that: a release adding twenty of them spends
+  # close to three hours on it.
+  timeout: 240 minutes
   needs:
     - job: release:xcframework
       artifacts: true

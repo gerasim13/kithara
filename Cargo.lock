@@ -5785,6 +5785,7 @@ dependencies = [
 name = "kithara-stretch"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bitflags 2.13.0",
  "bon",
  "bungee-sys",
  "delegate",

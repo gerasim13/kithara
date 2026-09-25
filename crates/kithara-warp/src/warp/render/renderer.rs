@@ -159,7 +159,7 @@ where
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             (current_kind, current_keylock),
-            config.backends(),
+            Self::backend_config(config),
             config.source_block_frames(),
             spec,
             &pools,
@@ -176,7 +176,7 @@ where
             projection: ProjectionState::new(config),
             residency: target.residency,
             committed: None,
-            backends: config.backends(),
+            backends: Self::backend_config(config),
             engine: target.engine,
             retired_engine: None,
             current_kind,
@@ -218,6 +218,22 @@ where
             plan,
             region: None,
         }
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    fn backend_config(config: &WarpConfig) -> ElasticBackendConfig {
+        config.backends()
+    }
+
+    #[cfg(not(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )))]
+    fn backend_config(_config: &WarpConfig) -> ElasticBackendConfig {
+        ElasticBackendConfig::default()
     }
 }
 

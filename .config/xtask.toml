@@ -2960,6 +2960,11 @@ timeout_minutes = 60
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20
+# crates.io lets one uploader register 5 new crates at once and one more every
+# 10 minutes after that; new versions of registered crates have a limit (30 at
+# once, then one a minute) a release stays under.
+new_crate_burst = 5
+new_crate_interval_secs = 610
 http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 

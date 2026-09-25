@@ -30,6 +30,7 @@ apple = ["kithara-play/apple"]
 apple-fused-src = ["kithara-play/apple-fused-src"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
+stretch-glide = ["kithara-play/stretch-glide"]
 usdt = ["kithara-play/usdt", "kithara-sync/usdt", "kithara-test-utils/usdt"]
 
 [dependencies]

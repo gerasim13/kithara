@@ -3,8 +3,8 @@ use std::num::NonZeroUsize;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
-    ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
-    build_varispeed_engine,
+    BackendCapabilities, ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError,
+    StretchKind, build_engine, build_varispeed_engine,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -51,6 +51,11 @@ where
         reusable: PreparedTarget,
         measure_capabilities: bool,
     ) -> Result<PreparedTarget, ElasticError> {
+        if keylock && !kind.capabilities().contains(BackendCapabilities::KEYLOCK) {
+            return Err(ElasticError::EnginePreparation(
+                "selected backend does not support keylock",
+            ));
+        }
         let PreparedTarget {
             residency: reusable_residency,
             activation_scratch: reusable_activation_scratch,
@@ -71,7 +76,13 @@ where
             .as_ref()
             .map_or(0, |resident| resident.replacement.capacity() / channels);
         let measured = (|| -> Result<(), ElasticError> {
-            for backend in StretchKind::all().iter().filter(|_| measure_capabilities) {
+            for backend in StretchKind::all().iter().filter(|backend| {
+                measure_capabilities
+                    && (!keylock
+                        || backend
+                            .capabilities()
+                            .contains(BackendCapabilities::KEYLOCK))
+            }) {
                 let capabilities =
                     Self::config_for(*backend, backends, source_block_frames, spec, pools)
                         .and_then(build_engine)

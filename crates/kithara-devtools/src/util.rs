@@ -27,6 +27,17 @@ pub fn project_name() -> &'static str {
     .as_str()
 }
 
+/// The nightly channel the repository pins. CI exports it from
+/// `.config/ci-pins.toml`; a plain `nightly` is the local-development default.
+#[must_use]
+pub fn nightly_toolchain() -> String {
+    std::env::var("KITHARA_NIGHTLY_TOOLCHAIN")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "nightly".to_owned())
+}
+
 /// Check that an external tool is available.
 ///
 /// # Errors
