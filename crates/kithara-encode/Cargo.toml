@@ -24,8 +24,8 @@ client-reqwest = ["kithara-stream/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq"]
 tls-native = ["kithara-stream/tls-native"]
 tls-rustls = ["kithara-stream/tls-rustls"]
-flash = ["kithara-test-utils/flash"]
-no-block = ["kithara-test-utils/no-block"]
+flash = ["kithara-stream/flash"]
+no-block = ["kithara-stream/no-block"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
