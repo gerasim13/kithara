@@ -3,8 +3,6 @@
 //! The pose is resolved in the neutral facade, so the one place worth testing
 //! is the argument every host receives: a control's transform. Neither host is
 //! involved here, which is the point — if this is right, both draw it right.
-mod common;
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use kithara_ui::{
@@ -170,8 +168,8 @@ impl Reads for Phase {
     }
 }
 
-fn registry() -> common::registry::TestRegistry {
-    let mut registry = common::registry::player_registry();
+fn registry() -> crate::common::registry::TestRegistry {
+    let mut registry = crate::common::registry::player_registry();
     for id in ["gallery.phase", "gallery.clock"] {
         registry.insert(
             EndpointCategory::Model,

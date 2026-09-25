@@ -1,5 +1,3 @@
-mod common;
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
@@ -33,7 +31,7 @@ fn swatch_compiles_without_bindings() {
     let ui = compile(
         "swatch.klayout.ron",
         &resolver,
-        &common::registry::player_registry(),
+        &crate::common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

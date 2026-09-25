@@ -1,5 +1,3 @@
-mod common;
-
 use std::collections::BTreeMap;
 
 use kithara_test_utils::kithara;
@@ -84,12 +82,12 @@ fn collect_instance_decks(
 fn four_deck_layout_instantiates_one_module_file_four_times() {
     let resolver = resolver_with(
         "four_deck.klayout.ron",
-        include_str!("fixtures/four_deck.klayout.ron"),
+        include_str!("../fixtures/four_deck.klayout.ron"),
     );
     let ui = compile(
         "four_deck.klayout.ron",
         &resolver,
-        &common::registry::player_registry(),
+        &crate::common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -122,12 +120,12 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
 fn two_deck_layout_compiles() {
     let resolver = resolver_with(
         "two_deck.klayout.ron",
-        include_str!("fixtures/two_deck.klayout.ron"),
+        include_str!("../fixtures/two_deck.klayout.ron"),
     );
     compile(
         "two_deck.klayout.ron",
         &resolver,
-        &common::registry::player_registry(),
+        &crate::common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -157,12 +155,12 @@ fn collect_read_keys(ui: &CompiledUi, node: &ExpandedNode, keys: &mut Vec<String
 fn scoped_read_keys_address_each_deck() {
     let resolver = resolver_with(
         "two_deck.klayout.ron",
-        include_str!("fixtures/two_deck.klayout.ron"),
+        include_str!("../fixtures/two_deck.klayout.ron"),
     );
     let ui = compile(
         "two_deck.klayout.ron",
         &resolver,
-        &common::registry::player_registry(),
+        &crate::common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

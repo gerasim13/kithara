@@ -1,7 +1,5 @@
 #![cfg(feature = "render")]
 
-mod common;
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
@@ -187,8 +185,8 @@ impl Host for WaveHost<'_> {
     }
 }
 
-fn studio_registry() -> common::registry::TestRegistry {
-    let mut registry = common::registry::player_registry();
+fn studio_registry() -> crate::common::registry::TestRegistry {
+    let mut registry = crate::common::registry::player_registry();
     for (category, id, value) in [
         (
             EndpointCategory::Command,
@@ -246,7 +244,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
     let registry = if studio {
         studio_registry()
     } else {
-        common::registry::player_registry()
+        crate::common::registry::player_registry()
     };
     let ui = compile(
         "wave-document.klayout.ron",
@@ -277,7 +275,7 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
     let cases = [
         (
             "deck",
-            include_str!("../assets/modules/deck.kmodule.ron"),
+            include_str!("../../assets/modules/deck.kmodule.ron"),
             builtin_layout(),
             &[("deck-a/wave", WaveStyle::Hero)][..],
             InputOwner::Leaf,
@@ -287,7 +285,7 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
         // waves those two documents own rather than one of its own.
         (
             "deck-micro",
-            include_str!("../assets/modules/deck-micro.kmodule.ron"),
+            include_str!("../../assets/modules/deck-micro.kmodule.ron"),
             builtin_layout(),
             &[
                 ("deck-a/bar/wave", WaveStyle::Micro),
@@ -298,7 +296,7 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
         ),
         (
             "app-deck",
-            include_str!("../../kithara-app/assets/ui/modules/app-deck.kmodule.ron"),
+            include_str!("../../../kithara-app/assets/ui/modules/app-deck.kmodule.ron"),
             studio_layout(),
             &[("deck-a/wave", WaveStyle::Hero)][..],
             InputOwner::Engine,
@@ -306,7 +304,7 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
         ),
         (
             "deck-overview-row",
-            include_str!("../assets/modules/deck/overview-row.kmodule.ron"),
+            include_str!("../../assets/modules/deck/overview-row.kmodule.ron"),
             studio_layout(),
             &[("deck-a/wave", WaveStyle::Default)][..],
             InputOwner::Engine,

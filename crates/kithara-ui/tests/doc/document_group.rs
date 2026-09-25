@@ -4,8 +4,6 @@
 //! testing is the argument every host receives. Neither host is involved here,
 //! which is the point - a role dropped in the facade is dropped for both, and
 //! a comparison between them cannot see it.
-mod common;
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
@@ -165,7 +163,7 @@ fn document(root: &str) -> CompiledUi {
     compile(
         "frame.klayout.ron",
         &resolver,
-        &common::registry::player_registry(),
+        &crate::common::registry::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
