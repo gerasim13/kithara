@@ -1,18 +1,60 @@
 //! Expresses a fixture's [`BeatArtifact`] as the warp [`SegmentSet`] a deck
-//! publishes for a track. Fixture support: the product publishes grids from
-//! its own analysis bridge, not through this module.
+//! publishes for a track, and reads the beat grid the fixture build analysed
+//! for a downloaded library track. Fixture support: the product publishes
+//! grids from its own analysis bridge, not through this module.
 
 use std::{cmp::Reverse, collections::BTreeMap};
 
 use kithara::{
-    analysis::BeatArtifact,
+    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact, BeatGridModel},
     warp::{
         AssetAxis, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
         MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError, SegmentFacts,
         SegmentSet,
     },
 };
+use kithara_test_fixtures::assets::by_name;
 use num_traits::cast::AsPrimitive;
+
+/// The fingerprint the fixture build writes every analysis file under.
+const ANALYSIS_FINGERPRINT: &str = "rhythm-fixture:v1";
+
+/// The analysis the fixture build writes beside the downloaded library track
+/// `track`: `library_analysis_<case>` for `library_flac_<case>` and
+/// `library_mp3_analysis_<case>` for `library_mp3_<case>`. `None` for any
+/// other fixture, analyses included.
+#[must_use]
+pub fn library_analysis_name(track: &str) -> Option<String> {
+    track
+        .strip_prefix("library_flac_")
+        .map(|case| format!("library_analysis_{case}"))
+        .or_else(|| {
+            track
+                .strip_prefix("library_mp3_")
+                .filter(|case| !case.starts_with("analysis_"))
+                .map(|case| format!("library_mp3_analysis_{case}"))
+        })
+}
+
+/// The beat grid the fixture build analysed for the downloaded library track
+/// `track`. A test reads it instead of analysing the track again.
+///
+/// # Panics
+///
+/// When `track` is no library track, or its analysis is absent or unreadable.
+#[must_use]
+pub fn library_beat_grid(track: &str) -> BeatGridModel {
+    let name = library_analysis_name(track)
+        .unwrap_or_else(|| panic!("`{track}` is no downloaded library track"));
+    let asset = by_name(&name).unwrap_or_else(|| panic!("analysis `{name}` is not registered"));
+    let file = AnalysisFile::parse(
+        asset.bytes(),
+        &AnalysisFingerprint::new(Some(ANALYSIS_FINGERPRINT), None),
+    )
+    .unwrap_or_else(|error| panic!("decode `{name}`: {error:?}"));
+    BeatGridModel::try_from(file.latest().analysis())
+        .unwrap_or_else(|error| panic!("`{name}` carries no usable beat grid: {error:?}"))
+}
 
 /// Failure to express a [`BeatArtifact`] as a warp [`SegmentSet`].
 #[derive(Debug, thiserror::Error)]

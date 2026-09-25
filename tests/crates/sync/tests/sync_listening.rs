@@ -1,20 +1,15 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::PathBuf;
-
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{
-    audio_artifact::{AudioArtifactSet, audio_artifact_path},
     cochlea::{CochleaReport, mix_loudness_failures},
     kithara,
 };
 
 use super::sync_product_matrix::{
-    AMBIENT_TRIP_HOP_PROVIDER, AMBIENT_TRIP_HOP_SYNC, BLOCK_FRAMES, CHANNELS, CROSS_STYLE_PROVIDER,
-    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, PreparedSources,
-    ProductHarness, Provider, SEQUENTIAL_SYNC, SyncCase, TECHNO_BREAKBEAT_PROVIDER,
-    TECHNO_BREAKBEAT_SYNC, listening_sources, prepared_sources,
+    BLOCK_FRAMES, CHANNELS, PreparedSources, ProductHarness, SyncCase, TUNNEL_FOUR_DECK_SYNC,
+    TUNNEL_SYNC, tunnel_sources,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
@@ -41,6 +36,7 @@ async fn render_mix(
     target_bpm: Option<f64>,
 ) -> Capture {
     let mut harness = ProductHarness::new(case, provider, 0).await;
+    harness.mark("mix: every deck audible");
     for deck in &harness.decks {
         let control = deck.control().clone();
         harness.host.run(move || control.set_muted(false)).await;
@@ -90,20 +86,6 @@ pub(super) async fn render_frames(
     pcm
 }
 
-pub(super) fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> PathBuf {
-    let frames = pcm.len() / usize::from(CHANNELS);
-    let mut recording = artifacts
-        .recording(label, Some(frames as u64))
-        .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
-    recording
-        .push(pcm)
-        .unwrap_or_else(|error| panic!("record {label}: {error}"));
-    let reader = AudioArtifactSet::finish(recording)
-        .unwrap_or_else(|error| panic!("finish {label} recording: {error}"));
-    audio_artifact_path(&reader)
-        .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"))
-}
-
 #[kithara::test(
     native,
     tokio,
@@ -113,10 +95,10 @@ pub(super) fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f3
     timeout(Duration::from_secs(60))
 )]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
-    #[future(awt)] listening_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
-    let case = DOWNTEMPO_HOUSE_SYNC;
-    let provider = listening_sources;
+    let case = TUNNEL_SYNC;
+    let provider = tunnel_sources;
     let mut decks = Vec::with_capacity(case.decks());
     for deck in 0..case.decks() {
         let capture = render_solo(case, &provider, deck).await;
@@ -148,63 +130,33 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "writes opt-in listening WAVs; ignored-red until Warp alignment is implemented"]
-#[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, source_synthetic().await, None)]
-#[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, source_synthetic().await, Some(127.0))]
-#[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, source_sweep().await, Some(145.0))]
-#[case::ambient_trip_hop(
-    "ambient-dub-62-trip-hop-74",
-    AMBIENT_TRIP_HOP_SYNC,
-    source_ambient_trip_hop_provider().await,
-    None
-)]
-#[case::downtempo_house(
-    "downtempo-96-house-124",
-    DOWNTEMPO_HOUSE_SYNC,
-    source_downtempo_house_provider().await,
-    None
-)]
-#[case::techno_breakbeat(
-    "techno-132-breakbeat-140",
-    TECHNO_BREAKBEAT_SYNC,
-    source_techno_breakbeat_provider().await,
-    None
-)]
-#[case::cross_style_four_deck(
-    "ambient-62-downtempo-96-house-124-breakbeat-140",
-    CROSS_STYLE_SYNC,
-    source_cross_style_provider().await,
-    None
-)]
+#[case::host_120(TUNNEL_SYNC, None)]
+#[case::ride_to_96(TUNNEL_SYNC, Some(96.0))]
+#[case::ride_to_127(TUNNEL_SYNC, Some(127.0))]
+#[case::ride_to_145(TUNNEL_SYNC, Some(145.0))]
+#[case::four_deck_host_120(TUNNEL_FOUR_DECK_SYNC, None)]
 async fn record_sync_listening_wavs(
-    #[case] artifact_case: &str,
     #[case] case: SyncCase,
-    #[case] provider: PreparedSources,
     #[case] target_bpm: Option<f64>,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
-    let artifacts = AudioArtifactSet::from_env(artifact_case, case.sample_rate, CHANNELS)
-        .expect("configure sync listening artifacts")
-        .unwrap_or_else(|| {
-            panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder")
-        });
-    let mut paths = Vec::with_capacity(case.decks() + 1);
+    assert!(
+        std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_some(),
+        "KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder"
+    );
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
-        let label = format!("deck-{}", deck + 1);
-        let capture = render_solo(case, &provider, deck).await;
-        let path = write_capture(&artifacts, &label, &capture.pcm);
+        let capture = render_solo(case, &tunnel_sources, deck).await;
         deck_reports.push(CochleaReport::measure(
             &capture.pcm,
             CHANNELS,
             case.sample_rate,
         ));
-        paths.push((label, path));
         failures.extend(capture.failures);
     }
-    let mix = render_mix(case, &provider, target_bpm).await;
-    let mix_path = write_capture(&artifacts, "mix", &mix.pcm);
+    let mix = render_mix(case, &tunnel_sources, target_bpm).await;
     let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
-    paths.push(("mix".to_owned(), mix_path));
     failures.extend(mix.failures);
     failures.extend(mix_loudness_failures(
         case.id(),
@@ -215,69 +167,10 @@ async fn record_sync_listening_wavs(
     if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
         failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
     }
-
-    let manifest = serde_json::json!({
-        "case": case.id(),
-        "fixture": artifact_case,
-        "sample_rate": case.sample_rate,
-        "channels": CHANNELS,
-        "capture_frames": CAPTURE_FRAMES,
-        "failures": failures,
-        "cochlea": {
-            "decks": deck_reports,
-            "mix": mix_report,
-        },
-        "artifacts": paths.iter().map(|(label, path)| {
-            serde_json::json!({ "label": label, "path": path })
-        }).collect::<Vec<_>>(),
-    });
-    let manifest = artifacts
-        .write_manifest(&manifest)
-        .expect("write sync listening manifest");
-    let manifest_path =
-        audio_artifact_path(&manifest).expect("resolve sync listening manifest path");
-
-    for (label, path) in &paths {
-        eprintln!("KITHARA_AUDIO_ARTIFACT {label}: {}", path.display());
-    }
-    eprintln!(
-        "KITHARA_AUDIO_ARTIFACT manifest: {}",
-        manifest_path.display()
-    );
     assert!(
         failures.is_empty(),
-        "{} listening capture failed:\n{}",
+        "{} listening capture failed:\n{}\ndecks={deck_reports:?}\nmix={mix_report:?}",
         case.id(),
         failures.join("\n"),
     );
-}
-
-#[kithara::fixture]
-async fn source_synthetic() -> PreparedSources {
-    prepared_sources(Provider::Synthetic).await
-}
-
-#[kithara::fixture]
-async fn source_sweep() -> PreparedSources {
-    prepared_sources(Provider::Sweep).await
-}
-
-#[kithara::fixture]
-async fn source_ambient_trip_hop_provider() -> PreparedSources {
-    prepared_sources(AMBIENT_TRIP_HOP_PROVIDER).await
-}
-
-#[kithara::fixture]
-async fn source_downtempo_house_provider() -> PreparedSources {
-    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
-}
-
-#[kithara::fixture]
-async fn source_techno_breakbeat_provider() -> PreparedSources {
-    prepared_sources(TECHNO_BREAKBEAT_PROVIDER).await
-}
-
-#[kithara::fixture]
-async fn source_cross_style_provider() -> PreparedSources {
-    prepared_sources(CROSS_STYLE_PROVIDER).await
 }

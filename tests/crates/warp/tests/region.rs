@@ -635,27 +635,20 @@ fn render_configured_grid_with_updates(
 fn record_tunnel_previews() {
     use std::io::Cursor;
 
-    use kithara_integration_tests::kithara::{
-        analysis::{AnalysisFile, AnalysisFingerprint, BeatGridModel},
-        decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
-        resampler::NoResamplerBackend,
+    use kithara_integration_tests::{
+        grid::library_beat_grid,
+        kithara::{
+            decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+            resampler::NoResamplerBackend,
+        },
     };
-    use kithara_test_fixtures::assets::{
-        library_mp3_analysis_zvuk_27390231, library_mp3_zvuk_27390231,
-    };
+    use kithara_test_fixtures::assets::library_mp3_zvuk_27390231;
     use num_traits::ToPrimitive;
-
-    const FINGERPRINT: &str = "rhythm-fixture:v1";
 
     if std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_none() {
         return;
     }
-    let file = AnalysisFile::parse(
-        library_mp3_analysis_zvuk_27390231().bytes(),
-        &AnalysisFingerprint::new(Some(FINGERPRINT), None),
-    )
-    .expect("parse Tunnel beat analysis");
-    let model = BeatGridModel::try_from(file.latest().analysis()).expect("Tunnel beat grid");
+    let model = library_beat_grid("library_mp3_zvuk_27390231");
     let raw = model.as_raw();
     let first_beat = raw
         .beats
@@ -1000,72 +993,13 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();
                 let output = render_configured_grid(
-                    config.clone(),
+                    config,
                     Some(plan.clone()),
                     &warp_nominal_clicks,
                     2.0,
                     None,
                     Some(anchor),
                 );
-                #[cfg(feature = "playback")]
-                if let Some(mut tap) =
-                    kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
-                        &format!("projected-ramp-{backend}-{target_bps}-{keylock}-{quantum}"),
-                        SR,
-                        u16::try_from(CH).expect("channel count"),
-                    )
-                    .expect("ramp artifact")
-                {
-                    let source_start = source_clicks[0];
-                    let mut listening_source = warp_nominal_clicks[source_start * CH..].to_vec();
-                    listening_source.resize(NOMINAL * BARS * CH, 0.0);
-                    let listening = render_configured_grid(
-                        config,
-                        Some(plan.clone()),
-                        &listening_source,
-                        2.0,
-                        None,
-                        Some(anchor),
-                    );
-                    tap.push(&listening);
-                    for beat in 0..BARS {
-                        let frame = anchor
-                            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
-                            .expect("Host beat frame");
-                        tap.host_beat(
-                            u64::try_from(i64::from(frame)).expect("positive Host frame"),
-                            beat.is_multiple_of(4),
-                        );
-                    }
-                    tap.evidence(
-                        "projection",
-                        serde_json::json!({
-                            "backend": backend.to_string(),
-                            "target_bps": target_bps,
-                            "keylock": keylock,
-                            "quantum": quantum,
-                            "source_beat_zero_frame": source_start,
-                        }),
-                    );
-                    let listening_clicks = click_positions(&mono(&listening));
-                    assert_eq!(
-                        listening_clicks.len(),
-                        BARS,
-                        "listening artifact keeps every beat"
-                    );
-                    for (beat, actual) in listening_clicks.iter().enumerate() {
-                        let expected = anchor
-                            .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
-                            .expect("Host beat frame");
-                        let expected =
-                            usize::try_from(i64::from(expected)).expect("positive frame");
-                        assert!(
-                            actual.abs_diff(expected) <= NOMINAL / 20,
-                            "listening artifact beat {beat}: {actual} vs Host {expected}"
-                        );
-                    }
-                    assert_eq!(tap.metronome_mix().1, 0, "listening mix has headroom");
-                }
                 let clicks = click_positions(&mono(&output));
                 assert_eq!(
                     clicks.len(),

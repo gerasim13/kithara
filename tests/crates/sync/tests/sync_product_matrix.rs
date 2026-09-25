@@ -1,8 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
 #[cfg(not(target_os = "android"))]
 use std::{env, io};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
+};
 
 #[cfg(not(target_os = "android"))]
 use kithara::{
@@ -29,15 +32,20 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation},
-    warp::{AssetFrame, PresentationFrontier},
+    warp::{
+        AssetFrame, Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition,
+        PresentationFrontier,
+    },
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
+    grid::library_beat_grid,
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
@@ -336,6 +344,23 @@ pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
 )
 .ride(TempoRide::Up, 120);
 
+/// Two Tunnel decks synced one after the other onto the Host grid.
+pub(super) const TUNNEL_SYNC: SyncCase = SyncCase::running(
+    "tunnel-sequential-sync",
+    2,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.gridded();
+/// Four Tunnel decks, staggered, synced one after the other.
+pub(super) const TUNNEL_FOUR_DECK_SYNC: SyncCase = SyncCase::running(
+    "tunnel-four-deck-sequential-sync",
+    4,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.gridded();
+
 pub(super) const AMBIENT_TRIP_HOP_SYNC: SyncCase = SyncCase::running(
     "ambient-dub-62-to-trip-hop-74",
     2,
@@ -384,6 +409,8 @@ const CROSS_STYLE: &[&str] = &[
     "rhythm_wav_breakbeat_140_aligned",
 ];
 pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowtechno"];
+/// Richie Hawtin - The Tunnel, a straight-kick track with a steady grid.
+pub(super) const TUNNEL: &[&str] = &["library_mp3_zvuk_27390231"];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
@@ -409,6 +436,7 @@ impl Provider {
         Self::HlsSame(HlsProtection::Plain),
         Self::HlsSame(HlsProtection::Drm),
         Self::Library(LIBRARY),
+        Self::Library(TUNNEL),
         Self::Mp3Same,
         Self::Mp3Distinct,
         Self::HlsMp3(HlsProtection::Plain),
@@ -418,6 +446,62 @@ impl Provider {
 
     const fn has_score_markers(self) -> bool {
         matches!(self, Self::Rhythm(_))
+    }
+
+    /// The beat grid deck `deck`'s track was rendered or analysed on.
+    fn beat_grid(self, deck: usize) -> ArtifactSource<BeatGridModel> {
+        match self {
+            Self::Synthetic => synthetic_grid(),
+            Self::Library(names) => {
+                ArtifactSource::Value(Arc::new(library_beat_grid(names[deck % names.len()])))
+            }
+            other => panic!("{other:?} declares no beat grid for a gridded case"),
+        }
+    }
+}
+
+/// Marks every beat the Host session grid places inside `frames` on the
+/// artifact's metronome. Output frames are session frames: the harness
+/// renders its session from frame 0.
+fn mark_host_beats(tap: &mut AudioArtifactTap, grid: &BeatGridSnapshot, frames: Range<u64>) {
+    let at = |frame: u64| {
+        grid.beat_at(MapPoint::new(
+            grid.stamp(),
+            MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
+        ))
+    };
+    let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
+        (at(frames.start), at(frames.end))
+    else {
+        return;
+    };
+    let first = f64::from(*first.value().value()).ceil() as i64;
+    let last = f64::from(*last.value().value()).floor() as i64;
+    for ordinal in first..=last {
+        let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
+            continue;
+        };
+        let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
+        else {
+            continue;
+        };
+        let MapPosition::Session(frame) = *position.value().value() else {
+            continue;
+        };
+        let Ok(frame) = u64::try_from(i64::from(frame)) else {
+            continue;
+        };
+        if !frames.contains(&frame) {
+            continue;
+        }
+        let downbeat = matches!(
+            grid.meter_at(MapPoint::new(grid.stamp(), beat)),
+            BeatGridQuery::Resolved(meter)
+                if (ordinal - i64::from(meter.value().downbeat()))
+                    .rem_euclid(i64::from(meter.value().beats_per_bar()))
+                    == 0
+        );
+        tap.host_beat(frame, downbeat);
     }
 }
 
@@ -436,6 +520,8 @@ pub(super) struct ProductHarness {
     _trace: usdt_trace::Scope,
     output_frames: u64,
     paced: bool,
+    /// Every rendered block with the Host metronome, when artifacts are on.
+    tap: Option<AudioArtifactTap>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -511,6 +597,22 @@ pub(super) async fn prepared_sources(provider: Provider) -> PreparedSources {
     let server = TestServerHelper::new().await;
     let paths = sources(provider, 4, &server).await;
     (provider, server, paths)
+}
+
+/// The artifact of one harness run, named by the running test, the case and
+/// the audible deck.
+fn open_tap(case: SyncCase, provider: Provider, audible_deck: usize) -> Option<AudioArtifactTap> {
+    let mut tap = AudioArtifactTap::from_env(
+        &format!("{}-{}-deck-{audible_deck}", artifact_label(), case.id),
+        case.sample_rate,
+        CHANNELS,
+    )
+    .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
+    tap.evidence(
+        "provider",
+        serde_json::Value::String(format!("{provider:?}")),
+    );
+    Some(tap)
 }
 
 impl ProductHarness {
@@ -589,7 +691,7 @@ impl ProductHarness {
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
-            .maybe_beat_grid(case.gridded.then(synthetic_grid))
+            .maybe_beat_grid(case.gridded.then(|| provider.beat_grid(index)))
             .build();
             let control = deck.control().clone();
             let id = host
@@ -606,6 +708,7 @@ impl ProductHarness {
             host,
             output_frames: 0,
             paced,
+            tap: open_tap(case, provider, audible_deck),
             _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
@@ -701,6 +804,11 @@ impl ProductHarness {
         assert_eq!(self.host.position(), end);
         self.tick_all(case).await;
         self.output_frames = end;
+        if let Some(tap) = self.tap.as_mut() {
+            let grid = self.host.session_grid().await;
+            mark_host_beats(tap, &grid, start..end);
+            tap.push(&samples);
+        }
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -709,6 +817,13 @@ impl ProductHarness {
         };
         time::sleep(delay).await;
         samples
+    }
+
+    /// Stamps a control marker on the artifact, when artifacts are on.
+    pub(super) fn mark(&mut self, label: &str) {
+        if let Some(tap) = self.tap.as_mut() {
+            tap.mark(label);
+        }
     }
 
     pub(super) async fn settle(&mut self, case: SyncCase, blocks: usize) {
@@ -787,6 +902,7 @@ impl ProductHarness {
     }
 
     pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
+        self.mark(&format!("sync {intent:?}"));
         let transport = self.transport_revision(case).await;
         for index in 0..self.decks.len() {
             {
@@ -1351,23 +1467,23 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires KITHARA_REMOTE_FIXTURES at build time and product Warp alignment, 2026-09-07"]
-#[case::play_sync_seek(PLAY_SYNC_SEEK)]
-#[case::play_seek_sync(PLAY_SEEK_SYNC)]
-#[case::seek_play_sync(SEEK_PLAY_SYNC)]
-#[case::seek_sync_play(SEEK_SYNC_PLAY)]
-#[case::sync_play_seek(SYNC_PLAY_SEEK)]
-#[case::sync_seek_play(SYNC_SEEK_PLAY)]
-#[case::sequential_sync(SEQUENTIAL_SYNC)]
-#[case::paused_sync_then_play(PAUSED_SYNC)]
-#[case::four_deck_sequential_sync(FOUR_DECK_SYNC)]
-#[case::tempo_up_120hz(TEMPO_UP_120)]
-#[case::tempo_down_30hz(TEMPO_DOWN_30)]
-async fn opt_in_library_product_rows_reach_the_pcm_oracle(
+#[ignore = "ignored-red: product Warp alignment is not implemented"]
+#[case::play_sync_seek(PLAY_SYNC_SEEK.gridded())]
+#[case::play_seek_sync(PLAY_SEEK_SYNC.gridded())]
+#[case::seek_play_sync(SEEK_PLAY_SYNC.gridded())]
+#[case::seek_sync_play(SEEK_SYNC_PLAY.gridded())]
+#[case::sync_play_seek(SYNC_PLAY_SEEK.gridded())]
+#[case::sync_seek_play(SYNC_SEEK_PLAY.gridded())]
+#[case::sequential_sync(SEQUENTIAL_SYNC.gridded())]
+#[case::paused_sync_then_play(PAUSED_SYNC.gridded())]
+#[case::four_deck_sequential_sync(FOUR_DECK_SYNC.gridded())]
+#[case::tempo_up_120hz(TEMPO_UP_120.gridded())]
+#[case::tempo_down_30hz(TEMPO_DOWN_30.gridded())]
+async fn tunnel_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
-    #[future(awt)] library_sources: PreparedSources,
+    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
-    run(case, library_sources).await;
+    run(case, tunnel_sources).await;
 }
 
 #[kithara::fixture]
@@ -1381,11 +1497,6 @@ pub(super) async fn sweep_sources() -> PreparedSources {
 #[kithara::fixture]
 pub(super) async fn mixed_sources() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
-}
-#[kithara::fixture]
-#[cfg(not(target_os = "android"))]
-pub(super) async fn listening_sources() -> PreparedSources {
-    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
 #[kithara::fixture]
@@ -1444,6 +1555,6 @@ async fn source_hls_mp3_drm() -> PreparedSources {
 }
 
 #[kithara::fixture]
-async fn library_sources() -> PreparedSources {
-    prepared_sources(Provider::Library(LIBRARY)).await
+pub(super) async fn tunnel_sources() -> PreparedSources {
+    prepared_sources(Provider::Library(TUNNEL)).await
 }
