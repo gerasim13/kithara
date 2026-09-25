@@ -2964,7 +2964,9 @@ http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
 [ext.release]
-# Apple release flow (`just release artifacts|publish`).
+# Release flow: the `release:*` CI jobs build every artifact, and
+# `release:publish` tags, publishes and deploys them (`just ci run
+# release-publish`).
 manifest = "Package.swift"
 title = "Kithara"
 github_repo = "zvuk/kithara"
@@ -2979,21 +2981,42 @@ merged_asset = "Kithara.xcframework.zip"
 platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600
-# WebAssembly channel: trunk dist (`just platform wasm build`) zipped + deployed
-# to GitHub Pages classic on the gh-pages branch.
+# WebAssembly channel: trunk dist (`just platform wasm build`) zipped and served
+# at the root of the GitHub Pages site the gh-pages branch carries; the release
+# section with the documentation, archives, and crates is added to its page.
 wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
+# Releases up to the base were squashed without conventional subjects; their
+# notes are hand-written in the git-cliff footer.
+[ext.release.changelog]
+config = ".config/cliff.toml"
+output = "CHANGELOG.md"
+base = "v0.0.1-alpha4"
+
 # Documentation channels: each `doc` recipe's output directory, zipped and
-# uploaded as a release asset.
+# uploaded as a release asset, and served by the Pages site under `pages_path`.
 [ext.release.docs.apple]
 asset = "Kithara-docs.zip"
 archive = "docs-build/Kithara.doccarchive"
+label = "iOS"
+pages_path = "docs/ios"
+entry = "documentation/"
 
 [ext.release.docs.android]
 asset = "kithara-android-docs.zip"
 archive = "docs-build/kithara-android"
+label = "Android"
+pages_path = "docs/android"
+entry = ""
+
+[ext.release.docs.web]
+asset = "kithara-web-docs.zip"
+archive = "docs-build/kithara-web"
+label = "Web"
+pages_path = "docs/web"
+entry = "kithara_ffi/"
 
 # What each packaging run collects. Whether a version has to be named is the
 # pipeline's answer rather than a profile's: this same release profile builds
@@ -3010,7 +3033,7 @@ assets = ["merged"]
 requires_version = true
 require_all_assets = true
 tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
-steps = ["retained", "pages", "crates"]
+steps = ["tag", "retained", "pages", "crates"]
 
 [ext.release.channels.nightly]
 requires_version = false
