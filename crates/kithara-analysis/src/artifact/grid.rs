@@ -76,10 +76,16 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
 /// The artifact's beats with the ordinal each one holds, still paired with the
 /// source frame the bar lines name them by.
 ///
-/// Ordinals count from the first marker. A marker sitting too far from a whole
-/// beat to name one is left out rather than named wrongly: the grid then states
-/// a gap in its numbers, which is what a consumer following ordinals reads as
-/// "nothing proved here", while the beats around it stand as observed.
+/// Each beat kept is the whole beats it sits after or before its kept
+/// neighbour, so a tempo drifting from the stated one never adds up to a lost
+/// beat. Where the tracker slips off the beats - a stray marker, a phrase
+/// tracked on the off-beats - a marker names no whole beat from its kept
+/// neighbour and is left out rather than named wrongly: the grid then states a
+/// gap in its numbers, which is what a consumer following ordinals reads as
+/// "nothing proved here", while the beats around it stand as observed. The
+/// count starts inside the longest run of markers a whole beat apart, so a
+/// slip at the start of the track does not leave the music after it out.
+/// Ordinals count from the first beat kept.
 fn place(
     snapshot: &BeatSnapshot,
     rate: f64,
@@ -88,40 +94,80 @@ fn place(
 ) -> Vec<(u64, GridBeat)> {
     let artifact = snapshot.artifact();
     let period = Consts::SECONDS_PER_MINUTE / bpm;
-    let Some(first) = artifact.beats().first() else {
-        return Vec::new();
+    let whole_beats = |from: &GridBeat, to: &GridBeat| {
+        let exact = (to.at - from.at) / period;
+        let rounded = exact.round();
+        if rounded < 1.0 || (exact - rounded).abs() > ORDINAL_TOLERANCE_BEATS {
+            return None;
+        }
+        rounded.to_i64()
     };
-    let origin = seconds(*first, rate);
-    let mut previous: Option<i64> = None;
-    artifact
+    let markers: Vec<(u64, GridBeat)> = artifact
         .beats()
         .iter()
-        .zip(artifact.beat_confidence().iter())
-        .filter_map(|(frame, confidence)| {
-            let at = seconds(*frame, rate);
-            if duration.is_some_and(|duration| at > duration) {
-                return None;
-            }
-            let exact = (at - origin) / period;
-            let rounded = exact.round();
-            if (exact - rounded).abs() > ORDINAL_TOLERANCE_BEATS {
-                return None;
-            }
-            let ordinal = rounded.to_i64()?;
-            if previous.is_some_and(|before| ordinal <= before) {
-                return None;
-            }
-            previous = Some(ordinal);
-            Some((
-                *frame,
-                GridBeat {
-                    at,
-                    ordinal,
-                    confidence: *confidence,
-                },
-            ))
+        .zip(artifact.beat_confidence())
+        .map(|(frame, confidence)| {
+            let beat = GridBeat {
+                at: seconds(*frame, rate),
+                ordinal: 0,
+                confidence: *confidence,
+            };
+            (*frame, beat)
         })
-        .collect()
+        .filter(|(_, beat)| !duration.is_some_and(|duration| beat.at > duration))
+        .collect();
+    let Some(anchor) = longest_run_start(&markers, whole_beats) else {
+        return Vec::new();
+    };
+    let mut kept: Vec<(u64, GridBeat)> = Vec::with_capacity(markers.len());
+    let mut first = markers[anchor].1;
+    for (frame, beat) in markers[..anchor].iter().rev() {
+        if let Some(step) = whole_beats(beat, &first) {
+            first = GridBeat {
+                ordinal: first.ordinal - step,
+                ..*beat
+            };
+            kept.push((*frame, first));
+        }
+    }
+    kept.reverse();
+    let mut last = markers[anchor].1;
+    kept.push(markers[anchor]);
+    for (frame, beat) in &markers[anchor + 1..] {
+        if let Some(step) = whole_beats(&last, beat) {
+            last = GridBeat {
+                ordinal: last.ordinal + step,
+                ..*beat
+            };
+            kept.push((*frame, last));
+        }
+    }
+    for (_, beat) in &mut kept {
+        beat.ordinal -= first.ordinal;
+    }
+    kept
+}
+
+/// Where the longest run of markers each a whole beat after the one before
+/// it starts; the earliest such run on a tie.
+fn longest_run_start(
+    markers: &[(u64, GridBeat)],
+    whole_beats: impl Fn(&GridBeat, &GridBeat) -> Option<i64>,
+) -> Option<usize> {
+    let mut start = 0;
+    let mut best: Option<(usize, usize)> = None;
+    for index in 0..markers.len() {
+        let continues =
+            index > 0 && whole_beats(&markers[index - 1].1, &markers[index].1).is_some();
+        if !continues {
+            start = index;
+        }
+        let length = index + 1 - start;
+        if best.is_none_or(|(_, longest)| length > longest) {
+            best = Some((start, length));
+        }
+    }
+    best.map(|(start, _)| start)
 }
 
 /// The bar lines the detected ones agree on, each named by the beat it falls
@@ -336,6 +382,90 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 1, 60, 61],
             "the ordinal counts beats of the music, never entries of the list"
+        );
+    }
+
+    /// A track a hair slower than its stated tempo drifts a whole beat off
+    /// the stated period within a few minutes; every beat it keeps is still
+    /// one beat after the one before it.
+    #[kithara::test(native, flash(false))]
+    fn a_tempo_drifting_from_the_stated_one_keeps_every_beat() {
+        let slow = Consts::PERIOD_48 + Consts::PERIOD_48 / 100;
+        let beats: Vec<u64> = (0..100).map(|beat| beat * slow).collect();
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(
+            model
+                .as_raw()
+                .beats
+                .iter()
+                .map(|beat| beat.ordinal)
+                .collect::<Vec<_>>(),
+            (0..100).collect::<Vec<_>>()
+        );
+    }
+
+    fn ordinals(model: &BeatGridModel) -> Vec<i64> {
+        model
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.ordinal)
+            .collect()
+    }
+
+    fn half_beats(half_beats: impl Iterator<Item = u64>) -> Vec<u64> {
+        half_beats
+            .map(|half| half * Consts::PERIOD_48 / 2)
+            .collect()
+    }
+
+    /// A tracker that slips half a beat onto the off-beats for a phrase and
+    /// back names no whole beat there; the music on either side is still one
+    /// run of whole beats, counted across the slip.
+    #[kithara::test(native, flash(false))]
+    fn a_phrase_tracked_half_a_beat_off_leaves_the_beats_around_it_counted() {
+        let beats = half_beats(
+            (0..20)
+                .map(|beat| 2 * beat)
+                .chain((20..25).map(|beat| 2 * beat + 1))
+                .chain((26..46).map(|beat| 2 * beat)),
+        );
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(ordinals(&model), (0..20).chain(26..46).collect::<Vec<_>>());
+    }
+
+    /// A stray first marker half a beat before the music names no beat of
+    /// it, and does not cost the music its beats.
+    #[kithara::test(native, flash(false))]
+    fn a_stray_first_marker_does_not_cost_the_music_its_beats() {
+        let beats = half_beats(std::iter::once(0).chain((1..20).map(|beat| 2 * beat + 1)));
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(ordinals(&model), (0..19).collect::<Vec<_>>());
+        assert_eq!(
+            model.as_raw().beats.first().map(|beat| beat.at),
+            Some(0.75),
+            "the grid opens on the music, not on the stray marker"
         );
     }
 
