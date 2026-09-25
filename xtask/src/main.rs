@@ -15,6 +15,8 @@ mod release;
 mod self_cache;
 mod sysroot;
 mod test_server;
+#[cfg(test)]
+mod testing;
 mod wasm;
 
 use android::AndroidCommand;
