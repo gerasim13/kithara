@@ -4,25 +4,34 @@
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     cochlea::{CochleaReport, mix_loudness_failures},
+    grid::Start,
     kithara,
 };
 
 use super::sync_product_matrix::{
-    BLOCK_FRAMES, CHANNELS, PreparedSources, ProductHarness, SyncCase, TUNNEL_FOUR_DECK_SYNC,
-    TUNNEL_SYNC, tunnel_sources,
+    Audible, BLOCK_FRAMES, CHANNELS, NEWTECHNO_PHRASE, PreparedSources, ProductHarness,
+    REAL_TRACK_FOUR_DECK_SYNC, REAL_TRACK_SYNC, SyncCase, newtechno_sources, tunnel_sources,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
 const LOUDNESS_TOLERANCE_LU: f64 = 0.5;
 const RIDE_STEPS: usize = 32;
+/// An entry on the second beat of the first bar.
+const WEAK_BEAT: Start = Start::Bar { bar: 0, beat: 1 };
 
 struct Capture {
     pcm: Vec<f32>,
     failures: Vec<String>,
 }
 
-async fn render_solo(case: SyncCase, provider: &PreparedSources, audible_deck: usize) -> Capture {
-    let mut harness = ProductHarness::new(case, provider, audible_deck).await;
+async fn render_solo(
+    case: SyncCase,
+    provider: &PreparedSources,
+    start: Start,
+    audible_deck: usize,
+) -> Capture {
+    let mut harness = ProductHarness::new(case, provider, start, Audible::Deck(audible_deck)).await;
+    harness.seek_staggered(case).await;
     let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
     Capture {
         pcm,
@@ -33,14 +42,11 @@ async fn render_solo(case: SyncCase, provider: &PreparedSources, audible_deck: u
 async fn render_mix(
     case: SyncCase,
     provider: &PreparedSources,
+    start: Start,
     target_bpm: Option<f64>,
 ) -> Capture {
-    let mut harness = ProductHarness::new(case, provider, 0).await;
-    harness.mark("mix: every deck audible");
-    for deck in &harness.decks {
-        let control = deck.control().clone();
-        harness.host.run(move || control.set_muted(false)).await;
-    }
+    let mut harness = ProductHarness::new(case, provider, start, Audible::Mix).await;
+    harness.seek_staggered(case).await;
     harness.request_sync(case).await;
 
     let pcm = if let Some(target_bpm) = target_bpm {
@@ -94,21 +100,24 @@ pub(super) async fn render_frames(
     flash(false),
     timeout(Duration::from_secs(60))
 )]
+#[case::tunnel(tunnel_sources().await, Start::bar(0))]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
+#[case::tunnel_weak_beat(tunnel_sources().await, WEAK_BEAT)]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
-    #[future(awt)] tunnel_sources: PreparedSources,
+    #[case] provider: PreparedSources,
+    #[case] start: Start,
 ) {
-    let case = TUNNEL_SYNC;
-    let provider = tunnel_sources;
+    let case = REAL_TRACK_SYNC;
     let mut decks = Vec::with_capacity(case.decks());
     for deck in 0..case.decks() {
-        let capture = render_solo(case, &provider, deck).await;
+        let capture = render_solo(case, &provider, start, deck).await;
         decks.push(CochleaReport::measure(
             &capture.pcm,
             CHANNELS,
             case.sample_rate,
         ));
     }
-    let mix = render_mix(case, &provider, None).await;
+    let mix = render_mix(case, &provider, start, None).await;
     let mix = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
     let mut failures = mix_loudness_failures(case.id(), &mix, &decks, LOUDNESS_TOLERANCE_LU);
     if mix.clipped_samples > 0 || mix.true_peak_over_0dbtp {
@@ -129,16 +138,22 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "writes opt-in listening WAVs; ignored-red until Warp alignment is implemented"]
-#[case::host_120(TUNNEL_SYNC, None)]
-#[case::ride_to_96(TUNNEL_SYNC, Some(96.0))]
-#[case::ride_to_127(TUNNEL_SYNC, Some(127.0))]
-#[case::ride_to_145(TUNNEL_SYNC, Some(145.0))]
-#[case::four_deck_host_120(TUNNEL_FOUR_DECK_SYNC, None)]
+#[ignore = "writes opt-in listening WAVs; run through `just test audio-artifacts`"]
+#[case::tunnel_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, None)]
+#[case::tunnel_ride_to_96(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(96.0))]
+#[case::tunnel_ride_to_127(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(127.0))]
+#[case::tunnel_ride_to_145(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(145.0))]
+#[case::tunnel_four_deck_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_FOUR_DECK_SYNC, None)]
+#[case::newtechno_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, None)]
+#[case::newtechno_ride_to_96(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(96.0))]
+#[case::newtechno_ride_to_127(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(127.0))]
+#[case::newtechno_ride_to_145(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(145.0))]
+#[case::newtechno_four_deck_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_FOUR_DECK_SYNC, None)]
 async fn record_sync_listening_wavs(
+    #[case] provider: PreparedSources,
+    #[case] start: Start,
     #[case] case: SyncCase,
     #[case] target_bpm: Option<f64>,
-    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
     assert!(
         std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_some(),
@@ -147,7 +162,7 @@ async fn record_sync_listening_wavs(
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
-        let capture = render_solo(case, &tunnel_sources, deck).await;
+        let capture = render_solo(case, &provider, start, deck).await;
         deck_reports.push(CochleaReport::measure(
             &capture.pcm,
             CHANNELS,
@@ -155,7 +170,7 @@ async fn record_sync_listening_wavs(
         ));
         failures.extend(capture.failures);
     }
-    let mix = render_mix(case, &tunnel_sources, target_bpm).await;
+    let mix = render_mix(case, &provider, start, target_bpm).await;
     let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
     failures.extend(mix.failures);
     failures.extend(mix_loudness_failures(

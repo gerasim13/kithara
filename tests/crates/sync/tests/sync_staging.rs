@@ -7,13 +7,15 @@ use kithara::{
     sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
     warp::AssetFrame,
 };
-use kithara_integration_tests::{kithara, usdt_trace};
+use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
 
 use super::{
     sync_listening::render_frames,
     sync_product_matrix::{
-        BLOCK_FRAMES, CHANNELS, PreparedSources, ProductHarness, STAGED_BESIDE_PLAYBACK,
-        STAGED_CUE, STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase, tunnel_sources,
+        Audible, BLOCK_FRAMES, CHANNELS, NEWTECHNO_PHRASE, PreparedSources, ProductHarness,
+        STAGED_BESIDE_PLAYBACK, STAGED_BESIDE_PLAYBACK_CONTROL, STAGED_CUE,
+        STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase, TUNNEL_CUE,
+        newtechno_sources, tunnel_sources,
     },
 };
 
@@ -26,12 +28,16 @@ const CANCELLED: u64 = 4;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longer than a lane's ring holds, so the sounding lane has to keep decoding.
 const LISTEN_FRAMES: usize = 48_000 * 6;
-/// A cue off the downbeat, well inside the track.
-const CUE_SECONDS: f64 = 5.25;
-/// A second cue that supersedes the first.
-const SUPERSEDING_CUE_SECONDS: f64 = 9.625;
-/// Recording rate of the track the cues index.
-const FIXTURE_RATE: f64 = 44_100.0;
+/// A cue on the second beat of the Tunnel's fifth bar.
+const TUNNEL_WEAK_CUE: Start = Start::Bar { bar: 4, beat: 1 };
+/// A second Tunnel cue that supersedes the first.
+const TUNNEL_SUPERSEDING_CUE: Start = Start::bar(8);
+/// Newtechno's third phrase, a second cue that supersedes its second.
+const NEWTECHNO_SUPERSEDING_CUE: Start = Start::Beat(128);
+/// Recording rate of The Tunnel, the frame rate its cues index.
+const TUNNEL_RATE: f64 = 44_100.0;
+/// Recording rate of newtechno.
+const NEWTECHNO_RATE: f64 = 48_000.0;
 
 /// One receipt the owner answered: the operation it answers for, its
 /// rejection code and whether the owner recorded it.
@@ -83,7 +89,8 @@ async fn render_until(
 /// Syncs the deck, then asks its group to prepare the track from the exact
 /// recording frame `seconds` in: a launch the executor stages beside
 /// whatever the deck plays. Returns the operation the preparation carries.
-async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64) -> u64 {
+async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, rate: f64, cue: Start) -> u64 {
+    let seconds = harness.start_seconds(0, cue);
     harness.request_sync_intent(case, SyncIntent::Enable).await;
     let deck = harness.decks[0].id();
     let topology = harness
@@ -109,7 +116,7 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64)
         .await
         .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id()));
     let now = SessionFrame::new(i64::try_from(harness.host.position()).unwrap_or(i64::MAX));
-    let cue = AssetFrame::new(seconds * FIXTURE_RATE).expect("fixture cue is finite");
+    let cue = AssetFrame::new(seconds * rate).expect("fixture cue is finite");
     let admission = harness
         .host
         .with(move |host| {
@@ -137,14 +144,34 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64)
     flash(false),
     timeout(Duration::from_secs(60))
 )]
-#[case::unbounded_deadline(STAGED_CUE)]
-#[case::deadline_looser_than_the_ring(STAGED_UNDER_LOOSE_DEADLINE)]
+#[case::tunnel_unbounded_deadline(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, STAGED_CUE)]
+#[case::tunnel_deadline_looser_than_the_ring(
+    tunnel_sources().await,
+    TUNNEL_RATE,
+    TUNNEL_CUE,
+    STAGED_UNDER_LOOSE_DEADLINE
+)]
+#[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE, STAGED_CUE)]
+#[case::newtechno_unbounded_deadline(
+    newtechno_sources().await,
+    NEWTECHNO_RATE,
+    NEWTECHNO_PHRASE,
+    STAGED_CUE
+)]
+#[case::newtechno_deadline_looser_than_the_ring(
+    newtechno_sources().await,
+    NEWTECHNO_RATE,
+    NEWTECHNO_PHRASE,
+    STAGED_UNDER_LOOSE_DEADLINE
+)]
 async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
+    #[case] sources: PreparedSources,
+    #[case] rate: f64,
+    #[case] cue: Start,
     #[case] case: SyncCase,
-    #[future(awt)] tunnel_sources: PreparedSources,
 ) {
-    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
-    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue).await;
 
     let receipts = render_until(&mut harness, case, operation, INSTALLED).await;
     assert_eq!(
@@ -167,12 +194,17 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     flash(false),
     timeout(Duration::from_secs(60))
 )]
+#[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
+#[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
 async fn unloading_the_track_reports_its_installed_lane_cancelled(
-    #[future(awt)] tunnel_sources: PreparedSources,
+    #[case] sources: PreparedSources,
+    #[case] rate: f64,
+    #[case] cue: Start,
 ) {
     let case = STAGED_CUE;
-    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
-    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue).await;
     let _ = render_until(&mut harness, case, operation, INSTALLED).await;
 
     let control = harness.decks[0].control().clone();
@@ -206,12 +238,17 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     flash(false),
     timeout(Duration::from_secs(60))
 )]
+#[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
+#[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
 async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
-    #[future(awt)] tunnel_sources: PreparedSources,
+    #[case] sources: PreparedSources,
+    #[case] rate: f64,
+    #[case] cue: Start,
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
-    let mut harness = ProductHarness::new(case, &tunnel_sources, 0).await;
-    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue).await;
 
     let receipts = render_until(&mut harness, case, operation, CAPACITY).await;
     assert!(
@@ -240,19 +277,38 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     flash(false),
     timeout(Duration::from_secs(120))
 )]
+#[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, TUNNEL_SUPERSEDING_CUE)]
+#[case::tunnel_weak_beat(
+    tunnel_sources().await,
+    TUNNEL_RATE,
+    TUNNEL_WEAK_CUE,
+    TUNNEL_SUPERSEDING_CUE
+)]
+#[case::newtechno(
+    newtechno_sources().await,
+    NEWTECHNO_RATE,
+    NEWTECHNO_PHRASE,
+    NEWTECHNO_SUPERSEDING_CUE
+)]
 async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
-    #[future(awt)] tunnel_sources: PreparedSources,
+    #[case] sources: PreparedSources,
+    #[case] rate: f64,
+    #[case] cue: Start,
+    #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
     let control = {
+        let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
-            ProductHarness::new_for_block(case, &tunnel_sources, 0, BLOCK_FRAMES).await;
-        render_frames(&mut harness, case, LISTEN_FRAMES).await
+            ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
+                .await;
+        render_frames(&mut harness, control, LISTEN_FRAMES).await
     };
-    let mut harness = ProductHarness::new_for_block(case, &tunnel_sources, 0, BLOCK_FRAMES).await;
+    let mut harness =
+        ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
     harness.mark("staged cue, then a superseding cue");
-    let superseded = prepare_cue(&mut harness, case, CUE_SECONDS).await;
-    let successor = prepare_cue(&mut harness, case, SUPERSEDING_CUE_SECONDS).await;
+    let superseded = prepare_cue(&mut harness, case, rate, cue).await;
+    let successor = prepare_cue(&mut harness, case, rate, superseding).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(

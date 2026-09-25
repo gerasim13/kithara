@@ -14,7 +14,7 @@ use crate::{
 };
 
 const SR: u32 = 44_100;
-const CH: usize = 2;
+pub(crate) const CH: usize = 2;
 /// Nominal bar length in source frames (0.5 s at 44.1 kHz).
 const NOMINAL: usize = 22_050;
 /// Drifting bar lengths: region 1 runs fast, region 2 runs slow.
@@ -50,11 +50,11 @@ fn spec() -> AudioSpec {
     }
 }
 
-fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
+fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], frame_offset: u64) -> AudioChunk {
     let frames = samples.len() / CH;
     AudioChunk::new(
         AudioChunkInfo {
-            spec: spec(),
+            spec,
             frames: u32::try_from(frames).unwrap_or(0),
             frame_offset,
             ..Default::default()
@@ -79,7 +79,7 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
         let output = fx
-            .render(chunk(&pools, data, offset))
+            .render(chunk(&pools, spec(), data, offset))
             .continue_value()
             .expect("whole manual span");
         fx.prepare(spec());
@@ -99,7 +99,7 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     out
 }
 
-fn mono(samples: &[f32]) -> Vec<f32> {
+pub(crate) fn mono(samples: &[f32]) -> Vec<f32> {
     samples.iter().step_by(CH).copied().collect()
 }
 
@@ -462,6 +462,7 @@ fn render_configured_grid(
 ) -> Vec<f32> {
     render_configured_grid_with_updates(
         config,
+        spec(),
         plan,
         source,
         session_beats,
@@ -470,17 +471,31 @@ fn render_configured_grid(
         None,
         &mut |_, _| None,
     )
+    .samples
 }
 
+/// A render's interleaved output and, for every chunk it presented, the
+/// output frame the chunk starts at with the source frame the renderer
+/// published as audible there.
+pub(crate) struct Presented {
+    pub(crate) samples: Vec<f32>,
+    pub(crate) positions: Vec<(usize, u64)>,
+}
+
+/// Renders `source`, shaped by `spec`, through `plan` against a published
+/// session context, stopping once `output_frames` are rendered; `updates`
+/// may retarget the context and install that retarget's plan at any
+/// source/output frontier.
 #[kithara::hang_watchdog]
-fn render_configured_grid_with_updates(
+pub(crate) fn render_configured_grid_with_updates(
     config: WarpConfig,
+    spec: AudioSpec,
     plan: Option<WarpPlan>,
     source: &[f32],
     session_beats: f64,
     swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
     trajectory: Option<crate::SessionAnchor>,
-    pending_plan: Option<WarpPlan>,
+    output_frames: Option<usize>,
     updates: &mut dyn FnMut(
         u64,
         usize,
@@ -489,13 +504,13 @@ fn render_configured_grid_with_updates(
         crate::WarpMapRevision,
         Option<WarpPlan>,
     )>,
-) -> Vec<f32> {
+) -> Presented {
     let pools = pools();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let output = OutputContext::new(
-        SessionFrame::new(0)..SessionFrame::new(i64::from(SR)),
-        spec().sample_rate,
+        SessionFrame::new(0)..SessionFrame::new(i64::from(spec.sample_rate.get())),
+        spec.sample_rate,
         SessionEpoch::new(0),
         Some(TransportRevision::first()),
     )
@@ -517,15 +532,23 @@ fn render_configured_grid_with_updates(
             .build(),
     );
     config.plan().install(plan.map(Arc::new));
-    let mut fx = warp.renderer(spec(), pools.clone());
-    if let Some(plan) = pending_plan {
-        config.plan().install(Some(Arc::new(plan)));
-    }
+    let mut fx = warp.renderer(spec, pools.clone());
     let mut out = Vec::new();
+    let mut positions = Vec::new();
+    let mut present = |out: &mut Vec<f32>, chunk: AudioChunk| {
+        positions.push((out.len() / CH, chunk.meta.frame_offset));
+        out.extend_from_slice(&chunk.samples);
+    };
     let mut offset = 0_u64;
     let mut swap = swap;
     let mut carried = 0;
     for data in source.chunks(4096 * CH) {
+        if output_frames.is_some_and(|limit| out.len() / CH >= limit) {
+            return Presented {
+                samples: out,
+                positions,
+            };
+        }
         let frames = data.len() / CH;
         if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at)) {
             if let Some((_, plan)) = swap.take() {
@@ -541,16 +564,15 @@ fn render_configured_grid_with_updates(
         while consumed < frames {
             let source_frontier = fx.rendered_source_end().map_or(0, |frontier| frontier.0);
             let output_frontier = out.len() / CH;
-            if let Some((anchor, revision, pending_plan)) =
-                updates(source_frontier, output_frontier)
-            {
+            if let Some((anchor, revision, plan)) = updates(source_frontier, output_frontier) {
                 let output_frame = SessionFrame::new(i64_of(output_frontier));
                 let output = OutputContext::new(
                     output_frame
                         ..SessionFrame::new(i64_of(
-                            output_frontier + usize::try_from(SR).expect("sample rate"),
+                            output_frontier
+                                + usize::try_from(spec.sample_rate.get()).expect("sample rate"),
                         )),
-                    spec().sample_rate,
+                    spec.sample_rate,
                     SessionEpoch::new(0),
                     Some(TransportRevision::first()),
                 )
@@ -564,14 +586,14 @@ fn render_configured_grid_with_updates(
                         .output(output_frame)
                         .build(),
                 );
-                if let Some(plan) = pending_plan {
+                if let Some(plan) = plan {
                     config.plan().install(Some(Arc::new(plan)));
                 }
             }
-            fx.prepare(spec());
+            fx.prepare(spec);
             let remaining = frames - consumed;
             let meta = AudioChunkInfo {
-                spec: spec(),
+                spec,
                 frame_offset: offset + u64_of(consumed),
                 frames: u32::try_from(remaining).expect("fixture frames"),
                 ..Default::default()
@@ -581,9 +603,9 @@ fn render_configured_grid_with_updates(
                 Err(kithara_warp::WarpRenderError::NeedsService) => {
                     while fx.transition_pending() {
                         if let Some(output) = fx.flush() {
-                            out.extend_from_slice(&output.samples);
+                            present(&mut out, output);
                         }
-                        fx.prepare(spec());
+                        fx.prepare(spec);
                     }
                     continue;
                 }
@@ -605,6 +627,7 @@ fn render_configured_grid_with_updates(
             };
             let input = chunk(
                 &pools,
+                spec,
                 &source[start * CH..(start + planned) * CH],
                 meta.frame_offset,
             );
@@ -613,7 +636,7 @@ fn render_configured_grid_with_updates(
                 .continue_value()
                 .expect("prepared source shape")
             {
-                out.extend_from_slice(&output.samples);
+                present(&mut out, output);
             }
             consumed += planned;
         }
@@ -622,311 +645,16 @@ fn render_configured_grid_with_updates(
     }
     loop {
         let output = fx.flush();
-        fx.prepare(spec());
+        fx.prepare(spec);
         let Some(o) = output else {
             break;
         };
-        out.extend_from_slice(&o.samples);
+        present(&mut out, o);
     }
-    out
-}
-
-#[cfg(feature = "playback")]
-fn record_tunnel_previews() {
-    use std::io::Cursor;
-
-    use kithara_integration_tests::{
-        grid::library_beat_grid,
-        kithara::{
-            decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
-            resampler::NoResamplerBackend,
-        },
-    };
-    use kithara_test_fixtures::assets::library_mp3_zvuk_27390231;
-    use num_traits::ToPrimitive;
-
-    if std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_none() {
-        return;
+    Presented {
+        samples: out,
+        positions,
     }
-    let model = library_beat_grid("library_mp3_zvuk_27390231");
-    let raw = model.as_raw();
-    let first_beat = raw
-        .beats
-        .first()
-        .expect("Tunnel analysis carries beat phase");
-    let source_start = (first_beat.at * f64::from(SR))
-        .round()
-        .to_usize()
-        .expect("Tunnel cue fits usize");
-    let sample_rate = usize::try_from(SR).expect("sample rate fits usize");
-    let decode_end = source_start + sample_rate * 50;
-    let config = DecoderConfig::<NoResamplerBackend, crate::test_pools::TestPools>::builder()
-        .pools(pools())
-        .build();
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(library_mp3_zvuk_27390231().bytes().to_vec()),
-        Some("mp3"),
-        config,
-    )
-    .expect("decode Richie Hawtin - The Tunnel");
-    assert_eq!(
-        decoder.spec(),
-        spec(),
-        "Tunnel fixture keeps its native shape"
-    );
-    let mut decoded = Vec::new();
-    while decoded.len() / CH < decode_end {
-        match decoder.next_chunk().expect("decode Tunnel PCM") {
-            DecoderChunkOutcome::Chunk(chunk) => decoded.extend_from_slice(&chunk.samples),
-            DecoderChunkOutcome::Pending(reason) => panic!("Tunnel decode pending: {reason:?}"),
-            DecoderChunkOutcome::Eof => break,
-        }
-    }
-    assert!(decoded.len() / CH >= decode_end, "Tunnel covers preview");
-
-    let beat_frames = f64::from(SR) * 60.0 / raw.bpm;
-    let render_segment = |source_beat: usize,
-                          start_bpm: f64,
-                          target_bpm: f64,
-                          seconds: usize,
-                          smooth_seconds: f64| {
-        let base = source_start
-            + (f64_of(source_beat) * beat_frames)
-                .round()
-                .to_usize()
-                .expect("source beat fits usize");
-        let source_seconds = (f64_of(seconds) * start_bpm.max(target_bpm) / raw.bpm).ceil();
-        let source_frames = ((source_seconds + 2.0) * f64::from(SR))
-            .to_usize()
-            .expect("source preview fits usize");
-        let end = (base + source_frames).min(decoded.len() / CH);
-        let anchor = crate::SessionAnchor::new(
-            SessionFrame::new(0),
-            SessionBeat::default(),
-            start_bpm / 60.0,
-            spec().sample_rate,
-        )
-        .and_then(|anchor| anchor.retarget(SessionFrame::new(0), target_bpm / 60.0, smooth_seconds))
-        .expect("Host trajectory");
-        let target = crate::BeatGridSnapshot::session(
-            crate::BeatGridId::allocate().expect("grid id"),
-            crate::BeatGridRevision::first(),
-            SessionEpoch::new(0),
-            anchor,
-            None,
-        );
-        let source = asset_grid_over(&[(0.0, beat_frames, 256)], None, spec().sample_rate);
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
-        controls.set_backend(StretchKind::Signalsmith);
-        let rendered = render_configured_grid(
-            WarpConfig::builder()
-                .stretch(controls)
-                .render_quantum_frames(NonZero::new(64).expect("quantum"))
-                .build(),
-            Some(plan_over(source, target)),
-            &decoded[base * CH..end * CH],
-            target_bpm / 60.0 * f64_of(seconds),
-            None,
-            Some(anchor),
-        );
-        let samples = (sample_rate * seconds * CH).min(rendered.len());
-        (rendered[..samples].to_vec(), anchor)
-    };
-
-    let cases: &[(&str, &[(usize, f64, f64, usize, f64)])] = &[
-        ("fixed-96", &[(0, 96.0, 96.0, 10, 0.0)]),
-        ("fixed-160", &[(24, 160.0, 160.0, 10, 0.0)]),
-        ("rise-96-to-150", &[(0, 96.0, 150.0, 12, 3.0)]),
-        ("fall-150-to-96", &[(32, 150.0, 96.0, 12, 3.0)]),
-    ];
-    for (name, segments) in cases {
-        let Some(mut tap) = kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
-            &format!("projected-richie-hawtin-the-tunnel-{name}"),
-            SR,
-            u16::try_from(CH).expect("channel count"),
-        )
-        .expect("Tunnel listening artifact") else {
-            return;
-        };
-        let mut output_frame = 0_u64;
-        for &(source_beat, start_bpm, target_bpm, seconds, smooth_seconds) in *segments {
-            let (rendered, anchor) =
-                render_segment(source_beat, start_bpm, target_bpm, seconds, smooth_seconds);
-            let frames = rendered.len() / CH;
-            tap.push(&rendered);
-            let mut beat = 0;
-            loop {
-                let frame = anchor
-                    .frame_at(SessionBeat::new(f64_of(beat)).expect("Host beat"))
-                    .expect("Host beat frame");
-                let frame = u64::try_from(i64::from(frame)).expect("positive Host frame");
-                if frame >= u64_of(frames) {
-                    break;
-                }
-                tap.host_beat(output_frame + frame, beat.is_multiple_of(4));
-                beat += 1;
-            }
-            output_frame += u64_of(frames);
-        }
-        tap.evidence(
-            "projection",
-            serde_json::json!({
-                "artist": "Richie Hawtin",
-                "title": "The Tunnel (Original Mix)",
-                "source_bpm": raw.bpm,
-                "source_beat_zero_frame": source_start,
-                "segments": segments,
-            }),
-        );
-        assert_eq!(tap.metronome_mix().1, 0, "Tunnel mix has headroom");
-    }
-
-    let ride_name = "ride-96-150-110-160-100";
-    let targets = [150.0, 110.0, 160.0, 100.0];
-    let segment_frames = sample_rate * 8;
-    let total_frames = segment_frames * targets.len();
-    let source = asset_grid_over(&[(0.0, beat_frames, 256)], None, spec().sample_rate);
-    let mut anchors = Vec::with_capacity(targets.len());
-    let mut anchor = crate::SessionAnchor::new(
-        SessionFrame::new(0),
-        SessionBeat::default(),
-        96.0 / 60.0,
-        spec().sample_rate,
-    )
-    .and_then(|anchor| anchor.retarget(SessionFrame::new(0), targets[0] / 60.0, 2.5))
-    .expect("initial ride trajectory");
-    anchors.push(anchor);
-    for (index, target) in targets.iter().copied().enumerate().skip(1) {
-        anchor = anchor
-            .retarget(
-                SessionFrame::new(i64_of(segment_frames * index)),
-                target / 60.0,
-                2.5,
-            )
-            .expect("continuous ride retarget");
-        anchors.push(anchor);
-    }
-    for pair in anchors.windows(2) {
-        let frame = pair[1].frame();
-        assert_eq!(pair[0].beat_at(frame), pair[1].beat_at(frame));
-        assert!((pair[0].tempo_at(frame) - pair[1].tempo_at(frame)).abs() < 1e-12);
-    }
-
-    let mut revision = crate::WarpMapRevision::first();
-    let mut plans = Vec::with_capacity(anchors.len());
-    for anchor in anchors.iter().copied() {
-        let target = crate::BeatGridSnapshot::session(
-            crate::BeatGridId::allocate().expect("grid id"),
-            crate::BeatGridRevision::first(),
-            SessionEpoch::new(0),
-            anchor,
-            None,
-        );
-        let beat = crate::Beat::new(f64::from(anchor.beat())).expect("ride beat");
-        let alignment = crate::BeatAlignment::new(
-            crate::MapPoint::new(source.stamp(), beat),
-            crate::MapPoint::new(target.stamp(), beat),
-        );
-        let map = crate::WarpMap::projected(source.clone(), target, alignment, revision)
-            .expect("ride projection");
-        plans.push(WarpPlan::new(map, anchor.frame()).expect("ride activation"));
-        revision = revision.checked_next().expect("ride map revision");
-    }
-    assert!(plans.windows(2).all(|plans| {
-        plans[0].activation().source() < plans[1].activation().source()
-            && plans[0].activation().output() < plans[1].activation().output()
-    }));
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(StretchKind::Signalsmith);
-    let mut next_update = 1;
-    let mut plans = plans.into_iter();
-    let initial_plan = plans.next().expect("initial ride plan");
-    let pending_plan = plans.next().expect("first ride retarget");
-    let mut active_revision = crate::WarpMapRevision::first()
-        .checked_next()
-        .expect("first ride retarget revision");
-    let mut update = |_: u64, output_frontier: usize| {
-        if next_update >= anchors.len() || output_frontier < segment_frames * next_update {
-            return None;
-        }
-        let next = anchors[next_update];
-        let revision = active_revision;
-        active_revision = active_revision
-            .checked_next()
-            .expect("active ride revision");
-        next_update += 1;
-        Some((next, revision, plans.next()))
-    };
-    let rendered = render_configured_grid_with_updates(
-        WarpConfig::builder()
-            .stretch(controls)
-            .render_quantum_frames(NonZero::new(16).expect("quantum"))
-            .build(),
-        Some(initial_plan),
-        &decoded[source_start * CH..decode_end * CH],
-        0.0,
-        None,
-        Some(anchors[0]),
-        Some(pending_plan),
-        &mut update,
-    );
-    assert!(
-        rendered.len() / CH >= total_frames,
-        "ride covers its duration"
-    );
-    assert_eq!(
-        next_update,
-        anchors.len(),
-        "every ride retarget was applied"
-    );
-    let Some(mut tap) = kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
-        &format!("projected-richie-hawtin-the-tunnel-{ride_name}"),
-        SR,
-        u16::try_from(CH).expect("channel count"),
-    )
-    .expect("Tunnel ride artifact") else {
-        return;
-    };
-    tap.push(&rendered[..total_frames * CH]);
-    let final_beat = anchors
-        .last()
-        .and_then(|anchor| anchor.beat_at(SessionFrame::new(i64_of(total_frames))).ok())
-        .expect("ride final beat");
-    let mut beat = 0_u64;
-    while beat.to_f64().expect("Host beat fits f64") < f64::from(final_beat) {
-        let session_beat =
-            SessionBeat::new(beat.to_f64().expect("Host beat fits f64")).expect("Host beat");
-        let anchor = anchors
-            .iter()
-            .rev()
-            .find(|anchor| anchor.beat() <= session_beat)
-            .copied()
-            .unwrap_or(anchors[0]);
-        let frame = anchor.frame_at(session_beat).expect("Host beat frame");
-        if i64::from(frame) >= i64_of(total_frames) {
-            break;
-        }
-        tap.host_beat(
-            u64::try_from(i64::from(frame)).expect("positive Host frame"),
-            beat.is_multiple_of(4),
-        );
-        beat += 1;
-    }
-    tap.evidence(
-        "projection",
-        serde_json::json!({
-            "artist": "Richie Hawtin",
-            "title": "The Tunnel (Original Mix)",
-            "source_bpm": raw.bpm,
-            "source_beat_zero_frame": source_start,
-            "targets_bpm": targets,
-            "segment_seconds": 8,
-            "smooth_seconds": 2.5,
-        }),
-    );
-    assert_eq!(tap.metronome_mix().1, 0, "Tunnel ride mix has headroom");
 }
 
 #[kithara::test]
@@ -948,10 +676,6 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     use crate::{BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor};
 
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
-    #[cfg(feature = "playback")]
-    if matches!(backend, StretchKind::Signalsmith) {
-        record_tunnel_previews();
-    }
     assert_eq!(
         source_clicks.len(),
         BARS,
