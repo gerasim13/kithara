@@ -125,13 +125,11 @@ mod tests {
 
     use super::*;
 
-    struct Consts;
-
-    impl Consts {
+    mod consts {
         /// Chunks the playback path preloads before a lane sounds.
-        const PRELOAD: usize = 2;
+        pub(super) const PRELOAD: usize = 2;
         /// Decode epoch the lane was positioned in.
-        const POSITIONED: u64 = 3;
+        pub(super) const POSITIONED: u64 = 3;
     }
 
     /// A plan entering a 120 BPM recording one second into a session at the
@@ -193,7 +191,7 @@ mod tests {
     }
 
     /// The exact entry of `plan` and the chunk that follows it.
-    fn entry(plan: &WarpPlan) -> [AudioChunkInfo; Consts::PRELOAD] {
+    fn entry(plan: &WarpPlan) -> [AudioChunkInfo; consts::PRELOAD] {
         let activation = plan.activation();
         let revision = NonZeroU64::new(u64::from(activation.revision()));
         let first = chunk(activation.source(), revision);
@@ -207,16 +205,16 @@ mod tests {
         let (mut probe, _report) = ReadinessProbe::new(&plan);
         let stale = chunk(0, None);
 
-        probe.admit(&stale, Consts::POSITIONED, Consts::PRELOAD);
-        probe.bind(Consts::POSITIONED);
-        probe.admit(&stale, Consts::POSITIONED - 1, Consts::PRELOAD);
+        probe.admit(&stale, consts::POSITIONED, consts::PRELOAD);
+        probe.bind(consts::POSITIONED);
+        probe.admit(&stale, consts::POSITIONED - 1, consts::PRELOAD);
         assert_eq!(
             probe.verdict, None,
             "PCM decoded before the lane was positioned neither proves nor fails it"
         );
 
         for chunk in entry(&plan) {
-            probe.admit(&chunk, Consts::POSITIONED, Consts::PRELOAD);
+            probe.admit(&chunk, consts::POSITIONED, consts::PRELOAD);
         }
         assert_eq!(probe.verdict, Some(Readiness::Ready));
     }
@@ -237,7 +235,7 @@ mod tests {
             "the fixture activates mid-recording"
         );
         let (mut probe, _report) = ReadinessProbe::new(&plan);
-        probe.bind(Consts::POSITIONED);
+        probe.bind(consts::POSITIONED);
         let [first, next] = entry(&plan);
         let displaced = chunk(
             first.frame_offset.saturating_add_signed(offset),
@@ -246,8 +244,8 @@ mod tests {
                 .and_then(|revision| revision.checked_add(revision_shift)),
         );
 
-        probe.admit(&displaced, Consts::POSITIONED, Consts::PRELOAD);
-        probe.admit(&next, Consts::POSITIONED, Consts::PRELOAD);
+        probe.admit(&displaced, consts::POSITIONED, consts::PRELOAD);
+        probe.admit(&next, consts::POSITIONED, consts::PRELOAD);
         assert_eq!(
             probe.verdict,
             Some(Readiness::Failed),
