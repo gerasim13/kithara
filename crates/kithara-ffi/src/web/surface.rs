@@ -51,7 +51,7 @@ impl AudioPlayer {
     }
 
     /// Subscribe `obj` to the marshalled
-    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects of the track
+    /// [`FfiItemEvent`](crate::types::FfiItemEvent) objects of the track
     /// with `id`. Returns the observer handle `removeItemObserver` takes.
     ///
     /// # Errors
@@ -433,7 +433,7 @@ impl AudioPlayer {
 
     /// Register a JS callback (`obj`) as the player-level observer. The
     /// callback receives one marshalled event object per
-    /// [`FfiPlayerEvent`](crate::api::FfiPlayerEvent). This is one of
+    /// [`FfiPlayerEvent`](crate::types::FfiPlayerEvent). This is one of
     /// the FFI boundary sites: a JS `Function` is adapted into the typed
     /// `Arc<dyn PlayerObserver>` the facade expects.
     ///
