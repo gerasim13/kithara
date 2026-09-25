@@ -2,9 +2,11 @@
 
 //! Recursive synchronization-group ownership and its control-plane protocol.
 
+mod execution;
 mod owner;
 mod protocol;
 
+pub use execution::{ReceiptSink, StagePort, SyncExecutor};
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{
     AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal,

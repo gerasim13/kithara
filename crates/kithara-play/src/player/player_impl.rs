@@ -90,7 +90,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
         // A web session is not `Send`, and the web has no Warp backend to
         // stage on.
         #[cfg(not(target_arch = "wasm32"))]
-        let owner: Option<Arc<dyn crate::player::staging::ReceiptOwner>> =
+        let owner: Option<Arc<dyn kithara_sync::ReceiptSink>> =
             Some(Arc::new(engine.session().clone()));
         #[cfg(target_arch = "wasm32")]
         let owner = None;
