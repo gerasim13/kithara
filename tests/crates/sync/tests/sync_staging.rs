@@ -7,7 +7,10 @@ use kithara::{
     platform::time::{Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     signal::{SessionFrame, TransportRevision},
-    sync::{AlignmentSource, LoadGeneration, SyncError, SyncGroup, SyncIntent, SyncOperation},
+    sync::{
+        AlignmentSource, LoadGeneration, SyncAdmission, SyncError, SyncGroup, SyncIntent,
+        SyncOperation,
+    },
     warp::{AssetFrame, BeatGridId},
 };
 use kithara_integration_tests::{
@@ -42,10 +45,11 @@ const SUPERSEDING_CUE_SECONDS: f64 = 9.625;
 /// Recording rate of the synthetic fixtures the cues index.
 const FIXTURE_RATE: f64 = 48_000.0;
 
-/// One receipt the owner answered: its rejection code and whether the owner
-/// recorded it.
+/// One receipt the owner answered: the operation it answers for, its
+/// rejection code and whether the owner recorded it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Delivered {
+    operation: u64,
     rejected: u64,
     accepted: bool,
 }
@@ -55,23 +59,33 @@ fn delivered() -> Vec<Delivered> {
         .iter()
         .filter(|event| event.probe == RECEIPT)
         .map(|event| Delivered {
+            operation: event.field("operation").expect("receipt operation"),
             rejected: event.field("rejected").expect("receipt rejection"),
             accepted: event.field("accepted").expect("receipt answer") == 1,
         })
         .collect()
 }
 
-/// Renders until the owner has answered a receipt with `code`.
-async fn render_until(harness: &mut ProductHarness, case: SyncCase, code: u64) -> Vec<Delivered> {
+/// Renders until the owner has answered a receipt with `code` for
+/// `operation`.
+async fn render_until(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    operation: u64,
+    code: u64,
+) -> Vec<Delivered> {
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
         let receipts = delivered();
-        if receipts.iter().any(|receipt| receipt.rejected == code) {
+        if receipts
+            .iter()
+            .any(|receipt| receipt.operation == operation && receipt.rejected == code)
+        {
             return receipts;
         }
         assert!(
             Instant::now() < deadline,
-            "{}: no receipt {code} reached the owner; delivered {receipts:?}",
+            "{}: no receipt {code} for operation {operation} reached the owner; delivered {receipts:?}",
             case.id()
         );
         let _ = harness.render(case, BLOCK_FRAMES).await;
@@ -80,8 +94,8 @@ async fn render_until(harness: &mut ProductHarness, case: SyncCase, code: u64) -
 
 /// Syncs the deck, then asks its group to prepare the track from the exact
 /// recording frame `seconds` in: a launch the executor stages beside
-/// whatever the deck plays.
-async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64) {
+/// whatever the deck plays. Returns the operation the preparation carries.
+async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64) -> u64 {
     // The Host publishes its committed transport as the session grid only
     // when a transport command observes it; nothing else refreshes the root.
     harness.set_tempo(case, case.start_bpm(), true).await;
@@ -111,7 +125,7 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64)
         .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id()));
     let now = SessionFrame::new(i64::try_from(harness.host.position()).unwrap_or(i64::MAX));
     let cue = AssetFrame::new(seconds * FIXTURE_RATE).expect("fixture cue is finite");
-    let _ = harness
+    let admission = harness
         .host
         .with(move |host| {
             host.transact(SyncOperation::Prepare {
@@ -124,6 +138,10 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, seconds: f64)
         })
         .await
         .unwrap_or_else(|rejected| panic!("{}: prepare the cue: {rejected}", case.id()));
+    let SyncAdmission::Prepared(preparation) = admission else {
+        panic!("{}: the cue was not prepared: {admission:?}", case.id());
+    };
+    u64::from(preparation.stamp().operation())
 }
 
 #[kithara::test(
@@ -141,12 +159,13 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
     let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
-    prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
 
-    let receipts = render_until(&mut harness, case, INSTALLED).await;
+    let receipts = render_until(&mut harness, case, operation, INSTALLED).await;
     assert_eq!(
         receipts,
         [Delivered {
+            operation,
             rejected: INSTALLED,
             accepted: true,
         }],
@@ -168,12 +187,12 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
 ) {
     let case = STAGED_CUE;
     let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
-    prepare_cue(&mut harness, case, CUE_SECONDS).await;
-    let _ = render_until(&mut harness, case, INSTALLED).await;
+    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let _ = render_until(&mut harness, case, operation, INSTALLED).await;
 
     let control = harness.decks[0].control().clone();
     harness.host.run(move || control.clear()).await;
-    let receipts = render_until(&mut harness, case, CANCELLED).await;
+    let receipts = render_until(&mut harness, case, operation, CANCELLED).await;
     harness.settle(case, 8).await;
 
     assert_eq!(
@@ -185,6 +204,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     assert_eq!(
         receipts.last(),
         Some(&Delivered {
+            operation,
             rejected: CANCELLED,
             accepted: true,
         }),
@@ -206,12 +226,13 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
     let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
-    prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let operation = prepare_cue(&mut harness, case, CUE_SECONDS).await;
 
-    let receipts = render_until(&mut harness, case, CAPACITY).await;
+    let receipts = render_until(&mut harness, case, operation, CAPACITY).await;
     assert!(
         receipts.iter().all(|receipt| *receipt
             == Delivered {
+                operation,
                 rejected: CAPACITY,
                 accepted: true,
             }),
@@ -243,15 +264,21 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         render_frames(&mut harness, case, LISTEN_FRAMES).await
     };
     let mut harness = ProductHarness::new(case, &synthetic_sources, 0).await;
-    prepare_cue(&mut harness, case, CUE_SECONDS).await;
-    prepare_cue(&mut harness, case, SUPERSEDING_CUE_SECONDS).await;
+    let superseded = prepare_cue(&mut harness, case, CUE_SECONDS).await;
+    let successor = prepare_cue(&mut harness, case, SUPERSEDING_CUE_SECONDS).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
-    let receipts = render_until(&mut harness, case, INSTALLED).await;
+    let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt.rejected == INSTALLED && receipt.accepted),
-        "{}: a superseded lane is dropped without a receipt: {receipts:?}",
+        receipts.iter().all(|receipt| receipt.rejected == INSTALLED
+            && (receipt.operation == superseded
+                || receipt
+                    == &Delivered {
+                        operation: successor,
+                        rejected: INSTALLED,
+                        accepted: true,
+                    })),
+        "{}: the successor installs once; a superseded lane is dropped without a \
+         rejection, installed at most before it was replaced: {receipts:?}",
         case.id()
     );
 

@@ -367,11 +367,26 @@ impl Shared {
             if let Err(error) = answer {
                 debug!(%error, "sync: the owner refused an executor receipt");
                 if rejected.is_none() {
-                    let refused = self.state.lock().held.take_if(|held| held.stamp == stamp);
-                    SyncStaging::cancel_silently(refused);
+                    self.retire_refused(stamp);
                 }
             }
         }
+    }
+
+    /// Drops the lane installed for `stamp` once the owner refused it, and
+    /// queues its cancellation behind the refusal, so an owner that kept the
+    /// preparation pending hears that its lane is gone. A successor that
+    /// replaced the lane meanwhile is left alone.
+    fn retire_refused(&self, stamp: SyncExecutionStamp) {
+        let mut state = self.state.lock();
+        let refused = state.held.take_if(|held| held.stamp == stamp);
+        if let Some(held) = &refused {
+            // The drainer running this is the one that takes the
+            // cancellation, so no second one starts.
+            let _ = state.retire(held);
+        }
+        drop(state);
+        SyncStaging::cancel_silently(refused);
     }
 }
 
