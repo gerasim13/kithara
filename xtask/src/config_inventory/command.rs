@@ -37,15 +37,21 @@ pub(crate) enum ConfigCommand {
         /// Rust source output, relative to the workspace unless absolute.
         #[arg(
             long,
-            default_value = "crates/kithara-ffi/src/core/config_generated.rs"
+            default_value = "crates/kithara-ffi/src/core/config/config_generated.rs"
         )]
         output: PathBuf,
         /// Generated host record source, relative to the workspace unless absolute.
         #[arg(
             long,
-            default_value = "crates/kithara-ffi/src/core/config_host_generated.rs"
+            default_value = "crates/kithara-ffi/src/core/config/config_host_generated.rs"
         )]
         host_output: PathBuf,
+        /// Generated per-item source settings, relative to the workspace unless absolute.
+        #[arg(
+            long,
+            default_value = "crates/kithara-ffi/src/core/config/config_source_generated.rs"
+        )]
+        source_output: PathBuf,
         /// Verify the existing projection instead of writing it.
         #[arg(long)]
         check: bool,
@@ -81,22 +87,27 @@ pub(crate) fn run(command: ConfigCommand, ctx: &Ctx) -> Result<()> {
     if let ConfigCommand::Project {
         output,
         host_output,
+        source_output,
         check,
     } = &command
     {
         let manifest = manifest(&ctx.root, TargetProfile::Native)?;
         let generated = project::render(&manifest.registrations)?;
         let generated_host = project::render_host(&manifest.registrations)?;
+        let generated_source = project::render_source(&manifest.registrations)?;
         let output = ctx.root.join(output);
         let host_output = ctx.root.join(host_output);
+        let source_output = ctx.root.join(source_output);
         if *check {
             verify_projection(&output, &generated)?;
             verify_projection(&host_output, &generated_host)?;
+            verify_projection(&source_output, &generated_source)?;
             info!(path = %output.display(), "configuration FFI projection is current");
             return Ok(());
         }
         write_projection(&output, generated)?;
         write_projection(&host_output, generated_host)?;
+        write_projection(&source_output, generated_source)?;
         info!(path = %output.display(), "configuration FFI projection complete");
         return Ok(());
     }

@@ -4122,6 +4122,12 @@ public func FfiConverterTypeFfiFileSourceSettings_lower(_ value: FfiFileSourceSe
  */
 public struct FfiHlsSourceSettings: Equatable, Hashable {
     /**
+     * Method used by on-demand exact-size probes. Segment-aware fMP4 decode
+     * never issues these probes; file-like paths use them after a seek needs
+     * exact prefix offsets.
+     */
+    public let sizeProbeMethod: FfiSizeProbeMethod?
+    /**
      * Max segments to download per step. Three keep the fetcher busy across
      * one round-trip without planning further ahead than a look-ahead cap
      * would allow anyway.
@@ -4133,11 +4139,17 @@ public struct FfiHlsSourceSettings: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
+         * Method used by on-demand exact-size probes. Segment-aware fMP4 decode
+         * never issues these probes; file-like paths use them after a seek needs
+         * exact prefix offsets.
+         */sizeProbeMethod: FfiSizeProbeMethod?,
+        /**
          * Max segments to download per step. Three keep the fetcher busy across
          * one round-trip without planning further ahead than a look-ahead cap
          * would allow anyway.
          * Accepted range: 1..=64.
          */downloadBatchSize: UInt32?) {
+        self.sizeProbeMethod = sizeProbeMethod
         self.downloadBatchSize = downloadBatchSize
     }
 
@@ -4157,11 +4169,13 @@ public struct FfiConverterTypeFfiHlsSourceSettings: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiHlsSourceSettings {
         return
             try FfiHlsSourceSettings(
+                sizeProbeMethod: FfiConverterOptionTypeFfiSizeProbeMethod.read(from: &buf),
                 downloadBatchSize: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiHlsSourceSettings, into buf: inout [UInt8]) {
+        FfiConverterOptionTypeFfiSizeProbeMethod.write(value.sizeProbeMethod, into: &buf)
         FfiConverterOptionUInt32.write(value.downloadBatchSize, into: &buf)
     }
 }
@@ -8947,6 +8961,92 @@ public func FfiConverterTypeFfiRouteChangeReason_lower(_ value: FfiRouteChangeRe
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * HTTP method used to probe an HLS segment's exact size.
+ */
+
+public enum FfiSizeProbeMethod: Equatable, Hashable {
+
+    /**
+     * Probe with HTTP HEAD.
+     */
+    case head
+    /**
+     * Probe with a one-byte ranged GET.
+     */
+    case rangeGet
+    /**
+     * Reserved value rejected when configuring an item.
+     */
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiSizeProbeMethod: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSizeProbeMethod: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSizeProbeMethod
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSizeProbeMethod {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .head
+
+        case 2: return .rangeGet
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiSizeProbeMethod, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .head:
+            writeInt(&buf, Int32(1))
+
+
+        case .rangeGet:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSizeProbeMethod_lift(_ buf: RustBuffer) throws -> FfiSizeProbeMethod {
+    return try FfiConverterTypeFfiSizeProbeMethod.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSizeProbeMethod_lower(_ value: FfiSizeProbeMethod) -> RustBuffer {
+    return FfiConverterTypeFfiSizeProbeMethod.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum FfiStretchBackendKind: Equatable, Hashable {
 
@@ -9883,6 +9983,30 @@ fileprivate struct FfiConverterOptionTypeFfiPlaybackOrder: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiSizeProbeMethod: FfiConverterRustBuffer {
+    typealias SwiftType = FfiSizeProbeMethod?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiSizeProbeMethod.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiSizeProbeMethod.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionDictionaryStringString: FfiConverterRustBuffer {
     typealias SwiftType = [String: String]?
 
@@ -10257,13 +10381,13 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 35270) {
+    if (uniffi_kithara_ffi_checksum_func_default_host_config() != 28158) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_ensure_default_host() != 9526) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 59381) {
+    if (uniffi_kithara_ffi_checksum_func_initialize_host() != 11430) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_query_identity_layout() != 9390) {
@@ -10353,7 +10477,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 34253) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 24686) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
@@ -10419,7 +10543,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 25575) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_layout() != 58459) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 55090) {
@@ -10467,7 +10591,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 1044) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 10670) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
@@ -10488,7 +10612,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new_with_source_settings() != 54340) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new_with_source_settings() != 4869) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
@@ -10503,7 +10627,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new_with_queue_settings() != 30182) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new_with_queue_settings() != 57641) {
         return InitializationResult.apiChecksumMismatch
     }
 

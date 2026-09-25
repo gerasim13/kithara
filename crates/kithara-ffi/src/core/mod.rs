@@ -1,6 +1,5 @@
 pub mod analysis;
-mod config_generated;
-mod config_host_generated;
+mod config;
 pub(crate) mod convert;
 pub(crate) mod host;
 pub mod item;
@@ -11,9 +10,9 @@ pub(crate) mod observer_set;
 pub(crate) mod registry;
 pub mod types;
 
-pub use config_generated::{
+pub use config::{
     FfiEqBandConfig, FfiEqFilterKind, FfiFileSourceSettings, FfiHlsSourceSettings,
-    FfiLimiterConfig, FfiQueueSettings, FfiSourceSettings,
+    FfiLimiterConfig, FfiQueueSettings, FfiSizeProbeMethod, FfiSourceSettings,
 };
 pub use host::{FfiHostConfig, default_host_config};
 

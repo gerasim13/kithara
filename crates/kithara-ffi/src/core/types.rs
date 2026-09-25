@@ -295,7 +295,7 @@ pub enum FfiCrossfadeCurve {
     Unknown,
 }
 
-pub use super::config_generated::FfiCrossfadeSettings;
+pub use super::config::FfiCrossfadeSettings;
 
 impl TryFrom<FfiPlaybackOrder> for PlaybackOrder {
     type Error = FfiError;

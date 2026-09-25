@@ -750,6 +750,7 @@ mod tests {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
                     download_batch_size: Some(6),
+                    size_probe_method: Some(crate::FfiSizeProbeMethod::RangeGet),
                 }),
             },
         )
@@ -757,6 +758,10 @@ mod tests {
         assert_eq!(
             hls.source.as_ref().unwrap().hls.download_batch_size,
             Some(6)
+        );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.size_probe_method,
+            Some(kithara_hls::SizeProbeMethod::RangeGet)
         );
 
         for settings in [
@@ -770,6 +775,7 @@ mod tests {
                 file: None,
                 hls: Some(crate::FfiHlsSourceSettings {
                     download_batch_size: Some(6),
+                    size_probe_method: None,
                 }),
             },
         ] {
@@ -781,6 +787,19 @@ mod tests {
                 Err(crate::types::FfiError::InvalidArgument { .. })
             ));
         }
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        download_batch_size: None,
+                        size_probe_method: Some(crate::FfiSizeProbeMethod::Unknown),
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
         assert!(item_for("https://example.com/song.mp3").source.is_none());
     }
 

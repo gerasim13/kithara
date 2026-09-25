@@ -162,7 +162,7 @@ where
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
     #[builder(default)]
-    #[config(value)]
+    #[config(value, sdk)]
     pub size_probe_method: SizeProbeMethod,
     /// Acquire attempts a planned segment slot gets before the dispatch
     /// settles it terminally. A requeue is re-dispatched on the peer's next

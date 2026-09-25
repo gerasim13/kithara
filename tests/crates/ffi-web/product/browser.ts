@@ -1,4 +1,4 @@
-import api, { AudioPlayer as UniAudioPlayer, AudioPlayerItem, defaultHostConfig, FfiActionAtItemEnd, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, FfiPlaybackOrder, initializeHost, tickHost } from "./generated/kithara_ffi";
+import api, { AudioPlayer as UniAudioPlayer, AudioPlayerItem, defaultHostConfig, FfiActionAtItemEnd, FfiCrossfadeCurve, FfiEqFilterKind, FfiError, FfiPlaybackOrder, FfiSizeProbeMethod, initializeHost, tickHost } from "./generated/kithara_ffi";
 
 async function main() {
   const memory = new WebAssembly.Memory({ initial: 128, maximum: 1024, shared: true });
@@ -187,9 +187,19 @@ async function main() {
     invalidSource = FfiError.InvalidArgument.instanceOf(error);
   }
   if (!invalidSource) throw new Error("unbounded file reader capacity was accepted");
+  invalidSource = false;
+  try {
+    AudioPlayerItem.newWithSourceSettings(
+      { ...itemConfig, url: `${location.origin}/live.m3u8` },
+      { file: undefined, hls: { sizeProbeMethod: FfiSizeProbeMethod.Unknown } },
+    );
+  } catch (error) {
+    invalidSource = FfiError.InvalidArgument.instanceOf(error);
+  }
+  if (!invalidSource) throw new Error("unknown HLS size probe method was accepted");
   const hlsItem = AudioPlayerItem.newWithSourceSettings(
     { ...itemConfig, url: `${location.origin}/live.m3u8` },
-    { file: undefined, hls: { downloadBatchSize: 6 } },
+    { file: undefined, hls: { downloadBatchSize: 6, sizeProbeMethod: FfiSizeProbeMethod.RangeGet } },
   ) as AudioPlayerItem;
   hlsItem.uniffiDestroy();
   const item = AudioPlayerItem.newWithSourceSettings(itemConfig, { file: { readerEventCapacity: 512 }, hls: undefined }) as AudioPlayerItem;

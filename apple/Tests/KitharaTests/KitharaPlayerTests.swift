@@ -8,6 +8,15 @@ import Testing
 struct KitharaPlayerTests {
     final class LegacyItem {}
 
+    @Test("HLS source settings preserve the batch-size initializer")
+    func hlsSourceSettingsInitializer() {
+        let legacy = FfiHlsSourceSettings(downloadBatchSize: 6)
+        let configured = FfiHlsSourceSettings(sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
+        #expect(legacy.downloadBatchSize == 6)
+        #expect(legacy.sizeProbeMethod == nil)
+        #expect(configured.sizeProbeMethod == .rangeGet)
+    }
+
     init() throws {
         try TestHost.initialize()
     }
