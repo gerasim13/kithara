@@ -4773,6 +4773,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "hotpath",
+ "kithara-config",
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
