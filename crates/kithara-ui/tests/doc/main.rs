@@ -9,8 +9,17 @@ mod document_group;
 mod document_object;
 mod document_placed;
 mod document_wave;
+mod envelope;
+mod expand_kind;
+mod module_doc;
 mod multi_deck;
+mod package;
 mod roundtrip;
 mod skin;
+mod skin_document;
+#[cfg(not(target_arch = "wasm32"))]
+mod source_file;
+mod source_mem;
+mod source_overlay;
 mod swatch;
 mod text;

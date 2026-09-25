@@ -1,5 +1,3 @@
-#![cfg(feature = "render")]
-
 use std::{borrow::Cow, env, fmt::Write as _, fs, path::Path};
 
 use iced::{

@@ -1,3 +1,5 @@
+#![cfg(feature = "render")]
+
 //! The two hosts laid out and drawn side by side, driven through the public
 //! API.
 

@@ -1,5 +1,3 @@
-#![cfg(feature = "render")]
-
 use std::{cell::RefCell, collections::BTreeSet};
 
 use kithara_test_utils::kithara;
