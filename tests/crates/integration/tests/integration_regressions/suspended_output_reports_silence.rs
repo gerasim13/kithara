@@ -73,13 +73,11 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     harness
         .with_player(move |player| {
             player.insert(
-                resource_from_reader(
-                    kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
-                        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-                        1.0,
-                        constant_half,
-                    ),
-                ),
+                resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+                    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+                    1.0,
+                    constant_half,
+                )),
                 TrackId::allocate(),
                 None,
             );

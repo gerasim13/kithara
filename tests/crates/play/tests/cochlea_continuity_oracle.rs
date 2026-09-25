@@ -3,10 +3,9 @@
 use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
-use kithara::{events::TrackId, signal::AudioSpec};
-use kithara_integration_tests::{
-    audio_mock::TestPcmReader,
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+use kithara::{audio::mock::TestPcmReader, events::TrackId, signal::AudioSpec};
+use kithara_integration_tests::offline::{
+    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -34,7 +33,7 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
     harness
         .with_player(move |player| {
             player.insert(
-                resource_from_reader(TestPcmReader::from_pcm(spec, 3.0, constant_half)),
+                resource_from_reader(TestPcmReader::with_pcm(spec, 3.0, constant_half)),
                 TrackId::allocate(),
                 None,
             );

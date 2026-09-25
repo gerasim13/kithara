@@ -13,13 +13,11 @@ const TARGET_SAMPLES: usize = 8_820;
 const MAX_RENDERED_FRAMES: usize = 9_000;
 
 fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
-    resource_from_reader(
-        kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
-            Consts::AUDIO_SPEC,
-            duration_secs,
-            constant_half,
-        ),
-    )
+    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+        Consts::AUDIO_SPEC,
+        duration_secs,
+        constant_half,
+    ))
 }
 
 #[kithara::test(tokio)]

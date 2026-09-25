@@ -23,13 +23,11 @@ const MEASURE_BLOCKS: usize = 200;
 const FAST_RATE: f32 = 2.0;
 
 fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
-    resource_from_reader(
-        kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
-            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-            duration_secs,
-            constant_half,
-        ),
-    )
+    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+        duration_secs,
+        constant_half,
+    ))
 }
 
 #[kithara::test(tokio)]

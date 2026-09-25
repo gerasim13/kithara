@@ -1,254 +1,31 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_lossless,
-    reason = "test mock code; values are small and positive by construction"
-)]
-
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU32, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use kithara::{
-    audio::{
-        AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome,
-        SeekBegin, SeekOutcome,
-    },
-    decode::{DecodeError, TrackMetadata},
-    events::EventBus,
-    platform::time::Duration,
-    signal::AudioSpec,
+use kithara_decode::{DecodeError, TrackMetadata};
+use kithara_events::EventBus;
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use kithara_signal::AudioSpec;
+
+use super::pcm_reader::prepared_sample;
+use crate::{
+    AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome, SeekBegin,
+    SeekOutcome,
 };
 
-/// A stateful fixed-rate `AudioReader` for testing playback facades.
-pub struct TestPcmReader {
-    bus: EventBus,
-    spec: AudioSpec,
-    metadata: TrackMetadata,
-    position_frames: u64,
-    total_frames: u64,
-    source: Source,
-}
+/// Sample rate of the reader [`MockReader::seek_tracking`] builds.
+const SEEK_TRACKING_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(rate) => rate,
+    None => panic!("seek-tracking rate is non-zero"),
+};
 
-enum Source {
-    Samples(Vec<f32>),
-    Bytes(&'static [u8]),
-}
-
-/// Expected amplitude of the default prepared PCM fixture.
-pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
-
-impl TestPcmReader {
-    #[must_use]
-    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
-        let frames = (f64::from(spec.sample_rate.get()) * duration_secs) as usize;
-        Self::from_samples(
-            spec,
-            vec![TEST_PCM_DEFAULT_VALUE; frames * usize::from(spec.channels)],
-        )
-    }
-
-    #[must_use]
-    pub fn from_samples(spec: AudioSpec, samples: Vec<f32>) -> Self {
-        let total_frames = samples.len() as u64;
-        let mut reader = Self::with_source(spec, 0.0, Source::Samples(samples));
-        reader.total_frames = total_frames;
-        reader
-    }
-
-    #[must_use]
-    pub fn from_pcm(spec: AudioSpec, duration_secs: f64, bytes: &'static [u8]) -> Self {
-        assert!(
-            bytes.len().is_multiple_of(size_of::<f32>()),
-            "prepared PCM must contain whole samples"
-        );
-        let reader = Self::with_source(spec, duration_secs, Source::Bytes(bytes));
-        assert!(
-            reader.total_frames <= (bytes.len() / size_of::<f32>()) as u64,
-            "prepared PCM is shorter than the requested track"
-        );
-        reader
-    }
-
-    fn with_source(spec: AudioSpec, duration_secs: f64, source: Source) -> Self {
-        let total_frames = (f64::from(spec.sample_rate.get()) * duration_secs) as u64;
-        Self {
-            spec,
-            total_frames,
-            metadata: TrackMetadata {
-                title: Some("Mock".to_owned()),
-                ..TrackMetadata::default()
-            },
-            position_frames: 0,
-            bus: EventBus::default(),
-            source,
-        }
-    }
-
-    fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
-        match &self.source {
-            Source::Samples(samples) => samples[(start + output_frame) as usize],
-            Source::Bytes(bytes) => prepared_sample(bytes, (start + output_frame) as usize),
-        }
-    }
-
-    const fn at_natural_end(&self) -> bool {
-        self.position_frames >= self.total_frames
-    }
-
-    /// Output frames still renderable before the source budget runs out.
-    fn output_frames_left(&self) -> u64 {
-        self.total_frames - self.position_frames
-    }
-
-    /// Advance the source cursor by the frames consumed to render
-    /// `output_frames`, saturating at the total budget.
-    fn consume(&mut self, output_frames: u64) {
-        self.position_frames = self
-            .position_frames
-            .saturating_add(output_frames)
-            .min(self.total_frames);
-    }
-
-    fn eof_outcome(&self) -> ReadOutcome {
-        ReadOutcome::Eof {
-            position: self.frames_to_duration(self.position_frames),
-        }
-    }
-
-    /// Get a reference to the event bus for publishing mock events.
-    #[must_use]
-    pub const fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn frames_to_duration(&self, frames: u64) -> Duration {
-        Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate.get()))
-    }
-}
-
-impl AudioSession for TestPcmReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(self.frames_to_duration(self.total_frames))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for TestPcmReader {
-    fn position(&self) -> Duration {
-        self.frames_to_duration(self.position_frames)
-    }
-
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        if self.at_natural_end() {
-            return Ok(self.eof_outcome());
-        }
-        let channels = u64::from(self.spec.channels);
-        let position = self.frames_to_duration(self.position_frames);
-        if channels == 0 || buf.is_empty() {
-            return Ok(ReadOutcome::Pending {
-                position,
-                reason: PendingReason::Buffering,
-            });
-        }
-        let renderable_samples = self.output_frames_left() * channels;
-        let to_write = (buf.len() as u64).min(renderable_samples) as usize;
-        let start = self.position_frames;
-        for (index, sample) in buf[..to_write].iter_mut().enumerate() {
-            *sample = self.sample_at(start, index as u64 / channels);
-        }
-        self.consume(to_write as u64 / channels);
-        let new_position = self.frames_to_duration(self.position_frames);
-        let Some(count) = NonZeroUsize::new(to_write) else {
-            return Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
-                position: new_position,
-            });
-        };
-        Ok(ReadOutcome::Frames {
-            count,
-            position: new_position,
-            source_span: None,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        if self.at_natural_end() {
-            return Ok(self.eof_outcome());
-        }
-        let position = self.frames_to_duration(self.position_frames);
-        if output.is_empty() {
-            return Ok(ReadOutcome::Pending {
-                position,
-                reason: PendingReason::Buffering,
-            });
-        }
-        let channels = usize::from(self.spec.channels);
-        if channels == 0 || output.len() < channels {
-            return Ok(ReadOutcome::Pending {
-                position,
-                reason: PendingReason::Buffering,
-            });
-        }
-        let frames_per_channel = output[0].len();
-        let renderable = self.output_frames_left() as usize;
-        let frames_to_write = frames_per_channel.min(renderable);
-        let start = self.position_frames;
-        for ch in output.iter_mut().take(channels) {
-            for (frame, sample) in ch.iter_mut().take(frames_to_write).enumerate() {
-                *sample = self.sample_at(start, frame as u64);
-            }
-        }
-        self.consume(frames_to_write as u64);
-        let new_position = self.frames_to_duration(self.position_frames);
-        let Some(count) = NonZeroUsize::new(frames_to_write) else {
-            return Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
-                position: new_position,
-            });
-        };
-        Ok(ReadOutcome::Frames {
-            count,
-            position: new_position,
-            source_span: None,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for TestPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let target = position;
-        let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;
-        self.position_frames = frame.min(self.total_frames);
-        let landed_at = self.frames_to_duration(self.position_frames);
-        if let Some(duration) = self.duration()
-            && position >= duration
-        {
-            return Ok(SeekOutcome::PastEof { target, duration });
-        }
-        Ok(SeekOutcome::Landed { target, landed_at })
-    }
-}
-
+/// A reader scripted for one behaviour an owner must handle: recording what
+/// the owner applies, lying about its duration, stalling, failing, or
+/// splitting its seek.
 pub struct MockReader {
     behavior: MockBehavior,
     bus: EventBus,
@@ -328,7 +105,7 @@ impl MockReader {
 
     #[must_use]
     pub fn seek_tracking(seek_log: Arc<Mutex<Vec<u64>>>) -> Self {
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let spec = AudioSpec::new(2, SEEK_TRACKING_RATE);
         let mut reader = Self::with_behavior(spec, MockBehavior::SeekTracking { seek_log });
         reader.metadata.title = Some("Tracking".to_owned());
         reader
@@ -509,10 +286,7 @@ impl AudioControl for MockReader {
         match &mut self.behavior {
             MockBehavior::SeekTracking { seek_log } => {
                 let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
-                seek_log
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(ms);
+                seek_log.lock().push(ms);
             }
             MockBehavior::Faulty(Fault::RefuseSeek) => {
                 return Err(DecodeError::Io {
@@ -535,9 +309,7 @@ impl AudioControl for MockReader {
             recorded_wake_mode, ..
         } = &self.behavior
         {
-            *recorded_wake_mode
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(mode);
+            *recorded_wake_mode.lock() = Some(mode);
         }
     }
 
@@ -612,13 +384,4 @@ impl SeekBegin for SeekSpy {
             landed_at: position,
         }
     }
-}
-
-fn prepared_sample(bytes: &[u8], frame: usize) -> f32 {
-    let index = frame * size_of::<f32>();
-    f32::from_le_bytes(
-        bytes[index..index + size_of::<f32>()]
-            .try_into()
-            .expect("prepared PCM sample"),
-    )
 }

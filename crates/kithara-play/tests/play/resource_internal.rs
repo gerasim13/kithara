@@ -7,29 +7,23 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use kithara::{
-    self,
-    audio::{AudioEvent, ReadOutcome},
-    events::EventBus,
-    platform::time::Duration,
-    play::Resource,
-};
-use kithara_integration_tests::{
-    audio_mock::TestPcmReader, event::TestEvent, test_defaults::Consts,
-};
+use kithara_audio::{AudioEvent, ReadOutcome, mock::TestPcmReader};
+use kithara_events::EventBus;
+use kithara_platform::time::Duration;
+use kithara_play::Resource;
 use kithara_test_fixtures::integration_fixtures::default_pcm;
+use kithara_test_utils::kithara;
+
+use crate::support::AUDIO_SPEC;
 
 #[kithara::fixture]
 fn make_resource(default_pcm: Vec<f32>) -> Resource {
-    Resource::from_reader(
-        TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm),
-        None,
-    )
+    Resource::from_reader(TestPcmReader::with_samples(AUDIO_SPEC, default_pcm), None)
 }
 
 #[kithara::fixture]
 fn make_resource_with_bus(default_pcm: Vec<f32>) -> (Resource, EventBus) {
-    let reader = TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm);
+    let reader = TestPcmReader::with_samples(AUDIO_SPEC, default_pcm);
     let bus = reader.event_bus().clone();
     let resource = Resource::from_reader(reader, None);
     (resource, bus)
@@ -101,10 +95,7 @@ async fn test_resource_from_reader_seek(make_resource: Resource) {
     let outcome = resource
         .seek(Duration::from_millis(500))
         .expect("BUG: seek");
-    assert!(matches!(
-        outcome,
-        kithara::audio::SeekOutcome::Landed { .. }
-    ));
+    assert!(matches!(outcome, kithara_audio::SeekOutcome::Landed { .. }));
     let pos = resource.position();
     assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
 }
@@ -130,9 +121,9 @@ async fn test_resource_from_reader_reads_until_eof(make_resource: Resource) {
 #[kithara::test(tokio)]
 async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resource, EventBus)) {
     let (resource, bus) = make_resource_with_bus;
-    let mut rx = resource.subscribe();
+    let mut rx = resource.subscribe::<AudioEvent>();
 
-    let spec = Consts::AUDIO_SPEC;
+    let spec = AUDIO_SPEC;
     bus.publish(AudioEvent::FormatDetected { spec });
 
     let event = time::timeout(Duration::from_millis(200), rx.recv())
@@ -141,7 +132,7 @@ async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resour
         .unwrap()
         .unwrap();
 
-    assert!(matches!(event, TestEvent::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
+    assert!(matches!(event, AudioEvent::FormatDetected { spec: s } if s == spec));
 }
 
 #[kithara::test(tokio)]

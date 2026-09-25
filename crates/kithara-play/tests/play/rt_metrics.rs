@@ -7,23 +7,18 @@
 use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
-use kithara::{
-    events::TrackId,
-    platform::{sync::Arc, time::Duration},
-    play::{
-        Resource, SharedEq,
-        bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
-    },
-    signal::AudioSpec,
+use kithara_audio::mock::{Fault, MockReader, TEST_PCM_DEFAULT_VALUE, TestPcmReader};
+use kithara_events::TrackId;
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_play::{
+    Resource, SharedEq,
+    bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
+    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_integration_tests::audio_mock::{
-    Fault, MockReader, TEST_PCM_DEFAULT_VALUE, TestPcmReader,
-};
+use kithara_signal::AudioSpec;
 use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_utils::{bufpool::pools, kithara};
 use ringbuf::traits::Producer;
-
-use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 128;
@@ -31,10 +26,10 @@ const CROSSFADE_SECONDS: f32 = 0.5;
 const CROSSFADE_BLOCKS: usize = 8;
 const AUDIBLE_FRACTION: f32 = 0.5;
 
-fn crossfade(duration: f32) -> kithara::play::CrossfadeSettings {
-    kithara::play::CrossfadeSettings {
+fn crossfade(duration: f32) -> kithara_play::CrossfadeSettings {
+    kithara_play::CrossfadeSettings {
         duration,
-        ..kithara::play::CrossfadeSettings::default()
+        ..kithara_play::CrossfadeSettings::default()
     }
 }
 
@@ -57,7 +52,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
             inputs,
             shape,
             &pools(),
-            kithara::play::DEFAULT_GATE_SMOOTHING,
+            kithara_play::DEFAULT_GATE_SMOOTHING,
         ),
         control,
     )
@@ -72,7 +67,7 @@ fn faulty_track(src: &str, fault: Fault) -> Box<PlayerResource> {
 
 fn healthy_track(constant_half: &'static [u8], src: &str) -> Box<PlayerResource> {
     boxed(
-        Resource::from_reader(TestPcmReader::from_pcm(spec(), 60.0, constant_half), None),
+        Resource::from_reader(TestPcmReader::with_pcm(spec(), 60.0, constant_half), None),
         src,
     )
 }

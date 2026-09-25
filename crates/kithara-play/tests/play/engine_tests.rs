@@ -1,20 +1,18 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara::{
-    self,
-    audio::ConsumerWakeMode,
-    events::EventBus,
-    host::{Host, HostConfig, HostOwned},
-    platform::sync::Arc,
-    play::{
-        Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SlotId,
-    },
-    warp::{BeatGrid, BeatGridId},
+use kithara_audio::ConsumerWakeMode;
+use kithara_events::EventBus;
+use kithara_platform::sync::Arc;
+use kithara_play::{
+    Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionBinding, SessionDispatcher, SlotId,
 };
-use kithara_integration_tests::test_defaults::Consts as Shared;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
+use kithara_warp::BeatGridId;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::support::SAMPLE_RATE;
 
 struct FixtureSession;
 
@@ -39,30 +37,14 @@ fn response_budget() -> NonZeroUsize {
 fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-            .session(SessionBinding::new(
-                Arc::new(FixtureSession),
-                Shared::NON_ZERO_SAMPLE_RATE,
-            ))
+            .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
             .pools(pools())
             .response_budget_frames(response_budget())
             .build(),
         EventBus::default(),
     )
-}
-
-fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(host.requested_sample_rate())
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .build(),
-    );
-    let instance_id = player.id();
-    let owner = host.insert(player).expect("insert fixture player instance");
-    assert_eq!(owner.id(), instance_id);
-    owner
 }
 
 #[derive(Clone, Copy)]
@@ -90,14 +72,11 @@ fn engine_config_defaults() {
 fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(SessionBinding::new(
-            Arc::new(FixtureSession),
-            Shared::NON_ZERO_SAMPLE_RATE,
-        ))
+        .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
         .max_slots(8)
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .channels(1)
-        .eq_layout(kithara::effects::eq::generate_log_spaced_bands(5))
+        .eq_layout(kithara_effects::eq::generate_log_spaced_bands(5))
         .pools(pools())
         .response_budget_frames(response_budget())
         .build();
@@ -126,7 +105,7 @@ fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
 #[kithara::test]
 fn engine_subscribe_works() {
     let engine = make_engine();
-    let _rx = engine.subscribe::<kithara::play::EngineEvent>();
+    let _rx = engine.subscribe::<kithara_play::EngineEvent>();
 }
 
 #[kithara::test]
@@ -153,48 +132,11 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(SessionBinding::new(
-            Arc::new(FixtureSession),
-            Shared::NON_ZERO_SAMPLE_RATE,
-        ))
+        .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())
         .response_budget_frames(response_budget())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
-}
-
-#[kithara::test]
-fn foreign_host_cannot_close_owned_player() {
-    let mut owner_host = Host::new(HostConfig::builder().build()).expect("create owner host");
-    let mut foreign_host = Host::new(HostConfig::builder().build()).expect("create foreign host");
-    let player = insert_player(&mut owner_host);
-
-    let error = foreign_host
-        .remove(&player)
-        .expect_err("foreign host must reject the player before closing it");
-    assert!(matches!(error, PlayError::ForeignSession));
-    assert!(
-        !player.is_closed(),
-        "foreign remove must not close the player"
-    );
-
-    owner_host
-        .remove(&player)
-        .expect("owning host removes its player");
-    assert!(player.is_closed());
-}
-
-#[kithara::test]
-fn dropping_host_invalidates_retained_player_control() {
-    let player = {
-        let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");
-        insert_player(&mut host)
-    };
-
-    assert!(
-        player.is_closed(),
-        "dropping the canonical host must invalidate retained controls"
-    );
 }

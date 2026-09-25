@@ -9,25 +9,24 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara::{
-    self,
-    audio::ConsumerWakeMode,
-    events::{EventBus, EventReceiver, TrackId},
-    platform::sync::{Arc, Mutex},
-    play::{
-        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionBinding,
-        SessionDispatcher, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
-    },
+use kithara_audio::{
+    ConsumerWakeMode,
+    mock::{MockReader, TestPcmReader},
 };
-use kithara_integration_tests::{
-    audio_mock::{MockReader, TestPcmReader},
-    event::TestEvent,
-    test_defaults::Consts,
+use kithara_events::{EventBus, EventReceiver, TrackId};
+use kithara_platform::sync::{Arc, Mutex};
+use kithara_play::{
+    AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
+    PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionBinding,
+    SessionDispatcher, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::support::{AUDIO_SPEC, SAMPLE_RATE};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -44,7 +43,7 @@ enum RemoveAtScenario {
 
 fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
+        TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("test-resource-{duration_secs}"))),
     )
 }
@@ -57,7 +56,7 @@ fn make_tagged_resource(
     duration_secs: f64,
 ) -> Resource {
     Resource::from_reader(
-        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
+        TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("memory://{label}"))),
     )
 }
@@ -82,7 +81,7 @@ impl SessionDispatcher<TestPools> for FixtureSession {
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(kithara::play::session::RegisteredPlayer {
+                Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
                     id: self.next_player.fetch_add(1, Ordering::Relaxed),
                     eq: SharedEq::new(10),
                 })
@@ -93,10 +92,9 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
-            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
-                None,
-                Consts::NON_ZERO_SAMPLE_RATE.get(),
-            )),
+            Cmd::QuerySampleRate => {
+                Reply::SampleRate(SessionSampleRate::new(None, SAMPLE_RATE.get()))
+            }
             _ => Reply::Ok,
         };
         Ok(reply)
@@ -117,11 +115,11 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
+        .sample_rate(SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(SessionBinding::new(
             Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>,
-            Consts::NON_ZERO_SAMPLE_RATE,
+            SAMPLE_RATE,
         ))
         .build();
     let player = PlayerImpl::new(player_config);
@@ -149,26 +147,22 @@ fn prepared_player<const N: usize>(
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
+        .sample_rate(SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .session(SessionBinding::new(
-            fixture_session(),
-            Consts::NON_ZERO_SAMPLE_RATE,
-        ))
+        .session(SessionBinding::new(fixture_session(), SAMPLE_RATE))
         .build()
 }
 
 fn drain_player_events(
     player: &PlayerImpl<TestPools>,
-    rx: &mut EventReceiver<TestEvent>,
+    rx: &mut EventReceiver<PlayerEvent>,
 ) -> Vec<PlayerEvent> {
-    use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
+    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
     player.process_notifications();
     let mut events = Vec::new();
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(TestEvent::Player(event)) => events.push(event),
-            Ok(_) => continue,
+            Ok(event) => events.push(event),
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
         }
@@ -316,7 +310,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
 #[kithara::test(tokio)]
 async fn an_inserted_resource_adopts_the_session_wake_mode() {
     let (player, _session) = make_fixture_player(0.0);
-    let (reader, recorded) = MockReader::wake_mode_tracking(Consts::AUDIO_SPEC);
+    let (reader, recorded) = MockReader::wake_mode_tracking(AUDIO_SPEC);
 
     player.insert(
         Resource::from_reader(reader, None),
@@ -328,12 +322,10 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
         .expect("start the fixture engine");
     player.ensure_slot().expect("allocate the fixture slot");
     player
-        .select_item(0, kithara::play::SelectionPlayback::Play)
+        .select_item(0, kithara_play::SelectionPlayback::Play)
         .expect("select the inserted item");
 
-    let applied = *recorded
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let applied = *recorded.lock();
     assert_eq!(
         applied,
         Some(ConsumerWakeMode::RealtimeDeferred),
@@ -354,7 +346,7 @@ fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u
     let _ = drain_player_events(&player, &mut rx);
 
     player
-        .select_item(0, kithara::play::SelectionPlayback::Pause)
+        .select_item(0, kithara_play::SelectionPlayback::Pause)
         .expect("re-select current index");
     let after = drain_player_events(&player, &mut rx);
     let announces = after
@@ -489,7 +481,7 @@ fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) 
         .arm_next(1)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
-    let mut rx = player.subscribe();
+    let mut rx: EventReceiver<PlayerEvent> = player.subscribe();
 
     player.commit_next(1).unwrap();
     assert_eq!(player.current_index(), 1);
@@ -498,7 +490,7 @@ fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) 
     let mut saw_changed = false;
     for _ in 0..8 {
         match rx.try_recv().map(|env| env.event) {
-            Ok(TestEvent::Player(PlayerEvent::CurrentItemChanged { .. })) => saw_changed = true,
+            Ok(PlayerEvent::CurrentItemChanged { .. }) => saw_changed = true,
             Ok(_) => continue,
             Err(_) => break,
         }
@@ -555,7 +547,7 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'
     assert_eq!(player.armed_next(), Some(1));
 
     player
-        .select_item(2, kithara::play::SelectionPlayback::Play)
+        .select_item(2, kithara_play::SelectionPlayback::Play)
         .unwrap();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
@@ -571,7 +563,7 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'
 fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["item-1", "item-2"]);
     player
-        .select_item(0, kithara::play::SelectionPlayback::Play)
+        .select_item(0, kithara_play::SelectionPlayback::Play)
         .unwrap();
     let armed_src = player
         .arm_next(1)
@@ -580,7 +572,7 @@ fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) 
     assert_eq!(player.armed_next(), Some(1));
 
     player
-        .select_item(1, kithara::play::SelectionPlayback::Play)
+        .select_item(1, kithara_play::SelectionPlayback::Play)
         .unwrap();
     player.process_notifications();
 

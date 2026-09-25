@@ -6,21 +6,18 @@
 use std::{num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
-use kithara::{
-    events::TrackId,
-    platform::sync::Arc,
-    play::{
-        Resource, SharedEq,
-        bridge::{PlayerCmd, SlotControl, TrackTransition, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
-    },
-    signal::AudioSpec,
+use kithara_audio::mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
+use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
+use kithara_play::{
+    Resource, SharedEq,
+    bridge::{PlayerCmd, SlotControl, TrackTransition, slot_channels},
+    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_integration_tests::audio_mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
+use kithara_signal::AudioSpec;
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
+use kithara_test_utils::{bufpool::pools, kithara};
 use ringbuf::traits::Producer;
-
-use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;
@@ -32,10 +29,10 @@ const SETTLE_BLOCKS: usize = 40;
 const MAX_STEP: f32 = 0.01;
 const EXACT: f32 = 1.0e-6;
 
-fn crossfade(duration: f32) -> kithara::play::CrossfadeSettings {
-    kithara::play::CrossfadeSettings {
+fn crossfade(duration: f32) -> kithara_play::CrossfadeSettings {
+    kithara_play::CrossfadeSettings {
         duration,
-        ..kithara::play::CrossfadeSettings::default()
+        ..kithara_play::CrossfadeSettings::default()
     }
 }
 
@@ -54,7 +51,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
             inputs,
             shape,
             &pools(),
-            kithara::play::DEFAULT_GATE_SMOOTHING,
+            kithara_play::DEFAULT_GATE_SMOOTHING,
         ),
         control,
     )
@@ -63,7 +60,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
 fn track(src: &str, input: &'static [u8]) -> Box<PlayerResource> {
     Box::new(
         PlayerResource::new(
-            Resource::from_reader(TestPcmReader::from_pcm(spec(), TRACK_SECS, input), None),
+            Resource::from_reader(TestPcmReader::with_pcm(spec(), TRACK_SECS, input), None),
             Arc::from(src),
             &pools(),
         )

@@ -2,6 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     self,
+    audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
     events::TrackId,
     net::{HttpClient, NetOptions},
@@ -12,7 +13,6 @@ use kithara::{
     worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader,
     bufpool_ext::pools,
     offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
@@ -32,7 +32,7 @@ const MAX_BLOCKS: usize = 2_000;
 
 fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
     let spec = AudioSpec::new(2, NonZeroU32::new(SESSION_RATE).expect("test rate"));
-    resource_from_reader(TestPcmReader::from_samples(spec, broadcast_tone))
+    resource_from_reader(TestPcmReader::with_samples(spec, broadcast_tone))
 }
 
 async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {

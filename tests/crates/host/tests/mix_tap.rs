@@ -21,13 +21,11 @@ const ROOMY_CAPACITY: usize = 65_536;
 
 fn make_resource(constant_half: &'static [u8]) -> Resource {
     let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
-    resource_from_reader(
-        kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
-            spec,
-            TRACK_SECS,
-            constant_half,
-        ),
-    )
+    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+        spec,
+        TRACK_SECS,
+        constant_half,
+    ))
 }
 
 async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {

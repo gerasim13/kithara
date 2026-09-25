@@ -477,7 +477,7 @@ rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_li
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it.
-rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play-tests -p kithara-analysis-tests --test play --test analysis" "kithara-play-tests/apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play -p kithara-play-tests -p kithara-host-tests -p kithara-analysis-tests --test play --test host --test analysis" "kithara-play/apple-fused-src,kithara-play-tests/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
 

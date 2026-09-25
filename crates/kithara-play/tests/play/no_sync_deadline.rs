@@ -3,22 +3,22 @@
 use std::{collections::BTreeMap, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
-use kithara::{
-    events::TrackId,
-    platform::sync::Arc,
-    play::{
-        Resource, SharedEq,
-        bridge::{PlayerCmd, SlotControl, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
-    },
-    signal::AudioSpec,
+use kithara_audio::mock::TestPcmReader;
+use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
+use kithara_play::{
+    Resource, SharedEq,
+    bridge::{PlayerCmd, SlotControl, slot_channels},
+    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_signal::AudioSpec;
 use kithara_test_fixtures::{integration_fixtures::deadline_tracks, signal::peak};
-use kithara_test_utils::test::usdt::{self, ProbeEvent};
+use kithara_test_utils::{
+    bufpool::pools,
+    kithara,
+    test::usdt::{self, ProbeEvent},
+};
 use ringbuf::traits::Producer;
-
-use crate::bufpool_ext::pools;
 
 struct Consts;
 
@@ -63,7 +63,7 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
             inputs,
             shape,
             &pools(),
-            kithara::play::DEFAULT_GATE_SMOOTHING,
+            kithara_play::DEFAULT_GATE_SMOOTHING,
         ),
         control,
     )
@@ -96,7 +96,7 @@ fn load_tracks(
         let value = f32::from(u16::try_from(idx + 1).expect("track index fits u16")) * 0.02;
         expected_sample += value;
         let resource = Resource::from_reader(
-            TestPcmReader::from_pcm(spec(), Consts::TRACK_SECONDS, deadline_tracks[idx]),
+            TestPcmReader::with_pcm(spec(), Consts::TRACK_SECONDS, deadline_tracks[idx]),
             Some(Arc::clone(src)),
         );
         send(

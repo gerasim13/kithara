@@ -139,6 +139,7 @@ lockbud_exclude = [
   "kithara-fuzz",
   "kithara-harness-tests",
   "kithara-hls-tests",
+  "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
@@ -575,6 +576,8 @@ prefix_args = [
   "-p",
   "kithara-hls-tests",
   "-p",
+  "kithara-host-tests",
+  "-p",
   "kithara-integration-tests",
   "-p",
   "kithara-play-tests",
@@ -810,6 +813,20 @@ prefix_args = [
   "kithara-hls",
   "-p",
   "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.host]
+program = "cargo"
+owns = ["crates/kithara-host/", "tests/crates/host/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-host",
+  "-p",
+  "kithara-host-tests",
   "--cargo-profile",
   "test-release",
 ]
@@ -1354,6 +1371,45 @@ pins = ".config/ci-pins.toml"
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"kithara-integration-tests::suite_light::kithara_play::engine_tests::dropping_host_invalidates_retained_player_control" = "kithara-host::player_ownership::dropping_host_invalidates_retained_player_control"
+"suite_light::kithara_play::engine_tests::dropping_host_invalidates_retained_player_control" = "kithara-host::player_ownership::dropping_host_invalidates_retained_player_control"
+"kithara-play-tests::play::engine_tests::dropping_host_invalidates_retained_player_control" = "kithara-host::player_ownership::dropping_host_invalidates_retained_player_control"
+"kithara-integration-tests::suite_light::kithara_play::engine_tests::foreign_host_cannot_close_owned_player" = "kithara-host::player_ownership::foreign_host_cannot_close_owned_player"
+"suite_light::kithara_play::engine_tests::foreign_host_cannot_close_owned_player" = "kithara-host::player_ownership::foreign_host_cannot_close_owned_player"
+"kithara-play-tests::play::engine_tests::foreign_host_cannot_close_owned_player" = "kithara-host::player_ownership::foreign_host_cannot_close_owned_player"
+"kithara-integration-tests::suite_light::kithara_play::mixing::" = "kithara-host-tests::host::mixing::"
+"suite_light::kithara_play::mixing::" = "kithara-host-tests::host::mixing::"
+"kithara-play-tests::play::mixing::" = "kithara-host-tests::host::mixing::"
+"kithara-integration-tests::suite_light::kithara_play::mix_tap::" = "kithara-host-tests::host::mix_tap::"
+"suite_light::kithara_play::mix_tap::" = "kithara-host-tests::host::mix_tap::"
+"kithara-play-tests::play::mix_tap::" = "kithara-host-tests::host::mix_tap::"
+"kithara-integration-tests::suite_light::kithara_play::rt_metrics::" = "kithara-play::play::rt_metrics::"
+"suite_light::kithara_play::rt_metrics::" = "kithara-play::play::rt_metrics::"
+"kithara-play-tests::play::rt_metrics::" = "kithara-play::play::rt_metrics::"
+"kithara-integration-tests::suite_light::kithara_play::rt_click::" = "kithara-play::play::rt_click::"
+"suite_light::kithara_play::rt_click::" = "kithara-play::play::rt_click::"
+"kithara-play-tests::play::rt_click::" = "kithara-play::play::rt_click::"
+"kithara-integration-tests::suite_light::kithara_play::resource_internal::" = "kithara-play::play::resource_internal::"
+"suite_light::kithara_play::resource_internal::" = "kithara-play::play::resource_internal::"
+"kithara-play-tests::play::resource_internal::" = "kithara-play::play::resource_internal::"
+"kithara-integration-tests::suite_light::kithara_play::player_track_internal::" = "kithara-play::play::player_track_internal::"
+"suite_light::kithara_play::player_track_internal::" = "kithara-play::play::player_track_internal::"
+"kithara-play-tests::play::player_track_internal::" = "kithara-play::play::player_track_internal::"
+"kithara-integration-tests::suite_light::kithara_play::player_resource_internal::" = "kithara-play::play::player_resource_internal::"
+"suite_light::kithara_play::player_resource_internal::" = "kithara-play::play::player_resource_internal::"
+"kithara-play-tests::play::player_resource_internal::" = "kithara-play::play::player_resource_internal::"
+"kithara-integration-tests::suite_light::kithara_play::player_processor_internal::" = "kithara-play::play::player_processor_internal::"
+"suite_light::kithara_play::player_processor_internal::" = "kithara-play::play::player_processor_internal::"
+"kithara-play-tests::play::player_processor_internal::" = "kithara-play::play::player_processor_internal::"
+"kithara-integration-tests::suite_light::kithara_play::player_internal::" = "kithara-play::play::player_internal::"
+"suite_light::kithara_play::player_internal::" = "kithara-play::play::player_internal::"
+"kithara-play-tests::play::player_internal::" = "kithara-play::play::player_internal::"
+"kithara-integration-tests::suite_light::kithara_play::no_sync_deadline::" = "kithara-play::play::no_sync_deadline::"
+"suite_light::kithara_play::no_sync_deadline::" = "kithara-play::play::no_sync_deadline::"
+"kithara-play-tests::play::no_sync_deadline::" = "kithara-play::play::no_sync_deadline::"
+"kithara-integration-tests::suite_light::kithara_play::engine_tests::" = "kithara-play::play::engine_tests::"
+"suite_light::kithara_play::engine_tests::" = "kithara-play::play::engine_tests::"
+"kithara-play-tests::play::engine_tests::" = "kithara-play::play::engine_tests::"
 "kithara-broadcast-tests::broadcast::packaging_tests::" = "kithara-broadcast::packaging_tests::"
 "kithara-stream-tests::stream::reader_seek_overflow::" = "kithara-stream::reader_seek_overflow::"
 "kithara-decode-tests::decode::timeline_tests::test_progressive_file_" = "kithara-decode::decode::timeline_tests::test_progressive_file_"

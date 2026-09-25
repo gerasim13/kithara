@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    audio::mock::TestPcmReader,
     events::TrackId,
     host::{HostConfig, HostOwned},
     platform::time::{self, Duration},
@@ -12,18 +13,14 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::{
-    audio_mock::TestPcmReader,
-    offline::{OfflineHostHarness, resource_from_reader},
-};
+use kithara_integration_tests::offline::{OfflineHostHarness, resource_from_reader};
 use kithara_test_fixtures::{
     integration_fixtures::{
         constant_four, constant_quiet, constant_three, constant_two, constant_unity,
     },
     signal::peak,
 };
-
-use crate::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::bufpool::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -92,7 +89,7 @@ impl MixHarness {
                     player
                         .replace_item(
                             0,
-                            resource_from_reader(TestPcmReader::from_pcm(spec, TRACK_SECS, value)),
+                            resource_from_reader(TestPcmReader::with_pcm(spec, TRACK_SECS, value)),
                             TrackId::allocate(),
                         )
                         .expect("replace player item");

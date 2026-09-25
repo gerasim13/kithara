@@ -5,6 +5,7 @@ use std::{
 
 use kithara::{
     assets::{AssetResource, AssetSource, AssetStore, ReadSide, ResourceKey},
+    audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig},
     encode::EncodeConfig,
     events::TrackId,
@@ -27,7 +28,6 @@ use kithara::{
 };
 use kithara_app::recording::{AssetPartSink, AssetPartSinkError};
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader,
     bufpool_ext::{TestPools, pools},
     memory_asset_store,
     offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
@@ -73,7 +73,7 @@ fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
         CHANNELS,
         NonZeroU32::new(OLD_RATE).expect("test rate is non-zero"),
     );
-    resource_from_reader(TestPcmReader::from_samples(spec, broadcast_tone))
+    resource_from_reader(TestPcmReader::with_samples(spec, broadcast_tone))
 }
 
 async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {

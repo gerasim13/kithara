@@ -12,27 +12,22 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara::{
-    self,
-    events::TrackId,
-    platform::{sync::Arc, time::Duration},
-    play::{
-        CrossfadeSettings, PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
-        bridge::RtMetrics,
-        rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
-    },
-};
-use kithara_integration_tests::{
-    audio_mock::{MockReader, TestPcmReader},
-    test_defaults::Consts,
+use kithara_audio::mock::{MockReader, TestPcmReader};
+use kithara_events::TrackId;
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_play::{
+    CrossfadeSettings, PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
+    bridge::RtMetrics,
+    rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_utils::{bufpool::pools, kithara};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Split},
 };
 
-use crate::bufpool_ext::pools;
+use crate::support::AUDIO_SPEC;
 
 /// Slot seek epoch a freshly built track already sits at: nothing published,
 /// nothing pending, so a natural end finalizes immediately.
@@ -72,7 +67,7 @@ fn make_track_with_crossfade_duration(
 ) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
     let resource = Resource::from_reader(
-        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
+        TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half),
         None,
     );
     make_track_from_resource_with_crossfade_duration(resource, src, item_id, crossfade_duration)
@@ -361,7 +356,7 @@ async fn read_outcome_matches_track_state(
 #[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let frontier_ns = Arc::new(AtomicU64::new(0));
-    let reader = MockReader::live_frontier(Consts::AUDIO_SPEC, Arc::clone(&frontier_ns));
+    let reader = MockReader::live_frontier(AUDIO_SPEC, Arc::clone(&frontier_ns));
     let src: Arc<str> = Arc::from("frontier.flac");
     let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
     let track = make_track_from_resource(resource, src, TrackId::allocate());
@@ -510,7 +505,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half:
 async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half: &'static [u8]) {
     let src = Arc::from("misreported.mp3");
     let resource = Resource::from_reader(
-        MockReader::misreported_duration(Consts::AUDIO_SPEC, 900, constant_half),
+        MockReader::misreported_duration(AUDIO_SPEC, 900, constant_half),
         Some(Arc::clone(&src)),
     );
     let mut track =

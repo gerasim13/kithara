@@ -7,30 +7,25 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{
-    num::NonZeroU32,
-    sync::{Mutex, atomic::Ordering as AtomicOrdering},
-};
+use std::{num::NonZeroU32, sync::atomic::Ordering as AtomicOrdering};
 
 use firewheel::node::ProcBuffers;
-use kithara::{
-    self,
-    events::TrackId,
-    platform::{sync::Arc, time::Duration},
-    play::{
-        PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
-        bridge::{PlayerCmd, SlotControl, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
-    },
+use kithara_audio::mock::{MockReader, TestPcmReader};
+use kithara_events::TrackId;
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
 };
-use kithara_integration_tests::{
-    audio_mock::{MockReader, TestPcmReader},
-    test_defaults::Consts,
+use kithara_play::{
+    PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
+    bridge::{PlayerCmd, SlotControl, slot_channels},
+    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_utils::{bufpool::pools, kithara};
 use ringbuf::traits::{Consumer, Producer};
 
-use crate::bufpool_ext::pools;
+use crate::support::{AUDIO_SPEC, SAMPLE_RATE};
 
 #[derive(Clone, Copy)]
 enum TrackCommandScenario {
@@ -52,9 +47,9 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let processor = PlayerNodeProcessor::new(
         inputs,
-        stream_shape(Consts::NON_ZERO_SAMPLE_RATE),
+        stream_shape(SAMPLE_RATE),
         &pools(),
-        kithara::play::DEFAULT_GATE_SMOOTHING,
+        kithara_play::DEFAULT_GATE_SMOOTHING,
     );
     (processor, control)
 }
@@ -68,7 +63,7 @@ fn create_mock_player_resource_with_duration(
     src: &str,
     duration_secs: f64,
 ) -> Box<PlayerResource> {
-    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half);
+    let reader = TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -77,8 +72,7 @@ fn create_mock_player_resource_with_duration(
 }
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
-    let (reader, _recorded) =
-        MockReader::sample_rate_tracking_with_duration(Consts::AUDIO_SPEC, duration);
+    let (reader, _recorded) = MockReader::sample_rate_tracking_with_duration(AUDIO_SPEC, duration);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -100,7 +94,7 @@ fn create_tracking_player_resource(
 #[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
-    let (reader, recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
+    let (reader, recorded) = MockReader::sample_rate_tracking(AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
@@ -113,7 +107,7 @@ async fn load_track_propagates_host_sample_rate() {
         inputs,
         stream_shape(sample_rate),
         &pools(),
-        kithara::play::DEFAULT_GATE_SMOOTHING,
+        kithara_play::DEFAULT_GATE_SMOOTHING,
     );
 
     control
@@ -162,7 +156,7 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
+    let (reader, _recorded) = MockReader::sample_rate_tracking(AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
@@ -232,7 +226,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .cmd_tx
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: first_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: kithara_play::CrossfadeSettings::default(),
         }))
         .ok();
     processor.drain_commands();
@@ -261,7 +255,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .cmd_tx
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: second_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: kithara_play::CrossfadeSettings::default(),
         }))
         .ok();
     processor.drain_commands();
@@ -292,7 +286,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .cmd_tx
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: kithara_play::CrossfadeSettings::default(),
         }))
         .ok();
     processor.drain_commands();
@@ -339,10 +333,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         "stale seek epochs must not move the media clock, got {position}"
     );
     assert!(
-        seek_log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty(),
+        seek_log.lock().is_empty(),
         "the audio thread must not reach the reader's blocking seek"
     );
     assert_eq!(playback.seek_epoch.load(AtomicOrdering::SeqCst), third);
@@ -433,7 +424,7 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
         .cmd_tx
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
-            settings: kithara::play::CrossfadeSettings::default(),
+            settings: kithara_play::CrossfadeSettings::default(),
         }))
         .ok();
     processor.drain_commands();
@@ -622,7 +613,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     processor
         .track_mut(fading_id)
         .expect("BUG: fading track must remain loaded")
-        .fade_out(kithara::play::CrossfadeSettings::default());
+        .fade_out(kithara_play::CrossfadeSettings::default());
 
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];
