@@ -413,10 +413,12 @@ pub(crate) async fn serve_subscribe(
     let (served, asks) = watch::channel(1);
     let sender = tx.clone();
     task::spawn(async move {
+        let mut count = 1usize;
         while let Some(request) = requests.recv().await {
             if let Request::Subscribe { reply, .. } = request {
                 let _ = reply.send(sender.subscribe());
-                served.send_modify(|count| *count += 1);
+                count += 1;
+                served.send_replace(count);
             }
         }
     });
