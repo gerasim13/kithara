@@ -27,7 +27,6 @@ where
         to self.player {
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
-            fn sync_attachment(&self) -> SyncAttachment;
         }
     }
 }
@@ -53,7 +52,10 @@ where
 
     delegate::delegate! {
         to self.player {
-            fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError>;
+            fn attach_session(
+                &mut self,
+                binding: SessionBinding<S>,
+            ) -> Result<SyncAttachment, PlayError>;
         }
     }
 }

@@ -11,7 +11,8 @@ use crate::{PlayError, SessionBinding};
 ///
 /// Queue-specific item, EQ, volume, and event APIs remain on their concrete
 /// facade. This contract contains only playback operations shared by every
-/// host member; synchronization attaches through [`Self::sync_attachment`].
+/// host member; synchronization attaches through
+/// [`PlayerControlSource::attach_session`].
 pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
@@ -34,10 +35,6 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Commit the host-applied deck level after a validated graph batch.
     fn set_host_level(&self, level: f32);
 
-    /// The synchronization group this player's owner builds for it: the
-    /// player's track geometry and the executor of its staged lanes.
-    fn sync_attachment(&self) -> SyncAttachment;
-
     /// Advance control-plane and audio-backend work.
     fn tick(&self) -> Result<(), PlayError>;
 }
@@ -51,8 +48,14 @@ pub trait PlayerControlSource: Player {
     /// Typed pool schema shared with the canonical playback session.
     type Schema;
 
-    /// Attaches the resident Player to its canonical session exactly once.
-    fn attach_session(&mut self, binding: SessionBinding<Self::Schema>) -> Result<(), PlayError>;
+    /// Attaches the resident Player to its canonical session exactly once and
+    /// hands that owner the player's synchronization attachment: the group
+    /// identity, the track geometry and the executor of its staged lanes. The
+    /// session is the only owner the attachment ever exists for.
+    fn attach_session(
+        &mut self,
+        binding: SessionBinding<Self::Schema>,
+    ) -> Result<SyncAttachment, PlayError>;
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
@@ -105,15 +108,6 @@ where
         }
     }
 
-    fn sync_attachment(&self) -> SyncAttachment {
-        SyncAttachment::new(
-            self.grid_id,
-            self.sample_rate,
-            Box::new(self.runtime.core.track_grid.clone()),
-            self.runtime.core.staging.execution(),
-        )
-    }
-
     fn tick(&self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)
     }
@@ -126,8 +120,14 @@ where
     type Control = crate::player::PlayerControl<S>;
     type Schema = S;
 
-    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-        self.runtime.attach_session(binding)
+    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<SyncAttachment, PlayError> {
+        self.runtime.attach_session(binding)?;
+        Ok(SyncAttachment::new(
+            self.grid_id,
+            self.sample_rate,
+            Box::new(self.runtime.core.track_grid.clone()),
+            self.runtime.core.staging.execution(),
+        ))
     }
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
