@@ -1,17 +1,12 @@
-//! This test-only harness lives inside the crate because resolving a document
-//! path needs the retained layout; an integration test would require widening
-//! the product API with test-only surface.
-
 use kithara_platform::time::Duration;
-use masonry::vello::Scene;
-
-use super::{App, Config, Ui};
-use crate::{
+use kithara_ui::{
+    app::{App, Config, Frame, Ui},
     draw::{PoolStats, Pt, Rect, Rgba},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{Reads, Skin, UiEvent},
     view::ViewState,
 };
+use masonry::vello::Scene;
 
 /// Wraps an application, recording every event the document published to
 /// it, so a test asserts on the consequence of a gesture instead of
@@ -53,24 +48,24 @@ impl<A: App> App for Recording<A> {
 
 /// Drives one mounted document by the path a hand would name, not the
 /// coordinates a hand would first have to compute.
-pub(super) struct Scenario<'config, A: App> {
+pub(crate) struct Scenario<'config, A: App> {
     ui: Ui<'config, Recording<A>>,
 }
 
 impl<'config, A: App> Scenario<'config, A> {
-    pub(super) fn background(&self) -> Rgba {
+    pub(crate) fn background(&self) -> Rgba {
         self.ui.background()
     }
 
     /// A press immediately followed by a release, at the control's centre.
-    pub(super) fn click(&mut self, path: &str) {
+    pub(crate) fn click(&mut self, path: &str) {
         self.press(path);
         self.release(path);
     }
 
     /// A whole press at one point of the window, for the gestures that are
     /// aimed at no control: dismissing what stands over the page.
-    pub(super) fn click_at(&mut self, at: Pt) {
+    pub(crate) fn click_at(&mut self, at: Pt) {
         self.ui.input(pointer(at, PointerPhase::Move));
         self.ui.input(pointer(at, PointerPhase::Down));
         self.ui.input(pointer(at, PointerPhase::Up));
@@ -79,7 +74,7 @@ impl<'config, A: App> Scenario<'config, A> {
     /// Drags from one point in the control's rect to another. `from` and
     /// `to` are fractions of the rect on each axis (0.0..=1.0), so a test
     /// never computes a pixel itself.
-    pub(super) fn drag(&mut self, path: &str, from: Pt, to: Pt, steps: u16) {
+    pub(crate) fn drag(&mut self, path: &str, from: Pt, to: Pt, steps: u16) {
         let rect = self.rect(path);
         let anchor = |fraction: Pt| Pt {
             x: inside(rect.x, rect.w, fraction.x),
@@ -101,7 +96,7 @@ impl<'config, A: App> Scenario<'config, A> {
 
     /// Mounts the document and settles its first frame, so every control's
     /// rect is real before a test acts on one.
-    pub(super) fn mount(app: A, config: Config<'config>, size: (u32, u32), scale: f64) -> Self {
+    pub(crate) fn mount(app: A, config: Config<'config>, size: (u32, u32), scale: f64) -> Self {
         let mut ui = Ui::new(Recording::new(app), config, size, scale)
             .unwrap_or_else(|error| panic!("the scenario must mount: {error}"));
         ui.frame(Duration::from_millis(16));
@@ -111,7 +106,7 @@ impl<'config, A: App> Scenario<'config, A> {
     }
 
     /// Presses at the control's own centre.
-    pub(super) fn press(&mut self, path: &str) {
+    pub(crate) fn press(&mut self, path: &str) {
         let at = center(self.rect(path));
         self.ui.input(pointer(at, PointerPhase::Move));
         self.ui.input(pointer(at, PointerPhase::Down));
@@ -124,20 +119,27 @@ impl<'config, A: App> Scenario<'config, A> {
     }
 
     /// Releases at the control's own centre.
-    pub(super) fn release(&mut self, path: &str) {
+    pub(crate) fn release(&mut self, path: &str) {
         let at = center(self.rect(path));
         self.ui.input(pointer(at, PointerPhase::Up));
     }
 
+    /// The frame the document draws now, shaders and meters included.
+    pub(crate) fn frame(&mut self) -> Frame {
+        self.ui
+            .render()
+            .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
+    }
+
     /// Draws the current document.
-    pub(super) fn scene(&mut self) -> Scene {
+    pub(crate) fn scene(&mut self) -> Scene {
         self.ui
             .scene()
             .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
     }
 
     /// A wheel notch over the control's centre.
-    pub(super) fn wheel(&mut self, path: &str, notches: f32) {
+    pub(crate) fn wheel(&mut self, path: &str, notches: f32) {
         let at = center(self.rect(path));
         self.ui.input(pointer(at, PointerPhase::Move));
         self.ui
@@ -148,20 +150,20 @@ impl<'config, A: App> Scenario<'config, A> {
         to self.ui {
             /// Where a control stands, or nothing when nothing stands at that
             /// path.
-            pub(super) fn rect_of(&self, path: &str) -> Option<Rect>;
+            pub(crate) fn rect_of(&self, path: &str) -> Option<Rect>;
             /// Reuse counters for the pools this host draws every one of its
             /// documents from.
-            pub(super) fn draw_pool_stats(&self) -> PoolStats;
+            pub(crate) fn draw_pool_stats(&self) -> PoolStats;
             /// The state the shown screen keeps for itself.
-            pub(super) fn view(&self) -> &ViewState;
+            pub(crate) fn view(&self) -> &ViewState;
         }
         to self.ui.app() {
             /// The application the scenario is driving.
             #[call(inner)]
-            pub(super) fn app(&self) -> &A;
+            pub(crate) fn app(&self) -> &A;
             /// Every event the document has published since the scenario mounted.
             #[call(published)]
-            pub(super) fn published(&self) -> &[UiEvent];
+            pub(crate) fn published(&self) -> &[UiEvent];
         }
     }
 }

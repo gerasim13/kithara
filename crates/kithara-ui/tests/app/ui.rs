@@ -10,11 +10,11 @@ use std::{
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use masonry::{core::CursorIcon, vello::Scene};
-
-use super::{App, Config, RunError, Ui, scenario::Scenario};
-use crate::{
+use kithara_ui::{
+    app::{App, Config, RunError, Ui},
+    backends::paint_color,
     builtin,
+    capture::Offscreen,
     draw::{Pt, Rect, Rgba},
     error::UiDocError,
     ids::{DocId, EndpointId, SourceUri},
@@ -29,6 +29,9 @@ use crate::{
     source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
+use masonry::{core::CursorIcon, vello::Scene};
+
+use crate::scenario::Scenario;
 
 #[derive(Default)]
 struct Registry(BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>);
@@ -947,9 +950,11 @@ fn photograph_scenario(
     let Some(dir) = dir else {
         return;
     };
-    let background = crate::backends::paint_color(scenario.background());
-    let scene = scenario.scene();
-    let rgba = crate::backends::conformance::rasterise_at(&scene, size, background)
+    let background = paint_color(scenario.background());
+    let frame = scenario.frame();
+    let mut rgba = Vec::new();
+    Offscreen::new(size.0, size.1)
+        .and_then(|mut offscreen| offscreen.rasterise(&frame, 1.0, background, &mut rgba))
         .unwrap_or_else(|error| panic!("rasterise scenario {name}: {error}"));
     let path = dir.join(format!("{name}.png"));
     write_png(&path, &rgba, size).unwrap_or_else(|error| panic!("write scenario {name}: {error}"));
@@ -2319,6 +2324,11 @@ fn a_double_click_resets_the_knob_it_lands_on() {
 #[kithara::test]
 fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
     use kithara_platform::sync::Arc;
+    use kithara_ui::{
+        compile::compile,
+        render::{document, masonry::MasonryHost},
+        source::UiConfig,
+    };
     use masonry::{
         app::{RenderRootOptions, WindowSizePolicy},
         core::PointerEvent,
@@ -2328,12 +2338,6 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
             PointerButton, PointerButtonEvent, PointerButtons, PointerId, PointerInfo,
             PointerState, PointerType,
         },
-    };
-
-    use crate::{
-        compile::compile,
-        render::{document, masonry::MasonryHost},
-        source::UiConfig,
     };
 
     let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
@@ -2358,7 +2362,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
     );
     let host = MasonryHost::new(ctx, skin());
     let node = document::render(&ui.root, ctx, host);
-    let mut root = crate::render::masonry::MasonryRoot::new(
+    let mut root = kithara_ui::render::masonry::MasonryRoot::new(
         node,
         RenderRootOptions {
             default_properties: Arc::new(default_property_set()),
