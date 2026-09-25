@@ -1,4 +1,7 @@
-use std::{num::NonZeroUsize, ops::Deref};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Deref,
+};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -8,9 +11,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use kithara_signal::SessionEpoch;
-use kithara_sync::SyncMember;
-use kithara_warp::WarpConfigPatch;
+use kithara_warp::{BeatGridId, WarpConfigPatch};
 
 use super::{
     core::{PlayerCore, PlayerRuntime},
@@ -21,7 +22,6 @@ use crate::{
     error::PlayError,
     player::{
         PlayerConfig, PlayerControl,
-        protocol::PlayerSync,
         staging::SyncStaging,
         state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
     },
@@ -31,7 +31,9 @@ use crate::{
 /// Concrete Player implementation managing items queue.
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
-    pub(crate) sync: PlayerSync,
+    /// Identity of the synchronization group the player's owner builds.
+    pub(super) grid_id: BeatGridId,
+    pub(super) sample_rate: NonZeroU32,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -57,15 +59,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
         }
         let pools = config.worker.pools().clone();
         let track_grid = TrackGrid::new(config.track_grid_id, config.sample_rate);
-        let sync = PlayerSync::owning(
-            config.grid_id,
-            config.sample_rate,
-            SessionEpoch::new(0),
-            SyncMember::Grid {
-                alignment: None,
-                grid: Box::new(track_grid.clone()),
-            },
-        );
 
         let bus = config
             .bus
@@ -118,7 +111,8 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             items: ItemQueue::new(bus),
         };
         Self {
-            sync,
+            grid_id: config.grid_id,
+            sample_rate: config.sample_rate,
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),

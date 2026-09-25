@@ -4,13 +4,12 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, Tempo,
-    player::{PlayerControlSource, PlayerMember},
+    PlayError, SessionBinding, SessionDispatcher, Tempo, player::PlayerControlSource,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
-    SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
+    GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
     SyncStatusSnapshot, SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
@@ -22,6 +21,7 @@ use super::{
     platform::{Platform, PlatformResult},
 };
 use crate::{
+    PlayerMember,
     api::HostLevel,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
@@ -152,17 +152,17 @@ impl<S> Host<S> {
     pub(super) fn bind_player<P>(
         &self,
         player: &mut P,
-    ) -> Result<(BeatGridId, P::Control), PlayError>
+    ) -> Result<(SyncAttachment, P::Control), PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
-        let grid_id = player.id();
+        let attachment = player.sync_attachment();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(
             dispatcher,
             self.requested_sample_rate(),
         ))?;
-        Ok((grid_id, player.control()))
+        Ok((attachment, player.control()))
     }
 
     pub(super) fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {

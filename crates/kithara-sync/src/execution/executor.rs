@@ -2,51 +2,20 @@ use std::{collections::VecDeque, mem};
 
 use kithara_platform::{
     CancelToken,
-    maybe_send::MaybeSendFuture,
     sync::{Arc, Mutex},
     tokio::{
         runtime::Handle,
         task::{spawn_blocking_on, spawn_on},
     },
 };
-use kithara_warp::{BeatGridId, WarpPlan, supports_playback_rate};
+use kithara_warp::{BeatGridId, supports_playback_rate};
 use tracing::warn;
 
+use super::{ReceiptSink, StagePort, SyncExecution, command::Execute};
 use crate::{
-    AlignmentSource, SyncAdmission, SyncCapability, SyncEffect, SyncError, SyncExecutionReject,
-    SyncExecutionStamp, SyncGroup, SyncOperation, SyncPreparation, SyncReceipt, SyncRejected,
-    SyncTransition,
+    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    SyncPreparation, SyncReceipt,
 };
-
-/// Opens the staged lanes of one load of a member's media.
-pub trait StagePort: Clone + Send + 'static {
-    /// Identifies one load of the member's media.
-    type Media: Copy + Eq + Send + 'static;
-    /// Holds a staged lane's prepared PCM until the preparation it serves
-    /// ends.
-    type Lane: Send + 'static;
-
-    /// The runtime staging and receipt delivery run on.
-    fn runtime(&self) -> &Handle;
-
-    /// Opens a lane that plays `plan` and resolves once its prepared PCM is
-    /// proven, or with the reason the lane cannot be held.
-    fn stage(
-        self,
-        plan: WarpPlan,
-        cancel: CancelToken,
-    ) -> impl MaybeSendFuture<Output = Result<Self::Lane, SyncExecutionReject>> + 'static;
-}
-
-/// The group owner an executor reports the outcome of each staged lane to.
-pub trait ReceiptSink: Send + Sync {
-    /// Whether an owner is bound to take receipts at all.
-    fn is_bound(&self) -> bool;
-
-    /// Hands one receipt to the owner and blocks until it answers; returns
-    /// whether the owner recorded it.
-    fn acknowledge(&self, receipt: SyncReceipt) -> bool;
-}
 
 struct Loaded<P: StagePort> {
     media: P::Media,
@@ -160,42 +129,6 @@ impl<P: StagePort> SyncExecutor<P> {
         }))
     }
 
-    /// Admits `operation` into `group` only if this executor can carry out
-    /// the preparation it asks for, then follows what the group issued.
-    ///
-    /// # Errors
-    ///
-    /// Returns the group's own refusal, or the executor's when it cannot
-    /// stage the member or has no owner to report to.
-    pub fn transact<G: SyncGroup>(
-        &self,
-        group: &mut G,
-        operation: SyncOperation<G::NestedGroup>,
-    ) -> Result<SyncAdmission, SyncRejected<G::NestedGroup>> {
-        if let Err(error) = self.admit(&operation) {
-            return Err(SyncRejected::new(error, operation));
-        }
-        let relocation = matches!(operation, SyncOperation::Relocate { .. });
-        let admission = group.transact(operation)?;
-        match &admission {
-            SyncAdmission::Prepared(preparation) => self.follow(preparation, relocation),
-            SyncAdmission::TopologyChanged { transition, .. }
-            | SyncAdmission::StateChanged { transition, .. } => self.follow_transition(transition),
-            _ => {}
-        }
-        Ok(admission)
-    }
-
-    /// Follows the preparations one committed change withdrew and issued.
-    pub fn follow_transition(&self, transition: &SyncTransition) {
-        for stamp in transition.withdrawn() {
-            self.withdraw(*stamp);
-        }
-        for preparation in transition.issued() {
-            self.follow(preparation, false);
-        }
-    }
-
     /// The media the member now holds, staged through `port` when it can be
     /// staged at all; a preparation staged for another load is dropped and
     /// reported cancelled.
@@ -220,15 +153,22 @@ impl<P: StagePort> SyncExecutor<P> {
         self.0.drain(drain);
     }
 
-    fn admit<G: SyncGroup>(&self, operation: &SyncOperation<G>) -> Result<(), SyncError> {
-        let staged = match operation {
-            SyncOperation::Relocate { target, .. } => *target == self.0.member,
-            SyncOperation::Prepare { target, source, .. } => {
-                *target == self.0.member && !matches!(source, AlignmentSource::Audible { .. })
-            }
-            _ => false,
-        };
-        if !staged {
+    /// The command side of this executor, which the member's group follows.
+    #[must_use]
+    pub fn execution(&self) -> SyncExecution {
+        SyncExecution(Arc::clone(&self.0) as Arc<dyn Execute>)
+    }
+}
+
+fn cancel_silently<P: StagePort>(held: Option<Held<P>>) {
+    if let Some(held) = held {
+        held.cancel.cancel();
+    }
+}
+
+impl<P: StagePort> Execute for Shared<P> {
+    fn admit(&self, target: BeatGridId) -> Result<(), SyncError> {
+        if target != self.member {
             return Ok(());
         }
         let unsupported = SyncError::CapabilityUnavailable {
@@ -237,11 +177,10 @@ impl<P: StagePort> SyncExecutor<P> {
         if !supports_playback_rate() {
             return Err(unsupported);
         }
-        if !self.0.sink.as_ref().is_some_and(|sink| sink.is_bound()) {
+        if !self.sink.as_ref().is_some_and(|sink| sink.is_bound()) {
             return Err(SyncError::OwnerUnavailable);
         }
         let unstageable = self
-            .0
             .state
             .lock()
             .loaded
@@ -253,12 +192,12 @@ impl<P: StagePort> SyncExecutor<P> {
         Ok(())
     }
 
-    fn follow(&self, preparation: &SyncPreparation, relocation: bool) {
+    fn follow(self: Arc<Self>, preparation: &SyncPreparation, relocation: bool) {
         let stamp = preparation.stamp();
-        if stamp.member().grid_id() != self.0.member {
+        if stamp.member().grid_id() != self.member {
             return;
         }
-        let mut state = self.0.state.lock();
+        let mut state = self.state.lock();
         if state.held.as_ref().is_some_and(|held| held.stamp == stamp) {
             return;
         }
@@ -282,7 +221,7 @@ impl<P: StagePort> SyncExecutor<P> {
             warn!(?stamp, "sync: no loaded media to stage the preparation on");
             return;
         };
-        let cancel = self.0.cancel.child();
+        let cancel = self.cancel.child();
         let runtime = port.runtime().clone();
         state.held = Some(Held {
             stamp,
@@ -293,22 +232,15 @@ impl<P: StagePort> SyncExecutor<P> {
         });
         drop(state);
         cancel_silently(superseded);
-        let shared = Arc::clone(&self.0);
         drop(spawn_on(&runtime, async move {
             let outcome = port.stage(plan, cancel.clone()).await;
-            shared.settle(stamp, &cancel, outcome);
+            self.settle(stamp, &cancel, outcome);
         }));
     }
 
     fn withdraw(&self, stamp: SyncExecutionStamp) {
-        let withdrawn = self.0.state.lock().held.take_if(|held| held.stamp == stamp);
+        let withdrawn = self.state.lock().held.take_if(|held| held.stamp == stamp);
         cancel_silently(withdrawn);
-    }
-}
-
-fn cancel_silently<P: StagePort>(held: Option<Held<P>>) {
-    if let Some(held) = held {
-        held.cancel.cancel();
     }
 }
 

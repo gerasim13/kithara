@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerMember,
+    player::Player,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
@@ -25,6 +25,7 @@ use super::super::{
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
+use crate::{PlayerMember, host::HeldPlayer};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -201,15 +202,16 @@ fn target_member<S>(player: PlayerImpl<S>) -> PlayerMember
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    PlayerMember::new(player)
+    PlayerMember::new(player.sync_attachment(), HeldPlayer::new(player))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn target_member<S>(mut player: PlayerImpl<S>) -> PlayerMember
+fn target_member<S>(player: PlayerImpl<S>) -> PlayerMember
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    player
-        .take_host_member()
-        .expect("fixture player synchronization member")
+    PlayerMember::new(
+        player.sync_attachment(),
+        HeldPlayer::new(player.host_level()),
+    )
 }

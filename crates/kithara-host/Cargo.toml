@@ -74,6 +74,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 bevy_platform = { workspace = true, features = ["web"] }
 firewheel = { workspace = true, features = ["wasm-bindgen"] }
 firewheel-web-audio = { workspace = true }
+portable-atomic = { workspace = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
